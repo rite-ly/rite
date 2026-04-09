@@ -643,3 +643,25 @@ pub struct PcrValue {
     /// PCR value in the format `"algorithm:hexhash"` (e.g., `"sha256:abc123..."`).
     pub value: String,
 }
+
+// ============================================================================
+// Backend config
+// ============================================================================
+
+/// Backend configuration entry from a ceremony file.
+///
+/// The `provider` field identifies the backend by its self-declared name
+/// (e.g., `"software"`, `"yubikey"`). The remaining YAML keys are flattened
+/// into `extra` for backend-specific deserialization.
+///
+/// Each backend crate defines its own config struct and deserializes from
+/// `extra` at startup. This inverts the prior design where the model listed
+/// concrete backend variants — backends now declare themselves.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendConfig {
+    /// Backend provider identifier as a lowercase string (e.g., `"software"`).
+    pub provider: String,
+    /// Backend-specific configuration key/value pairs.
+    #[serde(flatten)]
+    pub extra: serde_json::Value,
+}

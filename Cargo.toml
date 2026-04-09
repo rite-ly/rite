@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rite-sdk",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "TBD"
+repository = "https://github.com/rite-ly/rite"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+thiserror = "2.0"
+bitflags = { version = "2", features = ["serde"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Overly noisy on a types-heavy crate — allow selectively
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+# Proactive correctness
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"
+arithmetic_side_effects = "warn"
+# Banned in committed code
+dbg_macro = "deny"
+print_stdout = "warn"
+todo = "deny"
+unimplemented = "deny"
+wildcard_imports = "deny"
+self_named_module_files = "deny"

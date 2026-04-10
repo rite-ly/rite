@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/rite-sdk",
     "crates/rite-model",
+    "crates/rite-resolver",
 ]
 
 [workspace.package]
@@ -15,8 +16,10 @@ repository = "https://github.com/rite-ly/rite"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 thiserror = "2.0"
+marked-yaml = { version = "0.8", features = ["serde"] }
+insta = { version = "1", features = ["yaml"] }
 bitflags = { version = "2", features = ["serde"] }
-indexmap = "2"
+indexmap = { version = "2", features = ["serde"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

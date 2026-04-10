@@ -54,7 +54,7 @@ pub struct Ceremony {
     pub execution_plan: Vec<Step>,
 
     /// Post-ceremony duties, in declaration order.
-    pub post_ceremony: Vec<PostCeremonyDuty>,
+    pub after: Vec<PostCeremonyDuty>,
 }
 
 /// A resolved role.
@@ -139,18 +139,18 @@ pub struct Step {
     /// Action-specific parameters with expressions parsed (not yet evaluated).
     ///
     /// The runtime evaluates these to `serde_json::Value` before passing to handlers.
-    pub params: ExprValue,
+    pub with: ExprValue,
 
     /// Validated input artifact references (for ordering validation).
-    pub inputs: Vec<ArtifactRef>,
+    pub reads: Vec<ArtifactRef>,
 
     /// Pre-resolved input references for handlers.
     ///
     /// Handlers can access artifact IDs directly without parsing.
-    pub typed_inputs: Option<StepInputs>,
+    pub reads_resolved: Option<StepInputs>,
 
     /// Artifact ID this step produces.
-    pub produces: Option<ArtifactId>,
+    pub creates: Option<ArtifactId>,
 
     /// Human-readable description for display (may contain interpolated expressions).
     pub description: Option<ExprValue>,
@@ -158,7 +158,7 @@ pub struct Step {
     /// Skip the default pause after step completion.
     ///
     /// When `true`, the executor auto-advances without waiting for user acknowledgment.
-    pub auto_advance: bool,
+    pub silent: bool,
 }
 
 /// A resolved parameter with its value.
@@ -230,11 +230,11 @@ impl Material {
 /// A resolved post-ceremony duty.
 #[derive(Debug, Clone)]
 pub struct PostCeremonyDuty {
-    /// Duty identifier (always present; synthesized as `"duty_01"` etc. if absent in YAML).
+    /// Duty identifier (the dict key in the YAML `after:` block).
     pub id: String,
 
     /// Type of duty.
-    pub duty_type: DutyType,
+    pub kind: DutyType,
 
     /// Role responsible for this duty (resolved from plain role ID string).
     pub role: Option<RoleId>,
@@ -259,7 +259,7 @@ pub struct Output {
     pub id: OutputId,
 
     /// Type of output.
-    pub artifact_type: OutputType,
+    pub kind: OutputType,
 
     /// Human-readable description.
     pub description: Option<String>,
@@ -327,9 +327,9 @@ impl ArtifactRef {
 /// string parsing in handlers.
 #[derive(Debug, Clone)]
 pub enum StepInputs {
-    /// Single artifact reference (e.g., `input: "${artifact.keypair}"`)
+    /// Single artifact reference (e.g., `reads: "${artifact.keypair}"`)
     Single(ArtifactRef),
-    /// Named artifact references (e.g., `input: { key_to_wrap: "...", wrapping_key: "..." }`)
+    /// Named artifact references (e.g., `reads: { key_to_wrap: "...", wrapping_key: "..." }`)
     Named(HashMap<String, ArtifactRef>),
 }
 

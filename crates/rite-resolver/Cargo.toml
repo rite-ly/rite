@@ -1,0 +1,21 @@
+[package]
+name = "rite-resolver"
+description = "Ceremony resolver: parse YAML, validate, and produce IR"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rite-model = { path = "../rite-model" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+marked-yaml = { workspace = true }
+thiserror = { workspace = true }
+indexmap = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+
+[lints]
+workspace = true

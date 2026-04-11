@@ -9,7 +9,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "TBD"
+license = "GPL-3.0-only"
 repository = "https://github.com/rite-ly/rite"
 
 [workspace.dependencies]

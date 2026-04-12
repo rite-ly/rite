@@ -1,0 +1,31 @@
+[package]
+name = "rite-runtime"
+description = "Execution runtime for Rite ceremonies"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rite-sdk   = { path = "../rite-sdk" }
+rite-model = { path = "../rite-model" }
+
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+bitflags   = { workspace = true }
+chrono     = { workspace = true }
+sha2       = { workspace = true }
+secrecy    = { workspace = true }
+base16ct   = { workspace = true }
+base32ct   = { workspace = true }
+base64ct   = { workspace = true }
+rpassword  = "7"
+
+[dev-dependencies]
+rite-resolver = { path = "../rite-resolver" }
+insta         = { workspace = true }
+tempfile      = "3"
+
+[lints]
+workspace = true

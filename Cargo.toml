@@ -4,6 +4,7 @@ members = [
     "crates/rite-sdk",
     "crates/rite-model",
     "crates/rite-resolver",
+    "crates/rite-runtime",
 ]
 
 [workspace.package]
@@ -14,12 +15,18 @@ repository = "https://github.com/rite-ly/rite"
 
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
+serde_json = { version = "1.0", features = ["raw_value"] }
 thiserror = "2.0"
 marked-yaml = { version = "0.8", features = ["serde"] }
 insta = { version = "1", features = ["yaml"] }
 bitflags = { version = "2", features = ["serde"] }
 indexmap = { version = "2", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+secrecy = "0.10"
+base16ct = { version = "0.2", features = ["alloc"] }
+base32ct = { version = "0.2", features = ["alloc"] }
+base64ct = { version = "1.6", features = ["alloc"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

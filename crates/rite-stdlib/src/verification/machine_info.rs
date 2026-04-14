@@ -80,7 +80,7 @@ fn collect_security_features() -> SecurityFeatures {
 
     // IOMMU: /sys/class/iommu/ entries are created when the kernel assigns IOMMU groups.
     let iommu_count = std::fs::read_dir("/sys/class/iommu")
-        .map(|entries| entries.count())
+        .map(std::iter::Iterator::count)
         .unwrap_or(0);
     let iommu_dma_protection = if iommu_count > 0 {
         format!("active ({iommu_count} groups)")

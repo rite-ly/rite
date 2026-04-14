@@ -204,6 +204,7 @@ pub fn analyze(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use rite_model::{ParamId, RoleId};
@@ -248,7 +249,14 @@ sections:
         let resolved = result.into_result().unwrap();
         assert_eq!(resolved.roles.len(), 1);
         assert_eq!(resolved.execution_plan.len(), 1);
-        assert_eq!(resolved.execution_plan[0].role, Some(RoleId::new("admin")));
+        assert_eq!(
+            resolved
+                .execution_plan
+                .first()
+                .expect("should have first step")
+                .role,
+            Some(RoleId::new("admin"))
+        );
     }
 
     #[test]

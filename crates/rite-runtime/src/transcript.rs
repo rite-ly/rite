@@ -1178,6 +1178,7 @@ impl std::fmt::Display for VerificationResult {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use rite_model::ActionType;
@@ -1290,14 +1291,14 @@ mod tests {
         // Add several events
         for i in 1..=3 {
             writer.record_event(ExecutionEvent {
-                step_id: format!("step{}", i),
+                step_id: format!("step{i}"),
                 action: ActionType::Confirm,
                 role: None,
                 started_at: Utc::now(),
                 completed_at: Utc::now(),
                 outcome: EventOutcome {
                     status: "completed".to_string(),
-                    message: Some(format!("Step {} done", i)),
+                    message: Some(format!("Step {i} done")),
                 },
                 evidence: StepEvidence::new(),
             })?;
@@ -1514,9 +1515,10 @@ mod tests {
 
     /// Generate the deterministic test fixture at examples/test-fixtures/sample-transcript.jsonl.
     ///
-    /// Run with: cargo test -p rite-runtime generate_sample_transcript -- --ignored
+    /// Run with: cargo test -p rite-runtime `generate_sample_transcript` -- --ignored
     #[test]
-    #[ignore]
+    #[ignore = "manual fixture regeneration — run explicitly when sample transcript format changes"]
+    #[allow(clippy::too_many_lines)]
     fn generate_sample_transcript() -> io::Result<()> {
         use chrono::TimeZone;
 
@@ -1709,7 +1711,7 @@ mod tests {
         let mut file = File::create(&path)?;
         for event in &events {
             let json = serde_json::to_string(event).map_err(io::Error::other)?;
-            writeln!(file, "{}", json)?;
+            writeln!(file, "{json}")?;
         }
 
         eprintln!("Generated fixture: {}", path.display());

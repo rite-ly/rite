@@ -308,6 +308,7 @@ fn unsupported(name: &str, trait_name: &str) -> BackendError {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use rite_sdk::{Backend, BackendError, KeyId, KeyMetadata, KeySpec, KeyStoreBackend};
@@ -324,7 +325,7 @@ mod tests {
         fn name(&self) -> &str {
             &self.name
         }
-        fn provider(&self) -> &str {
+        fn provider(&self) -> &'static str {
             "mock"
         }
         fn fingerprint(&self) -> String {
@@ -443,11 +444,10 @@ mod tests {
             BackendError::UnsupportedOperation(msg) => {
                 assert!(
                     msg.contains("SignBackend"),
-                    "Expected UnsupportedOperation for SignBackend, got: {}",
-                    msg
+                    "Expected UnsupportedOperation for SignBackend, got: {msg}"
                 );
             }
-            e => panic!("Expected UnsupportedOperation, got: {}", e),
+            e => panic!("Expected UnsupportedOperation, got: {e}"),
         }
     }
 
@@ -458,7 +458,7 @@ mod tests {
         assert!(result.is_err());
         match result.err().unwrap() {
             BackendError::NotFound(name) => assert_eq!(name, "nonexistent"),
-            e => panic!("Expected NotFound, got: {}", e),
+            e => panic!("Expected NotFound, got: {e}"),
         }
     }
 
@@ -515,12 +515,11 @@ mod tests {
             Err(BackendError::UnsupportedOperation(msg)) => {
                 assert!(
                     msg.contains("AttestationBackend"),
-                    "Expected AttestationBackend error, got: {}",
-                    msg
+                    "Expected AttestationBackend error, got: {msg}"
                 );
             }
             Ok(_) => panic!("Expected UnsupportedOperation, got Ok"),
-            Err(e) => panic!("Expected UnsupportedOperation, got: {:?}", e),
+            Err(e) => panic!("Expected UnsupportedOperation, got: {e:?}"),
         }
     }
 }

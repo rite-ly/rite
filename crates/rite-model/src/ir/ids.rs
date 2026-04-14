@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn ids_display_nicely() {
         let id = RoleId::new("ceremony_admin");
-        assert_eq!(format!("{}", id), "ceremony_admin");
-        assert_eq!(format!("{:?}", id), r#"RoleId("ceremony_admin")"#);
+        assert_eq!(format!("{id}"), "ceremony_admin");
+        assert_eq!(format!("{id:?}"), r#"RoleId("ceremony_admin")"#);
     }
 }

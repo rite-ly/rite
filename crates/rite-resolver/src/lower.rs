@@ -440,6 +440,7 @@ pub(crate) fn diagnostic_to_resolve_error(d: Diagnostic) -> ResolveError {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -482,7 +483,14 @@ sections:
             .expect("section exists");
         assert_eq!(section.steps.len(), 1);
         assert!(section.steps.contains_key("test_step"));
-        assert!(section.steps["test_step"].with.is_some());
+        assert!(
+            section
+                .steps
+                .get("test_step")
+                .expect("test_step should exist")
+                .with
+                .is_some()
+        );
     }
 
     #[test]
@@ -519,7 +527,10 @@ sections:
             span_map.steps.contains_key(&step_id),
             "step_one should be in span map"
         );
-        let span = span_map.steps[&step_id];
+        let span = span_map
+            .steps
+            .get(&step_id)
+            .expect("step_one should be in span map");
         assert!(span.line > 0, "span line should be set");
     }
 

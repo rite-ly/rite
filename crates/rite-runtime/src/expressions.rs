@@ -463,6 +463,7 @@ pub fn value_to_json(value: &Value) -> serde_json::Value {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::actions::ArtifactValue;
@@ -487,7 +488,7 @@ mod tests {
         }
     }
 
-    /// Create a HandlerContext from params and artifacts for tests.
+    /// Create a `HandlerContext` from params and artifacts for tests.
     /// Note: This leaks memory, only use in tests.
     fn make_context(
         params: HashMap<ParamId, serde_json::Value>,
@@ -770,7 +771,7 @@ mod tests {
         if let Value::Bytes(b) = result {
             assert_eq!(b, b"hello world".to_vec());
         } else {
-            panic!("Expected Bytes, got {:?}", result);
+            panic!("Expected Bytes, got {result:?}");
         }
     }
 

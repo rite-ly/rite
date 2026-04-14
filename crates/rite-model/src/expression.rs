@@ -842,6 +842,7 @@ fn parse_interpolated_string(s: &str) -> Vec<StringPart> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -966,7 +967,7 @@ mod tests {
     #[test]
     fn value_type_names() {
         assert_eq!(Value::Bytes(vec![]).type_name(), "bytes");
-        assert_eq!(Value::String("".into()).type_name(), "string");
+        assert_eq!(Value::String(String::new()).type_name(), "string");
         assert_eq!(Value::Integer(0).type_name(), "integer");
         assert_eq!(Value::Boolean(true).type_name(), "boolean");
         assert_eq!(Value::Null.type_name(), "null");
@@ -1174,7 +1175,7 @@ mod tests {
                     assert_eq!(stages.len(), 1);
                     assert_eq!(stages[0].function, "sha256");
                 }
-                _ => panic!("Expected Expr(Pipeline), got {:?}", expr),
+                _ => panic!("Expected Expr(Pipeline), got {expr:?}"),
             }
         }
 
@@ -1187,7 +1188,7 @@ mod tests {
                     assert_eq!(r.ref_type, RefType::Param);
                     assert_eq!(r.name, "name");
                 }
-                _ => panic!("Expected Expr(Reference), got {:?}", expr),
+                _ => panic!("Expected Expr(Reference), got {expr:?}"),
             }
         }
 
@@ -1205,7 +1206,7 @@ mod tests {
                     ));
                     assert!(matches!(&parts[2], StringPart::Literal(s) if s == "!"));
                 }
-                _ => panic!("Expected Interpolated, got {:?}", expr),
+                _ => panic!("Expected Interpolated, got {expr:?}"),
             }
         }
 
@@ -1226,7 +1227,7 @@ mod tests {
                         Some(ExprValue::Literal(Literal::String(_)))
                     ));
                 }
-                _ => panic!("Expected Object, got {:?}", expr),
+                _ => panic!("Expected Object, got {expr:?}"),
             }
         }
 
@@ -1241,7 +1242,7 @@ mod tests {
                     assert!(matches!(&arr[1], ExprValue::Literal(Literal::String(_))));
                     assert!(matches!(&arr[2], ExprValue::Expr(_)));
                 }
-                _ => panic!("Expected Array, got {:?}", expr),
+                _ => panic!("Expected Array, got {expr:?}"),
             }
         }
 
@@ -1256,7 +1257,7 @@ mod tests {
                     assert!(matches!(&parts[1], StringPart::Literal(s) if s == " and "));
                     assert!(matches!(&parts[2], StringPart::Expr(_)));
                 }
-                _ => panic!("Expected Interpolated, got {:?}", expr),
+                _ => panic!("Expected Interpolated, got {expr:?}"),
             }
         }
     }

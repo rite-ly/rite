@@ -751,6 +751,7 @@ fn extract_name(s: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::schema::{PostCeremonyDutyBody, RoleDefinition, SectionBody, StepBody};
@@ -916,8 +917,14 @@ mod tests {
         assert!(result.is_ok(), "Errors: {:?}", result.errors);
         let resolved = result.into_result().unwrap();
         assert_eq!(resolved.after.len(), 2);
-        assert_eq!(resolved.after[0].id, "duty_01");
-        assert_eq!(resolved.after[1].id, "return_media");
+        assert_eq!(
+            resolved.after.first().expect("should have first duty").id,
+            "duty_01"
+        );
+        assert_eq!(
+            resolved.after.get(1).expect("should have second duty").id,
+            "return_media"
+        );
     }
 
     #[test]
@@ -1173,6 +1180,9 @@ mod tests {
         let result = resolve_ceremony(ceremony, None);
         assert!(result.is_ok(), "Errors: {:?}", result.errors);
         let resolved = result.into_result().unwrap();
-        assert_eq!(resolved.after[0].role, Some(RoleId::new("admin")));
+        assert_eq!(
+            resolved.after.first().expect("should have first duty").role,
+            Some(RoleId::new("admin"))
+        );
     }
 }

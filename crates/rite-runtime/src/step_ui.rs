@@ -284,6 +284,7 @@ impl<R: io::BufRead + Send, W: io::Write + Send> StepUI for ConsoleStepUI<'_, R,
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -415,6 +415,7 @@ impl YubikeyBackend for MockBackend {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use rite_sdk::KeyPolicy;
@@ -526,7 +527,10 @@ mod tests {
 
         assert!(!attestation.certificates.is_empty());
         assert!(attestation.signature.is_some());
-        assert_eq!(attestation.metadata["mock"], true);
+        assert_eq!(
+            attestation.metadata.get("mock"),
+            Some(&serde_json::json!(true))
+        );
     }
 
     #[test]

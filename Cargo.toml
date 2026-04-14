@@ -5,6 +5,7 @@ members = [
     "crates/rite-model",
     "crates/rite-resolver",
     "crates/rite-runtime",
+    "crates/rite-stdlib",
 ]
 
 [workspace.package]
@@ -27,6 +28,14 @@ secrecy = "0.10"
 base16ct = { version = "0.2", features = ["alloc"] }
 base32ct = { version = "0.2", features = ["alloc"] }
 base64ct = { version = "1.6", features = ["alloc"] }
+rand      = "0.9"
+tempfile  = "3"
+subtle    = "2"
+sysinfo   = "0.33"
+x509-cert = { version = "0.2", features = ["builder", "pem"] }
+der       = { version = "0.7", features = ["pem"] }
+sha1      = "0.10"
+rsa       = { version = "0.9", features = ["sha2"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

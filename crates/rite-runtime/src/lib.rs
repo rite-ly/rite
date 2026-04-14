@@ -34,6 +34,8 @@ pub use executor::{CeremonyExecutor, ExecutionError, ExecutionResult, StepOutcom
 pub use actions::{
     ActionCategory, ActionHandler, ActionMetadata, ActionRegistry, ArtifactValue, KeyFormat,
 };
+// Display helpers for downstream action handler crates (rite-stdlib, etc.)
+pub use actions::display;
 
 // Backend registry (traits live in `rite-sdk`, not here)
 pub use backend::{BackendFactory, BackendRegistry};

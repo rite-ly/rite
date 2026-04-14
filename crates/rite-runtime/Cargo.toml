@@ -25,7 +25,7 @@ rpassword  = "7"
 [dev-dependencies]
 rite-resolver = { path = "../rite-resolver" }
 insta         = { workspace = true }
-tempfile      = "3"
+tempfile      = "=3.27.0"
 
 [lints]
 workspace = true

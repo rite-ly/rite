@@ -301,21 +301,13 @@ impl DutyType {
     pub fn built_in_prose(&self) -> Option<&'static str> {
         match self {
             DutyType::ReturnToVault => Some("Return materials to secure storage"),
-            DutyType::DistributeShares => {
-                Some("Distribute key shares to assigned custodians")
-            }
-            DutyType::DistributeMedia => {
-                Some("Distribute backup media to designated recipients")
-            }
+            DutyType::DistributeShares => Some("Distribute key shares to assigned custodians"),
+            DutyType::DistributeMedia => Some("Distribute backup media to designated recipients"),
             DutyType::ArchiveMaterials => {
                 Some("Archive ceremony materials at designated storage locations")
             }
-            DutyType::PublishRecord => {
-                Some("Publish ceremony record and witness attestations")
-            }
-            DutyType::NotifyStakeholders => {
-                Some("Notify stakeholders of ceremony completion")
-            }
+            DutyType::PublishRecord => Some("Publish ceremony record and witness attestations"),
+            DutyType::NotifyStakeholders => Some("Notify stakeholders of ceremony completion"),
             DutyType::ImportKeys => Some("Import generated keys into operational system"),
             DutyType::Custom => None,
         }

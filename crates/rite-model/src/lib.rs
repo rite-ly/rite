@@ -31,6 +31,6 @@ pub use types::{
 
 pub use ir::{
     Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind, Output,
-    OutputId, ParamId, Parameter, PostCeremonyDuty, Role, RoleId, Section, SectionId, Step,
-    StepId, StepInputs, SymbolTable,
+    OutputId, ParamId, Parameter, PostCeremonyDuty, Role, RoleId, Section, SectionId, Step, StepId,
+    StepInputs, SymbolTable,
 };

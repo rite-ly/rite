@@ -183,9 +183,7 @@ impl Material {
     /// Get the title of this material (if set).
     pub(crate) fn title(&self) -> Option<&str> {
         match self {
-            Material::Digital { title, .. } | Material::Physical { title, .. } => {
-                title.as_deref()
-            }
+            Material::Digital { title, .. } | Material::Physical { title, .. } => title.as_deref(),
         }
     }
 

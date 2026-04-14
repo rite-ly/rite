@@ -476,7 +476,10 @@ sections:
 "#;
         let (ceremony, _, _) = lower_ceremony(None, yaml);
         let ceremony = ceremony.expect("should parse");
-        let section = ceremony.sections.get("test_section").expect("section exists");
+        let section = ceremony
+            .sections
+            .get("test_section")
+            .expect("section exists");
         assert_eq!(section.steps.len(), 1);
         assert!(section.steps.contains_key("test_step"));
         assert!(section.steps["test_step"].with.is_some());

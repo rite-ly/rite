@@ -3,8 +3,8 @@
 use rite_model::{ActionType, StepInputs};
 use rite_runtime::{
     ActionCategory, ActionHandler, ActionMetadata, ArtifactValue, ExecutionError, HandlerContext,
-    KeyFormat, StepEvidence, StepInfo, StepResult, StepUI, compute_fingerprint,
-    display, resolve_backend_key,
+    KeyFormat, StepEvidence, StepInfo, StepResult, StepUI, compute_fingerprint, display,
+    resolve_backend_key,
 };
 use rite_sdk::Backend;
 
@@ -30,10 +30,7 @@ impl ActionHandler for ExportPublicAction {
     ) -> Result<(StepResult, StepEvidence), ExecutionError> {
         display::write_line(ui, "Exporting public key...")?;
 
-        let source_ref = step
-            .typed_inputs
-            .as_ref()
-            .and_then(StepInputs::as_single);
+        let source_ref = step.typed_inputs.as_ref().and_then(StepInputs::as_single);
 
         if let Some(r) = source_ref {
             display::write_line(ui, &format!("Source keypair: {}", r.display_name()))?;
@@ -75,9 +72,7 @@ impl ActionHandler for ExportPublicAction {
                     .as_keystore_mut()
                     .ok_or_else(|| ExecutionError::StepFailed {
                         step: step.id.clone(),
-                        reason: format!(
-                            "Backend '{backend_name}' does not support key export"
-                        ),
+                        reason: format!("Backend '{backend_name}' does not support key export"),
                     })?;
 
             keystore

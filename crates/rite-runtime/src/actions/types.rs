@@ -134,7 +134,10 @@ impl std::fmt::Display for ArtifactValue {
                 share_ids,
                 ..
             } => {
-                write!(f, "ShamirShares({threshold}-of-{total}, ids: {share_ids:?})")
+                write!(
+                    f,
+                    "ShamirShares({threshold}-of-{total}, ids: {share_ids:?})"
+                )
             }
 
             // Materials

@@ -37,14 +37,15 @@ impl ActionHandler for UnwrapKeyAction {
         let wrap_alg: WrapAlgorithm = algorithm_str
             .parse::<WrapAlgorithm>()
             .map_err(|e| ExecutionError::InvalidParams(e.to_string()))?;
-        let label = typed.label.as_deref().unwrap_or("unwrapped-key").to_string();
+        let label = typed
+            .label
+            .as_deref()
+            .unwrap_or("unwrapped-key")
+            .to_string();
 
         display::write_line(ui, &format!("Unwrapping key using {wrap_alg}..."))?;
 
-        let named = step
-            .typed_inputs
-            .as_ref()
-            .and_then(StepInputs::as_named);
+        let named = step.typed_inputs.as_ref().and_then(StepInputs::as_named);
 
         let unwrapping_key_ref = named.and_then(|m| m.get("unwrapping_key"));
         let wrapped_data_ref = named.and_then(|m| m.get("wrapped_data"));
@@ -119,9 +120,7 @@ impl ActionHandler for UnwrapKeyAction {
                 .as_transport_mut()
                 .ok_or_else(|| ExecutionError::StepFailed {
                     step: step.id.clone(),
-                    reason: format!(
-                        "Backend '{backend_name}' does not support key unwrapping"
-                    ),
+                    reason: format!("Backend '{backend_name}' does not support key unwrapping"),
                 })?;
 
         display::write_line(ui, "Unwrapping key using backend...")?;

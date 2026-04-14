@@ -60,9 +60,7 @@ fn to_nato_phonetic(input: &str) -> String {
         .chars()
         .filter_map(|c| {
             let upper = c.to_ascii_uppercase();
-            nato_map
-                .get(&upper)
-                .map(|word| format!("{word} ({upper})"))
+            nato_map.get(&upper).map(|word| format!("{word} ({upper})"))
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -145,7 +143,10 @@ impl ActionHandler for OralReadbackAction {
                 evidence.insert("characters_read", chars);
             }
             evidence.insert("verified", true);
-            return Ok((StepResult::completed("Oral readback completed (dry run)"), evidence));
+            return Ok((
+                StepResult::completed("Oral readback completed (dry run)"),
+                evidence,
+            ));
         }
 
         display::write_line(ui, "CONFIRMER: Verify the reader spoke the correct value.")?;

@@ -87,10 +87,23 @@ impl MockBackend {
     }
 
     /// Store a key and return its new `KeyId`.
-    fn store_key(&mut self, prefix: &str, algorithm: KeyAlgorithm, label: String, public_key: Vec<u8>) -> KeyId {
+    fn store_key(
+        &mut self,
+        prefix: &str,
+        algorithm: KeyAlgorithm,
+        label: String,
+        public_key: Vec<u8>,
+    ) -> KeyId {
         self.key_counter = self.key_counter.saturating_add(1);
         let key_id = KeyId::new(format!("{prefix}-{}", self.key_counter));
-        self.keys.insert(key_id.clone(), MockKey { algorithm, label, public_key });
+        self.keys.insert(
+            key_id.clone(),
+            MockKey {
+                algorithm,
+                label,
+                public_key,
+            },
+        );
         key_id
     }
 
@@ -267,7 +280,12 @@ impl KeyTransportBackend for MockBackend {
         let public_key_copy = public_key.clone();
         let key_algorithm = KeyAlgorithm::Rsa4096;
         let owned_label = label.to_string();
-        let key_id = self.store_key("mock-unwrapped", key_algorithm, owned_label.clone(), public_key);
+        let key_id = self.store_key(
+            "mock-unwrapped",
+            key_algorithm,
+            owned_label.clone(),
+            public_key,
+        );
 
         Ok(KeyMetadata {
             key_id,

@@ -765,7 +765,8 @@ fn parse_string_to_expr_value(s: &str) -> ExprValue {
     let trimmed = s.trim();
 
     // Case 1: Entire string is a single expression.
-    if trimmed.starts_with("${") && trimmed.ends_with('}')
+    if trimmed.starts_with("${")
+        && trimmed.ends_with('}')
         && !trimmed[2..trimmed.len() - 1].contains("${")
         && let Some(expr) = parse_expression(trimmed)
     {
@@ -994,8 +995,7 @@ mod tests {
         #[test]
         fn dnssec_hash_verification() {
             // actual: "${artifact.ksr | sha256 | hex | substr(0, 16)}"
-            let expr =
-                parse_expression("${artifact.ksr | sha256 | hex | substr(0, 16)}").unwrap();
+            let expr = parse_expression("${artifact.ksr | sha256 | hex | substr(0, 16)}").unwrap();
             match expr {
                 Expression::Pipeline { source, stages } => {
                     if let Expression::Reference(r) = *source {

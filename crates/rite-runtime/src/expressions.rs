@@ -301,16 +301,18 @@ fn apply_substr(
         .as_integer()
         .ok_or_else(|| ExecutionError::InvalidParams("substr start must be integer".to_string()))?;
 
-    let len_i64 = evaluate(len_arg, ctx)?
-        .as_integer()
-        .ok_or_else(|| ExecutionError::InvalidParams("substr length must be integer".to_string()))?;
+    let len_i64 = evaluate(len_arg, ctx)?.as_integer().ok_or_else(|| {
+        ExecutionError::InvalidParams("substr length must be integer".to_string())
+    })?;
 
     // Clamp negative values to 0, then convert to usize
     let start = usize::try_from(start_i64.max(0)).unwrap_or(0).min(s.len());
     let len = usize::try_from(len_i64.max(0)).unwrap_or(0);
     let end = start.saturating_add(len).min(s.len());
 
-    Ok(Value::String(s.get(start..end).unwrap_or_default().to_string()))
+    Ok(Value::String(
+        s.get(start..end).unwrap_or_default().to_string(),
+    ))
 }
 
 // ============================================================================
@@ -714,8 +716,7 @@ mod tests {
         let artifacts = HashMap::new();
         let ctx = make_context(params, artifacts);
 
-        let expr =
-            rite_model::expression::parse_expression("${param.expected_hash}").unwrap();
+        let expr = rite_model::expression::parse_expression("${param.expected_hash}").unwrap();
         let result = evaluate(&expr, &ctx).unwrap();
 
         assert_eq!(result, Value::String("abc123".to_string()));
@@ -778,8 +779,7 @@ mod tests {
         let ctx = empty_context();
 
         // Test parsing a real expression string
-        let expr =
-            rite_model::expression::parse_expression("${\"test\" | sha256 | hex}").unwrap();
+        let expr = rite_model::expression::parse_expression("${\"test\" | sha256 | hex}").unwrap();
         let result = evaluate(&expr, &ctx).unwrap();
 
         if let Value::String(s) = result {

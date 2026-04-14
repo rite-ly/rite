@@ -107,10 +107,7 @@ impl ActionHandler for IssueCertificateAction {
         let validity_days = typed.validity_days.unwrap_or(3650);
         let profile = parse_profile(typed.profile.as_deref(), typed.path_len)?;
 
-        let named = step
-            .typed_inputs
-            .as_ref()
-            .and_then(StepInputs::as_named);
+        let named = step.typed_inputs.as_ref().and_then(StepInputs::as_named);
 
         let signing_key_ref = named.and_then(|m| m.get("signing_key"));
         let csr_ref = named.and_then(|m| m.get("csr"));
@@ -128,8 +125,8 @@ impl ActionHandler for IssueCertificateAction {
         })?;
 
         let signing_key_id = signing_key_ref.artifact_id();
-        let (key_backend_name, key_id, _, _) =
-            resolve_backend_key(ctx.artifacts, &signing_key_id).map_err(|e| {
+        let (key_backend_name, key_id, _, _) = resolve_backend_key(ctx.artifacts, &signing_key_id)
+            .map_err(|e| {
                 ExecutionError::InvalidParams(format!(
                     "signing_key '{}' must be a BackendKey: {e}",
                     signing_key_ref.display_name()
@@ -139,8 +136,8 @@ impl ActionHandler for IssueCertificateAction {
         let key_backend_name = key_backend_name.to_string();
 
         let csr_id = csr_ref.artifact_id();
-        let csr_bytes =
-            resolve_artifact_bytes(ctx.artifacts, &csr_id, csr_ref.property()).map_err(|e| {
+        let csr_bytes = resolve_artifact_bytes(ctx.artifacts, &csr_id, csr_ref.property())
+            .map_err(|e| {
                 ExecutionError::InvalidParams(format!(
                     "csr '{}' could not be resolved: {e}",
                     csr_ref.display_name()
@@ -159,15 +156,17 @@ impl ActionHandler for IssueCertificateAction {
         let issuer_cert_opt = if let Some(issuer_ref) = issuer_cert_ref {
             let issuer_id = issuer_ref.artifact_id();
             let issuer_bytes =
-                resolve_artifact_bytes(ctx.artifacts, &issuer_id, issuer_ref.property())
-                    .map_err(|e| {
+                resolve_artifact_bytes(ctx.artifacts, &issuer_id, issuer_ref.property()).map_err(
+                    |e| {
                         ExecutionError::InvalidParams(format!(
                             "issuer_cert '{}' could not be resolved: {e}",
                             issuer_ref.display_name()
                         ))
-                    })?;
-            let issuer_cert = parse_certificate(&issuer_bytes)
-                .map_err(|e| ExecutionError::InvalidParams(format!("Failed to parse issuer cert: {e}")))?;
+                    },
+                )?;
+            let issuer_cert = parse_certificate(&issuer_bytes).map_err(|e| {
+                ExecutionError::InvalidParams(format!("Failed to parse issuer cert: {e}"))
+            })?;
             Some(issuer_cert)
         } else {
             None
@@ -290,10 +289,7 @@ impl ActionHandler for IssueCertificateAction {
         let message = "X.509 certificate issued from CSR".to_string();
 
         if let Some(produces) = &step.produces {
-            display::write_line(
-                ui,
-                &format!("Certificate stored as artifact '{produces}'"),
-            )?;
+            display::write_line(ui, &format!("Certificate stored as artifact '{produces}'"))?;
             let result = StepResult::completed_with_artifact(message, produces.clone(), artifact);
             Ok((result, evidence))
         } else {
@@ -492,8 +488,8 @@ fn extract_san_from_csr(csr: &CertReq) -> Option<x509_cert::ext::Extension> {
 
 /// SHA-256 `DigestInfo` DER prefix for PKCS#1 v1.5 (RFC 3447 §9.2, note 1).
 const SHA256_DIGEST_INFO_PREFIX: &[u8] = &[
-    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
-    0x05, 0x00, 0x04, 0x20,
+    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
+    0x00, 0x04, 0x20,
 ];
 
 /// Verify the CSR's self-signature. Only sha256WithRSAEncryption is supported.
@@ -582,7 +578,9 @@ fn build_validity(validity_days: u32) -> Result<Validity, der::Error> {
 
     let now = SystemTime::now();
     let duration = Duration::from_secs(u64::from(validity_days).saturating_mul(86_400));
-    let later = now.checked_add(duration).ok_or(der::Error::from(der::ErrorKind::Failed))?;
+    let later = now
+        .checked_add(duration)
+        .ok_or(der::Error::from(der::ErrorKind::Failed))?;
 
     let dt_now = DerDateTime::try_from(now)?;
     let dt_later = DerDateTime::try_from(later)?;

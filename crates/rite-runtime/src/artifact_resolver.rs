@@ -105,9 +105,9 @@ pub fn resolve_backend_key<'a, S: BuildHasher>(
     artifact_id: &ArtifactId,
 ) -> Result<BackendKeyMeta<'a>, ExecutionError> {
     let id = artifact_id.as_str();
-    let artifact = artifacts.get(artifact_id).ok_or_else(|| {
-        ExecutionError::InvalidParams(format!("Artifact '{id}' not found"))
-    })?;
+    let artifact = artifacts
+        .get(artifact_id)
+        .ok_or_else(|| ExecutionError::InvalidParams(format!("Artifact '{id}' not found")))?;
 
     match artifact {
         ArtifactValue::BackendKey {

@@ -100,9 +100,7 @@ impl ActionHandler for GenerateCsrAction {
         display::write_line(ui, &format!("Subject: {subject}"))?;
 
         let spki = SubjectPublicKeyInfoOwned::from_der(public_key_bytes).map_err(|e| {
-            ExecutionError::InvalidParams(format!(
-                "Failed to parse signing key's public key: {e}"
-            ))
+            ExecutionError::InvalidParams(format!("Failed to parse signing key's public key: {e}"))
         })?;
 
         let attributes: SetOfVec<Attribute> =
@@ -237,8 +235,9 @@ fn build_san_attribute(
                     "Invalid IP SAN '{value}': must be a valid IPv4 or IPv6 address"
                 ))
             })?;
-            let octet = OctetString::new(ip_bytes)
-                .map_err(|e| ExecutionError::InvalidParams(format!("Failed to encode IP SAN: {e}")))?;
+            let octet = OctetString::new(ip_bytes).map_err(|e| {
+                ExecutionError::InvalidParams(format!("Failed to encode IP SAN: {e}"))
+            })?;
             names.push(GeneralName::IpAddress(octet));
         } else if let Some(value) = s.strip_prefix("email:") {
             let ia5 = Ia5String::new(value).map_err(|e| {
@@ -276,11 +275,10 @@ fn build_san_attribute(
             reason: format!("Failed to encode Extensions: {e}"),
         })?;
 
-    let exts_any =
-        der::Any::from_der(&extensions_der).map_err(|e| ExecutionError::StepFailed {
-            step: step.id.clone(),
-            reason: format!("Failed to wrap extensions as Any: {e}"),
-        })?;
+    let exts_any = der::Any::from_der(&extensions_der).map_err(|e| ExecutionError::StepFailed {
+        step: step.id.clone(),
+        reason: format!("Failed to wrap extensions as Any: {e}"),
+    })?;
 
     let mut attr_values: SetOfVec<der::Any> = SetOfVec::new();
     attr_values

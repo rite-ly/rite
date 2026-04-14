@@ -9,9 +9,9 @@
 
 use super::SymbolTable;
 use super::ids::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};
+use crate::expression::ExprValue;
 use crate::material::MaterialSource;
 use crate::types::{ActionType, DutyType, Metadata, OutputType, ParameterType};
-use crate::expression::ExprValue;
 use rite_sdk::BackendConfig;
 use std::collections::HashMap;
 

@@ -41,10 +41,7 @@ impl ActionHandler for WrapKeyAction {
 
         display::write_line(ui, &format!("Wrapping key using {wrap_alg}..."))?;
 
-        let named = step
-            .typed_inputs
-            .as_ref()
-            .and_then(StepInputs::as_named);
+        let named = step.typed_inputs.as_ref().and_then(StepInputs::as_named);
 
         let key_to_wrap_ref = named.and_then(|m| m.get("key_to_wrap"));
         let wrapping_key_ref = named.and_then(|m| m.get("wrapping_key"));
@@ -66,8 +63,8 @@ impl ActionHandler for WrapKeyAction {
         let key_to_wrap_id = key_to_wrap_ref.artifact_id();
         let wrapping_key_id = wrapping_key_ref.artifact_id();
 
-        let (key_backend, key_id, _, _) =
-            resolve_backend_key(ctx.artifacts, &key_to_wrap_id).map_err(|e| {
+        let (key_backend, key_id, _, _) = resolve_backend_key(ctx.artifacts, &key_to_wrap_id)
+            .map_err(|e| {
                 ExecutionError::InvalidParams(format!(
                     "key_to_wrap '{}' must be a BackendKey: {e}",
                     key_to_wrap_ref.display_name()
@@ -76,49 +73,47 @@ impl ActionHandler for WrapKeyAction {
 
         let wrapping_key_meta = resolve_backend_key(ctx.artifacts, &wrapping_key_id);
 
-        let (wrapped_key, backend_fingerprint) =
-            if let Ok((wrap_key_backend, wrap_key_id, _, _)) = wrapping_key_meta {
-                if key_backend != wrap_key_backend {
-                    return Err(ExecutionError::InvalidParams(format!(
-                        "Key wrapping requires both keys on same backend (key: '{key_backend}', wrapper: '{wrap_key_backend}')"
-                    )));
+        let (wrapped_key, backend_fingerprint) = if let Ok((wrap_key_backend, wrap_key_id, _, _)) =
+            wrapping_key_meta
+        {
+            if key_backend != wrap_key_backend {
+                return Err(ExecutionError::InvalidParams(format!(
+                    "Key wrapping requires both keys on same backend (key: '{key_backend}', wrapper: '{wrap_key_backend}')"
+                )));
+            }
+
+            let (transport, backend_fp) = require_transport_backend(step, backend, key_backend)?;
+            display::write_line(ui, "Wrapping key using backend...")?;
+            let wk = transport.wrap(key_id, wrap_key_id, wrap_alg).map_err(|e| {
+                ExecutionError::StepFailed {
+                    step: step.id.clone(),
+                    reason: format!("Backend key wrapping failed: {e}"),
                 }
+            })?;
+            (wk, backend_fp)
+        } else {
+            let pub_key_bytes = resolve_artifact_bytes(
+                ctx.artifacts,
+                &wrapping_key_id,
+                wrapping_key_ref.property(),
+            )
+            .map_err(|_| {
+                ExecutionError::InvalidParams(format!(
+                    "Cannot resolve wrapping key '{}' as a public key",
+                    wrapping_key_ref.display_name()
+                ))
+            })?;
 
-                let (transport, backend_fp) =
-                    require_transport_backend(step, backend, key_backend)?;
-                display::write_line(ui, "Wrapping key using backend...")?;
-                let wk =
-                    transport
-                        .wrap(key_id, wrap_key_id, wrap_alg)
-                        .map_err(|e| ExecutionError::StepFailed {
-                            step: step.id.clone(),
-                            reason: format!("Backend key wrapping failed: {e}"),
-                        })?;
-                (wk, backend_fp)
-            } else {
-                let pub_key_bytes = resolve_artifact_bytes(
-                    ctx.artifacts,
-                    &wrapping_key_id,
-                    wrapping_key_ref.property(),
-                )
-                .map_err(|_| {
-                    ExecutionError::InvalidParams(format!(
-                        "Cannot resolve wrapping key '{}' as a public key",
-                        wrapping_key_ref.display_name()
-                    ))
+            let (transport, backend_fp) = require_transport_backend(step, backend, key_backend)?;
+            display::write_line(ui, "Wrapping key to external recipient public key...")?;
+            let wk = transport
+                .wrap_to_public(key_id, &pub_key_bytes, wrap_alg)
+                .map_err(|e| ExecutionError::StepFailed {
+                    step: step.id.clone(),
+                    reason: format!("Key wrapping failed: {e}"),
                 })?;
-
-                let (transport, backend_fp) =
-                    require_transport_backend(step, backend, key_backend)?;
-                display::write_line(ui, "Wrapping key to external recipient public key...")?;
-                let wk = transport
-                    .wrap_to_public(key_id, &pub_key_bytes, wrap_alg)
-                    .map_err(|e| ExecutionError::StepFailed {
-                        step: step.id.clone(),
-                        reason: format!("Key wrapping failed: {e}"),
-                    })?;
-                (wk, backend_fp)
-            };
+            (wk, backend_fp)
+        };
 
         let fingerprint = compute_fingerprint(&wrapped_key.data);
         display::write_success(
@@ -142,10 +137,7 @@ impl ActionHandler for WrapKeyAction {
         let message = format!("Key wrapped using {wrap_alg}");
 
         if let Some(produces) = &step.produces {
-            display::write_line(
-                ui,
-                &format!("Wrapped key stored as artifact '{produces}'"),
-            )?;
+            display::write_line(ui, &format!("Wrapped key stored as artifact '{produces}'"))?;
             let result = StepResult::completed_with_artifact(message, produces.clone(), wrapped);
             Ok((result, evidence))
         } else {

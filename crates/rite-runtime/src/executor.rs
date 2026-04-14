@@ -209,7 +209,8 @@ impl<R: BufRead + Send, W: Write + Send> CeremonyExecutor<R, W> {
 
         if !missing.is_empty() {
             return Err(ExecutionError::ValidationFailed(format!(
-                "Parameters missing values: {}", missing.join(", ")
+                "Parameters missing values: {}",
+                missing.join(", ")
             )));
         }
 
@@ -365,10 +366,7 @@ fn execute_core(
         let artifact = load_material_artifact(id.as_str(), material)?;
         state = state.with_material(ArtifactId::new(id.as_str()), artifact);
         let display_name = material.display_name();
-        ui.log(
-            Icon::Checkmark,
-            &format!("Loaded material: {display_name}"),
-        );
+        ui.log(Icon::Checkmark, &format!("Loaded material: {display_name}"));
     }
 
     let mut completed = 0usize;
@@ -404,10 +402,7 @@ fn execute_core(
         // Step header
         let step_label = &step.step_label;
         let step_id = &step.id;
-        ui.log(
-            Icon::Info,
-            &format!("⏺ Step {step_label}: {step_id}"),
-        );
+        ui.log(Icon::Info, &format!("⏺ Step {step_label}: {step_id}"));
         if let Some(role) = &step.role {
             let role_name = state.resolve_role(role);
             ui.log(Icon::Info, &format!("Role: {role_name}"));
@@ -493,14 +488,12 @@ fn execute_core(
                     }
                 })?;
 
-                let artifact_value =
-                    state
-                        .artifacts
-                        .get(artifact_id)
-                        .ok_or_else(|| ExecutionError::OutputWriteFailed {
-                            name: artifact_id.as_str().to_string(),
-                            reason: "artifact not produced".to_string(),
-                        })?;
+                let artifact_value = state.artifacts.get(artifact_id).ok_or_else(|| {
+                    ExecutionError::OutputWriteFailed {
+                        name: artifact_id.as_str().to_string(),
+                        reason: "artifact not produced".to_string(),
+                    }
+                })?;
 
                 let (path, hash, size, mime_type) =
                     write_artifact_to_disk(artifact_id, artifact_value, output_config)?;
@@ -550,8 +543,10 @@ fn step_info_from(step: &Step) -> StepInfo {
 }
 
 /// Load a single material into an `ArtifactValue`.
-fn load_material_artifact(name: &str, material: &Material) -> Result<ArtifactValue, ExecutionError> {
-
+fn load_material_artifact(
+    name: &str,
+    material: &Material,
+) -> Result<ArtifactValue, ExecutionError> {
     match &material.kind {
         MaterialKind::Physical { identifier, .. } => {
             let text = identifier
@@ -591,12 +586,13 @@ fn write_artifact_to_disk(
     artifact_value: &ArtifactValue,
     output_config: &OutputConfig,
 ) -> Result<(PathBuf, String, u64, Option<String>), ExecutionError> {
-    let serialized = artifact_value
-        .serialize(None)
-        .map_err(|e| ExecutionError::OutputWriteFailed {
-            name: artifact_id.as_str().to_string(),
-            reason: e,
-        })?;
+    let serialized =
+        artifact_value
+            .serialize(None)
+            .map_err(|e| ExecutionError::OutputWriteFailed {
+                name: artifact_id.as_str().to_string(),
+                reason: e,
+            })?;
 
     let path = output_config.artifact_path(artifact_id.as_str(), serialized.extension);
 
@@ -605,11 +601,10 @@ fn write_artifact_to_disk(
         reason: e.to_string(),
     })?;
 
-    let hash =
-        compute_file_fingerprint(&path).map_err(|e| ExecutionError::OutputWriteFailed {
-            name: artifact_id.as_str().to_string(),
-            reason: format!("hash computation failed: {e}"),
-        })?;
+    let hash = compute_file_fingerprint(&path).map_err(|e| ExecutionError::OutputWriteFailed {
+        name: artifact_id.as_str().to_string(),
+        reason: format!("hash computation failed: {e}"),
+    })?;
 
     let size = fs::metadata(&path)
         .map_err(|e| ExecutionError::OutputWriteFailed {
@@ -643,7 +638,8 @@ sections:
         let backend_registry = BackendRegistry::new();
         let registry = crate::actions::ActionRegistry::new();
         let tempdir = tempfile::TempDir::new().unwrap();
-        let output_config = OutputConfig::for_ceremony(Some(tempdir.path().to_path_buf()), &resolved.metadata.name);
+        let output_config =
+            OutputConfig::for_ceremony(Some(tempdir.path().to_path_buf()), &resolved.metadata.name);
         let mut executor = CeremonyExecutor::new_interactive(false, registry, output_config);
 
         let result = executor.execute(&resolved, backend_registry);

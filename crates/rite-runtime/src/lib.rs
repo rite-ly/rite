@@ -48,6 +48,7 @@ pub use state::{ExecutionState, HandlerContext, StepResult};
 pub use step_info::StepInfo;
 
 // Transcript
+pub use output_config::OutputConfig;
 pub use transcript::{
     ArtifactVerification, BinaryInfo, CeremonyInfo, ChainedEvent, EventData, EventOutcome,
     ExecutionEvent, GENESIS_HASH, ImageManifest, InitrdMeasurements, InstanceInfo,
@@ -56,10 +57,11 @@ pub use transcript::{
     compute_file_fingerprint, compute_fingerprint, read_transcript, verify_transcript,
 };
 pub use transcript_config::TranscriptConfig;
-pub use output_config::OutputConfig;
 
 // Expression evaluation (used by action handler implementors)
-pub use expressions::{evaluate, evaluate_expr_value, evaluate_expr_value_to_string, value_to_json};
+pub use expressions::{
+    evaluate, evaluate_expr_value, evaluate_expr_value_to_string, value_to_json,
+};
 
 // Artifact resolution (used by action handler implementors)
 pub use artifact_resolver::{resolve_artifact_bytes, resolve_backend_key};

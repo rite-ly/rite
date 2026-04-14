@@ -185,9 +185,7 @@ impl SpanMap {
             | ResolveError::ArtifactNeverProduced { step, .. } => self.steps.get(step).copied(),
             ResolveError::UnknownRole { context, .. }
             | ResolveError::InvalidReferenceSyntax { context, .. }
-            | ResolveError::ReferenceTypeMismatch { context, .. } => {
-                self.span_for_context(context)
-            }
+            | ResolveError::ReferenceTypeMismatch { context, .. } => self.span_for_context(context),
             ResolveError::ArtifactUsedBeforeProduced { used_in, .. } => {
                 self.steps.get(used_in).copied()
             }

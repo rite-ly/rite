@@ -56,8 +56,7 @@ impl ActionHandler for AttestAction {
 
         if ctx.dry_run {
             display::write_dry_run(ui, "auto-attesting")?;
-            let result =
-                StepResult::completed(format!("Attestation recorded for {role_display}"));
+            let result = StepResult::completed(format!("Attestation recorded for {role_display}"));
             let evidence = StepEvidence::new();
             return Ok((result, evidence));
         }
@@ -65,8 +64,7 @@ impl ActionHandler for AttestAction {
         display::write_line(ui, "By typing 'attest', you confirm the above statement.")?;
 
         if display::prompt_exact(ui, "Type 'attest' to confirm", "attest")? {
-            let result =
-                StepResult::completed(format!("Attestation recorded for {role_display}"));
+            let result = StepResult::completed(format!("Attestation recorded for {role_display}"));
 
             let mut evidence = StepEvidence::new();
             if let Some(s) = typed.statement {

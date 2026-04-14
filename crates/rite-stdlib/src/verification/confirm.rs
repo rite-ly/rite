@@ -47,7 +47,10 @@ impl ActionHandler for ConfirmAction {
                 evidence.insert("prompt", msg);
             }
             evidence.insert("confirmed", true);
-            return Ok((StepResult::completed("Verification confirmed (dry run)"), evidence));
+            return Ok((
+                StepResult::completed("Verification confirmed (dry run)"),
+                evidence,
+            ));
         }
 
         if display::prompt_yes_no(ui, "Confirm?")? {

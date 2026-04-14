@@ -264,7 +264,10 @@ impl std::fmt::Display for ResolveWarning {
                 write!(f, "output '{id}' is declared but no artifact produces it")
             }
             ResolveWarning::ArtifactNotOutput(id) => {
-                write!(f, "artifact '{id}' is produced but not written to any output")
+                write!(
+                    f,
+                    "artifact '{id}' is produced but not written to any output"
+                )
             }
             ResolveWarning::UnknownRoleInInputs { role } => write!(
                 f,

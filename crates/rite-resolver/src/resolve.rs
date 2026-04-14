@@ -3,16 +3,16 @@
 //! This module transforms a parsed ceremony (`schema::Ceremony`, AST) and optional
 //! instance inputs into a resolved ceremony (`rite_model::Ceremony`, IR) ready for execution.
 
+use crate::CeremonyInputs;
 use crate::error::{ResolveError, ResolveResult, ResolveWarning};
 use crate::schema;
-use crate::CeremonyInputs;
 use indexmap::IndexMap;
-use rite_model::expression::{parse_expr_value, parse_expression, Expression, Reference};
 use rite_model::expression::RefType;
+use rite_model::expression::{Expression, Reference, parse_expr_value, parse_expression};
 use rite_model::{
     Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind,
-    MaterialSource, Metadata, Output, OutputId, ParamId, Parameter, PostCeremonyDuty, Role,
-    RoleId, Section, SectionId, Step, StepId, StepInputs, SymbolTable,
+    MaterialSource, Metadata, Output, OutputId, ParamId, Parameter, PostCeremonyDuty, Role, RoleId,
+    Section, SectionId, Step, StepId, StepInputs, SymbolTable,
 };
 use rite_model::{ActionType, DutyType, ParameterType};
 use std::collections::{HashMap, HashSet};
@@ -717,10 +717,7 @@ fn value_type_name(value: &serde_json::Value) -> &'static str {
 #[allow(clippy::arithmetic_side_effects)]
 fn is_valid_date(s: &str) -> bool {
     let bytes = s.as_bytes();
-    if bytes.len() != 10
-        || bytes.get(4) != Some(&b'-')
-        || bytes.get(7) != Some(&b'-')
-    {
+    if bytes.len() != 10 || bytes.get(4) != Some(&b'-') || bytes.get(7) != Some(&b'-') {
         return false;
     }
     let (Some(year), Some(month), Some(day)) = (
@@ -813,7 +810,9 @@ mod tests {
     fn detects_duplicate_step_ids() {
         let mut ceremony = minimal_ceremony();
         // Same step ID in two different sections — caught by the resolver.
-        ceremony.sections.insert("other".to_string(), empty_section());
+        ceremony
+            .sections
+            .insert("other".to_string(), empty_section());
         ceremony
             .sections
             .get_mut("main")
@@ -879,10 +878,12 @@ mod tests {
 
         let result = resolve_ceremony(ceremony, None);
         assert!(result.is_err());
-        assert!(result
-            .errors
-            .iter()
-            .any(|e| matches!(e, ResolveError::ArtifactUsedBeforeProduced { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::ArtifactUsedBeforeProduced { .. }))
+        );
     }
 
     #[test]
@@ -971,9 +972,27 @@ mod tests {
         let mut ceremony = minimal_ceremony();
         ceremony.roles = {
             let mut m = IndexMap::new();
-            m.insert("witness__1".to_string(), RoleDefinition { name: None, person: None });
-            m.insert("hsm_operator__primary".to_string(), RoleDefinition { name: None, person: None });
-            m.insert("ceremony_admin".to_string(), RoleDefinition { name: None, person: None });
+            m.insert(
+                "witness__1".to_string(),
+                RoleDefinition {
+                    name: None,
+                    person: None,
+                },
+            );
+            m.insert(
+                "hsm_operator__primary".to_string(),
+                RoleDefinition {
+                    name: None,
+                    person: None,
+                },
+            );
+            m.insert(
+                "ceremony_admin".to_string(),
+                RoleDefinition {
+                    name: None,
+                    person: None,
+                },
+            );
             m
         };
 
@@ -985,7 +1004,10 @@ mod tests {
         assert_eq!(w1.role_type, "witness");
         assert_eq!(w1.name, "Witness");
 
-        let op = resolved.roles.get(&RoleId::new("hsm_operator__primary")).unwrap();
+        let op = resolved
+            .roles
+            .get(&RoleId::new("hsm_operator__primary"))
+            .unwrap();
         assert_eq!(op.role_type, "hsm_operator");
         assert_eq!(op.name, "Hsm Operator");
 
@@ -1001,7 +1023,10 @@ mod tests {
             let mut m = IndexMap::new();
             m.insert(
                 "witness__1".to_string(),
-                RoleDefinition { name: Some("First Witness".to_string()), person: None },
+                RoleDefinition {
+                    name: Some("First Witness".to_string()),
+                    person: None,
+                },
             );
             m
         };
@@ -1041,7 +1066,10 @@ mod tests {
             let mut m = IndexMap::new();
             m.insert(
                 "witness__1".to_string(),
-                RoleDefinition { name: None, person: Some("Default Witness".to_string()) },
+                RoleDefinition {
+                    name: None,
+                    person: Some("Default Witness".to_string()),
+                },
             );
             m
         };
@@ -1066,7 +1094,13 @@ mod tests {
         let mut ceremony = minimal_ceremony();
         ceremony.roles = {
             let mut m = IndexMap::new();
-            m.insert("operator".to_string(), RoleDefinition { name: None, person: None });
+            m.insert(
+                "operator".to_string(),
+                RoleDefinition {
+                    name: None,
+                    person: None,
+                },
+            );
             m
         };
 
@@ -1099,7 +1133,10 @@ mod tests {
         };
 
         let result = resolve_ceremony(ceremony, Some(&inputs));
-        assert!(result.is_ok(), "Should succeed with a warning, not an error");
+        assert!(
+            result.is_ok(),
+            "Should succeed with a warning, not an error"
+        );
         assert!(result.warnings.iter().any(|w| matches!(
             w,
             ResolveWarning::UnknownRoleInInputs { role }
@@ -1114,7 +1151,10 @@ mod tests {
             let mut m = IndexMap::new();
             m.insert(
                 "admin".to_string(),
-                RoleDefinition { name: Some("Administrator".to_string()), person: None },
+                RoleDefinition {
+                    name: Some("Administrator".to_string()),
+                    person: None,
+                },
             );
             m
         };

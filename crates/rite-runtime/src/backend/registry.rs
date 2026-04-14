@@ -193,10 +193,7 @@ impl BackendRegistry {
     }
 
     /// Get backend as `CertStoreBackend` trait (mutable).
-    pub fn get_certstore(
-        &mut self,
-        name: &str,
-    ) -> Result<&mut dyn CertStoreBackend, BackendError> {
+    pub fn get_certstore(&mut self, name: &str) -> Result<&mut dyn CertStoreBackend, BackendError> {
         self.get_ready(name)?
             .as_certstore_mut()
             .ok_or_else(|| unsupported(name, "CertStoreBackend"))
@@ -303,9 +300,7 @@ impl Default for BackendRegistry {
 // ============================================================================
 
 fn unsupported(name: &str, trait_name: &str) -> BackendError {
-    BackendError::UnsupportedOperation(format!(
-        "Backend '{name}' does not implement {trait_name}"
-    ))
+    BackendError::UnsupportedOperation(format!("Backend '{name}' does not implement {trait_name}"))
 }
 
 // ============================================================================

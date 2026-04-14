@@ -22,7 +22,7 @@ marked-yaml = { version = "0.8", features = ["serde"] }
 insta = { version = "1", features = ["yaml"] }
 bitflags = { version = "2", features = ["serde"] }
 indexmap = { version = "2", features = ["serde"] }
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 sha2 = "0.10"
 secrecy = "0.10"
 base16ct = { version = "0.2", features = ["alloc"] }
@@ -31,11 +31,11 @@ base64ct = { version = "1.6", features = ["alloc"] }
 rand      = "0.9"
 tempfile  = "3"
 subtle    = "2"
-sysinfo   = "0.33"
-x509-cert = { version = "0.2", features = ["builder", "pem"] }
-der       = { version = "0.7", features = ["pem"] }
+sysinfo   = { version = "0.33", default-features = false, features = ["system"] }
+x509-cert = "0.2"
+der       = "0.7"
 sha1      = "0.10"
-rsa       = { version = "0.9", features = ["sha2"] }
+rsa       = "0.9"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

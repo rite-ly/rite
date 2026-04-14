@@ -24,7 +24,7 @@ impl ActionHandler for GenerateKeypairAction {
     fn execute(
         &self,
         step: &StepInfo,
-        _ctx: &HandlerContext,
+        ctx: &HandlerContext,
         params: &serde_json::Value,
         ui: &mut dyn StepUI,
         backend: Option<&mut dyn Backend>,
@@ -37,6 +37,16 @@ impl ActionHandler for GenerateKeypairAction {
             None => format!("{} keypair...", typed.algorithm),
         };
         display::write_line(ui, &format!("Generating {display_algo}"))?;
+
+        if ctx.dry_run {
+            display::write_dry_run(ui, "key generation skipped")?;
+            let mut evidence = StepEvidence::new();
+            evidence.insert("algorithm", typed.algorithm);
+            if let Some(slot) = typed.slot {
+                evidence.insert("slot", slot);
+            }
+            return Ok((StepResult::completed("Key generated (dry run)"), evidence));
+        }
 
         let backend = backend.ok_or_else(|| ExecutionError::StepFailed {
             step: step.id.clone(),

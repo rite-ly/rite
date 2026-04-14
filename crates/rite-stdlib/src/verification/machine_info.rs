@@ -165,7 +165,7 @@ impl ActionHandler for MachineInfoAction {
     fn execute(
         &self,
         _step: &StepInfo,
-        ctx: &HandlerContext,
+        _ctx: &HandlerContext,
         params: &serde_json::Value,
         ui: &mut dyn StepUI,
         _backend: Option<&mut dyn Backend>,
@@ -180,13 +180,6 @@ impl ActionHandler for MachineInfoAction {
 
         display::write_line(ui, "Capturing machine information...")?;
         display::write_blank(ui)?;
-
-        if ctx.dry_run {
-            display::write_dry_run(ui, "machine info captured")?;
-            let result = StepResult::completed("Machine info captured (dry run)");
-            let evidence = StepEvidence::new();
-            return Ok((result, evidence));
-        }
 
         let hostname = get_hostname();
         let machine_id = get_machine_id();

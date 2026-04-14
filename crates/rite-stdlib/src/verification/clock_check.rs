@@ -56,9 +56,15 @@ impl ActionHandler for ClockCheckAction {
 
         if ctx.dry_run {
             display::write_dry_run(ui, "auto-confirming clock")?;
-            let result = StepResult::completed("Clock verified (dry run)");
-            let evidence = StepEvidence::new();
-            return Ok((result, evidence));
+            let mut evidence = StepEvidence::new();
+            if let Some(message) = typed.message {
+                evidence.insert("prompt", message);
+            }
+            evidence.insert("utc_time", utc_time.to_rfc3339());
+            evidence.insert("local_time", local_time.to_rfc3339());
+            evidence.insert("timezone", local_time.format("%Z").to_string());
+            evidence.insert("confirmed", true);
+            return Ok((StepResult::completed("Clock verified (dry run)"), evidence));
         }
 
         if display::prompt_yes_no(ui, "Is the system clock correct?")? {

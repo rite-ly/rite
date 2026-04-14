@@ -42,9 +42,12 @@ impl ActionHandler for ConfirmAction {
 
         if ctx.dry_run {
             display::write_dry_run(ui, "auto-confirming")?;
-            let result = StepResult::completed("Verification confirmed (dry run)");
-            let evidence = StepEvidence::new();
-            return Ok((result, evidence));
+            let mut evidence = StepEvidence::new();
+            if let Some(msg) = typed.message {
+                evidence.insert("prompt", msg);
+            }
+            evidence.insert("confirmed", true);
+            return Ok((StepResult::completed("Verification confirmed (dry run)"), evidence));
         }
 
         if display::prompt_yes_no(ui, "Confirm?")? {

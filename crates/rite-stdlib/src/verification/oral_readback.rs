@@ -136,9 +136,16 @@ impl ActionHandler for OralReadbackAction {
 
         if ctx.dry_run {
             display::write_dry_run(ui, "auto-confirming")?;
-            let result = StepResult::completed("Oral readback completed (dry run)");
-            let evidence = StepEvidence::new();
-            return Ok((result, evidence));
+            let mut evidence = StepEvidence::new();
+            if !typed.sensitive {
+                evidence.insert("value", display_value.to_string());
+            }
+            evidence.insert("format", format);
+            if let Some(chars) = typed.characters {
+                evidence.insert("characters_read", chars);
+            }
+            evidence.insert("verified", true);
+            return Ok((StepResult::completed("Oral readback completed (dry run)"), evidence));
         }
 
         display::write_line(ui, "CONFIRMER: Verify the reader spoke the correct value.")?;

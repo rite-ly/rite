@@ -13,19 +13,17 @@ rite-model = { path = "../rite-model" }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }
-bitflags   = { workspace = true }
 chrono     = { workspace = true }
 sha2       = { workspace = true }
 secrecy    = { workspace = true }
 base16ct   = { workspace = true }
 base32ct   = { workspace = true }
 base64ct   = { workspace = true }
-rpassword  = "7"
+rpassword  = "=7.4.0"
 
 [dev-dependencies]
 rite-resolver = { path = "../rite-resolver" }
-insta         = { workspace = true }
-tempfile      = "=3.27.0"
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

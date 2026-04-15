@@ -7,17 +7,19 @@ license.workspace    = true
 repository.workspace = true
 
 [features]
-default      = ["verification", "attestation", "crypto", "pki"]
+default      = ["verification", "attestation", "crypto", "pki", "openssl"]
 verification = ["dep:subtle", "dep:sysinfo"]
 attestation  = []
 crypto       = []
 pki          = ["dep:x509-cert", "dep:der", "dep:sha1", "dep:rsa", "dep:rand"]
-full         = ["verification", "attestation", "crypto", "pki"]
+openssl      = ["dep:rite-openssl"]
+full         = ["verification", "attestation", "crypto", "pki", "openssl"]
 
 [dependencies]
 rite-sdk     = { path = "../rite-sdk" }
 rite-model   = { path = "../rite-model" }
 rite-runtime = { path = "../rite-runtime" }
+rite-openssl = { path = "../rite-openssl", optional = true }
 
 serde      = { workspace = true }
 serde_json = { workspace = true }
@@ -33,8 +35,6 @@ sha1      = { workspace = true, optional = true }
 rsa       = { workspace = true, optional = true }
 
 [dev-dependencies]
-rite-resolver = { path = "../rite-resolver" }
-tempfile      = { workspace = true }
 
 [lints]
 workspace = true

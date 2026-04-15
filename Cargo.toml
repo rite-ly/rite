@@ -6,6 +6,7 @@ members = [
     "crates/rite-resolver",
     "crates/rite-runtime",
     "crates/rite-stdlib",
+    "crates/rite-openssl",
 ]
 
 [workspace.package]
@@ -28,6 +29,7 @@ base16ct = { version = "=1.0.0", features = ["alloc"] }
 base32ct = { version = "=0.3.1", features = ["alloc"] }
 base64ct = { version = "=1.8.3", features = ["alloc"] }
 rand = "=0.10.1"
+openssl = { version = "=0.10.77" }
 tempfile = "=3.27.0"
 subtle = "=2.6.1"
 sysinfo = { version = "=0.38.4", default-features = false, features = ["system"] }

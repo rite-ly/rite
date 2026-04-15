@@ -1,0 +1,22 @@
+[package]
+name        = "rite-openssl"
+description = "OpenSSL backend for Rite ceremonies — system-linked or vendored"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+
+[features]
+default  = []
+vendored = ["openssl/vendored"]
+
+[dependencies]
+rite-sdk = { path = "../rite-sdk" }
+openssl = { workspace = true }
+base16ct = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -13,9 +13,7 @@ use rite_sdk::{BackendConfig, BackendError};
 
 /// Create a backend by provider name and config.
 ///
-/// Currently supports: `"mock"`.
-/// Hardware-specific backends (`openssl`, `tpm`, `piv`) are provided by
-/// separate crates.
+/// Supports: `"mock"`, `"openssl"` (requires the `openssl` feature).
 pub fn create_backend(
     name: String,
     config: &BackendConfig,
@@ -30,8 +28,21 @@ pub fn create_backend(
                 .to_string();
             Ok(Box::new(MockBackend::new(name, seed)))
         }
+        "openssl" => {
+            #[cfg(feature = "openssl")]
+            {
+                rite_openssl::OpenSslBackend::try_new(&name)
+                    .map(|b| Box::new(b) as Box<dyn rite_sdk::Backend>)
+            }
+            #[cfg(not(feature = "openssl"))]
+            {
+                Err(BackendError::Configuration(
+                    "Backend 'openssl' requires the 'openssl' feature".to_string(),
+                ))
+            }
+        }
         other => Err(BackendError::Configuration(format!(
-            "Unknown backend provider '{other}' (rite-stdlib supports: mock)"
+            "Unknown backend provider '{other}'"
         ))),
     }
 }

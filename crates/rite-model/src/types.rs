@@ -90,10 +90,6 @@ pub enum ActionType {
     UnwrapKey,
     /// Export public key from keypair.
     ExportPublic,
-    /// Split secret using Shamir's Secret Sharing.
-    ShamirSplit,
-    /// Reconstruct secret from Shamir shares.
-    ShamirCombine,
 
     // Attestation actions
     /// Formal attestation statement.
@@ -147,8 +143,6 @@ impl std::fmt::Display for ActionType {
             ActionType::WrapKey => write!(f, "wrap_key"),
             ActionType::UnwrapKey => write!(f, "unwrap_key"),
             ActionType::ExportPublic => write!(f, "export_public"),
-            ActionType::ShamirSplit => write!(f, "shamir_split"),
-            ActionType::ShamirCombine => write!(f, "shamir_combine"),
             ActionType::Attest => write!(f, "attest"),
             ActionType::TpmAttest => write!(f, "tpm_attest"),
             ActionType::PivReadCertificate => write!(f, "piv_read_certificate"),
@@ -180,8 +174,6 @@ pub enum OutputType {
     SignedRrset,
     /// Certificate Transparency Signed Certificate Timestamp.
     Sct,
-    /// Shamir secret share.
-    SecretShare,
 
     // Documents
     /// Generic document.
@@ -198,7 +190,6 @@ impl std::fmt::Display for OutputType {
             OutputType::Certificate => write!(f, "certificate"),
             OutputType::SignedRrset => write!(f, "signed_rrset"),
             OutputType::Sct => write!(f, "sct"),
-            OutputType::SecretShare => write!(f, "secret_share"),
             OutputType::Document => write!(f, "document"),
             OutputType::CeremonyLog => write!(f, "ceremony_log"),
         }
@@ -211,7 +202,7 @@ impl OutputType {
         match self {
             OutputType::PublicKey | OutputType::Certificate => "pem",
             OutputType::WrappedKey | OutputType::SignedRrset | OutputType::Sct => "bin",
-            OutputType::SecretShare | OutputType::Document => "txt",
+            OutputType::Document => "txt",
             OutputType::CeremonyLog => "json",
         }
     }

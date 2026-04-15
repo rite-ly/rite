@@ -15,7 +15,6 @@ serde_json = { workspace = true }
 thiserror  = { workspace = true }
 chrono     = { workspace = true }
 sha2       = { workspace = true }
-secrecy    = { workspace = true }
 base16ct   = { workspace = true }
 base32ct   = { workspace = true }
 base64ct   = { workspace = true }

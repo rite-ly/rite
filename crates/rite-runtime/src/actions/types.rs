@@ -1,7 +1,6 @@
 //! Core types for action handling.
 
 use base64ct::{Base64, Encoding};
-use secrecy::SecretBox;
 
 use rite_sdk::{KeyAlgorithm, KeyId, WrapAlgorithm};
 
@@ -47,18 +46,6 @@ pub enum ArtifactValue {
         /// Output format.
         format: KeyFormat,
     },
-    /// Shamir secret shares.
-    ShamirShares {
-        /// Individual shares (each is a secret).
-        shares: Vec<SecretBox<Vec<u8>>>,
-        /// Minimum shares required to reconstruct (threshold).
-        threshold: u32,
-        /// Total number of shares.
-        total: u32,
-        /// Share identifiers (hex-encoded x-coordinates).
-        share_ids: Vec<String>,
-    },
-
     // ========================================================================
     // Materials (loaded from files or inline)
     // ========================================================================
@@ -128,18 +115,6 @@ impl std::fmt::Display for ArtifactValue {
                 let encoded = base64_encode(key_data);
                 write!(f, "{encoded}")
             }
-            ArtifactValue::ShamirShares {
-                threshold,
-                total,
-                share_ids,
-                ..
-            } => {
-                write!(
-                    f,
-                    "ShamirShares({threshold}-of-{total}, ids: {share_ids:?})"
-                )
-            }
-
             // Materials
             ArtifactValue::Bytes(bytes) => {
                 let len = bytes.len();
@@ -316,15 +291,6 @@ impl ArtifactValue {
                     Err("Cannot export public key from non-exportable backend key".to_string())
                 }
             }
-
-            // ========================================================================
-            // Text-based artifacts
-            // ========================================================================
-            ArtifactValue::ShamirShares { .. } => Ok(SerializedArtifact {
-                bytes: self.to_string().into_bytes(),
-                mime_type: Some("text/plain".to_string()),
-                extension: "txt",
-            }),
 
             // ========================================================================
             // Materials: Binary content and text references

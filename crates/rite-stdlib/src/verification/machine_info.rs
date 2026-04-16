@@ -79,23 +79,19 @@ fn collect_security_features() -> SecurityFeatures {
         };
 
     // IOMMU: /sys/class/iommu/ entries are created when the kernel assigns IOMMU groups.
-    let iommu_count = std::fs::read_dir("/sys/class/iommu")
-        .map(std::iter::Iterator::count)
-        .unwrap_or(0);
+    let iommu_count = std::fs::read_dir("/sys/class/iommu").map_or(0, std::iter::Iterator::count);
     let iommu_dma_protection = if iommu_count > 0 {
         format!("active ({iommu_count} groups)")
     } else {
         "not active".to_string()
     };
 
-    let freed_page_zeroing = if std::fs::read_to_string("/proc/cmdline")
-        .map(|c| c.contains("init_on_free=1"))
-        .unwrap_or(false)
-    {
-        "active".to_string()
-    } else {
-        "not active".to_string()
-    };
+    let freed_page_zeroing =
+        if std::fs::read_to_string("/proc/cmdline").is_ok_and(|c| c.contains("init_on_free=1")) {
+            "active".to_string()
+        } else {
+            "not active".to_string()
+        };
 
     SecurityFeatures {
         hardware_ram_encryption,

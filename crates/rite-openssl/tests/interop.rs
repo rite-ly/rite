@@ -23,8 +23,7 @@ fn openssl_binary_available() -> bool {
     Command::new("openssl")
         .arg("version")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }
 
 /// Build a self-signed X.509 cert that mirrors what `cert_for_public_key()` inside

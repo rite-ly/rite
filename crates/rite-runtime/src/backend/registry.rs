@@ -308,7 +308,6 @@ fn unsupported(name: &str, trait_name: &str) -> BackendError {
 // ============================================================================
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use rite_sdk::{Backend, BackendError, KeyId, KeyMetadata, KeySpec, KeyStoreBackend};

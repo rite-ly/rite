@@ -440,7 +440,6 @@ pub(crate) fn diagnostic_to_resolve_error(d: Diagnostic) -> ResolveError {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

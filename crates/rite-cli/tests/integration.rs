@@ -4,8 +4,6 @@
 //! without spawning a subprocess. Full CLI invocation tests (snapshot tests
 //! of stdout/stderr) are deferred to Phase 5 beta hardening.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use rite_resolver::{CeremonyInputs, analyze};
 use std::path::Path;
 

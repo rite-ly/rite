@@ -175,7 +175,6 @@ pub fn prompt_missing_params(inputs: &mut CeremonyInputs, ceremony: &rite_model:
 // ============================================================================
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -53,6 +53,7 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 module_name_repetitions = "allow"
 # Proactive correctness
+# Note: allow-unwrap-in-tests / allow-expect-in-tests are set in clippy.toml
 unwrap_used = "warn"
 expect_used = "warn"
 indexing_slicing = "warn"

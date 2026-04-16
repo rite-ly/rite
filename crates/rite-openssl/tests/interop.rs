@@ -3,8 +3,6 @@
 //!
 //! Tests are skipped (not failed) when the `openssl` binary is not on `$PATH`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use openssl::asn1::Asn1Time;
 use openssl::bn::BigNum;
 use openssl::hash::MessageDigest;

@@ -751,7 +751,6 @@ fn extract_name(s: &str) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::schema::{PostCeremonyDutyBody, RoleDefinition, SectionBody, StepBody};

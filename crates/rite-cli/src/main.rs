@@ -7,7 +7,8 @@ mod common;
 mod run;
 mod verify;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell, generate};
 
 #[derive(Parser)]
 #[command(name = "rite")]
@@ -25,6 +26,12 @@ enum Commands {
     Run(run::Args),
     /// Verify a ceremony transcript's integrity
     Verify(verify::Args),
+    /// Generate shell completion scripts
+    #[command(hide = true)]
+    Completions {
+        /// Shell to generate completions for
+        shell: Shell,
+    },
 }
 
 fn main() {
@@ -32,5 +39,10 @@ fn main() {
         Commands::Check(args) => check::run(&args),
         Commands::Run(args) => run::run(args),
         Commands::Verify(args) => verify::run(args),
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            let bin_name = cmd.get_name().to_string();
+            generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
+        }
     }
 }

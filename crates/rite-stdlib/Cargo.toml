@@ -12,8 +12,9 @@ verification = ["dep:subtle", "dep:sysinfo"]
 attestation  = []
 crypto       = []
 pki          = ["dep:x509-cert", "dep:der", "dep:sha1", "dep:rsa", "dep:rand"]
-openssl      = ["dep:rite-openssl"]
-full         = ["verification", "attestation", "crypto", "pki", "openssl"]
+openssl          = ["dep:rite-openssl"]
+openssl-vendored = ["openssl", "rite-openssl/vendored"]
+full             = ["verification", "attestation", "crypto", "pki", "openssl"]
 
 [dependencies]
 rite-sdk     = { path = "../rite-sdk" }

@@ -1,0 +1,13 @@
+version: "2.0"
+name: "Minimal Ceremony"
+roles:
+  officer:
+    name: Ceremony Officer
+sections:
+  main:
+    steps:
+      confirm_ready:
+        action: confirm
+        role: "${role.officer}"
+        with:
+          message: "Are you ready to begin?"

@@ -1,0 +1,11 @@
+version: "2.0"
+name: "Invalid Ceremony"
+roles: {}
+sections:
+  main:
+    steps:
+      step1:
+        action: confirm
+        role: "${role.nonexistent}"
+        with:
+          message: "Hello"

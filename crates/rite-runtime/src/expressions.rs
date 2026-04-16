@@ -167,10 +167,6 @@ fn apply_pipe_stage(
     }
 }
 
-// ============================================================================
-// Hash Functions
-// ============================================================================
-
 fn apply_sha256(input: &Value) -> Result<Value, ExecutionError> {
     let bytes = input.as_bytes().ok_or_else(|| {
         ExecutionError::InvalidParams(format!(
@@ -216,10 +212,6 @@ fn apply_sha512(input: &Value) -> Result<Value, ExecutionError> {
     Ok(Value::Bytes(result.to_vec()))
 }
 
-// ============================================================================
-// Encoding Functions
-// ============================================================================
-
 fn apply_hex(input: &Value) -> Result<Value, ExecutionError> {
     let bytes = input.as_bytes().ok_or_else(|| {
         ExecutionError::InvalidParams(format!(
@@ -261,10 +253,6 @@ fn apply_base64(input: &Value) -> Result<Value, ExecutionError> {
 fn hex_encode(bytes: &[u8]) -> String {
     hex_encode_string(bytes)
 }
-
-// ============================================================================
-// String Functions
-// ============================================================================
 
 fn apply_upper(input: &Value) -> Result<Value, ExecutionError> {
     let s = input.as_string().ok_or_else(|| {
@@ -315,10 +303,6 @@ fn apply_substr(
     ))
 }
 
-// ============================================================================
-// Bytes Concatenation
-// ============================================================================
-
 fn apply_concat(args: &[Expression], ctx: &HandlerContext) -> Result<Value, ExecutionError> {
     let mut result = Vec::new();
 
@@ -335,10 +319,6 @@ fn apply_concat(args: &[Expression], ctx: &HandlerContext) -> Result<Value, Exec
 
     Ok(Value::Bytes(result))
 }
-
-// ============================================================================
-// ExprValue Evaluation (new: no runtime parsing)
-// ============================================================================
 
 /// Evaluate an `ExprValue` to a JSON value.
 ///
@@ -792,10 +772,6 @@ mod tests {
             panic!("Expected String");
         }
     }
-
-    // =========================================================================
-    // Tests based on actual ceremony examples
-    // =========================================================================
 
     mod ceremony_examples {
         use super::*;

@@ -2,8 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-// === Verification params ===
-
 /// Params for `clock_check` action.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClockCheckParams {
@@ -92,8 +90,6 @@ impl Default for MachineInfoParams {
     }
 }
 
-// === Attestation params ===
-
 /// Params for `attest` action.
 #[cfg(feature = "attestation")]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -102,8 +98,6 @@ pub struct AttestParams {
     #[serde(default)]
     pub statement: Option<String>,
 }
-
-// === Crypto params ===
 
 /// Params for `generate_keypair` action.
 #[cfg(feature = "crypto")]
@@ -156,8 +150,6 @@ pub struct UnwrapKeyParams {
     #[serde(default)]
     pub label: Option<String>,
 }
-
-// === PKI params ===
 
 /// Params for `generate_csr` action.
 #[cfg(feature = "pki")]

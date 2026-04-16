@@ -10,7 +10,6 @@ use thiserror::Error;
 /// Errors that can occur during ceremony resolution.
 #[derive(Debug, Error, Clone)]
 pub enum ResolveError {
-    // ─── Parse Errors ───
     /// Failed to parse YAML.
     #[error("Failed to parse YAML: {message}")]
     Yaml {
@@ -29,7 +28,6 @@ pub enum ResolveError {
         message: String,
     },
 
-    // ─── Duplicate ID Errors ───
     /// Duplicate role ID.
     #[error("Duplicate role ID: '{0}'")]
     DuplicateRole(RoleId),
@@ -58,7 +56,6 @@ pub enum ResolveError {
     #[error("Duplicate output ID: '{0}'")]
     DuplicateOutput(OutputId),
 
-    // ─── Unknown Reference Errors ───
     /// Unknown role reference.
     #[error("Unknown role '{role}' in '{context}'")]
     UnknownRole {
@@ -113,7 +110,6 @@ pub enum ResolveError {
         step: StepId,
     },
 
-    // ─── Instance Validation Errors ───
     /// Required parameter is missing and has no default.
     #[error("Required parameter '{0}' is missing and has no default")]
     RequiredParamMissing(ParamId),
@@ -158,7 +154,6 @@ pub enum ResolveError {
         material: MaterialId,
     },
 
-    // ─── Semantic Errors ───
     /// `machine_info` step has a `backend:` field, which is not allowed.
     #[error("Step '{step}': machine_info does not use a backend — remove the 'backend:' field")]
     MachineInfoWithBackend {
@@ -182,7 +177,6 @@ pub enum ResolveError {
         duty_id: String,
     },
 
-    // ─── Ordering Errors ───
     /// Artifact is used before it is produced.
     #[error(
         "Artifact '{artifact}' is used in step '{used_in}' before it is produced in step '{produced_in}'"
@@ -205,7 +199,6 @@ pub enum ResolveError {
         step: StepId,
     },
 
-    // ─── Reference Syntax Errors ───
     /// Invalid reference syntax in a field.
     #[error("Invalid reference syntax '{value}' in '{context}' field '{field}'")]
     InvalidReferenceSyntax {

@@ -17,9 +17,6 @@ pub enum KeyFormat {
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum ArtifactValue {
-    // ========================================================================
-    // Real cryptographic artifacts
-    // ========================================================================
     /// Cryptographic key managed by a backend (software, HSM, `YubiKey`).
     /// The private key never leaves the backend - only references are stored.
     BackendKey {
@@ -46,9 +43,6 @@ pub enum ArtifactValue {
         /// Output format.
         format: KeyFormat,
     },
-    // ========================================================================
-    // Materials (loaded from files or inline)
-    // ========================================================================
     /// Binary content from files or inline data (documents, crypto materials).
     /// Used for hashing, cryptographic operations, and verification.
     Bytes(Vec<u8>),
@@ -197,9 +191,6 @@ impl ArtifactValue {
     #[allow(clippy::too_many_lines)]
     pub fn serialize(&self, format: Option<&str>) -> Result<SerializedArtifact, String> {
         match self {
-            // ========================================================================
-            // WrappedKey: CMS EnvelopedData
-            // ========================================================================
             ArtifactValue::WrappedKey { data, algorithm } => {
                 let fmt = format.unwrap_or("der");
                 let (mime, ext) = match algorithm {
@@ -231,9 +222,6 @@ impl ArtifactValue {
                 }
             }
 
-            // ========================================================================
-            // PublicKey: SPKI format
-            // ========================================================================
             ArtifactValue::PublicKey { key_data, .. } => {
                 let fmt = format.unwrap_or("pem");
                 match fmt {
@@ -260,9 +248,6 @@ impl ArtifactValue {
                 }
             }
 
-            // ========================================================================
-            // BackendKey: Only public key is exportable
-            // ========================================================================
             ArtifactValue::BackendKey { public_key, .. } => {
                 if let Some(pub_key) = public_key {
                     // Public key is available - serialize like PublicKey
@@ -292,9 +277,6 @@ impl ArtifactValue {
                 }
             }
 
-            // ========================================================================
-            // Materials: Binary content and text references
-            // ========================================================================
             ArtifactValue::Bytes(bytes) => Ok(SerializedArtifact {
                 bytes: bytes.clone(),
                 mime_type: Some("application/octet-stream".to_string()),
@@ -306,9 +288,6 @@ impl ArtifactValue {
                 extension: "txt",
             }),
 
-            // ========================================================================
-            // Certificate: DER or PEM
-            // ========================================================================
             ArtifactValue::Certificate { der } => {
                 let fmt = format.unwrap_or("pem");
                 match fmt {

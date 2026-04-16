@@ -21,7 +21,7 @@
 //!
 //! ## Grammar
 //!
-//! See [docs/dsl/grammar.md](../../../docs/dsl/grammar.md) for the formal grammar.
+//! The formal grammar is documented in `docs/dsl/grammar.md` (not yet published).
 
 // The expression parser uses byte-index arithmetic and slice indexing throughout.
 // All indices are guarded by length checks and loop bounds — the operations cannot
@@ -29,10 +29,6 @@
 #![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 
 use std::ops::Range;
-
-// ============================================================================
-// Reference Types (shared with reference.rs)
-// ============================================================================
 
 /// The type/namespace of a reference.
 ///
@@ -70,10 +66,6 @@ impl std::fmt::Display for RefType {
         }
     }
 }
-
-// ============================================================================
-// Runtime Values
-// ============================================================================
 
 /// A runtime value in the expression system.
 #[derive(Debug, Clone, PartialEq)]
@@ -145,10 +137,6 @@ impl std::fmt::Display for Value {
         }
     }
 }
-
-// ============================================================================
-// Expression Types
-// ============================================================================
 
 /// A parsed expression from ceremony YAML.
 ///
@@ -277,10 +265,6 @@ pub struct LocatedExpression {
     /// Byte range in the source string
     pub range: Range<usize>,
 }
-
-// ============================================================================
-// ExprValue Types (for resolver → runtime)
-// ============================================================================
 
 /// A value that may contain deferred expressions (parsed, not yet evaluated).
 ///
@@ -699,13 +683,9 @@ pub fn find_expressions(s: &str) -> Vec<LocatedExpression> {
     results
 }
 
-// ============================================================================
-// ExprValue Parsing (JSON → ExprValue)
-// ============================================================================
-
-/// Parse a `JSON` value into an `ExprValue`, extracting all `${...}` expressions.
+/// Parse a JSON value into an `ExprValue`, extracting all `${...}` expressions.
 ///
-/// This function recursively converts `JSON` into `ExprValue`:
+/// This function recursively converts JSON into `ExprValue`:
 /// - Strings containing `${...}` become `Expr` (if entire string) or `Interpolated` (if mixed)
 /// - Plain strings become `Literal(String)`
 /// - Numbers, bools, null become their `Literal` equivalents
@@ -984,10 +964,6 @@ mod tests {
         assert!(v.as_bytes().is_none());
     }
 
-    // =========================================================================
-    // Tests based on actual ceremony examples
-    // =========================================================================
-
     mod ceremony_examples {
         use super::*;
 
@@ -1119,10 +1095,6 @@ mod tests {
             }
         }
     }
-
-    // =========================================================================
-    // Tests for ExprValue parsing
-    // =========================================================================
 
     mod expr_value_tests {
         use super::*;

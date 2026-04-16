@@ -6,10 +6,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-// ============================================================================
-// Key types
-// ============================================================================
-
 /// Opaque key identifier (backend-specific).
 ///
 /// This is an opaque reference to a key managed by a backend. The internal
@@ -214,10 +210,6 @@ pub struct KeySecurityAttributes {
     pub usages: KeyUsages,
 }
 
-// ============================================================================
-// Algorithm types
-// ============================================================================
-
 /// Signature algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -331,10 +323,6 @@ impl WrappedKey {
     }
 }
 
-// ============================================================================
-// Attestation types
-// ============================================================================
-
 /// The kind of attestation evidence a backend can produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -387,10 +375,6 @@ pub struct DeviceInfo {
     /// Kernel version.
     pub kernel_version: Option<String>,
 }
-
-// ============================================================================
-// PIV types
-// ============================================================================
 
 /// PIV key slot identifiers.
 ///
@@ -554,10 +538,6 @@ pub struct YubikeySlotMetadata {
     pub public_key: Option<Vec<u8>>,
 }
 
-// ============================================================================
-// PKCS#11 types
-// ============================================================================
-
 bitflags::bitflags! {
     /// PKCS#11 token capability flags. Maps to the `CKF_*` constants in the PKCS#11 standard.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -617,10 +597,6 @@ impl fmt::Display for Pkcs11Mechanism {
     }
 }
 
-// ============================================================================
-// TPM types
-// ============================================================================
-
 /// TPM (Trusted Platform Module) information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TpmInfo {
@@ -643,10 +619,6 @@ pub struct PcrValue {
     /// PCR value in the format `"algorithm:hexhash"` (e.g., `"sha256:abc123..."`).
     pub value: String,
 }
-
-// ============================================================================
-// Backend config
-// ============================================================================
 
 /// Backend configuration entry from a ceremony file.
 ///

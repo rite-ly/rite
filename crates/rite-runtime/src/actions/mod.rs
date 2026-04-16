@@ -23,10 +23,6 @@ use rite_model::ActionType;
 pub use traits::{ActionCategory, ActionHandler, ActionMetadata};
 pub use types::{ArtifactValue, KeyFormat};
 
-// ============================================================================
-// Action Registry
-// ============================================================================
-
 /// Registry mapping action types to handlers.
 pub struct ActionRegistry {
     handlers: HashMap<ActionType, Arc<dyn ActionHandler>>,

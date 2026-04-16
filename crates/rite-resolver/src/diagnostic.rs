@@ -65,8 +65,6 @@ impl fmt::Display for Diagnostic {
     }
 }
 
-// ─── Reference map ───────────────────────────────────────────────────────────
-
 /// The kind of declaration a reference points to.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReferenceTarget {
@@ -98,8 +96,6 @@ pub struct ReferenceEntry {
     /// What this reference points to.
     pub target: ReferenceTarget,
 }
-
-// ─── SpanMap ─────────────────────────────────────────────────────────────────
 
 /// Maps ceremony element IDs to their source positions for diagnostic enrichment.
 #[derive(Default)]

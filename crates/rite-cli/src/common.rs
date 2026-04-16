@@ -170,10 +170,6 @@ pub fn prompt_missing_params(inputs: &mut CeremonyInputs, ceremony: &rite_model:
     }
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;

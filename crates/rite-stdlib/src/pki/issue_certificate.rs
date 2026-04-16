@@ -299,10 +299,6 @@ impl ActionHandler for IssueCertificateAction {
     }
 }
 
-// ============================================================================
-// Profile parsing
-// ============================================================================
-
 fn parse_profile(
     profile: Option<&str>,
     path_len: Option<u8>,
@@ -321,10 +317,6 @@ fn parse_profile(
         ))),
     }
 }
-
-// ============================================================================
-// Extension building
-// ============================================================================
 
 fn build_extensions(
     profile: &CertProfile,
@@ -482,10 +474,6 @@ fn extract_san_from_csr(csr: &CertReq) -> Option<x509_cert::ext::Extension> {
     None
 }
 
-// ============================================================================
-// CSR signature verification
-// ============================================================================
-
 /// SHA-256 `DigestInfo` DER prefix for PKCS#1 v1.5 (RFC 3447 §9.2, note 1).
 const SHA256_DIGEST_INFO_PREFIX: &[u8] = &[
     0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
@@ -534,10 +522,6 @@ fn verify_csr_signature(csr: &CertReq) -> Result<(), String> {
         ))
     }
 }
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 fn parse_csr(bytes: &[u8]) -> Result<CertReq, der::Error> {
     if bytes.starts_with(b"-----") {

@@ -31,10 +31,6 @@ use crate::types::{
     WrapAlgorithm, WrappedKey, YubikeySlotMetadata,
 };
 
-// ============================================================================
-// backend_capabilities! macro
-// ============================================================================
-
 /// Implement the `as_*_mut` upcasting helpers on a backend struct.
 ///
 /// Each `Backend` implementor must return `Some(self)` for every trait it
@@ -74,10 +70,6 @@ macro_rules! backend_capabilities {
     };
 }
 
-// ============================================================================
-// Core backend trait
-// ============================================================================
-
 /// Core trait that all backends must implement.
 ///
 /// Provides identity and fingerprinting for audit trails.
@@ -106,87 +98,61 @@ pub trait Backend: Send + Sync {
     /// - PKCS#11: `"pkcs11-module=/usr/lib/softhsm2.so+slot=0"`
     fn fingerprint(&self) -> String;
 
-    /// Try to get this backend as a `KeyStoreBackend` (mutable).
-    ///
-    /// Return `Some(self)` if this backend implements `KeyStoreBackend`.
+    /// Returns this backend as a [`KeyStoreBackend`], if supported.
     fn as_keystore_mut(&mut self) -> Option<&mut dyn KeyStoreBackend> {
         None
     }
 
-    /// Try to get this backend as a `SignBackend` (mutable).
-    ///
-    /// Return `Some(self)` if this backend implements `SignBackend`.
+    /// Returns this backend as a [`SignBackend`], if supported.
     fn as_sign_mut(&mut self) -> Option<&mut dyn SignBackend> {
         None
     }
 
-    /// Try to get this backend as an `AttestationBackend` (mutable).
-    ///
-    /// Return `Some(self)` if this backend implements `AttestationBackend`.
+    /// Returns this backend as an [`AttestationBackend`], if supported.
     fn as_attest_mut(&mut self) -> Option<&mut dyn AttestationBackend> {
         None
     }
 
-    /// Try to get this backend as a `PivBackend` (mutable).
-    ///
-    /// Return `Some(self)` if this backend implements `PivBackend`.
+    /// Returns this backend as a [`PivBackend`], if supported.
     fn as_piv_mut(&mut self) -> Option<&mut dyn PivBackend> {
         None
     }
 
-    /// Try to get this backend as a `YubikeyBackend` (mutable).
-    ///
-    /// Return `Some(self)` if this backend implements `YubikeyBackend`.
+    /// Returns this backend as a [`YubikeyBackend`], if supported.
     fn as_yubikey_mut(&mut self) -> Option<&mut dyn YubikeyBackend> {
         None
     }
 
-    /// Try to get this backend as a `KeyTransportBackend` (mutable).
-    ///
-    /// Return `Some(self)` if this backend implements `KeyTransportBackend`.
+    /// Returns this backend as a [`KeyTransportBackend`], if supported.
     fn as_transport_mut(&mut self) -> Option<&mut dyn KeyTransportBackend> {
         None
     }
 
-    /// Try to get this backend as a `CertStoreBackend` (mutable).
-    ///
-    /// Return `Some(self)` if this backend implements `CertStoreBackend`.
+    /// Returns this backend as a [`CertStoreBackend`], if supported.
     fn as_certstore_mut(&mut self) -> Option<&mut dyn CertStoreBackend> {
         None
     }
 
-    /// Try to get this backend as a `RandomBackend` (mutable).
-    ///
-    /// Return `Some(self)` if this backend implements `RandomBackend`.
+    /// Returns this backend as a [`RandomBackend`], if supported.
     fn as_random_mut(&mut self) -> Option<&mut dyn RandomBackend> {
         None
     }
 
-    /// Try to get this backend as a `Pkcs11Backend` (mutable).
-    ///
-    /// Return `Some(self)` if this backend implements `Pkcs11Backend`.
+    /// Returns this backend as a [`Pkcs11Backend`], if supported.
     fn as_pkcs11_mut(&mut self) -> Option<&mut dyn Pkcs11Backend> {
         None
     }
 
-    /// Try to get this backend as a `Pkcs11AdminBackend` (mutable).
-    ///
-    /// Return `Some(self)` if this backend implements `Pkcs11AdminBackend`.
+    /// Returns this backend as a [`Pkcs11AdminBackend`], if supported.
     fn as_pkcs11_admin_mut(&mut self) -> Option<&mut dyn Pkcs11AdminBackend> {
         None
     }
 
-    /// Try to get this backend as a `TpmBackend` (mutable).
-    ///
-    /// Return `Some(self)` if this backend implements `TpmBackend`.
+    /// Returns this backend as a [`TpmBackend`], if supported.
     fn as_tpm_mut(&mut self) -> Option<&mut dyn TpmBackend> {
         None
     }
 }
-
-// ============================================================================
-// Key store backend
-// ============================================================================
 
 /// Key generation and storage operations.
 ///
@@ -222,10 +188,6 @@ pub trait KeyStoreBackend: Backend {
     fn delete_key(&mut self, key_id: &KeyId) -> Result<(), BackendError>;
 }
 
-// ============================================================================
-// Sign backend
-// ============================================================================
-
 /// Signing and verification operations.
 pub trait SignBackend: Backend {
     /// Sign `message` with `key_id` using `algorithm`.
@@ -248,10 +210,6 @@ pub trait SignBackend: Backend {
     ) -> Result<bool, BackendError>;
 }
 
-// ============================================================================
-// Attestation backend
-// ============================================================================
-
 /// Hardware attestation operations.
 ///
 /// Backends that support attestation can cryptographically prove that a key
@@ -261,10 +219,6 @@ pub trait AttestationBackend: Backend {
     /// backend's hardware and has specific properties.
     fn attest_key(&self, key_id: &KeyId) -> Result<Attestation, BackendError>;
 }
-
-// ============================================================================
-// Certificate store backend
-// ============================================================================
 
 /// Certificate storage operations.
 ///
@@ -283,10 +237,6 @@ pub trait CertStoreBackend: Backend {
     fn delete_cert(&mut self, cert_ref: &CertRef) -> Result<(), BackendError>;
 }
 
-// ============================================================================
-// Random backend
-// ============================================================================
-
 /// Hardware or software random number generation.
 ///
 /// Backends implementing this trait can generate random bytes. For HSM
@@ -295,10 +245,6 @@ pub trait RandomBackend: Backend {
     /// Generate `len` random bytes.
     fn generate_random(&mut self, len: usize) -> Result<Vec<u8>, BackendError>;
 }
-
-// ============================================================================
-// Key transport backend
-// ============================================================================
 
 /// Key transport (wrapping) operations.
 pub trait KeyTransportBackend: Backend {
@@ -334,10 +280,6 @@ pub trait KeyTransportBackend: Backend {
     }
 }
 
-// ============================================================================
-// PKCS#11 backend
-// ============================================================================
-
 /// PKCS#11 token operations.
 ///
 /// Provides access to PKCS#11-specific functionality: token info, key
@@ -362,10 +304,6 @@ pub trait Pkcs11Backend: Backend {
     fn logout(&mut self) -> Result<(), BackendError>;
 }
 
-// ============================================================================
-// PKCS#11 admin backend
-// ============================================================================
-
 /// PKCS#11 Security Officer (SO) role operations.
 ///
 /// These operations require SO authentication and are typically performed
@@ -377,10 +315,6 @@ pub trait Pkcs11AdminBackend: Backend {
     /// Initialize the user PIN (`C_InitPIN`). Requires SO session.
     fn init_user_pin(&mut self, so_pin: &[u8], user_pin: &[u8]) -> Result<(), BackendError>;
 }
-
-// ============================================================================
-// TPM backend
-// ============================================================================
 
 /// TPM 2.0 operations.
 ///
@@ -401,10 +335,6 @@ pub trait TpmBackend: Backend {
     /// Generate a TPM quote (signed attestation over PCR values).
     fn generate_quote(&mut self, pcrs: &[u8], nonce: &[u8]) -> Result<Attestation, BackendError>;
 }
-
-// ============================================================================
-// PIV backend
-// ============================================================================
 
 /// Personal Identity Verification (PIV) smart card operations.
 ///
@@ -454,10 +384,6 @@ pub trait PivBackend: Backend {
     fn device_info(&self) -> Result<PivDeviceInfo, BackendError>;
 }
 
-// ============================================================================
-// YubiKey backend
-// ============================================================================
-
 /// `YubiKey`-specific extensions to the PIV interface.
 ///
 /// Operations in this trait are Yubico vendor extensions that go beyond
@@ -500,15 +426,10 @@ pub trait YubikeyBackend: PivBackend {
     fn block_puk(&mut self) -> Result<(), BackendError>;
 }
 
-// ============================================================================
-// Errors
-// ============================================================================
-
 /// Backend-specific errors.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum BackendError {
-    // -- Authentication --
     /// Authentication required (not logged in).
     #[error("Authentication required")]
     AuthRequired,
@@ -533,7 +454,6 @@ pub enum BackendError {
     #[error("Management key authentication required")]
     ManagementKeyRequired,
 
-    // -- Objects / keys --
     /// Key not found in backend storage.
     #[error("Key not found: {0}")]
     KeyNotFound(String),
@@ -550,7 +470,6 @@ pub enum BackendError {
     #[error("Capacity exceeded")]
     CapacityExceeded,
 
-    // -- Policy / permissions --
     /// Operation not permitted (key usage flags don't allow this).
     #[error("Operation not permitted: {0}")]
     OperationNotPermitted(String),
@@ -567,7 +486,6 @@ pub enum BackendError {
     #[error("Unsupported operation: {0}")]
     UnsupportedOperation(String),
 
-    // -- Hardware / token --
     /// Token not present in slot.
     #[error("Token not present")]
     TokenNotPresent,
@@ -576,7 +494,6 @@ pub enum BackendError {
     #[error("Hardware failure: {0}")]
     HardwareFailure(String),
 
-    // -- Data --
     /// Invalid key format or data.
     #[error("Invalid key format: {0}")]
     InvalidKeyFormat(String),
@@ -585,7 +502,6 @@ pub enum BackendError {
     #[error("Invalid data: {0}")]
     InvalidData(String),
 
-    // -- Configuration / catch-all --
     /// Backend not found in registry.
     #[error("Backend not found: {0}")]
     NotFound(String),

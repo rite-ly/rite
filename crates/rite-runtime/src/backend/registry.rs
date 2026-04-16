@@ -27,10 +27,6 @@ use rite_sdk::{
 };
 use std::collections::HashMap;
 
-// ============================================================================
-// Factory type
-// ============================================================================
-
 /// A closure that creates a concrete backend from its name and config.
 ///
 /// This is the bridge between `rite-runtime` (which defines the registry) and
@@ -43,10 +39,6 @@ use std::collections::HashMap;
 pub type BackendFactory =
     Box<dyn Fn(String, &BackendConfig) -> Result<Box<dyn Backend>, BackendError> + Send + Sync>;
 
-// ============================================================================
-// BackendState
-// ============================================================================
-
 enum BackendState {
     /// Declared but not yet initialized — hardware not yet touched.
     Uninitialized(BackendConfig),
@@ -55,10 +47,6 @@ enum BackendState {
     /// Initialization failed — error cached, hardware will not be retried.
     Failed(String),
 }
-
-// ============================================================================
-// BackendRegistry
-// ============================================================================
 
 /// Backend registry that owns all backend lifecycle state.
 ///
@@ -295,17 +283,9 @@ impl Default for BackendRegistry {
     }
 }
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
 fn unsupported(name: &str, trait_name: &str) -> BackendError {
     BackendError::UnsupportedOperation(format!("Backend '{name}' does not implement {trait_name}"))
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

@@ -2,10 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-// ============================================================================
-// Ceremony metadata
-// ============================================================================
-
 /// Ceremony metadata (name and optional description).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
@@ -15,10 +11,6 @@ pub struct Metadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
-
-// ============================================================================
-// Role helpers
-// ============================================================================
 
 /// Extract the role type from a role ID.
 ///
@@ -45,16 +37,11 @@ pub fn derive_role_name(id: &str) -> String {
         .join(" ")
 }
 
-// ============================================================================
-// Action types
-// ============================================================================
-
 /// Action types available in ceremony steps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ActionType {
-    // Verification actions
     /// Verify system clock is correct before ceremony proceeds.
     ///
     /// Displays current time and requires operator confirmation.
@@ -75,55 +62,51 @@ pub enum ActionType {
     /// Use when a value must be verified against something external (physical label,
     /// document). Supports NATO phonetic alphabet and hex formatting.
     OralReadback,
-    /// Capture machine information (hostname, `CPU`, OS) as evidence.
+    /// Capture machine information (hostname, CPU, OS) as evidence.
     ///
     /// Records device identity to prove which machine ran the ceremony.
     /// Should be placed early in ceremony to establish machine context.
     MachineInfo,
 
-    // Cryptographic actions
-    /// Generate `RSA` or `EC` keypair.
+    /// Generate RSA or EC keypair.
     GenerateKeypair,
-    /// Wrap key using `CMS` `EnvelopedData`.
+    /// Wrap key using CMS `EnvelopedData`.
     WrapKey,
-    /// Unwrap key using `CMS` `EnvelopedData`.
+    /// Unwrap key using CMS `EnvelopedData`.
     UnwrapKey,
     /// Export public key from keypair.
     ExportPublic,
 
-    // Attestation actions
     /// Formal attestation statement.
     Attest,
-    /// `TPM` attestation with `PCR` measurements and cryptographic quotes.
+    /// TPM attestation with PCR measurements and cryptographic quotes.
     ///
-    /// Requires the `rite-tpm` backend (not available at beta).
+    /// Requires the `rite-tpm` backend.
     TpmAttest,
 
-    // PIV smart card actions
-    /// Read `X.509` certificate from `PIV` smart card slot.
+    /// Read X.509 certificate from PIV smart card slot.
     ///
-    /// No `PIN` required — reading certificates is unauthenticated on `PIV` cards.
-    /// Requires a `PIV` backend (not available at beta).
+    /// No PIN required — reading certificates is unauthenticated on PIV cards.
+    /// Requires a PIV backend.
     PivReadCertificate,
-    /// Sign data using `PIV` smart card on-device key.
+    /// Sign data using PIV smart card on-device key.
     ///
-    /// Handles `PIN` verification internally before signing.
-    /// Requires a `PIV` backend (not available at beta).
+    /// Handles PIN verification internally before signing.
+    /// Requires a PIV backend.
     PivSign,
-    /// Generate a `YubiKey` attestation certificate for a `PIV` slot (Yubico extension).
+    /// Generate a `YubiKey` attestation certificate for a PIV slot (Yubico extension).
     ///
     /// Slot `F9` signs the key's certificate to prove it was generated on-device.
-    /// Requires the `rite-yubikey` backend (not available at beta).
+    /// Requires the `rite-yubikey` backend.
     YubikeyAttestSlot,
 
-    // PKI actions
-    /// Issue an `X.509` certificate from a `PKCS#10` `CSR`.
+    /// Issue an X.509 certificate from a PKCS#10 CSR.
     ///
-    /// Takes a `CSR` and a backend-managed signing key, assembles the `TBSCertificate`,
-    /// signs it via the backend's `SignBackend`, and produces a `DER`-encoded certificate.
-    /// Works with any backend implementing `SignBackend` (software, `PKCS#11`, `YubiKey`).
+    /// Takes a CSR and a backend-managed signing key, assembles the `TBSCertificate`,
+    /// signs it via the backend's `SignBackend`, and produces a DER-encoded certificate.
+    /// Works with any backend implementing `SignBackend` (software, PKCS#11, `YubiKey`).
     IssueCertificate,
-    /// Generate a `PKCS#10` `CSR` signed by a backend-managed key.
+    /// Generate a PKCS#10 CSR signed by a backend-managed key.
     ///
     /// Takes a backend-managed signing key and subject parameters, assembles a
     /// `CertReqInfo`, signs it via the backend's `SignBackend`, and produces a
@@ -154,23 +137,18 @@ impl std::fmt::Display for ActionType {
     }
 }
 
-// ============================================================================
-// Output types
-// ============================================================================
-
 /// Type of output produced by a ceremony.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum OutputType {
-    // Cryptographic outputs
-    /// Public key in `PEM` format.
+    /// Public key in PEM format.
     PublicKey,
-    /// Wrapped (encrypted) key in `CMS` format.
+    /// Wrapped (encrypted) key in CMS format.
     WrappedKey,
-    /// `X.509` certificate.
+    /// X.509 certificate.
     Certificate,
-    /// `DNSSEC` signed resource record set.
+    /// DNSSEC signed resource record set.
     SignedRrset,
     /// Certificate Transparency Signed Certificate Timestamp.
     Sct,
@@ -208,10 +186,6 @@ impl OutputType {
     }
 }
 
-// ============================================================================
-// Parameter types
-// ============================================================================
-
 /// Type of a ceremony parameter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -237,10 +211,6 @@ impl std::fmt::Display for ParameterType {
         }
     }
 }
-
-// ============================================================================
-// Duty types
-// ============================================================================
 
 /// Typed preset for common post-ceremony duty categories.
 ///
@@ -304,10 +274,6 @@ impl DutyType {
         }
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

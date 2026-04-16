@@ -213,10 +213,6 @@ impl ActionHandler for GenerateCsrAction {
     }
 }
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
 /// Build a PKCS#9 extensionRequest attribute containing a `SubjectAltName` extension.
 fn build_san_attribute(
     san_strings: &[String],

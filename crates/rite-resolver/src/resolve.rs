@@ -119,8 +119,7 @@ impl ResolveContext {
         self.errors.push(error);
     }
 
-    // ─── Phase 1: Registration ───
-
+    // Phase 1: Registration
     fn register_roles(&mut self, roles: &IndexMap<String, schema::RoleDefinition>) {
         for (id_str, role) in roles {
             let id = RoleId::new(id_str);
@@ -262,8 +261,7 @@ impl ResolveContext {
         }
     }
 
-    // ─── Phase 2: Input Resolution ───
-
+    // Phase 2: Input Resolution
     fn resolve_input_parameters(
         &mut self,
         declarations: &HashMap<String, schema::Parameter>,
@@ -378,8 +376,7 @@ impl ResolveContext {
         }
     }
 
-    // ─── Phase 3: Step Resolution ───
-
+    // Phase 3: Step Resolution
     fn resolve_steps(&mut self, ceremony: &schema::Ceremony) -> Vec<Step> {
         let mut steps = Vec::new();
         let mut seen_step_ids = HashSet::new();
@@ -603,8 +600,7 @@ impl ResolveContext {
         })
     }
 
-    // ─── Phase 4: Artifact Ordering Validation ───
-
+    // Phase 4: Artifact Ordering Validation
     fn validate_artifact_ordering(
         &mut self,
         execution_plan: &[Step],
@@ -638,8 +634,7 @@ impl ResolveContext {
         }
     }
 
-    // ─── Phase 5: Duty Resolution ───
-
+    // Phase 5: Duty Resolution
     fn resolve_duties(
         &mut self,
         duties: &IndexMap<String, schema::PostCeremonyDutyBody>,
@@ -686,8 +681,6 @@ impl ResolveContext {
         }
     }
 }
-
-// ─── Helper Functions ───
 
 /// Parse a reference string using the expression parser.
 fn parse_reference(s: &str) -> Option<Reference> {

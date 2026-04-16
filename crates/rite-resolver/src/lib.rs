@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// External inputs collected from CLI flags (`--param`, `--role`, `--material`)
-/// and environment variables (`RITE_PARAM_*`, `RITE_MATERIAL_*`).
+/// and environment variables (`RITE_PARAM_*`, `RITE_ROLE_*`, `RITE_MATERIAL_*`).
 ///
 /// These are merged with ceremony-level defaults during resolution.
 #[derive(Debug, Clone, Default)]
@@ -107,7 +107,10 @@ pub fn resolve(
     resolve::resolve_ceremony(ceremony, inputs)
 }
 
-/// Parse and resolve from a ceremony file path.
+/// Parse and resolve a ceremony from a file path.
+///
+/// Like [`resolve`], but reads YAML from disk and resolves relative `path:`
+/// values in digital materials against the ceremony file's directory.
 pub fn resolve_files(
     ceremony_path: &Path,
     inputs: Option<&CeremonyInputs>,

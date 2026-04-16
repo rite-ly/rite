@@ -18,10 +18,6 @@ use std::path::Path;
 use crate::executor::StepOutcome;
 use rite_model::StepId;
 
-// ============================================================================
-// Constants
-// ============================================================================
-
 /// Schema version for the JSONL transcript format.
 ///
 /// This version should be incremented when the transcript format changes
@@ -36,10 +32,6 @@ pub const TRANSCRIPT_SCHEMA_VERSION: &str = "0.1";
 /// Example: The first event has `prev: GENESIS_HASH`
 pub const GENESIS_HASH: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-
-// ============================================================================
-// Core Transcript Types
-// ============================================================================
 
 /// Information about the ceremony definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,10 +212,6 @@ impl StepEvidence {
     }
 }
 
-// ============================================================================
-// Fingerprint Computation
-// ============================================================================
-
 /// Compute raw SHA-256 hash bytes.
 fn sha256_bytes(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -260,10 +248,6 @@ fn compute_chain_hash(prev: &[u8], data: &[u8]) -> String {
 
     compute_fingerprint(&combined)
 }
-
-// ============================================================================
-// Transcript Writer Trait
-// ============================================================================
 
 /// Trait for writing ceremony transcripts.
 ///
@@ -306,10 +290,6 @@ pub trait TranscriptWriter: Send {
         mime: Option<String>,
     ) -> io::Result<()>;
 }
-
-// ============================================================================
-// JSONL Hash Chain Types
-// ============================================================================
 
 /// A hash-chained event in the JSONL transcript.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -452,10 +432,6 @@ impl ChainedEvent {
         computed == self.hash
     }
 }
-
-// ============================================================================
-// JSONL Hash Chain Transcript Writer
-// ============================================================================
 
 /// JSONL transcript writer with hash-chained events.
 pub struct JsonlTranscriptWriter {
@@ -614,10 +590,6 @@ impl TranscriptWriter for JsonlTranscriptWriter {
     }
 }
 
-// ============================================================================
-// No-op Transcript Writer (for when transcripts are disabled)
-// ============================================================================
-
 /// A no-op transcript writer that discards all events.
 pub struct NullTranscriptWriter;
 
@@ -664,10 +636,6 @@ impl TranscriptWriter for NullTranscriptWriter {
         Ok(())
     }
 }
-
-// ============================================================================
-// Verification
-// ============================================================================
 
 /// Verify a JSONL transcript file's integrity.
 pub fn verify_transcript(path: &Path) -> io::Result<VerificationResult> {
@@ -1172,10 +1140,6 @@ impl std::fmt::Display for VerificationResult {
         }
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

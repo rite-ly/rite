@@ -46,63 +46,73 @@ jobs:
 
   build:
     name: Build (${{ matrix.artifact }})
+    needs: [lint, test]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: rite-linux-x86_64
-            # ls_artifact: rite-ls-linux-x86_64
-          - os: ubuntu-24.04-arm
-            artifact: rite-linux-aarch64
-            # ls_artifact: rite-ls-linux-aarch64
+            target: x86_64-unknown-linux-gnu
+            artifact: rite-linux-x86_64-gnu
+            binary: rite
+            use_cross: true
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: rite-linux-x86_64-musl
+            binary: rite
+            use_cross: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: rite-linux-aarch64-gnu
+            binary: rite
+            use_cross: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact: rite-linux-aarch64-musl
+            binary: rite
+            use_cross: true
           - os: macos-15-intel
+            target: x86_64-apple-darwin
             artifact: rite-macos-x86_64
-            # ls_artifact: rite-ls-macos-x86_64
+            binary: rite
+            use_cross: false
           - os: macos-latest
+            target: aarch64-apple-darwin
             artifact: rite-macos-aarch64
-            # ls_artifact: rite-ls-macos-aarch64
+            binary: rite
+            use_cross: false
           - os: windows-latest
+            target: x86_64-pc-windows-msvc
             artifact: rite-windows-x86_64.exe
-            # ls_artifact: rite-ls-windows-x86_64.exe
+            binary: rite.exe
+            use_cross: false
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          key: build-${{ matrix.artifact }}
+          key: build-${{ matrix.target }}
+      # Linux cross-compilation uses `cross` (https://github.com/cross-rs/cross), which wraps
+      # `cargo` in a Docker container with the appropriate C toolchain pre-installed. This is
+      # needed because openssl-sys (even with vendored feature) requires a C cross-compiler.
+      # Alternatives worth evaluating: cargo-zigbuild (no Docker, uses Zig as C compiler),
+      # or bare cargo + manually installed gcc-*-linux-gnu toolchains.
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --locked
 
       - name: Build rite
-        run: cargo build --release -p rite-cli --features openssl-vendored
-      # TODO: Build rite-ls when crates/rite-ls is added to the workspace
-      # - name: Build rite-ls
-      #   run: cargo build --release -p rite-ls
+        run: ${{ matrix.use_cross && 'cross' || 'cargo' }} build --release -p rite-cli --target ${{ matrix.target }} --features openssl-vendored
+      # TODO: Add rite-ls build when crates/rite-ls is added to the workspace
 
-      - name: Prepare artifact (Unix)
-        if: runner.os != 'Windows'
-        run: cp target/release/rite ${{ matrix.artifact }}
-
-      - name: Prepare artifact (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Copy-Item target/release/rite.exe "${{ matrix.artifact }}"
-
-      - name: Upload rite artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
           if-no-files-found: error
           retention-days: 1
-      # TODO: Upload rite-ls artifact when crates/rite-ls is added
-      # - name: Upload rite-ls artifact
-      #   uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-      #   with:
-      #     name: ${{ matrix.ls_artifact }}
-      #     path: ${{ matrix.ls_artifact }}
-      #     if-no-files-found: error
-      #     retention-days: 1

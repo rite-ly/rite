@@ -71,7 +71,7 @@ pub struct KeyMetadata {
 
 /// Key algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING-KEBAB-CASE")]
+#[serde(into = "String", try_from = "String")]
 #[non_exhaustive]
 pub enum KeyAlgorithm {
     /// RSA 2048-bit key.
@@ -101,6 +101,44 @@ impl fmt::Display for KeyAlgorithm {
             KeyAlgorithm::Aes128 => write!(f, "AES-128"),
             KeyAlgorithm::Aes256 => write!(f, "AES-256"),
         }
+    }
+}
+
+/// Error returned when parsing an SDK algorithm identifier from a string fails.
+///
+/// Shared across all algorithm enums in this crate.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown value: {0:?}")]
+pub struct ParseError(String);
+
+impl std::str::FromStr for KeyAlgorithm {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "RSA-2048" => Ok(Self::Rsa2048),
+            "RSA-4096" => Ok(Self::Rsa4096),
+            "ECDSA-P256" => Ok(Self::EcdsaP256),
+            "ECDSA-P384" => Ok(Self::EcdsaP384),
+            "Ed25519" => Ok(Self::Ed25519),
+            "AES-128" => Ok(Self::Aes128),
+            "AES-256" => Ok(Self::Aes256),
+            _ => Err(ParseError(s.to_owned())),
+        }
+    }
+}
+
+impl From<KeyAlgorithm> for String {
+    fn from(a: KeyAlgorithm) -> String {
+        a.to_string()
+    }
+}
+
+impl TryFrom<String> for KeyAlgorithm {
+    type Error = ParseError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -212,6 +250,7 @@ pub struct KeySecurityAttributes {
 
 /// Signature algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SignAlgorithm {
     /// RSASSA-PKCS1-v1_5 with SHA-256.
@@ -228,6 +267,7 @@ pub enum SignAlgorithm {
 
 /// Wrapping algorithm. Determines both the cryptographic method and the output format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
 #[non_exhaustive]
 pub enum WrapAlgorithm {
     /// CMS `EnvelopedData` with RSA PKCS#1 v1.5 + AES-256-CBC (legacy).
@@ -258,30 +298,32 @@ impl fmt::Display for WrapAlgorithm {
     }
 }
 
-/// Error returned when parsing a [`WrapAlgorithm`] from a string fails.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseWrapAlgorithmError(String);
-
-impl fmt::Display for ParseWrapAlgorithmError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown wrap algorithm: '{}'", self.0)
-    }
-}
-
-impl std::error::Error for ParseWrapAlgorithmError {}
-
 impl std::str::FromStr for WrapAlgorithm {
-    type Err = ParseWrapAlgorithmError;
+    type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "CMS-RSA-CBC" => Ok(WrapAlgorithm::CmsRsaCbc),
-            "CMS-RSA-GCM" => Ok(WrapAlgorithm::CmsRsaGcm),
-            "AES-KW" => Ok(WrapAlgorithm::AesKeyWrap),
-            "AES-KWP" => Ok(WrapAlgorithm::AesKeyWrapPad),
-            "RSA-OAEP-SHA256" => Ok(WrapAlgorithm::RsaOaepSha256),
-            _ => Err(ParseWrapAlgorithmError(s.to_string())),
+            "CMS-RSA-CBC" => Ok(Self::CmsRsaCbc),
+            "CMS-RSA-GCM" => Ok(Self::CmsRsaGcm),
+            "AES-KW" => Ok(Self::AesKeyWrap),
+            "AES-KWP" => Ok(Self::AesKeyWrapPad),
+            "RSA-OAEP-SHA256" => Ok(Self::RsaOaepSha256),
+            _ => Err(ParseError(s.to_owned())),
         }
+    }
+}
+
+impl From<WrapAlgorithm> for String {
+    fn from(a: WrapAlgorithm) -> String {
+        a.to_string()
+    }
+}
+
+impl TryFrom<String> for WrapAlgorithm {
+    type Error = ParseError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -289,6 +331,7 @@ impl std::str::FromStr for WrapAlgorithm {
 ///
 /// Used for display, artifact metadata, and compatibility checking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum WrappedKeyFormat {
     /// CMS `ContentInfo` DER.
@@ -325,6 +368,7 @@ impl WrappedKey {
 
 /// The kind of attestation evidence a backend can produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum AttestationKind {
     /// Vendor cert chain proving on-device generation. Independently verifiable
@@ -457,6 +501,7 @@ pub enum CertRef {
 /// - NIST SP 800-73-5 Part 2, §3.2 — access rules per key reference
 /// - Yubico PIV documentation — configurable PIN policies (vendor extension)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum PivPinPolicy {
     /// Use the slot's default policy per NIST SP 800-73.
@@ -474,6 +519,7 @@ pub enum PivPinPolicy {
 /// This is a vendor extension (Yubico) — not part of the NIST PIV standard.
 /// Standard PIV cards do not have a touch sensor concept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum PivTouchPolicy {
     /// Use the slot's default touch policy.
@@ -503,6 +549,7 @@ pub struct PivSlotInfo {
 
 /// Origin of a key in a PIV slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum PivKeyOrigin {
     /// Key was generated on the device (GENERATE ASYMMETRIC KEY PAIR command).
@@ -636,4 +683,80 @@ pub struct BackendConfig {
     /// Backend-specific configuration key/value pairs.
     #[serde(flatten)]
     pub extra: serde_json::Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_algorithm_serde_roundtrip() {
+        // Serde uses Display strings via `serde(into/try_from)`. These are the canonical
+        // strings for ceremony YAML `algorithm:` fields and transcripts.
+        let cases: &[(KeyAlgorithm, &str)] = &[
+            (KeyAlgorithm::Rsa2048, "\"RSA-2048\""),
+            (KeyAlgorithm::Rsa4096, "\"RSA-4096\""),
+            (KeyAlgorithm::EcdsaP256, "\"ECDSA-P256\""),
+            (KeyAlgorithm::EcdsaP384, "\"ECDSA-P384\""),
+            (KeyAlgorithm::Ed25519, "\"Ed25519\""),
+            (KeyAlgorithm::Aes128, "\"AES-128\""),
+            (KeyAlgorithm::Aes256, "\"AES-256\""),
+        ];
+        for &(variant, expected) in cases {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, expected, "serialize {variant:?}");
+            let deserialized: KeyAlgorithm = serde_json::from_str(expected).unwrap();
+            assert_eq!(deserialized, variant, "deserialize {expected}");
+        }
+    }
+
+    #[test]
+    fn wrap_algorithm_serde_roundtrip() {
+        // Serde uses Display strings via `serde(into/try_from)`. These strings appear
+        // in ceremony YAML `algorithm:` fields and transcripts.
+        let cases: &[(WrapAlgorithm, &str)] = &[
+            (WrapAlgorithm::CmsRsaCbc, "\"CMS-RSA-CBC\""),
+            (WrapAlgorithm::CmsRsaGcm, "\"CMS-RSA-GCM\""),
+            (WrapAlgorithm::AesKeyWrap, "\"AES-KW\""),
+            (WrapAlgorithm::AesKeyWrapPad, "\"AES-KWP\""),
+            (WrapAlgorithm::RsaOaepSha256, "\"RSA-OAEP-SHA256\""),
+        ];
+        for &(variant, expected) in cases {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, expected, "serialize {variant:?}");
+            let deserialized: WrapAlgorithm = serde_json::from_str(expected).unwrap();
+            assert_eq!(deserialized, variant, "deserialize {expected}");
+        }
+    }
+
+    #[test]
+    fn wrap_algorithm_from_str_rejects_unknown() {
+        assert!("CMS-RSA-XTS".parse::<WrapAlgorithm>().is_err());
+        assert!("".parse::<WrapAlgorithm>().is_err());
+        assert!("cms-rsa-gcm".parse::<WrapAlgorithm>().is_err(), "must be case-sensitive");
+    }
+
+    #[test]
+    fn piv_slot_retired_enforces_valid_range() {
+        // Indices 0–19 map to PIV key references 0x82–0x95.
+        // An out-of-range index would send an invalid reference to PIV hardware.
+        assert!(PivSlot::retired(0).is_some(), "index 0 must be valid");
+        assert!(PivSlot::retired(19).is_some(), "index 19 must be valid (last slot 0x95)");
+        assert!(PivSlot::retired(20).is_none(), "index 20 must be rejected (out of range)");
+        assert!(PivSlot::retired(255).is_none(), "index 255 must be rejected");
+    }
+
+    #[test]
+    fn key_policy_default_is_secure() {
+        // The default is documented as the most secure configuration for ceremony signing keys.
+        // A regression here (e.g., extractable=true) is a silent security downgrade.
+        let policy = KeyPolicy::default();
+        assert!(policy.persistent, "ceremony keys must persist across sessions");
+        assert!(policy.sensitive, "ceremony keys must be marked sensitive");
+        assert!(!policy.extractable, "ceremony keys must not be extractable by default");
+        assert!(policy.usages.contains(KeyUsages::SIGN));
+        assert!(policy.usages.contains(KeyUsages::VERIFY));
+        assert!(!policy.usages.contains(KeyUsages::ENCRYPT), "signing-only default must not permit encryption");
+        assert!(!policy.usages.contains(KeyUsages::WRAP), "signing-only default must not permit wrapping");
+    }
 }

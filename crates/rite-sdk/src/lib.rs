@@ -35,8 +35,8 @@ pub use backend::{
 
 pub use types::{
     Attestation, AttestationKind, BackendConfig, CertRef, DeviceInfo, KeyAlgorithm, KeyId,
-    KeyMetadata, KeyPolicy, KeySecurityAttributes, KeySpec, KeyUsages, ParseWrapAlgorithmError,
-    PcrValue, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy,
+    KeyMetadata, KeyPolicy, KeySecurityAttributes, KeySpec, KeyUsages, ParseError, PcrValue,
+    PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy,
     Pkcs11Mechanism, Pkcs11TokenFlags, Pkcs11TokenInfo, SignAlgorithm, TpmInfo, WrapAlgorithm,
     WrappedKey, WrappedKeyFormat, YubikeySlotMetadata,
 };

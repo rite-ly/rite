@@ -294,4 +294,154 @@ mod tests {
         assert_eq!(derive_role_name("operator"), "Operator");
         assert_eq!(derive_role_name("ceremony-admin"), "Ceremony Admin");
     }
+
+    #[test]
+    fn action_type_serde_roundtrip() {
+        // `snake_case` rename means these exact strings appear in ceremony YAML.
+        // A variant rename or serde attr change breaks YAML parsing silently.
+        let cases: &[(ActionType, &str)] = &[
+            (ActionType::ClockCheck, "\"clock_check\""),
+            (ActionType::Confirm, "\"confirm\""),
+            (ActionType::CheckValue, "\"check_value\""),
+            (ActionType::OralReadback, "\"oral_readback\""),
+            (ActionType::MachineInfo, "\"machine_info\""),
+            (ActionType::GenerateKeypair, "\"generate_keypair\""),
+            (ActionType::WrapKey, "\"wrap_key\""),
+            (ActionType::UnwrapKey, "\"unwrap_key\""),
+            (ActionType::ExportPublic, "\"export_public\""),
+            (ActionType::Attest, "\"attest\""),
+            (ActionType::TpmAttest, "\"tpm_attest\""),
+            (ActionType::PivReadCertificate, "\"piv_read_certificate\""),
+            (ActionType::PivSign, "\"piv_sign\""),
+            (ActionType::YubikeyAttestSlot, "\"yubikey_attest_slot\""),
+            (ActionType::IssueCertificate, "\"issue_certificate\""),
+            (ActionType::GenerateCsr, "\"generate_csr\""),
+        ];
+        for &(variant, expected) in cases {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, expected, "serialize {variant:?}");
+            let deserialized: ActionType = serde_json::from_str(expected).unwrap();
+            assert_eq!(deserialized, variant, "deserialize {expected}");
+        }
+    }
+
+    #[test]
+    fn action_type_display_matches_serde() {
+        // Display is used in transcript output and error messages; serde in YAML parsing.
+        // They must agree or transcripts reference action names that differ from YAML.
+        let actions = [
+            ActionType::ClockCheck,
+            ActionType::Confirm,
+            ActionType::CheckValue,
+            ActionType::OralReadback,
+            ActionType::MachineInfo,
+            ActionType::GenerateKeypair,
+            ActionType::WrapKey,
+            ActionType::UnwrapKey,
+            ActionType::ExportPublic,
+            ActionType::Attest,
+            ActionType::TpmAttest,
+            ActionType::PivReadCertificate,
+            ActionType::PivSign,
+            ActionType::YubikeyAttestSlot,
+            ActionType::IssueCertificate,
+            ActionType::GenerateCsr,
+        ];
+        for action in actions {
+            let display = action.to_string();
+            let serde_json = serde_json::to_string(&action).unwrap();
+            assert_eq!(
+                display,
+                serde_json.trim_matches('"'),
+                "Display and serde disagree for {action:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn output_type_serde_roundtrip() {
+        // These strings appear in ceremony YAML `output:` blocks and in file extension
+        // mapping. A rename breaks both YAML parsing and output file naming.
+        let cases: &[(OutputType, &str)] = &[
+            (OutputType::PublicKey, "\"public_key\""),
+            (OutputType::WrappedKey, "\"wrapped_key\""),
+            (OutputType::Certificate, "\"certificate\""),
+            (OutputType::Document, "\"document\""),
+            (OutputType::CeremonyLog, "\"ceremony_log\""),
+        ];
+        for &(variant, expected) in cases {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, expected, "serialize {variant:?}");
+            let deserialized: OutputType = serde_json::from_str(expected).unwrap();
+            assert_eq!(deserialized, variant, "deserialize {expected}");
+        }
+    }
+
+    #[test]
+    fn parameter_type_serde_roundtrip() {
+        // These strings appear in ceremony YAML `parameters:` blocks.
+        let cases: &[(ParameterType, &str)] = &[
+            (ParameterType::String, "\"string\""),
+            (ParameterType::Date, "\"date\""),
+            (ParameterType::Integer, "\"integer\""),
+            (ParameterType::Boolean, "\"boolean\""),
+        ];
+        for (variant, expected) in cases {
+            let serialized = serde_json::to_string(variant).unwrap();
+            assert_eq!(serialized, *expected, "serialize {variant:?}");
+            let deserialized: ParameterType = serde_json::from_str(expected).unwrap();
+            // ParameterType does not implement PartialEq; check the display instead.
+            assert_eq!(
+                serde_json::to_string(&deserialized).unwrap(),
+                *expected,
+                "deserialize {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn duty_type_serde_roundtrip() {
+        // These strings appear in ceremony YAML `after:` blocks.
+        let cases: &[(DutyType, &str)] = &[
+            (DutyType::ReturnToVault, "\"return_to_vault\""),
+            (DutyType::DistributeShares, "\"distribute_shares\""),
+            (DutyType::DistributeMedia, "\"distribute_media\""),
+            (DutyType::ArchiveMaterials, "\"archive_materials\""),
+            (DutyType::PublishRecord, "\"publish_record\""),
+            (DutyType::NotifyStakeholders, "\"notify_stakeholders\""),
+            (DutyType::ImportKeys, "\"import_keys\""),
+            (DutyType::Custom, "\"custom\""),
+        ];
+        for (variant, expected) in cases {
+            let serialized = serde_json::to_string(variant).unwrap();
+            assert_eq!(serialized, *expected, "serialize {variant:?}");
+            let deserialized: DutyType = serde_json::from_str(expected).unwrap();
+            assert_eq!(deserialized, *variant, "deserialize {expected}");
+        }
+    }
+
+    #[test]
+    fn duty_type_custom_has_no_built_in_prose() {
+        // The runtime branches on this: if built_in_prose returns None, the description
+        // field is required. A regression here would panic or produce empty script output.
+        assert!(
+            DutyType::Custom.built_in_prose().is_none(),
+            "Custom duty must have no built-in prose"
+        );
+        // All other variants must have prose.
+        for duty in [
+            DutyType::ReturnToVault,
+            DutyType::DistributeShares,
+            DutyType::DistributeMedia,
+            DutyType::ArchiveMaterials,
+            DutyType::PublishRecord,
+            DutyType::NotifyStakeholders,
+            DutyType::ImportKeys,
+        ] {
+            assert!(
+                duty.built_in_prose().is_some(),
+                "{duty:?} must have built-in prose"
+            );
+        }
+    }
 }

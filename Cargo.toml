@@ -8,6 +8,7 @@ members = [
     "crates/rite-stdlib",
     "crates/rite-openssl",
     "crates/rite-cli",
+    "crates/rite-ls",
 ]
 
 [workspace.package]
@@ -34,6 +35,9 @@ openssl = { version = "=0.10.77" }
 tempfile = "=3.27.0"
 clap = { version = "=4.6.1", features = ["derive"] }
 clap_complete = "=4.6.2"
+tokio = "=1.52.1"
+tower-lsp-server = "=0.23.0"
+dashmap = "=6.1.0"
 subtle = "=2.6.1"
 sysinfo = { version = "=0.38.4", default-features = false, features = ["system"] }
 x509-cert = "=0.2.5"

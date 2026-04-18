@@ -55,37 +55,37 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: rite-linux-x86_64-gnu
-            binary: rite
+            ls_artifact: rite-ls-linux-x86_64-gnu
             use_cross: true
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact: rite-linux-x86_64-musl
-            binary: rite
+            ls_artifact: rite-ls-linux-x86_64-musl
             use_cross: true
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             artifact: rite-linux-aarch64-gnu
-            binary: rite
+            ls_artifact: rite-ls-linux-aarch64-gnu
             use_cross: true
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             artifact: rite-linux-aarch64-musl
-            binary: rite
+            ls_artifact: rite-ls-linux-aarch64-musl
             use_cross: true
           - os: macos-15-intel
             target: x86_64-apple-darwin
             artifact: rite-macos-x86_64
-            binary: rite
+            ls_artifact: rite-ls-macos-x86_64
             use_cross: false
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: rite-macos-aarch64
-            binary: rite
+            ls_artifact: rite-ls-macos-aarch64
             use_cross: false
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: rite-windows-x86_64.exe
-            binary: rite.exe
+            ls_artifact: rite-ls-windows-x86_64.exe
             use_cross: false
 
     steps:
@@ -107,12 +107,22 @@ jobs:
 
       - name: Build rite
         run: ${{ matrix.use_cross && 'cross' || 'cargo' }} build --release -p rite-cli --target ${{ matrix.target }} --features openssl-vendored
-      # TODO: Add rite-ls build when crates/rite-ls is added to the workspace
 
-      - name: Upload artifact
+      - name: Build rite-ls
+        run: ${{ matrix.use_cross && 'cross' || 'cargo' }} build --release -p rite-ls --target ${{ matrix.target }}
+
+      - name: Upload rite artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ${{ matrix.artifact }}
-          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+          path: target/${{ matrix.target }}/release/rite${{ runner.os == 'Windows' && '.exe' || '' }}
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload rite-ls artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ${{ matrix.ls_artifact }}
+          path: target/${{ matrix.target }}/release/rite-ls${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
           retention-days: 1

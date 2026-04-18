@@ -3,6 +3,11 @@
 //!
 //! Tests are skipped (not failed) when the `openssl` binary is not on `$PATH`.
 
+// Helper functions here are not annotated with #[test] so clippy's
+// allow-unwrap-in-tests / allow-expect-in-tests config does not cover them.
+// Panicking in test helpers is the expected behaviour on test failure.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use openssl::asn1::Asn1Time;
 use openssl::bn::BigNum;
 use openssl::hash::MessageDigest;

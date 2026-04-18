@@ -14,7 +14,7 @@ use std::collections::HashMap;
 /// A complete ceremony definition as parsed from YAML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Ceremony {
-    /// Schema version (e.g., `"2.0"`).
+    /// Schema version (e.g., `"0.2"`).
     pub(crate) version: String,
     /// Ceremony name.
     pub(crate) name: String,

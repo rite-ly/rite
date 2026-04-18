@@ -15,6 +15,10 @@ const INVALID: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/invalid.rite.yaml"
 );
+const ROOT_CA_SOFTWARE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/root_ca_software.rite.yaml"
+);
 
 #[test]
 fn check_minimal_ceremony_resolves_cleanly() {
@@ -46,9 +50,29 @@ fn check_invalid_ceremony_produces_errors() {
 }
 
 #[test]
+fn check_root_ca_software_resolves_cleanly() {
+    let (resolved, diags) = analyze(Path::new(ROOT_CA_SOFTWARE), None);
+
+    let errors: Vec<_> = diags
+        .iter()
+        .filter(|d| d.severity == rite_resolver::Severity::Error)
+        .collect();
+
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+
+    let resolved = resolved.expect("ceremony resolves");
+    assert_eq!(resolved.metadata.name, "Root CA Key Generation (Software)");
+    assert_eq!(resolved.roles.len(), 3, "expected 3 roles");
+    assert_eq!(resolved.execution_plan.len(), 13, "expected 13 steps");
+    assert_eq!(resolved.materials.len(), 1, "expected 1 material");
+    assert_eq!(resolved.outputs.len(), 3, "expected 3 outputs");
+    assert_eq!(resolved.parameters.len(), 1, "expected 1 parameter");
+}
+
+#[test]
 fn check_with_inputs_passes_parameter_values() {
     let yaml = r#"
-version: "2.0"
+version: "0.2"
 name: "Parameterized"
 roles: {}
 sections: {}

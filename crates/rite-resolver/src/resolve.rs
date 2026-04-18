@@ -17,11 +17,25 @@ use rite_model::{
 use rite_model::{ActionType, DutyType, ParameterType};
 use std::collections::{HashMap, HashSet};
 
+/// Schema versions this resolver understands.
+///
+/// When adding support for a new schema version, add its string here and branch the
+/// resolution logic in `resolve_ceremony` as needed. Older versions may need a separate
+/// resolution path if they differ structurally.
+const SUPPORTED_VERSIONS: &[&str] = &["0.2"];
+
 /// Resolve a ceremony and optional external inputs into IR.
 pub(crate) fn resolve_ceremony(
     ceremony: schema::Ceremony,
     inputs: Option<&CeremonyInputs>,
 ) -> ResolveResult<Ceremony> {
+    if !SUPPORTED_VERSIONS.contains(&ceremony.version.as_str()) {
+        return ResolveResult::err(ResolveError::UnsupportedVersion {
+            version: ceremony.version,
+            supported: SUPPORTED_VERSIONS.join(", "),
+        });
+    }
+
     let mut ctx = ResolveContext::new();
 
     // Phase 1: Register all declarations (build symbol tables)
@@ -753,7 +767,7 @@ mod tests {
         let mut sections = IndexMap::new();
         sections.insert("main".to_string(), empty_section());
         schema::Ceremony {
-            version: "2.0".to_string(),
+            version: "0.2".to_string(),
             name: "Test".to_string(),
             description: None,
             backends: HashMap::new(),

@@ -26,7 +26,8 @@ pub use rite_sdk::BackendConfig;
 pub use material::MaterialSource;
 
 pub use types::{
-    ActionType, DutyType, Metadata, OutputType, ParameterType, derive_role_name, role_type,
+    ActionType, DutyType, Metadata, OutputType, ParameterType, derive_role_name, derive_step_name,
+    role_type,
 };
 
 pub use ir::{

@@ -1,0 +1,188 @@
+version: "0.2"
+name: "Root CA Key Generation (Software)"
+description: |
+  Generate the offline root CA keypair on an air-gapped machine. The private key is
+  wrapped with a transport public key (CMS-RSA-GCM) and stored as an encrypted backup.
+  The keyholder of the transport private key is the sole custodian of the wrapped backup.
+
+backends:
+  openssl:
+    provider: openssl
+
+parameters:
+  ceremony_date:
+    type: date
+    default: "2026-03-28"
+    description: "Date of the ceremony (YYYY-MM-DD)"
+
+materials:
+  transport_pubkey:
+    type: digital
+    description: |
+      Crypto officer's transport RSA-4096 public key (pre-generated, held separately).
+      The corresponding private key must be kept secure — it is needed in ceremony 2
+      to unwrap the root CA key for signing.
+
+output:
+  root_ca_public_key:
+    type: public_key
+    description: "Root CA public key for trust anchor distribution"
+  root_ca_cert:
+    type: certificate
+    description: "Self-signed root CA certificate (trust anchor)"
+  wrapped_root_ca_key:
+    type: wrapped_key
+    description: "Root CA private key wrapped with transport key (encrypted backup)"
+
+roles:
+  crypto_officer:
+    name: "Crypto Officer"
+    person: "Alice Smith"
+  witness__1:
+    person: "Bob Jones"
+  witness__2:
+    person: "Carol White"
+
+acts:
+  - id: opening
+    name: "Opening"
+    description: "Verify participants and environment before proceeding."
+  - id: key_generation
+    name: "Root CA Key Generation"
+    description: "Generate and protect the root CA keypair."
+  - id: closing
+    name: "Closing"
+
+prerequisites:
+  - "Air-gapped workstation is powered on with all network interfaces disabled"
+  - "Video recording equipment is active and recording"
+  - "Transport public key file (transport.pub.pem) is present on the workstation"
+  - "All participants are present and identified"
+
+sections:
+  environment:
+    act: opening
+    name: "Environment Verification"
+    role: "${role.crypto_officer}"
+    steps:
+      verify_time:
+        action: clock_check
+        with:
+          message: "Verify system clock before recording timestamps"
+      record_machine:
+        action: machine_info
+        with:
+          include_machine_id: true
+          include_cpu: true
+          include_os: true
+          message: "Record air-gapped workstation identity for the transcript"
+      verify_air_gap:
+        action: confirm
+        with:
+          message: "Confirm the workstation has no active network connections (WiFi, Ethernet, and Bluetooth are all off)"
+      verify_transport_key:
+        action: confirm
+        with:
+          message: "Confirm transport public key file is present and originates from the crypto officer's pre-generated keypair"
+
+  keygen:
+    act: key_generation
+    name: "Key Generation"
+    role: "${role.crypto_officer}"
+    steps:
+      generate_root_ca:
+        action: generate_keypair
+        backend: openssl
+        with:
+          algorithm: RSA-4096
+          key_usage:
+            - key_cert_sign
+            - crl_sign
+        creates: root_ca_keypair
+        description: "Generate RSA-4096 root CA keypair. The private key resides only in this process."
+      export_public_key:
+        action: export_public
+        backend: openssl
+        reads: "${artifact.root_ca_keypair}"
+        creates: root_ca_public_key
+      generate_root_csr:
+        action: generate_csr
+        backend: openssl
+        reads:
+          signing_key: "${artifact.root_ca_keypair}"
+        with:
+          subject: "CN=Root CA,O=Example Org"
+        creates: root_ca_csr
+        description: "Generate a self-signed CSR for the root CA key."
+      issue_root_cert:
+        action: issue_certificate
+        backend: openssl
+        reads:
+          signing_key: "${artifact.root_ca_keypair}"
+          csr: "${artifact.root_ca_csr}"
+        with:
+          profile: root_ca
+          validity_days: 7300
+        creates: root_ca_cert
+        description: "Issue the self-signed root CA certificate (valid ~20 years)."
+      readback_fingerprint:
+        action: oral_readback
+        role: "${role.witness__1}"
+        with:
+          value: "${artifact.root_ca_public_key | sha256 | hex}"
+          format: nato_phonetic
+          characters: 16
+        description: |
+          Witness reads the first 16 hex characters of the public key hash aloud in NATO
+          phonetic alphabet. All parties record this value — it is the root CA fingerprint.
+
+  protection:
+    act: key_generation
+    name: "Key Protection"
+    role: "${role.crypto_officer}"
+    steps:
+      wrap_root_ca_key:
+        action: wrap_key
+        backend: openssl
+        reads:
+          key_to_wrap: "${artifact.root_ca_keypair}"
+          wrapping_key: "${artifact.transport_pubkey}"
+        with:
+          algorithm: CMS-RSA-GCM
+        creates: wrapped_root_ca_key
+        description: |
+          Encrypt the root CA private key with the transport public key using CMS-RSA-GCM.
+          The key can only be recovered by the holder of the transport private key.
+
+  attestation:
+    act: closing
+    name: "Witness Attestation"
+    steps:
+      witness1_attest:
+        action: attest
+        role: "${role.witness__1}"
+        with:
+          statement: "I witnessed the root CA key generation, fingerprint readback, and private key wrapping."
+      witness2_attest:
+        action: attest
+        role: "${role.witness__2}"
+        with:
+          statement: "I witnessed the root CA key generation, fingerprint readback, and private key wrapping."
+      officer_attest:
+        action: attest
+        role: "${role.crypto_officer}"
+        with:
+          statement: "Root CA keypair generated. Private key wrapped with transport public key and stored as encrypted backup. Public key exported."
+
+after:
+  archive:
+    type: archive_materials
+    role: crypto_officer
+    items:
+      - "Ceremony transcript JSON"
+      - "Root CA public key (root_ca_public_key.pem)"
+      - "Wrapped root CA key backup (wrapped_root_ca_key.bin)"
+    location: "Secure document archive"
+  notify:
+    type: notify_stakeholders
+    description: "Distribute root_ca_public_key.pem to PKI team and update trust anchor documentation"

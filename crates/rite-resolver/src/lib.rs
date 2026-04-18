@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn resolve_minimal_ceremony() {
         let yaml = r#"
-version: "2.0"
+version: "0.2"
 name: "Test Ceremony"
 roles: {}
 sections: {}
@@ -230,7 +230,7 @@ sections: {}
     #[test]
     fn resolve_with_roles_and_steps() {
         let yaml = r#"
-version: "2.0"
+version: "0.2"
 name: "Test"
 roles:
   admin:
@@ -264,7 +264,7 @@ sections:
     #[test]
     fn resolve_with_input_parameters() {
         let ceremony = r#"
-version: "2.0"
+version: "0.2"
 name: "Test"
 roles: {}
 sections:
@@ -301,7 +301,7 @@ parameters:
     #[test]
     fn fails_on_missing_required_parameter() {
         let ceremony = r#"
-version: "2.0"
+version: "0.2"
 name: "Test"
 roles: {}
 sections: {}
@@ -321,7 +321,7 @@ parameters:
     #[test]
     fn allows_missing_required_parameter_without_inputs() {
         let ceremony = r#"
-version: "2.0"
+version: "0.2"
 name: "Test"
 roles: {}
 sections: {}
@@ -336,7 +336,7 @@ parameters:
     #[test]
     fn fails_on_unknown_role_reference() {
         let yaml = r#"
-version: "2.0"
+version: "0.2"
 name: "Test"
 roles: {}
 sections:

@@ -19,6 +19,27 @@ pub fn role_type(id: &str) -> &str {
     id.split_once("__").map_or(id, |(prefix, _)| prefix)
 }
 
+/// Derive a display name from a step or section ID.
+///
+/// Splits on `_` and `-`, title-cases each word, joins with space.
+/// `"verify_time"` → `"Verify Time"`, `"generate_root_ca"` → `"Generate Root Ca"`.
+///
+/// Note: this naive title-casing does not handle acronyms — `"root_ca"` becomes `"Root Ca"`
+/// rather than `"Root CA"`. A lookup table for common ceremony acronyms (CA, CSR, PKI, HSM,
+/// TPM) could improve this. See `derive_role_name` for the same limitation.
+pub fn derive_step_name(id: &str) -> String {
+    id.split(['_', '-'])
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Derive a display name from a role ID.
 ///
 /// Splits on `__`, takes the prefix, then title-cases each word (split on `_` and `-`).
@@ -285,6 +306,16 @@ mod tests {
         assert_eq!(role_type("hsm_operator__primary"), "hsm_operator");
         assert_eq!(role_type("operator"), "operator");
         assert_eq!(role_type("witness__"), "witness");
+    }
+
+    #[test]
+    fn derive_step_name_title_cases() {
+        assert_eq!(derive_step_name("verify_time"), "Verify Time");
+        assert_eq!(derive_step_name("generate_root_ca"), "Generate Root Ca");
+        assert_eq!(derive_step_name("wrap_root_ca_key"), "Wrap Root Ca Key");
+        assert_eq!(derive_step_name("witness1_attest"), "Witness1 Attest");
+        assert_eq!(derive_step_name("clock-check"), "Clock Check");
+        assert_eq!(derive_step_name("opening"), "Opening");
     }
 
     #[test]

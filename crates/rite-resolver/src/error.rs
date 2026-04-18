@@ -10,6 +10,15 @@ use thiserror::Error;
 /// Errors that can occur during ceremony resolution.
 #[derive(Debug, Error, Clone)]
 pub enum ResolveError {
+    /// Schema version is not supported by this resolver.
+    #[error("unsupported schema version \"{version}\"; this resolver supports: {supported}")]
+    UnsupportedVersion {
+        /// The version string found in the ceremony file.
+        version: String,
+        /// Comma-separated list of supported versions.
+        supported: String,
+    },
+
     /// Failed to parse YAML.
     #[error("Failed to parse YAML: {message}")]
     Yaml {

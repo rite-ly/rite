@@ -623,7 +623,7 @@ mod tests {
     #[test]
     fn test_executor_accepts_backend_registry() {
         let ceremony_yaml = r#"
-version: "2.0"
+version: "0.2"
 name: "Backend Test"
 roles: {}
 sections:

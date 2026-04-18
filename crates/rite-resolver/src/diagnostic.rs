@@ -166,6 +166,7 @@ impl SpanMap {
                 location.map(|(line, col)| Span { line, column: col })
             }
             ResolveError::Io { .. }
+            | ResolveError::UnsupportedVersion { .. }
             | ResolveError::DuplicateOutput(_)
             | ResolveError::DutyUnknownRole { .. }
             | ResolveError::CustomDutyMissingDescription { .. } => None,

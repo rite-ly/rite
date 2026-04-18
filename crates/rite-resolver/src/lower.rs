@@ -444,7 +444,7 @@ mod tests {
     use super::*;
 
     const MINIMAL_CEREMONY: &str = r#"
-version: "2.0"
+version: "0.2"
 name: "Test Ceremony"
 roles: {}
 sections: {}
@@ -454,7 +454,7 @@ sections: {}
     fn parses_minimal_ceremony() {
         let (ceremony, _, diags) = lower_ceremony(None, MINIMAL_CEREMONY);
         let ceremony = ceremony.expect("should parse");
-        assert_eq!(ceremony.version, "2.0");
+        assert_eq!(ceremony.version, "0.2");
         assert_eq!(ceremony.name, "Test Ceremony");
         assert!(diags.iter().all(|d| d.severity != Severity::Error));
     }
@@ -462,7 +462,7 @@ sections: {}
     #[test]
     fn parses_step_with_params() {
         let yaml = r#"
-version: "2.0"
+version: "0.2"
 name: "Test"
 roles: {}
 sections:
@@ -495,7 +495,7 @@ sections:
     #[test]
     fn reports_yaml_errors_with_location() {
         let yaml = r#"
-version: "2.0"
+version: "0.2"
 name: "Test"
   bad_indent
 "#;
@@ -510,7 +510,7 @@ name: "Test"
     #[test]
     fn extracts_step_spans() {
         let yaml = r#"
-version: "2.0"
+version: "0.2"
 name: "Test"
 roles: {}
 sections:
@@ -536,7 +536,7 @@ sections:
     #[test]
     fn warns_on_unknown_top_level_key() {
         let yaml = r#"
-version: "2.0"
+version: "0.2"
 name: "Test"
 roles: {}
 sections: {}

@@ -733,7 +733,10 @@ mod tests {
     fn wrap_algorithm_from_str_rejects_unknown() {
         assert!("CMS-RSA-XTS".parse::<WrapAlgorithm>().is_err());
         assert!("".parse::<WrapAlgorithm>().is_err());
-        assert!("cms-rsa-gcm".parse::<WrapAlgorithm>().is_err(), "must be case-sensitive");
+        assert!(
+            "cms-rsa-gcm".parse::<WrapAlgorithm>().is_err(),
+            "must be case-sensitive"
+        );
     }
 
     #[test]
@@ -741,9 +744,18 @@ mod tests {
         // Indices 0–19 map to PIV key references 0x82–0x95.
         // An out-of-range index would send an invalid reference to PIV hardware.
         assert!(PivSlot::retired(0).is_some(), "index 0 must be valid");
-        assert!(PivSlot::retired(19).is_some(), "index 19 must be valid (last slot 0x95)");
-        assert!(PivSlot::retired(20).is_none(), "index 20 must be rejected (out of range)");
-        assert!(PivSlot::retired(255).is_none(), "index 255 must be rejected");
+        assert!(
+            PivSlot::retired(19).is_some(),
+            "index 19 must be valid (last slot 0x95)"
+        );
+        assert!(
+            PivSlot::retired(20).is_none(),
+            "index 20 must be rejected (out of range)"
+        );
+        assert!(
+            PivSlot::retired(255).is_none(),
+            "index 255 must be rejected"
+        );
     }
 
     #[test]
@@ -751,12 +763,24 @@ mod tests {
         // The default is documented as the most secure configuration for ceremony signing keys.
         // A regression here (e.g., extractable=true) is a silent security downgrade.
         let policy = KeyPolicy::default();
-        assert!(policy.persistent, "ceremony keys must persist across sessions");
+        assert!(
+            policy.persistent,
+            "ceremony keys must persist across sessions"
+        );
         assert!(policy.sensitive, "ceremony keys must be marked sensitive");
-        assert!(!policy.extractable, "ceremony keys must not be extractable by default");
+        assert!(
+            !policy.extractable,
+            "ceremony keys must not be extractable by default"
+        );
         assert!(policy.usages.contains(KeyUsages::SIGN));
         assert!(policy.usages.contains(KeyUsages::VERIFY));
-        assert!(!policy.usages.contains(KeyUsages::ENCRYPT), "signing-only default must not permit encryption");
-        assert!(!policy.usages.contains(KeyUsages::WRAP), "signing-only default must not permit wrapping");
+        assert!(
+            !policy.usages.contains(KeyUsages::ENCRYPT),
+            "signing-only default must not permit encryption"
+        );
+        assert!(
+            !policy.usages.contains(KeyUsages::WRAP),
+            "signing-only default must not permit wrapping"
+        );
     }
 }

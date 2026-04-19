@@ -112,7 +112,7 @@ jobs:
         run: ${{ matrix.use_cross && 'cross' || 'cargo' }} build --release -p rite-ls --target ${{ matrix.target }}
 
       - name: Upload rite artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact }}
           path: target/${{ matrix.target }}/release/rite${{ runner.os == 'Windows' && '.exe' || '' }}
@@ -120,7 +120,7 @@ jobs:
           retention-days: 1
 
       - name: Upload rite-ls artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.ls_artifact }}
           path: target/${{ matrix.target }}/release/rite-ls${{ runner.os == 'Windows' && '.exe' || '' }}

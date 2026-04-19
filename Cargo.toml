@@ -1,0 +1,71 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rite-sdk",
+    "crates/rite-model",
+    "crates/rite-resolver",
+    "crates/rite-runtime",
+    "crates/rite-stdlib",
+    "crates/rite-openssl",
+    "crates/rite-cli",
+    "crates/rite-ls",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/rite-ly/rite"
+
+[workspace.dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.149", features = ["raw_value"] }
+thiserror = "2.0.18"
+bitflags = { version = "2.11.1", features = ["serde"] }
+marked-yaml = { version = "0.8.0", features = ["serde"] }
+indexmap = { version = "2.14.0", features = ["serde"] }
+chrono = { version = "0.4.44", default-features = false, features = ["clock", "std", "serde"] }
+insta = { version = "1.47.2", features = ["yaml"] }
+secrecy = "0.10.3"
+base16ct = { version = "1.0.0", features = ["alloc"] }
+base32ct = { version = "0.3.1", features = ["alloc"] }
+base64ct = { version = "1.8.3", features = ["alloc"] }
+rand = "0.10.1"
+openssl = { version = "0.10.78" }
+tempfile = "3.27.0"
+clap = { version = "4.6.1", features = ["derive"] }
+clap_complete = "4.6.2"
+tokio = "1.52.1"
+tower-lsp-server = "0.23.0"
+dashmap = "6.1.0"
+subtle = "2.6.1"
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
+x509-cert = "0.2.5"
+der = "0.7.10"
+sha2 = "0.11.0"
+sha1 = "0.11.0"
+rsa = "0.9.10"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Overly noisy on a types-heavy crate — allow selectively
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+# Proactive correctness
+# Note: allow-unwrap-in-tests / allow-expect-in-tests are set in clippy.toml
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"
+arithmetic_side_effects = "warn"
+# Banned in committed code
+dbg_macro = "deny"
+print_stdout = "warn"
+todo = "deny"
+unimplemented = "deny"
+wildcard_imports = "deny"
+self_named_module_files = "deny"

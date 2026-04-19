@@ -1,0 +1,16 @@
+[package]
+name = "rite-sdk"
+description = "Core backend types and traits for implementing Rite ceremony backends"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+bitflags = { workspace = true }
+
+[lints]
+workspace = true

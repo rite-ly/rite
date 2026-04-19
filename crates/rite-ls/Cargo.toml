@@ -1,0 +1,19 @@
+[package]
+name = "rite-ls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Language server for the Rite ceremony DSL"
+publish = false
+
+[[bin]]
+name = "rite-ls"
+path = "src/main.rs"
+
+[dependencies]
+rite-resolver = { path = "../rite-resolver" }
+rite-model = { path = "../rite-model" }
+tower-lsp-server = { workspace = true }
+tokio = { workspace = true, features = ["macros", "io-std", "rt-multi-thread"] }
+dashmap = { workspace = true }

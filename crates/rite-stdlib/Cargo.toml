@@ -1,0 +1,41 @@
+[package]
+name        = "rite-stdlib"
+description = "Standard action library for Rite ceremony execution"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+
+[features]
+default      = ["verification", "attestation", "crypto", "pki", "openssl"]
+verification = ["dep:subtle", "dep:sysinfo"]
+attestation  = []
+crypto       = []
+pki          = ["dep:x509-cert", "dep:der", "dep:sha1", "dep:rsa", "dep:rand"]
+openssl          = ["dep:rite-openssl"]
+openssl-vendored = ["openssl", "rite-openssl/vendored"]
+full             = ["verification", "attestation", "crypto", "pki", "openssl"]
+
+[dependencies]
+rite-sdk     = { path = "../rite-sdk" }
+rite-model   = { path = "../rite-model" }
+rite-runtime = { path = "../rite-runtime" }
+rite-openssl = { path = "../rite-openssl", optional = true }
+
+serde      = { workspace = true }
+serde_json = { workspace = true }
+chrono     = { workspace = true }
+sha2       = { workspace = true }
+
+subtle    = { workspace = true, optional = true }
+sysinfo   = { workspace = true, optional = true }
+rand      = { workspace = true, optional = true }
+x509-cert = { workspace = true, optional = true }
+der       = { workspace = true, optional = true }
+sha1      = { workspace = true, optional = true }
+rsa       = { workspace = true, optional = true }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "rite-model"
+description = "Core domain model and IR for the Rite ceremony DSL"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rite-sdk = { path = "../rite-sdk" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+indexmap = { workspace = true }
+
+[lints]
+workspace = true

@@ -126,13 +126,16 @@ jobs:
           RELEASE_DIR="$(pwd)/release"
           ARTS="$(pwd)/artifacts"
 
-          cp "$ARTS/rite-linux-amd64/rite"          "$RELEASE_DIR/rite-${VERSION}-linux-amd64"
-          cp "$ARTS/rite-linux-amd64-musl/rite"     "$RELEASE_DIR/rite-${VERSION}-linux-amd64-musl"
-          cp "$ARTS/rite-linux-arm64/rite"          "$RELEASE_DIR/rite-${VERSION}-linux-arm64"
-          cp "$ARTS/rite-linux-arm64-musl/rite"     "$RELEASE_DIR/rite-${VERSION}-linux-arm64-musl"
-          cp "$ARTS/rite-darwin-amd64/rite"         "$RELEASE_DIR/rite-${VERSION}-darwin-amd64"
-          cp "$ARTS/rite-darwin-arm64/rite"         "$RELEASE_DIR/rite-${VERSION}-darwin-arm64"
-          cp "$ARTS/rite-windows-amd64/rite.exe"    "$RELEASE_DIR/rite-${VERSION}-windows-amd64.exe"
+          for target in linux-amd64 linux-amd64-musl linux-arm64 linux-arm64-musl darwin-amd64 darwin-arm64; do
+            tmp=$(mktemp -d)
+            cp "$ARTS/rite-${target}/rite" "$tmp/rite"
+            tar -czf "$RELEASE_DIR/rite-${VERSION}-${target}.tar.gz" -C "$tmp" rite
+            rm -rf "$tmp"
+          done
+          tmp=$(mktemp -d)
+          cp "$ARTS/rite-windows-amd64/rite.exe" "$tmp/rite.exe"
+          zip -j "$RELEASE_DIR/rite-${VERSION}-windows-amd64.zip" "$tmp/rite.exe"
+          rm -rf "$tmp"
 
           cp "$ARTS/rite-ls-linux-amd64/rite-ls"       "$RELEASE_DIR/rite-ls-${VERSION}-linux-amd64"
           cp "$ARTS/rite-ls-linux-amd64-musl/rite-ls"  "$RELEASE_DIR/rite-ls-${VERSION}-linux-amd64-musl"

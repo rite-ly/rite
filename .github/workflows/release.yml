@@ -126,23 +126,23 @@ jobs:
           RELEASE_DIR="$(pwd)/release"
           ARTS="$(pwd)/artifacts"
 
+          # Unix: rite as tarball, rite-ls as flat binary
           for target in linux-amd64 linux-amd64-musl linux-arm64 linux-arm64-musl darwin-amd64 darwin-arm64; do
             tmp=$(mktemp -d)
             cp "$ARTS/rite-${target}/rite" "$tmp/rite"
+            chmod +x "$tmp/rite"
             tar -czf "$RELEASE_DIR/rite-${VERSION}-${target}.tar.gz" -C "$tmp" rite
             rm -rf "$tmp"
+
+            cp "$ARTS/rite-ls-${target}/rite-ls" "$RELEASE_DIR/rite-ls-${VERSION}-${target}"
+            chmod +x "$RELEASE_DIR/rite-ls-${VERSION}-${target}"
           done
+
+          # Windows: rite as zip, rite-ls as flat binary
           tmp=$(mktemp -d)
           cp "$ARTS/rite-windows-amd64/rite.exe" "$tmp/rite.exe"
           zip -j "$RELEASE_DIR/rite-${VERSION}-windows-amd64.zip" "$tmp/rite.exe"
           rm -rf "$tmp"
-
-          cp "$ARTS/rite-ls-linux-amd64/rite-ls"       "$RELEASE_DIR/rite-ls-${VERSION}-linux-amd64"
-          cp "$ARTS/rite-ls-linux-amd64-musl/rite-ls"  "$RELEASE_DIR/rite-ls-${VERSION}-linux-amd64-musl"
-          cp "$ARTS/rite-ls-linux-arm64/rite-ls"       "$RELEASE_DIR/rite-ls-${VERSION}-linux-arm64"
-          cp "$ARTS/rite-ls-linux-arm64-musl/rite-ls"  "$RELEASE_DIR/rite-ls-${VERSION}-linux-arm64-musl"
-          cp "$ARTS/rite-ls-darwin-amd64/rite-ls"      "$RELEASE_DIR/rite-ls-${VERSION}-darwin-amd64"
-          cp "$ARTS/rite-ls-darwin-arm64/rite-ls"      "$RELEASE_DIR/rite-ls-${VERSION}-darwin-arm64"
           cp "$ARTS/rite-ls-windows-amd64/rite-ls.exe" "$RELEASE_DIR/rite-ls-${VERSION}-windows-amd64.exe"
 
           sha256sum "$RELEASE_DIR"/* > "$RELEASE_DIR/SHA256SUMS"

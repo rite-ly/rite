@@ -58,14 +58,19 @@ rite verify transcript.jsonl    # verify afterward
 
 ## Installation
 
+Install with Homebrew:
+
+```sh
+brew tap rite-ly/tap
+brew install rite
+```
+
 Build from source:
 
 ```sh
 cargo build --release -p rite-cli
 cargo build --release -p rite-ls   # language server for editor support
 ```
-
-Homebrew tap and prebuilt binaries are planned.
 
 ## Features
 

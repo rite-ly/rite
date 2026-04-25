@@ -1113,14 +1113,14 @@ mod tests {
 
         let w1 = resolved.roles.get(&RoleId::new("witness__1")).unwrap();
         assert_eq!(w1.role_type, "witness");
-        assert_eq!(w1.name, "Witness");
+        assert_eq!(w1.name, "Witness 1");
 
         let op = resolved
             .roles
             .get(&RoleId::new("hsm_operator__primary"))
             .unwrap();
         assert_eq!(op.role_type, "hsm_operator");
-        assert_eq!(op.name, "Hsm Operator");
+        assert_eq!(op.name, "Hsm Operator Primary");
 
         let admin = resolved.roles.get(&RoleId::new("ceremony_admin")).unwrap();
         assert_eq!(admin.role_type, "ceremony_admin");

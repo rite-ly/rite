@@ -1,17 +1,16 @@
 [package]
-name = "rite-model"
-description = "Core domain model and IR for the Rite ceremony DSL"
+name = "rite-script"
+description = "HTML ceremony script and report generation for Rite"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false #TODO enable at a later time, disabled for safety
+publish = false
 
 [dependencies]
-rite-sdk = { path = "../rite-sdk" }
+rite-model = { path = "../rite-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-indexmap = { workspace = true }
 chrono = { workspace = true }
 
 [lints]

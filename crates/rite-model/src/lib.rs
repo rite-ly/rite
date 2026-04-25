@@ -19,6 +19,7 @@
 pub mod expression;
 pub mod ir;
 mod material;
+pub mod transcript;
 mod types;
 
 pub use rite_sdk::BackendConfig;

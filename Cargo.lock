@@ -1077,6 +1077,7 @@ dependencies = [
  "rite-model",
  "rite-resolver",
  "rite-runtime",
+ "rite-script",
  "rite-stdlib",
  "serde_json",
  "tempfile",
@@ -1097,6 +1098,7 @@ dependencies = [
 name = "rite-model"
 version = "0.1.0-rc.3"
 dependencies = [
+ "chrono",
  "indexmap",
  "rite-sdk",
  "serde",
@@ -1142,6 +1144,16 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "rite-script"
+version = "0.1.0-rc.3"
+dependencies = [
+ "chrono",
+ "rite-model",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

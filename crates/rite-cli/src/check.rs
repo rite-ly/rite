@@ -1,6 +1,6 @@
 //! `rite check`: validate a ceremony definition file.
 
-use crate::common::{InputArgs, build_inputs_or_exit};
+use crate::common::{InputArgs, build_inputs_or_exit, resolve_or_exit};
 use clap::Args as ClapArgs;
 use std::path::PathBuf;
 
@@ -14,27 +14,7 @@ pub struct Args {
 
 pub fn run(args: &Args) {
     let inputs = build_inputs_or_exit(&args.input);
-
-    let (resolved_opt, diags) =
-        rite_resolver::analyze(&args.file, (!inputs.is_empty()).then_some(&inputs));
-
-    let has_errors = diags
-        .iter()
-        .any(|d| d.severity == rite_resolver::Severity::Error);
-
-    for d in &diags {
-        eprintln!("{d}");
-    }
-
-    if has_errors {
-        std::process::exit(1);
-    }
-
-    // resolved_opt is always Some when no error diagnostics were produced.
-    let Some(resolved) = resolved_opt else {
-        eprintln!("Internal error: ceremony resolved to None with no errors");
-        std::process::exit(1);
-    };
+    let resolved = resolve_or_exit(&args.file, (!inputs.is_empty()).then_some(&inputs));
 
     let registry = rite_stdlib::default_registry();
     let unsupported = registry.unsupported_actions(&resolved.execution_plan);

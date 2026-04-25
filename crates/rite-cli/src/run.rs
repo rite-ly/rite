@@ -96,11 +96,11 @@ pub fn run(args: Args) {
 
     match executor.execute(&resolved, backend_registry) {
         Ok(_) => {
-            eprintln!("\nOutput directory: {}", output_dir.display());
+            println!("Output directory: {}", output_dir.display());
             std::process::exit(0);
         }
         Err(e) => {
-            eprintln!("\nCeremony failed: {e}");
+            eprintln!("Ceremony failed: {e}");
             std::process::exit(1);
         }
     }

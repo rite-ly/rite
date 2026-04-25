@@ -10,10 +10,18 @@ mod verify;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 
+const TOP_LEVEL_AFTER_HELP: &str = "\
+Lifecycle:
+  rite check  ceremony.rite.yaml
+  rite run    ceremony.rite.yaml
+  rite verify <output-dir-or-transcript.jsonl>
+";
+
 #[derive(Parser)]
 #[command(name = "rite")]
 #[command(version)]
 #[command(about = "A CLI for cryptographic key ceremonies", long_about = None)]
+#[command(after_help = TOP_LEVEL_AFTER_HELP)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

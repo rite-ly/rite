@@ -77,15 +77,15 @@ pub fn build_inputs(
 
     for s in params {
         let (key, value) = parse_key_value(s)?;
-        input_params.insert(key, serde_json::Value::String(value));
+        input_params.insert(key.to_lowercase(), serde_json::Value::String(value));
     }
     for s in roles {
         let (key, value) = parse_key_value(s)?;
-        input_roles.insert(key, value);
+        input_roles.insert(key.to_lowercase(), value);
     }
     for s in materials {
         let (key, value) = parse_key_value(s)?;
-        input_materials.insert(key, parse_material_value(&value));
+        input_materials.insert(key.to_lowercase(), parse_material_value(&value));
     }
 
     Ok(CeremonyInputs {
@@ -212,5 +212,19 @@ mod tests {
         assert!(
             matches!(source, MaterialSource::Identifier { identifier } if identifier == "my-identifier")
         );
+    }
+
+    #[test]
+    fn build_inputs_normalizes_cli_keys_to_lowercase() {
+        let inputs = build_inputs(
+            &["Param_Name=value".to_string()],
+            &["Role_ID=Alice".to_string()],
+            &["Material_ID=@file.pem".to_string()],
+        )
+        .expect("inputs build");
+
+        assert!(inputs.parameters.contains_key("param_name"));
+        assert!(inputs.roles.contains_key("role_id"));
+        assert!(inputs.materials.contains_key("material_id"));
     }
 }

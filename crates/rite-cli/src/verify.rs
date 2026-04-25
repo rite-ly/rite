@@ -63,6 +63,8 @@ pub fn run(args: Args) {
                 status,
                 events_count,
             } => {
+                // TODO: Revisit exit-code policy for Incomplete; currently uses 2 as a
+                // special-case status distinct from generic verification failure.
                 eprintln!("Incomplete transcript (no final fingerprint).");
                 eprintln!("  Status: {status:?}");
                 eprintln!("  Events recorded: {events_count}");

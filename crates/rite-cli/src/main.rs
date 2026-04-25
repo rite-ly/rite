@@ -12,6 +12,7 @@ use clap_complete::{Shell, generate};
 
 #[derive(Parser)]
 #[command(name = "rite")]
+#[command(version)]
 #[command(about = "A CLI for cryptographic key ceremonies", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -43,6 +44,20 @@ fn main() {
             let mut cmd = Cli::command();
             let bin_name = cmd.get_name().to_string();
             generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn supports_top_level_version_flag() {
+        match Cli::try_parse_from(["rite", "--version"]) {
+            Ok(_) => panic!("--version should exit"),
+            Err(err) => assert_eq!(err.kind(), ErrorKind::DisplayVersion),
         }
     }
 }

@@ -11,7 +11,8 @@ name = "rite"
 path = "src/main.rs"
 
 [features]
-default = ["rite-stdlib/default"]
+default = ["rite-stdlib/default", "render"]
+render = ["dep:rite-script"]
 openssl = ["rite-stdlib/openssl"]
 verification = ["rite-stdlib/verification"]
 attestation = ["rite-stdlib/attestation"]
@@ -23,6 +24,7 @@ openssl-vendored = ["rite-stdlib/openssl-vendored"]
 rite-model = { path = "../rite-model" }
 rite-resolver = { path = "../rite-resolver" }
 rite-runtime = { path = "../rite-runtime" }
+rite-script = { path = "../rite-script", optional = true }
 rite-stdlib = { path = "../rite-stdlib", default-features = false }
 clap = { workspace = true }
 clap_complete = { workspace = true }

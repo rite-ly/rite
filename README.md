@@ -51,9 +51,11 @@ sections:
 Run it:
 
 ```sh
-rite check ceremony.rite.yaml   # validate
-rite run   ceremony.rite.yaml   # execute with transcript
-rite verify transcript.jsonl    # verify afterward
+rite check  ceremony.rite.yaml   # validate
+rite script ceremony.rite.yaml   # generate script
+rite run    ceremony.rite.yaml   # execute with transcript
+rite verify transcript.jsonl     # verify integrity
+rite report transcript.jsonl     # generate audit report
 ```
 
 ## Installation
@@ -84,7 +86,8 @@ cargo build --release -p rite-ls   # language server for editor support
 - [ ] Hardware backends: YubiKey PIV, TPM 2.0, PKCS#11
 - [ ] Bootable USB image for isolated ceremony environments
 - [ ] Error handling and ceremony resumption
-- [ ] Script and checklist generation from the ceremony definition
+- [x] Script and report generation (`rite script`, `rite report`)
+  - [ ] Themeable output via template engine
 - [ ] Plugin system for out-of-process backends
 
 ## Editor support

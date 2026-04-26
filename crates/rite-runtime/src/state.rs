@@ -237,7 +237,7 @@ mod tests {
             role: None,
             started_at: chrono::Utc::now(),
             completed_at: chrono::Utc::now(),
-            outcome: crate::transcript::EventOutcome::from(&result.outcome),
+            outcome: crate::transcript::step_outcome_to_event_outcome(&result.outcome),
             evidence: crate::transcript::StepEvidence::new(),
         };
 

@@ -42,11 +42,12 @@ pub fn derive_step_name(id: &str) -> String {
 
 /// Derive a display name from a role ID.
 ///
-/// Splits on `__`, takes the prefix, then title-cases each word (split on `_` and `-`).
-/// `"witness__1"` → `"Witness"`, `"hsm_operator__primary"` → `"Hsm Operator"`.
+/// Title-cases each word (split on `_`, `-`, and `__`), including the discriminator suffix.
+/// `"witness__1"` → `"Witness 1"`, `"hsm_operator__primary"` → `"Hsm Operator Primary"`.
 pub fn derive_role_name(id: &str) -> String {
-    role_type(id)
-        .split(['_', '-'])
+    id.replace("__", " ")
+        .split(['_', '-', ' '])
+        .filter(|s| !s.is_empty())
         .map(|word| {
             let mut chars = word.chars();
             match chars.next() {
@@ -133,6 +134,33 @@ pub enum ActionType {
     /// `CertReqInfo`, signs it via the backend's `SignBackend`, and produces a
     /// `DER`-encoded `CSR`.
     GenerateCsr,
+}
+
+impl ActionType {
+    /// Short human-readable description of what this action does.
+    ///
+    /// Used as fallback prose in script generation, TUI step display, and LSP
+    /// hover when no explicit `description` or `message` parameter is present.
+    pub fn describe(&self) -> &'static str {
+        match self {
+            ActionType::ClockCheck => "Verify system clock against a reference time.",
+            ActionType::Confirm => "Confirm readiness or completion of a manual step.",
+            ActionType::CheckValue => "Verify a value matches an expected result.",
+            ActionType::OralReadback => "Read back a value aloud for verification.",
+            ActionType::MachineInfo => "Record system and environment information.",
+            ActionType::Attest => "Record a signed attestation from a participant.",
+            ActionType::TpmAttest => "Record TPM platform attestation (PCR values).",
+            ActionType::GenerateKeypair => "Generate an asymmetric keypair.",
+            ActionType::ExportPublic => "Export the public component of a keypair.",
+            ActionType::WrapKey => "Wrap (encrypt) a key for secure transport.",
+            ActionType::UnwrapKey => "Unwrap (decrypt) a transported key.",
+            ActionType::GenerateCsr => "Generate a Certificate Signing Request.",
+            ActionType::IssueCertificate => "Issue an X.509 certificate from a CSR.",
+            ActionType::PivReadCertificate => "Read a certificate from a PIV smart card slot.",
+            ActionType::PivSign => "Sign data using a PIV smart card key.",
+            ActionType::YubikeyAttestSlot => "Attest a YubiKey PIV slot key.",
+        }
+    }
 }
 
 impl std::fmt::Display for ActionType {
@@ -320,8 +348,11 @@ mod tests {
 
     #[test]
     fn derive_role_name_title_cases() {
-        assert_eq!(derive_role_name("witness__1"), "Witness");
-        assert_eq!(derive_role_name("hsm_operator__primary"), "Hsm Operator");
+        assert_eq!(derive_role_name("witness__1"), "Witness 1");
+        assert_eq!(
+            derive_role_name("hsm_operator__primary"),
+            "Hsm Operator Primary"
+        );
         assert_eq!(derive_role_name("operator"), "Operator");
         assert_eq!(derive_role_name("ceremony-admin"), "Ceremony Admin");
     }

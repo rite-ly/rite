@@ -1,10 +1,11 @@
 //! Shared helpers for input assembly and pre-flight checks.
 
 use clap::Args;
-use rite_model::{MaterialKind, MaterialSource};
+use rite_model::{Ceremony, MaterialKind, MaterialSource};
 use rite_resolver::CeremonyInputs;
 use std::collections::HashMap;
 use std::io::BufRead;
+use std::path::Path;
 
 /// Input flags shared by `check` and `run`.
 #[derive(Args, Debug)]
@@ -104,6 +105,31 @@ pub fn build_inputs_or_exit(input_args: &InputArgs) -> CeremonyInputs {
             std::process::exit(1);
         }
     }
+}
+
+/// Resolve a ceremony file, printing diagnostics and exiting on failure.
+///
+/// Used by `check`, `script`, and `report` — any non-interactive entry point
+/// that needs a `Ceremony` from a YAML path.
+pub fn resolve_or_exit(path: &Path, inputs: Option<&CeremonyInputs>) -> Ceremony {
+    let (resolved_opt, diags) = rite_resolver::analyze(path, inputs);
+
+    for d in &diags {
+        eprintln!("{d}");
+    }
+
+    let has_errors = diags
+        .iter()
+        .any(|d| d.severity == rite_resolver::Severity::Error);
+
+    if has_errors {
+        std::process::exit(1);
+    }
+
+    resolved_opt.unwrap_or_else(|| {
+        eprintln!("Internal error: ceremony resolved to None with no errors");
+        std::process::exit(1);
+    })
 }
 
 /// Check that all digital materials with file sources exist on disk.

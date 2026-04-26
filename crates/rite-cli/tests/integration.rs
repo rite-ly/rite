@@ -70,9 +70,9 @@ fn check_root_ca_software_resolves_cleanly() {
     assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
 
     let resolved = resolved.expect("ceremony resolves");
-    assert_eq!(resolved.metadata.name, "Root CA Key Generation (Software)");
+    assert_eq!(resolved.metadata.name, "Test Root CA");
     assert_eq!(resolved.roles.len(), 3, "expected 3 roles");
-    assert_eq!(resolved.execution_plan.len(), 13, "expected 13 steps");
+    assert_eq!(resolved.execution_plan.len(), 8, "expected 8 steps");
     assert_eq!(resolved.materials.len(), 1, "expected 1 material");
     assert_eq!(resolved.outputs.len(), 3, "expected 3 outputs");
     assert_eq!(resolved.parameters.len(), 1, "expected 1 parameter");

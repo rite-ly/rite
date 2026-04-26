@@ -7,6 +7,7 @@ members = [
     "crates/rite-runtime",
     "crates/rite-stdlib",
     "crates/rite-openssl",
+    "crates/rite-script",
     "crates/rite-cli",
     "crates/rite-ls",
 ]

@@ -9,8 +9,8 @@ use crate::state::{ExecutionState, StepResult};
 use crate::step_info::StepInfo;
 use crate::step_ui::{ConsoleStepUI, Icon, StepUI};
 use crate::transcript::{
-    EventOutcome, ExecutionEvent, JsonlTranscriptWriter, NullTranscriptWriter, ParticipantRecord,
-    StepEvidence, TranscriptStatus, TranscriptWriter, compute_file_fingerprint,
+    ExecutionEvent, JsonlTranscriptWriter, NullTranscriptWriter, ParticipantRecord, StepEvidence,
+    TranscriptStatus, TranscriptWriter, compute_file_fingerprint,
 };
 use crate::transcript_config::{self, TranscriptConfig};
 use chrono::Utc;
@@ -460,7 +460,7 @@ fn execute_core(
             role: step.role.as_ref().map(|r| format!("${{{r}}}")),
             started_at,
             completed_at,
-            outcome: EventOutcome::from(&result.outcome),
+            outcome: crate::transcript::step_outcome_to_event_outcome(&result.outcome),
             evidence,
         };
 

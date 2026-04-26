@@ -4,17 +4,32 @@
 
 mod check;
 mod common;
+#[cfg(feature = "render")]
+mod report;
 mod run;
+#[cfg(feature = "render")]
+mod script;
 mod verify;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 
+#[cfg(feature = "render")]
 const TOP_LEVEL_AFTER_HELP: &str = "\
 Lifecycle:
-  rite check  ceremony.rite.yaml
-  rite run    ceremony.rite.yaml
-  rite verify <output-dir-or-transcript.jsonl>
+  rite check  ceremony.rite.yaml  # validate
+  rite script ceremony.rite.yaml  # generate script
+  rite run    ceremony.rite.yaml  # execute with transcript
+  rite verify <output-dir>        # verify integrity
+  rite report <output-dir>        # generate audit report
+";
+
+#[cfg(not(feature = "render"))]
+const TOP_LEVEL_AFTER_HELP: &str = "\
+Lifecycle:
+  rite check  ceremony.rite.yaml  # validate
+  rite run    ceremony.rite.yaml  # execute with transcript
+  rite verify <output-dir>        # verify integrity
 ";
 
 #[derive(Parser)]
@@ -35,6 +50,12 @@ enum Commands {
     Run(run::Args),
     /// Verify a ceremony transcript's integrity
     Verify(verify::Args),
+    /// Generate a printable HTML ceremony script
+    #[cfg(feature = "render")]
+    Script(script::Args),
+    /// Generate an HTML post-ceremony report from a transcript
+    #[cfg(feature = "render")]
+    Report(report::Args),
     /// Generate shell completion scripts
     #[command(hide = true)]
     Completions {
@@ -48,6 +69,10 @@ fn main() {
         Commands::Check(args) => check::run(&args),
         Commands::Run(args) => run::run(args),
         Commands::Verify(args) => verify::run(args),
+        #[cfg(feature = "render")]
+        Commands::Script(args) => script::run(&args),
+        #[cfg(feature = "render")]
+        Commands::Report(args) => report::run(args),
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             let bin_name = cmd.get_name().to_string();

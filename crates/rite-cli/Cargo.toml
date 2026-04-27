@@ -11,14 +11,14 @@ name = "rite"
 path = "src/main.rs"
 
 [features]
-default = ["rite-stdlib/default", "render"]
+default = ["render", "openssl", "verification", "attestation", "crypto", "pki"]
 render = ["dep:rite-script"]
-openssl = ["rite-stdlib/openssl"]
+openssl = ["rite-stdlib/openssl", "dep:openssl"]
 verification = ["rite-stdlib/verification"]
 attestation = ["rite-stdlib/attestation"]
 crypto = ["rite-stdlib/crypto"]
 pki = ["rite-stdlib/pki"]
-openssl-vendored = ["rite-stdlib/openssl-vendored"]
+openssl-vendored = ["rite-stdlib/openssl-vendored", "openssl"]
 
 [dependencies]
 rite-model = { path = "../rite-model" }
@@ -26,9 +26,13 @@ rite-resolver = { path = "../rite-resolver" }
 rite-runtime = { path = "../rite-runtime" }
 rite-script = { path = "../rite-script", optional = true }
 rite-stdlib = { path = "../rite-stdlib", default-features = false }
+openssl = { workspace = true, optional = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 serde_json = { workspace = true }
+
+[build-dependencies]
+chrono = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

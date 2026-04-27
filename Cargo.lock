@@ -1071,9 +1071,11 @@ dependencies = [
 name = "rite-cli"
 version = "0.1.0-rc.3"
 dependencies = [
+ "chrono",
  "clap",
  "clap_complete",
  "insta",
+ "openssl",
  "rite-model",
  "rite-resolver",
  "rite-runtime",

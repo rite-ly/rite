@@ -10,6 +10,7 @@ mod run;
 #[cfg(feature = "render")]
 mod script;
 mod verify;
+mod version;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
@@ -56,6 +57,8 @@ enum Commands {
     /// Generate an HTML post-ceremony report from a transcript
     #[cfg(feature = "render")]
     Report(report::Args),
+    /// Print version information
+    Version(version::Args),
     /// Generate shell completion scripts
     #[command(hide = true)]
     Completions {
@@ -73,6 +76,7 @@ fn main() {
         Commands::Script(args) => script::run(&args),
         #[cfg(feature = "render")]
         Commands::Report(args) => report::run(args),
+        Commands::Version(args) => version::run(&args),
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             let bin_name = cmd.get_name().to_string();

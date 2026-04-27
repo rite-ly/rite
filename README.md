@@ -82,9 +82,11 @@ cargo build --release -p rite-ls   # language server for editor support
 - [x] Transcript generation and `rite verify`
 - [x] Language server (`rite-ls`) with diagnostics, completions, hover, and go-to-definition
 - [ ] Elliptic curve support (EC keys, ECDSA signing)
+- [ ] Post-quantum support: ML-KEM key encapsulation (hybrid KEM+wrap)
 - [ ] Interactive TUI with role-specific views
 - [ ] Hardware backends: YubiKey PIV, TPM 2.0, PKCS#11
 - [ ] Bootable USB image for isolated ceremony environments
+- [ ] Docker image for containerised ceremony execution
 - [ ] Error handling and ceremony resumption
 - [x] Script and report generation (`rite script`, `rite report`)
   - [ ] Themeable output via template engine

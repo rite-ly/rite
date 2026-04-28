@@ -1069,7 +1069,7 @@ dependencies = [
 
 [[package]]
 name = "rite-cli"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "chrono",
  "clap",
@@ -1087,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "rite-ls"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "dashmap",
  "rite-model",
@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "rite-model"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "chrono",
  "indexmap",
@@ -1109,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "rite-openssl"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "base16ct",
  "openssl",
@@ -1119,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "rite-resolver"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "indexmap",
  "marked-yaml",
@@ -1131,7 +1131,7 @@ dependencies = [
 
 [[package]]
 name = "rite-runtime"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "base16ct",
  "base32ct",
@@ -1150,7 +1150,7 @@ dependencies = [
 
 [[package]]
 name = "rite-script"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "chrono",
  "rite-model",
@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "rite-sdk"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "bitflags",
  "serde",
@@ -1170,7 +1170,7 @@ dependencies = [
 
 [[package]]
 name = "rite-stdlib"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "chrono",
  "der",

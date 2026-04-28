@@ -67,6 +67,14 @@ brew tap rite-ly/tap
 brew install rite
 ```
 
+Run with Docker:
+
+```sh
+docker run --rm -it --init \
+  -v "$PWD:/workspace" \
+  ghcr.io/rite-ly/rite:0.1.0-rc.4 check ceremony.rite.yaml
+```
+
 Build from source:
 
 ```sh
@@ -86,7 +94,7 @@ cargo build --release -p rite-ls   # language server for editor support
 - [ ] Interactive TUI with role-specific views
 - [ ] Hardware backends: YubiKey PIV, TPM 2.0, PKCS#11
 - [ ] Bootable USB image for isolated ceremony environments
-- [ ] Docker image for containerised ceremony execution
+- [x] Docker image for containerised ceremony execution
 - [ ] Error handling and ceremony resumption
 - [x] Script and report generation (`rite script`, `rite report`)
   - [ ] Themeable output via template engine

@@ -1,6 +1,6 @@
 # Rite
 
-A DSL and runtime for cryptographic key ceremonies.
+A DSL and runtime for describing, executing, and reviewing cryptographic key ceremonies.
 
 > **Beta** — Breaking changes between 0.x versions.
 
@@ -82,27 +82,30 @@ cargo build --release -p rite-cli
 cargo build --release -p rite-ls   # language server for editor support
 ```
 
+### Editor support
+
+The `rite-ls` language server is available for editor integration (VS Code, IntelliJ, and other LSP clients).
+
 ## Features
 
 - [x] YAML ceremony DSL with roles, steps, materials, and outputs
 - [x] Guided execution with console UI (`rite run`)
-- [x] OpenSSL backend (RSA key generation, signing, wrapping)
+- [x] OpenSSL backend (RSA and ECDSA-P256 key generation, signing, wrapping, and PKI)
 - [x] Transcript generation and `rite verify`
 - [x] Language server (`rite-ls`) with diagnostics, completions, hover, and go-to-definition
-- [ ] Elliptic curve support (EC keys, ECDSA signing)
+- [x] Elliptic curve support (EC keys, ECDSA signing)
 - [ ] Post-quantum support: ML-KEM key encapsulation (hybrid KEM+wrap)
 - [ ] Interactive TUI with role-specific views
-- [ ] Hardware backends: YubiKey PIV, TPM 2.0, PKCS#11
+- [ ] Hardware backends: 
+  - [ ] YubiKey PIV
+  - [ ] TPM 2.0
+  - [ ] PKCS#11
 - [ ] Bootable USB image for isolated ceremony environments
 - [x] Docker image for containerised ceremony execution
 - [ ] Error handling and ceremony resumption
 - [x] Script and report generation (`rite script`, `rite report`)
   - [ ] Themeable output via template engine
 - [ ] Plugin system for out-of-process backends
-
-## Editor support
-
-The `rite-ls` language server is available for editor integration (VS Code, IntelliJ, and other LSP clients).
 
 ## Design
 

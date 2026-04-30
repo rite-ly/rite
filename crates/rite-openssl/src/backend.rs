@@ -7,7 +7,9 @@
 use openssl::asn1::Asn1Time;
 use openssl::bn::BigNum;
 use openssl::cms::CmsContentInfo;
+use openssl::ec::{EcGroup, EcKey};
 use openssl::hash::MessageDigest;
+use openssl::nid::Nid;
 use openssl::pkey::{PKey, PKeyRef, Private};
 use openssl::rsa::{Padding, Rsa};
 use openssl::sign::{Signer, Verifier};
@@ -116,9 +118,9 @@ impl Backend for OpenSslBackend {
     }
 
     rite_sdk::backend_capabilities!(
-        /// Supports RSA-2048 and RSA-4096 key generation and storage.
+        /// Supports RSA-2048, RSA-4096, and ECDSA-P256 key generation and storage.
         as_keystore_mut: KeyStoreBackend,
-        /// Supports RSA-PKCS1-v1.5 (SHA-256) and RSA-PSS (SHA-256) signing.
+        /// Supports RSA-PKCS1-v1.5 (SHA-256), RSA-PSS (SHA-256), and ECDSA-P256 (SHA-256) signing.
         as_sign_mut: SignBackend,
         /// Supports CMS-RSA-GCM and CMS-RSA-CBC key wrapping and unwrapping.
         as_transport_mut: KeyTransportBackend,
@@ -132,21 +134,51 @@ fn ossl_err(context: &str, e: &openssl::error::ErrorStack) -> BackendError {
     BackendError::Other(format!("{context}: {e}"))
 }
 
-/// Detect the key algorithm from an OpenSSL private key by inspecting the RSA modulus size.
+/// Infer `KeyAlgorithm` from a private key recovered by CMS decryption.
 ///
-/// `Rsa::size()` returns the modulus size in bytes (256 for RSA-2048, 512 for RSA-4096).
+/// CMS `EnvelopedData` carries the raw key bytes as opaque content — the algorithm
+/// of the wrapped key is not encoded in the CMS structure itself.
 fn detect_key_algorithm(pkey: &PKey<Private>) -> Result<KeyAlgorithm, BackendError> {
-    let rsa = pkey
-        .rsa()
-        .map_err(|_| BackendError::Other("Unwrapped key is not RSA".to_string()))?;
-    match rsa.size() {
-        256 => Ok(KeyAlgorithm::Rsa2048),
-        512 => Ok(KeyAlgorithm::Rsa4096),
-        n => Err(BackendError::UnsupportedAlgorithm(format!(
-            "RSA modulus size {n} bytes ({} bits) not supported (expected 2048 or 4096 bits)",
-            n.saturating_mul(8)
-        ))),
+    if let Ok(rsa) = pkey.rsa() {
+        return match rsa.size() {
+            256 => Ok(KeyAlgorithm::Rsa2048),
+            512 => Ok(KeyAlgorithm::Rsa4096),
+            n => Err(BackendError::UnsupportedAlgorithm(format!(
+                "RSA modulus size {n} bytes ({} bits) not supported (expected 2048 or 4096 bits)",
+                n.saturating_mul(8)
+            ))),
+        };
     }
+
+    if let Ok(ec_key) = pkey.ec_key() {
+        let nid = ec_key
+            .group()
+            .curve_name()
+            .ok_or_else(|| BackendError::Other("EC key has no named curve".to_string()))?;
+        return match nid {
+            Nid::X9_62_PRIME256V1 => Ok(KeyAlgorithm::EcdsaP256),
+            _ => Err(BackendError::UnsupportedAlgorithm(format!(
+                "EC curve {nid:?} is not supported for key transport (only P-256)"
+            ))),
+        };
+    }
+
+    Err(BackendError::Other(
+        "Unwrapped key is neither RSA nor a supported EC key".to_string(),
+    ))
+}
+
+/// Parse a private key from DER bytes, trying PKCS#8, traditional PKCS#1 (RSA), and
+/// traditional SEC1 (EC) in sequence.
+///
+/// `private_key_to_der()` emits PKCS#1 for RSA and SEC1 for EC keys. OpenSSL's
+/// `d2i_AutoPrivateKey` (called by `PKey::private_key_from_der`) handles PKCS#8 and
+/// PKCS#1 RSA but not SEC1 EC — the third leg covers that gap.
+fn parse_private_key_der(bytes: &[u8]) -> Result<PKey<Private>, BackendError> {
+    PKey::private_key_from_der(bytes)
+        .or_else(|_| Rsa::private_key_from_der(bytes).and_then(PKey::from_rsa))
+        .or_else(|_| EcKey::private_key_from_der(bytes).and_then(PKey::from_ec_key))
+        .map_err(|e| ossl_err("Parse private key material", &e))
 }
 
 impl KeyStoreBackend for OpenSslBackend {
@@ -159,6 +191,13 @@ impl KeyStoreBackend for OpenSslBackend {
             KeyAlgorithm::Rsa4096 => {
                 let rsa = Rsa::generate(4096).map_err(|e| ossl_err("RSA-4096 keygen", &e))?;
                 PKey::from_rsa(rsa).map_err(|e| ossl_err("PKey from RSA-4096", &e))?
+            }
+            KeyAlgorithm::EcdsaP256 => {
+                let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)
+                    .map_err(|e| ossl_err("Load P-256 group", &e))?;
+                let ec_key =
+                    EcKey::generate(&group).map_err(|e| ossl_err("ECDSA-P256 keygen", &e))?;
+                PKey::from_ec_key(ec_key).map_err(|e| ossl_err("PKey from ECDSA-P256", &e))?
             }
             other => {
                 return Err(BackendError::UnsupportedAlgorithm(format!(
@@ -174,18 +213,7 @@ impl KeyStoreBackend for OpenSslBackend {
         spec: KeySpec,
         key_bytes: &[u8],
     ) -> Result<KeyMetadata, BackendError> {
-        // Try PKCS#8 DER first (standard format), then fall back to traditional RSA DER.
-        // OpenSSL's private_key_to_der() outputs traditional format, but external callers
-        // may provide PKCS#8.
-        let pkey = PKey::private_key_from_der(key_bytes).or_else(|_| {
-            Rsa::private_key_from_der(key_bytes)
-                .and_then(PKey::from_rsa)
-                .map_err(|e| {
-                    BackendError::InvalidKeyFormat(format!(
-                        "Invalid private key (tried PKCS#8 and traditional RSA DER): {e}"
-                    ))
-                })
-        })?;
+        let pkey = parse_private_key_der(key_bytes)?;
         self.store_key(spec.algorithm, spec.label, pkey)
     }
 
@@ -255,6 +283,18 @@ impl SignBackend for OpenSslBackend {
                     .sign_oneshot_to_vec(message)
                     .map_err(|e| ossl_err("Sign operation", &e))
             }
+            KeyAlgorithm::EcdsaP256 => {
+                if algorithm != SignAlgorithm::EcdsaSha256 {
+                    return Err(BackendError::UnsupportedAlgorithm(format!(
+                        "Sign algorithm {algorithm:?} not supported for ECDSA-P256 keys"
+                    )));
+                }
+                let mut signer = Signer::new(MessageDigest::sha256(), &key.pkey)
+                    .map_err(|e| ossl_err("Create ECDSA signer", &e))?;
+                signer
+                    .sign_oneshot_to_vec(message)
+                    .map_err(|e| ossl_err("ECDSA sign operation", &e))
+            }
             other => Err(BackendError::UnsupportedAlgorithm(format!(
                 "Signing not yet implemented for algorithm {other:?}"
             ))),
@@ -302,6 +342,21 @@ impl SignBackend for OpenSslBackend {
                 Ok(verifier
                     .verify_oneshot(signature, message)
                     .map_err(|e| ossl_err("Verify operation", &e))?)
+            }
+            KeyAlgorithm::EcdsaP256 => {
+                if algorithm != SignAlgorithm::EcdsaSha256 {
+                    return Err(BackendError::UnsupportedAlgorithm(format!(
+                        "Verify algorithm {algorithm:?} not supported for ECDSA-P256 keys"
+                    )));
+                }
+
+                let pub_pkey = PKey::public_key_from_der(&key.public_der)
+                    .map_err(|e| ossl_err("Decode ECDSA public key", &e))?;
+                let mut verifier = Verifier::new(MessageDigest::sha256(), &pub_pkey)
+                    .map_err(|e| ossl_err("Create ECDSA verifier", &e))?;
+                Ok(verifier
+                    .verify_oneshot(signature, message)
+                    .map_err(|e| ossl_err("ECDSA verify operation", &e))?)
             }
             other => Err(BackendError::UnsupportedAlgorithm(format!(
                 "Verification not yet implemented for algorithm {other:?}"
@@ -397,10 +452,26 @@ fn build_cert(
     Ok(builder.build())
 }
 
-/// CMS-encrypt key material to a recipient certificate.
+/// CMS-encrypt `key_material` to a recipient certificate.
 ///
-/// Shared by `wrap` (self-signed cert from KEK) and `wrap_to_public` (cert from external
-/// public key). OpenSSL CMS requires an X.509 certificate, not a bare public key.
+/// Shared by `wrap` (self-signed cert built from the KEK) and `wrap_to_public` (cert built
+/// from an external public key). OpenSSL's `CMS_encrypt` selects the key-encapsulation
+/// mechanism automatically based on the recipient certificate's public key type:
+///
+/// **RSA recipient — `KeyTransportRecipientInfo` (RFC 5652 §6.2)**
+/// The content-encryption key (CEK) is encrypted directly under the recipient's RSA public
+/// key using RSAES-PKCS1-v1.5. This is the default in OpenSSL's `CMS_encrypt`; OAEP
+/// would require `CMS_KEY_PARAM` flags and is not used here.
+///
+/// **EC P-256 recipient — `KeyAgreementRecipientInfo` (RFC 5753 §3.1)**
+/// OpenSSL generates an ephemeral P-256 key pair, performs one-pass ECDH between the
+/// ephemeral private key and the recipient's static public key, then feeds the shared
+/// secret into the ANSI X9.63 KDF (SHA-256) to produce a 128-bit key-encryption key.
+/// That KEK wraps the CEK with AES-128-KeyWrap (RFC 3394). The algorithm identifier in
+/// the CMS blob is `dhSinglePass-stdDH-sha256kdf-scheme` (OID 1.3.132.1.11.1).
+///
+/// The `algorithm` parameter controls only the **content** cipher (AES-256-GCM or
+/// AES-256-CBC); the key-encapsulation path above is orthogonal to it.
 fn cms_encrypt(
     cert: openssl::x509::X509,
     key_material: &[u8],
@@ -442,6 +513,8 @@ impl KeyTransportBackend for OpenSslBackend {
         let kek = self.get_key(wrapping_key_id)?;
         let target = self.get_key(key_id)?;
 
+        // A self-signed cert built from the KEK lets OpenSSL select the right
+        // encapsulation: RSA KEK → RSAES-PKCS1-v1.5, EC P-256 KEK → RFC 5753 ECDH.
         let cert = self_signed_cert(&kek.pkey)?;
         let key_material = target
             .pkey
@@ -474,11 +547,7 @@ impl KeyTransportBackend for OpenSslBackend {
                 .map_err(|e| ossl_err("CMS decrypt", &e))?
         };
 
-        // The decrypted key material comes from private_key_to_der() which produces
-        // the traditional/type-specific format (not PKCS#8). Try both formats.
-        let pkey = PKey::private_key_from_der(&key_material)
-            .or_else(|_| Rsa::private_key_from_der(&key_material).and_then(PKey::from_rsa))
-            .map_err(|e| ossl_err("Parse unwrapped key material", &e))?;
+        let pkey = parse_private_key_der(&key_material)?;
 
         let key_algorithm = detect_key_algorithm(&pkey)?;
         self.store_key(key_algorithm, label.to_string(), pkey)
@@ -492,6 +561,9 @@ impl KeyTransportBackend for OpenSslBackend {
     ) -> Result<WrappedKey, BackendError> {
         let target = self.get_key(key_id)?;
 
+        // OpenSSL reads only the subject public key for CMS encapsulation and never
+        // validates the cert's self-signature — the throwaway RSA signing key inside
+        // cert_for_public_key works regardless of whether the recipient key is RSA or EC.
         let cert = cert_for_public_key(recipient_pub_key)?;
         let key_material = target
             .pkey
@@ -542,6 +614,18 @@ mod tests {
             .unwrap();
         assert_eq!(metadata.algorithm, KeyAlgorithm::Rsa4096);
         assert_eq!(metadata.label, "test-key-4096");
+        assert!(metadata.public_key.is_some());
+        assert!(metadata.attestation.is_none());
+    }
+
+    #[test]
+    fn test_generate_ecdsa_p256() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let metadata = backend
+            .generate_key(spec(KeyAlgorithm::EcdsaP256, "test-key-p256"))
+            .unwrap();
+        assert_eq!(metadata.algorithm, KeyAlgorithm::EcdsaP256);
+        assert_eq!(metadata.label, "test-key-p256");
         assert!(metadata.public_key.is_some());
         assert!(metadata.attestation.is_none());
     }
@@ -620,6 +704,29 @@ mod tests {
                 message,
                 &signature,
                 SignAlgorithm::RsaPssSha256,
+            )
+            .unwrap();
+        assert!(valid);
+    }
+
+    #[test]
+    fn test_sign_and_verify_ecdsa_p256() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let metadata = backend
+            .generate_key(spec(KeyAlgorithm::EcdsaP256, "signing-key-p256"))
+            .unwrap();
+
+        let message = b"Hello, ECDSA!";
+        let signature = backend
+            .sign(&metadata.key_id, message, SignAlgorithm::EcdsaSha256)
+            .unwrap();
+
+        let valid = backend
+            .verify(
+                &metadata.key_id,
+                message,
+                &signature,
+                SignAlgorithm::EcdsaSha256,
             )
             .unwrap();
         assert!(valid);
@@ -839,6 +946,107 @@ mod tests {
             .unwrap(&wrapped, &recipient.key_id, "unwrapped")
             .unwrap();
 
+        let unwrapped_pub = backend.export_public_key(&unwrapped.key_id).unwrap();
+        assert_eq!(original_pub, unwrapped_pub);
+    }
+
+    // EC key-transport round-trip tests.
+    //
+    // All three combinations of (content key type, KEK type) are exercised:
+    //   RSA content + EC KEK  → RFC 5753 ECDH encapsulation
+    //   EC content  + RSA KEK → RSAES-PKCS1-v1.5 encapsulation, SEC1 payload
+    //   EC content  + EC KEK  → RFC 5753 ECDH encapsulation, SEC1 payload
+
+    #[test]
+    fn test_wrap_rsa_content_with_ec_kek() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        // EC P-256 KEK → OpenSSL uses RFC 5753 ECDH key encapsulation.
+        let kek = backend
+            .generate_key(spec(KeyAlgorithm::EcdsaP256, "ec-kek"))
+            .unwrap();
+        let target = backend
+            .generate_key(spec(KeyAlgorithm::Rsa2048, "rsa-target"))
+            .unwrap();
+        let original_pub = backend.export_public_key(&target.key_id).unwrap();
+
+        let wrapped = backend
+            .wrap(&target.key_id, &kek.key_id, WrapAlgorithm::CmsRsaCbc)
+            .unwrap();
+        let unwrapped = backend.unwrap(&wrapped, &kek.key_id, "unwrapped").unwrap();
+
+        assert_eq!(unwrapped.algorithm, KeyAlgorithm::Rsa2048);
+        let unwrapped_pub = backend.export_public_key(&unwrapped.key_id).unwrap();
+        assert_eq!(original_pub, unwrapped_pub);
+    }
+
+    #[test]
+    fn test_wrap_ec_content_with_rsa_kek() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        // RSA KEK → RSAES-PKCS1-v1.5 encapsulation; the payload is an EC private key
+        // serialised in SEC1 (traditional EC DER), recovered via the EcKey fallback parser.
+        let kek = backend
+            .generate_key(spec(KeyAlgorithm::Rsa2048, "rsa-kek"))
+            .unwrap();
+        let target = backend
+            .generate_key(spec(KeyAlgorithm::EcdsaP256, "ec-target"))
+            .unwrap();
+        let original_pub = backend.export_public_key(&target.key_id).unwrap();
+
+        let wrapped = backend
+            .wrap(&target.key_id, &kek.key_id, WrapAlgorithm::CmsRsaCbc)
+            .unwrap();
+        let unwrapped = backend.unwrap(&wrapped, &kek.key_id, "unwrapped").unwrap();
+
+        assert_eq!(unwrapped.algorithm, KeyAlgorithm::EcdsaP256);
+        let unwrapped_pub = backend.export_public_key(&unwrapped.key_id).unwrap();
+        assert_eq!(original_pub, unwrapped_pub);
+    }
+
+    #[test]
+    fn test_wrap_ec_content_with_ec_kek() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        // Both keys are EC P-256: RFC 5753 ECDH encapsulation wraps an SEC1 payload.
+        let kek = backend
+            .generate_key(spec(KeyAlgorithm::EcdsaP256, "ec-kek"))
+            .unwrap();
+        let target = backend
+            .generate_key(spec(KeyAlgorithm::EcdsaP256, "ec-target"))
+            .unwrap();
+        let original_pub = backend.export_public_key(&target.key_id).unwrap();
+
+        let wrapped = backend
+            .wrap(&target.key_id, &kek.key_id, WrapAlgorithm::CmsRsaCbc)
+            .unwrap();
+        let unwrapped = backend.unwrap(&wrapped, &kek.key_id, "unwrapped").unwrap();
+
+        assert_eq!(unwrapped.algorithm, KeyAlgorithm::EcdsaP256);
+        let unwrapped_pub = backend.export_public_key(&unwrapped.key_id).unwrap();
+        assert_eq!(original_pub, unwrapped_pub);
+    }
+
+    #[test]
+    fn test_wrap_ec_content_to_ec_public_key() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        // wrap_to_public with an EC recipient: the throwaway cert carries the EC public key
+        // as its subject, triggering RFC 5753 ECDH encapsulation in CMS.
+        let recipient = backend
+            .generate_key(spec(KeyAlgorithm::EcdsaP256, "ec-recipient"))
+            .unwrap();
+        let recipient_pub = backend.export_public_key(&recipient.key_id).unwrap();
+
+        let target = backend
+            .generate_key(spec(KeyAlgorithm::EcdsaP256, "ec-target"))
+            .unwrap();
+        let original_pub = backend.export_public_key(&target.key_id).unwrap();
+
+        let wrapped = backend
+            .wrap_to_public(&target.key_id, &recipient_pub, WrapAlgorithm::CmsRsaCbc)
+            .unwrap();
+        let unwrapped = backend
+            .unwrap(&wrapped, &recipient.key_id, "unwrapped")
+            .unwrap();
+
+        assert_eq!(unwrapped.algorithm, KeyAlgorithm::EcdsaP256);
         let unwrapped_pub = backend.export_public_key(&unwrapped.key_id).unwrap();
         assert_eq!(original_pub, unwrapped_pub);
     }

@@ -17,7 +17,7 @@
 //! - `verification`: verification actions (requires `subtle`, `sysinfo`)
 //! - `attestation`: attestation recording
 //! - `crypto`: crypto actions (`generate_keypair`, `export_public`, `wrap_key`, `unwrap_key`)
-//! - `pki`: PKI actions (`generate_csr`, `issue_certificate`; requires `x509-cert`, `der`, `sha1`, `rsa`, `rand`)
+//! - `pki`: PKI actions (`generate_csr`, `issue_certificate`; requires `x509-cert`, `der`, `sha1`, `rsa`, `p256`, `rand`)
 //! - `default`: all features enabled
 //!
 //! # Usage

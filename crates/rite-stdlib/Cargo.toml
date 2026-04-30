@@ -12,7 +12,7 @@ default      = ["verification", "attestation", "crypto", "pki", "openssl"]
 verification = ["dep:subtle", "dep:sysinfo"]
 attestation  = []
 crypto       = []
-pki          = ["dep:x509-cert", "dep:der", "dep:sha1", "dep:rsa", "dep:rand"]
+pki          = ["dep:x509-cert", "dep:der", "dep:sha1", "dep:rsa", "dep:p256", "dep:rand"]
 openssl          = ["dep:rite-openssl"]
 openssl-vendored = ["openssl", "rite-openssl/vendored"]
 full             = ["verification", "attestation", "crypto", "pki", "openssl"]
@@ -35,8 +35,11 @@ x509-cert = { workspace = true, optional = true }
 der       = { workspace = true, optional = true }
 sha1      = { workspace = true, optional = true }
 rsa       = { workspace = true, optional = true }
+p256      = { workspace = true, optional = true }
 
 [dev-dependencies]
+rite-openssl = { path = "../rite-openssl" }
+openssl      = { workspace = true }
 
 [lints]
 workspace = true

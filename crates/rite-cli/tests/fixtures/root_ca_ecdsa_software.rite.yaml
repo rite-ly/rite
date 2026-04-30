@@ -1,0 +1,106 @@
+version: "0.2"
+name: "Test Root CA (ECDSA)"
+
+backends:
+  openssl:
+    provider: openssl
+
+parameters:
+  ceremony_date:
+    type: date
+    default: "2026-01-01"
+
+materials:
+  transport_pubkey:
+    type: digital
+
+output:
+  root_ca_public_key:
+    type: public_key
+  root_ca_cert:
+    type: certificate
+  wrapped_root_ca_key:
+    type: wrapped_key
+
+roles:
+  crypto_officer:
+    name: "Crypto Officer"
+    person: "Alice"
+  witness__1:
+    name: "Witness 1"
+    person: "Bob"
+  witness__2:
+    name: "Witness 2"
+    person: "Carol"
+
+sections:
+  keygen:
+    name: "Key Generation"
+    role: "${role.crypto_officer}"
+    steps:
+      generate_root_ca:
+        action: generate_keypair
+        backend: openssl
+        with:
+          algorithm: ECDSA-P256
+          key_usage: [key_cert_sign, crl_sign]
+        creates: root_ca_keypair
+      export_public_key:
+        action: export_public
+        backend: openssl
+        reads: "${artifact.root_ca_keypair}"
+        creates: root_ca_public_key
+      generate_root_csr:
+        action: generate_csr
+        backend: openssl
+        reads:
+          signing_key: "${artifact.root_ca_keypair}"
+        with:
+          subject: "CN=Test Root CA ECDSA"
+        creates: root_ca_csr
+      issue_root_cert:
+        action: issue_certificate
+        backend: openssl
+        reads:
+          signing_key: "${artifact.root_ca_keypair}"
+          csr: "${artifact.root_ca_csr}"
+        with:
+          profile: root_ca
+          validity_days: 7300
+        creates: root_ca_cert
+      wrap_root_ca_key:
+        action: wrap_key
+        backend: openssl
+        reads:
+          key_to_wrap: "${artifact.root_ca_keypair}"
+          wrapping_key: "${artifact.transport_pubkey}"
+        with:
+          algorithm: CMS-RSA-CBC
+        creates: wrapped_root_ca_key
+
+  attestation:
+    name: "Attestation"
+    steps:
+      witness1_attest:
+        action: attest
+        role: "${role.witness__1}"
+        with:
+          statement: "I witnessed the ceremony."
+      witness2_attest:
+        action: attest
+        role: "${role.witness__2}"
+        with:
+          statement: "I witnessed the ceremony."
+      officer_attest:
+        action: attest
+        role: "${role.crypto_officer}"
+        with:
+          statement: "Ceremony complete."
+
+after:
+  archive:
+    type: archive_materials
+    role: crypto_officer
+    items:
+      - "Transcript"
+    location: "Archive"

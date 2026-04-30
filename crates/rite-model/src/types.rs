@@ -98,7 +98,6 @@ pub enum ActionType {
     UnwrapKey,
     /// Export public key from keypair.
     ExportPublic,
-
     /// Formal attestation statement.
     Attest,
     /// TPM attestation with PCR measurements and cryptographic quotes.

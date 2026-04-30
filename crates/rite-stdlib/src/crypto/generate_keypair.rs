@@ -65,17 +65,9 @@ impl ActionHandler for GenerateKeypairAction {
                 reason: format!("Backend '{backend_name}' does not support key generation"),
             })?;
 
-        let key_algorithm = match typed.algorithm.as_str() {
-            "RSA-2048" => KeyAlgorithm::Rsa2048,
-            "RSA-4096" => KeyAlgorithm::Rsa4096,
-            "ECDSA-P256" => KeyAlgorithm::EcdsaP256,
-            "ECDSA-P384" => KeyAlgorithm::EcdsaP384,
-            other => {
-                return Err(ExecutionError::InvalidParams(format!(
-                    "Unsupported algorithm: {other}"
-                )));
-            }
-        };
+        let key_algorithm: KeyAlgorithm = typed.algorithm.parse().map_err(|_| {
+            ExecutionError::InvalidParams(format!("Unsupported algorithm: '{}'", typed.algorithm))
+        })?;
 
         let spec = KeySpec {
             algorithm: key_algorithm,

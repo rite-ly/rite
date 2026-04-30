@@ -7,13 +7,13 @@
 //! ## Design
 //!
 //! Certificate construction (`TbsCertificate` assembly, DER encoding) lives entirely in
-//! this action. The backend only provides the raw RSA signature bytes via `SignBackend::sign`.
+//! this action. The backend only provides raw signature bytes via `SignBackend::sign`.
 //! This means the action works with any backend implementing `SignBackend` (software,
 //! PKCS#11, `YubiKey`) without each backend needing custom cert-building code.
 
 use der::{
     Decode, DecodePem, Encode,
-    asn1::{BitString, Null, ObjectIdentifier, OctetString},
+    asn1::{BitString, ObjectIdentifier, OctetString},
 };
 use rite_model::{ActionType, StepInputs};
 use rite_runtime::{
@@ -21,7 +21,7 @@ use rite_runtime::{
     StepEvidence, StepInfo, StepResult, StepUI, display, resolve_artifact_bytes,
     resolve_backend_key,
 };
-use rite_sdk::{Backend, SignAlgorithm};
+use rite_sdk::Backend;
 use x509_cert::{
     Certificate, TbsCertificate, Version,
     ext::pkix::{
@@ -36,7 +36,10 @@ use x509_cert::{
 
 use crate::params::IssueCertificateParams;
 
-use super::oids::{EXTENSION_REQUEST_OID, ID_CE_SUBJECT_ALT_NAME, SHA256_WITH_RSA_ENCRYPTION};
+use super::oids::{
+    ECDSA_WITH_SHA256, EXTENSION_REQUEST_OID, ID_CE_SUBJECT_ALT_NAME, SHA256_WITH_RSA_ENCRYPTION,
+    sig_profile_for_algorithm,
+};
 
 /// id-ce-basicConstraints OID (2.5.29.19)
 const ID_CE_BASIC_CONSTRAINTS: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.19");
@@ -125,8 +128,8 @@ impl ActionHandler for IssueCertificateAction {
         })?;
 
         let signing_key_id = signing_key_ref.artifact_id();
-        let (key_backend_name, key_id, _, _) = resolve_backend_key(ctx.artifacts, &signing_key_id)
-            .map_err(|e| {
+        let (key_backend_name, key_id, key_algorithm, _) =
+            resolve_backend_key(ctx.artifacts, &signing_key_id).map_err(|e| {
                 ExecutionError::InvalidParams(format!(
                     "signing_key '{}' must be a BackendKey: {e}",
                     signing_key_ref.display_name()
@@ -189,9 +192,10 @@ impl ActionHandler for IssueCertificateAction {
             ExecutionError::InvalidParams(format!("Failed to build validity period: {e}"))
         })?;
 
-        let sig_alg = build_sig_alg().map_err(|e| {
-            ExecutionError::InvalidParams(format!("Failed to build signature algorithm: {e}"))
-        })?;
+        let (sign_algorithm, sig_alg, evidence_algorithm) =
+            sig_profile_for_algorithm(key_algorithm).map_err(|e| {
+                ExecutionError::InvalidParams(format!("Failed to build signature algorithm: {e}"))
+            })?;
 
         let issuer_spki = issuer_cert_opt
             .as_ref()
@@ -249,7 +253,7 @@ impl ActionHandler for IssueCertificateAction {
             })?;
 
         let signature_bytes = sign_backend
-            .sign(&key_id, &tbs_der, SignAlgorithm::RsaPkcs1Sha256)
+            .sign(&key_id, &tbs_der, sign_algorithm)
             .map_err(|e| ExecutionError::StepFailed {
                 step: step.id.clone(),
                 reason: format!("Signing failed: {e}"),
@@ -277,7 +281,7 @@ impl ActionHandler for IssueCertificateAction {
         )?;
 
         let mut evidence = StepEvidence::new();
-        evidence.insert("algorithm", "sha256WithRSAEncryption");
+        evidence.insert("algorithm", evidence_algorithm);
         evidence.insert("profile", profile.canonical_name());
         evidence.insert("validity_days", validity_days.to_string().as_str());
         evidence.insert("signing_key", signing_key_ref.display_name().as_str());
@@ -480,22 +484,25 @@ const SHA256_DIGEST_INFO_PREFIX: &[u8] = &[
     0x00, 0x04, 0x20,
 ];
 
-/// Verify the CSR's self-signature. Only sha256WithRSAEncryption is supported.
+/// Verify the CSR's self-signature.
 fn verify_csr_signature(csr: &CertReq) -> Result<(), String> {
     let oid = csr.algorithm.oid;
+
+    // Both branches need these; p256 and rsa crates use different type hierarchies
+    // from x509-cert/der, so a DER round-trip is the only cross-crate bridge available.
+    let spki_der = csr
+        .info
+        .public_key
+        .to_der()
+        .map_err(|e| format!("Failed to encode public key: {e}"))?;
+    let info_der = csr
+        .info
+        .to_der()
+        .map_err(|e| format!("Failed to encode CertReqInfo: {e}"))?;
+
     if oid == SHA256_WITH_RSA_ENCRYPTION {
         use rsa::pkcs8::DecodePublicKey;
         use sha2::Digest;
-
-        let spki_der = csr
-            .info
-            .public_key
-            .to_der()
-            .map_err(|e| format!("Failed to encode public key: {e}"))?;
-        let info_der = csr
-            .info
-            .to_der()
-            .map_err(|e| format!("Failed to encode CertReqInfo: {e}"))?;
 
         let rsa_key = rsa::RsaPublicKey::from_public_key_der(&spki_der)
             .map_err(|e| format!("Failed to parse RSA public key from CSR: {e}"))?;
@@ -504,21 +511,31 @@ fn verify_csr_signature(csr: &CertReq) -> Result<(), String> {
         let mut digest_info = SHA256_DIGEST_INFO_PREFIX.to_vec();
         digest_info.extend_from_slice(&hash);
 
-        let sig_bytes = csr.signature.raw_bytes();
-
         rsa_key
             .verify(
                 rsa::pkcs1v15::Pkcs1v15Sign::new_unprefixed(),
                 &digest_info,
-                sig_bytes,
+                csr.signature.raw_bytes(),
             )
             .map_err(|_| {
                 "CSR self-signature verification failed: signature does not match".to_string()
             })
+    } else if oid == ECDSA_WITH_SHA256 {
+        use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
+        use p256::pkcs8::DecodePublicKey;
+
+        let verifying_key = VerifyingKey::from_public_key_der(&spki_der)
+            .map_err(|e| format!("Failed to parse ECDSA P-256 public key from CSR: {e}"))?;
+        let signature = Signature::from_der(csr.signature.raw_bytes())
+            .map_err(|e| format!("Failed to parse ECDSA signature from CSR: {e}"))?;
+
+        verifying_key.verify(&info_der, &signature).map_err(|_| {
+            "CSR self-signature verification failed: ECDSA signature does not match".to_string()
+        })
     } else {
         Err(format!(
             "CSR signature algorithm {oid} is not supported for verification. \
-             Only sha256WithRSAEncryption is currently supported."
+             Supported algorithms are sha256WithRSAEncryption and ecdsa-with-SHA256."
         ))
     }
 }
@@ -572,17 +589,5 @@ fn build_validity(validity_days: u32) -> Result<Validity, der::Error> {
     Ok(Validity {
         not_before: Time::GeneralTime(GeneralizedTime::from(dt_now)),
         not_after: Time::GeneralTime(GeneralizedTime::from(dt_later)),
-    })
-}
-
-/// Build the sha256WithRSAEncryption algorithm identifier.
-///
-/// RSA algorithm identifiers carry an explicit NULL parameters field per RFC 3279.
-fn build_sig_alg() -> Result<x509_cert::spki::AlgorithmIdentifier<der::Any>, der::Error> {
-    let null_der = Null.to_der()?;
-    let null_any = der::Any::from_der(&null_der)?;
-    Ok(x509_cert::spki::AlgorithmIdentifier {
-        oid: SHA256_WITH_RSA_ENCRYPTION,
-        parameters: Some(null_any),
     })
 }

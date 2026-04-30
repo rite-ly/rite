@@ -15,6 +15,10 @@ const ROOT_CA_SOFTWARE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/root_ca_software.rite.yaml"
 );
+const ROOT_CA_ECDSA_SOFTWARE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/root_ca_ecdsa_software.rite.yaml"
+);
 
 #[test]
 fn check_minimal_ceremony_resolves_cleanly() {
@@ -71,6 +75,26 @@ fn check_root_ca_software_resolves_cleanly() {
 
     let resolved = resolved.expect("ceremony resolves");
     assert_eq!(resolved.metadata.name, "Test Root CA");
+    assert_eq!(resolved.roles.len(), 3, "expected 3 roles");
+    assert_eq!(resolved.execution_plan.len(), 8, "expected 8 steps");
+    assert_eq!(resolved.materials.len(), 1, "expected 1 material");
+    assert_eq!(resolved.outputs.len(), 3, "expected 3 outputs");
+    assert_eq!(resolved.parameters.len(), 1, "expected 1 parameter");
+}
+
+#[test]
+fn check_root_ca_ecdsa_software_resolves_cleanly() {
+    let (resolved, diags) = analyze(Path::new(ROOT_CA_ECDSA_SOFTWARE), None);
+
+    let errors: Vec<_> = diags
+        .iter()
+        .filter(|d| d.severity == rite_resolver::Severity::Error)
+        .collect();
+
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+
+    let resolved = resolved.expect("ceremony resolves");
+    assert_eq!(resolved.metadata.name, "Test Root CA (ECDSA)");
     assert_eq!(resolved.roles.len(), 3, "expected 3 roles");
     assert_eq!(resolved.execution_plan.len(), 8, "expected 8 steps");
     assert_eq!(resolved.materials.len(), 1, "expected 1 material");

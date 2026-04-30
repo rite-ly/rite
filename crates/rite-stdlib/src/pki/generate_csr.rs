@@ -13,14 +13,14 @@
 
 use der::{
     Decode, Encode,
-    asn1::{BitString, Ia5String, Null, OctetString, SetOfVec},
+    asn1::{BitString, Ia5String, OctetString, SetOfVec},
 };
 use rite_model::{ActionType, StepInputs};
 use rite_runtime::{
     ActionCategory, ActionHandler, ActionMetadata, ArtifactValue, ExecutionError, HandlerContext,
     StepEvidence, StepInfo, StepResult, StepUI, display, resolve_backend_key,
 };
-use rite_sdk::{Backend, SignAlgorithm};
+use rite_sdk::Backend;
 use x509_cert::attr::Attribute;
 use x509_cert::ext::pkix::name::GeneralName;
 use x509_cert::{
@@ -32,7 +32,7 @@ use x509_cert::{
 
 use crate::params::GenerateCsrParams;
 
-use super::oids::{EXTENSION_REQUEST_OID, ID_CE_SUBJECT_ALT_NAME, SHA256_WITH_RSA_ENCRYPTION};
+use super::oids::{EXTENSION_REQUEST_OID, ID_CE_SUBJECT_ALT_NAME, sig_profile_for_algorithm};
 
 /// Generate PKCS#10 CSR from backend key action.
 pub struct GenerateCsrAction;
@@ -71,7 +71,7 @@ impl ActionHandler for GenerateCsrAction {
         })?;
 
         let signing_key_id = signing_key_ref.artifact_id();
-        let (key_backend_name, key_id, _, public_key_bytes) =
+        let (key_backend_name, key_id, key_algorithm, public_key_bytes) =
             resolve_backend_key(ctx.artifacts, &signing_key_id).map_err(|e| {
                 ExecutionError::InvalidParams(format!(
                     "signing_key '{}' must be a BackendKey: {e}",
@@ -89,6 +89,9 @@ impl ActionHandler for GenerateCsrAction {
 
         let key_id = key_id.clone();
         let key_backend_name = key_backend_name.to_string();
+        let (sign_algorithm, sig_alg, evidence_algorithm) =
+            sig_profile_for_algorithm(key_algorithm)
+                .map_err(|e| ExecutionError::InvalidParams(format!("generate_csr: {e}")))?;
 
         let subject: Name = typed.subject.parse().map_err(|_| {
             ExecutionError::InvalidParams(format!(
@@ -156,24 +159,11 @@ impl ActionHandler for GenerateCsrAction {
             })?;
 
         let signature_bytes = sign_backend
-            .sign(&key_id, &info_der, SignAlgorithm::RsaPkcs1Sha256)
+            .sign(&key_id, &info_der, sign_algorithm)
             .map_err(|e| ExecutionError::StepFailed {
                 step: step.id.clone(),
                 reason: format!("Signing failed: {e}"),
             })?;
-
-        let null_der = Null.to_der().map_err(|e| ExecutionError::StepFailed {
-            step: step.id.clone(),
-            reason: format!("Failed to encode NULL: {e}"),
-        })?;
-        let null_any = der::Any::from_der(&null_der).map_err(|e| ExecutionError::StepFailed {
-            step: step.id.clone(),
-            reason: format!("Failed to build algorithm params: {e}"),
-        })?;
-        let sig_alg = x509_cert::spki::AlgorithmIdentifier {
-            oid: SHA256_WITH_RSA_ENCRYPTION,
-            parameters: Some(null_any),
-        };
 
         let csr = CertReq {
             info,
@@ -194,7 +184,7 @@ impl ActionHandler for GenerateCsrAction {
         display::write_success(ui, &format!("CSR generated ({} bytes DER)", csr_der.len()))?;
 
         let mut evidence = StepEvidence::new();
-        evidence.insert("algorithm", "sha256WithRSAEncryption");
+        evidence.insert("algorithm", evidence_algorithm);
         evidence.insert("signing_key", signing_key_ref.display_name().as_str());
         evidence.insert("backend", backend_name.as_str());
         evidence.insert("backend_fingerprint", backend_fingerprint.as_str());

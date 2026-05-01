@@ -1,10 +1,10 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 # See docs/docker.md for usage, build targets, and hardened runtime examples.
 
 # Builder: compiles from source for TARGETPLATFORM.
 # Cross-arch builds (e.g. arm64 host -> linux/amd64 image) work via buildx/qemu
 # without manually wiring Rust target triples.
-FROM --platform=$TARGETPLATFORM rust:1.95-trixie AS builder
+FROM --platform=$TARGETPLATFORM rust:1.95-trixie@sha256:a9cfb755b33f5bb872610cbdb25da61f527416b28fc9c052bbce4bef93e7799a AS builder
 WORKDIR /src
 
 # Override at build time for custom feature combinations.
@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Prebuilt selector: used by CI/release to avoid rebuilding from source.
 # Expects release artifacts copied into dist/ in the build context.
-FROM --platform=$TARGETPLATFORM debian:trixie-slim AS prebuilt
+FROM --platform=$TARGETPLATFORM debian:trixie-slim@sha256:cedb1ef40439206b673ee8b33a46a03a0c9fa90bf3732f54704f99cb061d2c5a AS prebuilt
 ARG TARGETARCH
 
 COPY dist/ /dist/
@@ -33,7 +33,7 @@ COPY dist/ /dist/
 RUN install -D -m 0755 "/dist/rite-linux-${TARGETARCH}-musl/rite" /out/rite
 
 # Runtime base: minimal hardened environment. Runs as non-root.
-FROM --platform=$TARGETPLATFORM debian:trixie-slim AS runtime-base
+FROM --platform=$TARGETPLATFORM debian:trixie-slim@sha256:cedb1ef40439206b673ee8b33a46a03a0c9fa90bf3732f54704f99cb061d2c5a AS runtime-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

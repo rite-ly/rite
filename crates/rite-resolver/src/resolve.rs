@@ -4,6 +4,7 @@
 //! instance inputs into a resolved ceremony (`rite_model::Ceremony`, IR) ready for execution.
 
 use crate::CeremonyInputs;
+use crate::diagnostic::ReferenceContext;
 use crate::error::{ResolveError, ResolveResult, ResolveWarning};
 use crate::schema;
 use indexmap::IndexMap;
@@ -14,7 +15,7 @@ use rite_model::{
     MaterialSource, Metadata, Output, OutputId, ParamId, Parameter, PostCeremonyDuty, Role, RoleId,
     Section, SectionId, Step, StepId, StepInputs, SymbolTable,
 };
-use rite_model::{ActionType, DutyType, ParameterType};
+use rite_model::{DutyType, ParameterType};
 use std::collections::{HashMap, HashSet};
 
 /// Schema versions this resolver understands.
@@ -199,7 +200,7 @@ impl ResolveContext {
             let default_role = section
                 .role
                 .as_ref()
-                .and_then(|r| self.resolve_role_ref(r, &format!("section:{id_str}")));
+                .and_then(|r| self.resolve_role_ref(r, &ReferenceContext::Section(id.clone())));
 
             let resolved = Section {
                 id: id.clone(),
@@ -481,7 +482,7 @@ impl ResolveContext {
 
                 // Resolve role (from step or section default)
                 let role = if let Some(role_ref) = &step.role {
-                    self.resolve_role_ref(role_ref, step_id_str)
+                    self.resolve_role_ref(role_ref, &ReferenceContext::Step(id.clone()))
                 } else {
                     self.sections
                         .get(&section_id)
@@ -524,18 +525,8 @@ impl ResolveContext {
                     silent: step.silent,
                 };
 
-                if step.action == ActionType::MachineInfo && step.backend.is_some() {
-                    self.add_error(ResolveError::MachineInfoWithBackend { step: id.clone() });
-                }
-
-                if let Some(backend_name) = &step.backend
-                    && !ceremony.backends.contains_key(backend_name)
-                {
-                    self.add_error(ResolveError::UndeclaredBackend {
-                        step: id,
-                        backend: backend_name.clone(),
-                    });
-                }
+                self.validate_step_backend(&id, step, ceremony);
+                self.validate_step_with_fields(&id, step);
 
                 steps.push(resolved);
             }
@@ -544,11 +535,54 @@ impl ResolveContext {
         steps
     }
 
-    fn resolve_role_ref(&mut self, role_ref: &str, context: &str) -> Option<RoleId> {
+    fn validate_step_backend(
+        &mut self,
+        id: &StepId,
+        step: &schema::StepBody,
+        ceremony: &schema::Ceremony,
+    ) {
+        if step.backend.is_some() && !step.action.requires_backend() {
+            self.warnings
+                .push(ResolveWarning::UnusedBackend { step: id.clone() });
+        }
+        if let Some(backend_name) = &step.backend
+            && !ceremony.backends.contains_key(backend_name)
+        {
+            self.add_error(ResolveError::UndeclaredBackend {
+                step: id.clone(),
+                backend: backend_name.clone(),
+            });
+        }
+        if step.action.requires_backend() && step.backend.is_none() {
+            self.add_error(ResolveError::MissingRequiredBackend {
+                step: id.clone(),
+                action: step.action,
+            });
+        }
+    }
+
+    fn validate_step_with_fields(&mut self, id: &StepId, step: &schema::StepBody) {
+        let required = step.action.required_with_fields();
+        if required.is_empty() {
+            return;
+        }
+        let with_obj = step.with.as_ref().and_then(|w| w.as_object());
+        for field in required {
+            if !with_obj.is_some_and(|m| m.contains_key(*field)) {
+                self.add_error(ResolveError::MissingWithField {
+                    step: id.clone(),
+                    action: step.action,
+                    field,
+                });
+            }
+        }
+    }
+
+    fn resolve_role_ref(&mut self, role_ref: &str, context: &ReferenceContext) -> Option<RoleId> {
         if let Some(reference) = parse_reference(role_ref) {
             if reference.ref_type != RefType::Role {
                 self.add_error(ResolveError::ReferenceTypeMismatch {
-                    context: context.to_string(),
+                    context: context.clone(),
                     field: "role".to_string(),
                     expected: RefType::Role,
                     actual: reference.ref_type,
@@ -560,14 +594,14 @@ impl ResolveContext {
             if !self.roles.contains(&id) {
                 self.add_error(ResolveError::UnknownRole {
                     role: id.clone(),
-                    context: context.to_string(),
+                    context: context.clone(),
                 });
                 return None;
             }
             Some(id)
         } else {
             self.add_error(ResolveError::InvalidReferenceSyntax {
-                context: context.to_string(),
+                context: context.clone(),
                 field: "role".to_string(),
                 value: role_ref.to_string(),
             });
@@ -636,7 +670,7 @@ impl ResolveContext {
 
         if reference.ref_type != RefType::Artifact {
             self.add_error(ResolveError::ReferenceTypeMismatch {
-                context: step_id.as_str().to_string(),
+                context: ReferenceContext::Step(step_id.clone()),
                 field: field.to_string(),
                 expected: RefType::Artifact,
                 actual: reference.ref_type,
@@ -1287,6 +1321,145 @@ mod tests {
         assert_eq!(
             resolved.after.first().expect("should have first duty").role,
             Some(RoleId::new("admin"))
+        );
+    }
+
+    #[test]
+    fn warns_on_backend_field_for_local_action() {
+        let mut ceremony = minimal_ceremony();
+        ceremony.backends.insert(
+            "ssl".to_string(),
+            BackendConfig {
+                provider: "openssl".to_string(),
+                extra: serde_json::json!({}),
+            },
+        );
+        let mut step = make_step_body();
+        step.action = ActionType::Confirm;
+        step.backend = Some("ssl".to_string());
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("confirm_step".to_string(), step);
+
+        let result = resolve_ceremony(ceremony, None);
+        assert!(result.is_ok(), "Errors: {:?}", result.errors);
+        assert!(result.warnings.iter().any(|w| matches!(
+            w,
+            ResolveWarning::UnusedBackend { step } if step.as_str() == "confirm_step"
+        )));
+    }
+
+    #[test]
+    fn errors_on_missing_required_backend() {
+        let mut ceremony = minimal_ceremony();
+        let mut step = make_step_body();
+        step.action = ActionType::GenerateKeypair;
+        // No backend set
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("gen".to_string(), step);
+
+        let result = resolve_ceremony(ceremony, None);
+        assert!(result.is_err());
+        assert!(result.errors.iter().any(|e| matches!(
+            e,
+            ResolveError::MissingRequiredBackend { step, action }
+                if step.as_str() == "gen" && *action == ActionType::GenerateKeypair
+        )));
+    }
+
+    #[test]
+    fn no_missing_backend_error_when_backend_provided() {
+        let mut ceremony = minimal_ceremony();
+        ceremony.backends.insert(
+            "ssl".to_string(),
+            BackendConfig {
+                provider: "openssl".to_string(),
+                extra: serde_json::json!({}),
+            },
+        );
+        let mut step = make_step_body();
+        step.action = ActionType::GenerateKeypair;
+        step.backend = Some("ssl".to_string());
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("gen".to_string(), step);
+
+        let result = resolve_ceremony(ceremony, None);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::MissingRequiredBackend { .. }))
+        );
+    }
+
+    #[test]
+    fn errors_on_missing_required_with_field() {
+        let mut ceremony = minimal_ceremony();
+        let mut step = make_step_body();
+        step.action = ActionType::CheckValue;
+        // with: block is missing "actual" and "expected"
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("chk".to_string(), step);
+
+        let result = resolve_ceremony(ceremony, None);
+        assert!(result.is_err());
+        let missing: Vec<&str> = result
+            .errors
+            .iter()
+            .filter_map(|e| {
+                if let ResolveError::MissingWithField { step, field, .. } = e
+                    && step.as_str() == "chk"
+                {
+                    Some(*field)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            missing.contains(&"actual"),
+            "expected 'actual' missing: {missing:?}"
+        );
+        assert!(
+            missing.contains(&"expected"),
+            "expected 'expected' missing: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn no_missing_with_field_error_when_fields_provided() {
+        let mut ceremony = minimal_ceremony();
+        let mut step = make_step_body();
+        step.action = ActionType::CheckValue;
+        step.with = Some(serde_json::json!({ "actual": "a", "expected": "b" }));
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("chk".to_string(), step);
+
+        let result = resolve_ceremony(ceremony, None);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::MissingWithField { .. }))
         );
     }
 

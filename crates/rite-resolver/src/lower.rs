@@ -1,6 +1,8 @@
 //! YAML lowering: parse the Node tree, extract source spans, and deserialize ceremony types.
 
-use crate::diagnostic::{Diagnostic, ReferenceEntry, ReferenceTarget, Severity, Span, SpanMap};
+use crate::diagnostic::{
+    Diagnostic, ReferenceContext, ReferenceEntry, ReferenceTarget, Severity, Span, SpanMap,
+};
 use crate::error::ResolveError;
 use crate::schema::Ceremony;
 use marked_yaml::Node;
@@ -40,6 +42,7 @@ pub(crate) fn lower_ceremony(
             let span = from_node_err.start_mark().map(|m| Span {
                 line: m.line(),
                 column: m.column(),
+                length: None,
             });
             diags.push(Diagnostic {
                 path: path.map(Path::to_owned),
@@ -93,22 +96,26 @@ fn walk_spans(path: Option<&Path>, node: &Node) -> (SpanMap, Vec<Diagnostic>) {
             };
 
             // Collect section-level reference spans.
+            let section_context =
+                ReferenceContext::Section(SectionId::new(section_id_scalar.as_str()));
             if let Some(val) = section_map.get_scalar("act") {
                 push_reference(
                     &mut span_map,
                     val,
                     ReferenceTarget::Act(ActId::new(val.as_str())),
+                    &section_context,
                 );
             }
             if let Some(val) = section_map.get_scalar("role") {
                 push_reference(
                     &mut span_map,
                     val,
-                    ReferenceTarget::Role(RoleId::new(val.as_str())),
+                    ReferenceTarget::Role(RoleId::new(extract_role_id(val.as_str()))),
+                    &section_context,
                 );
             }
             if let Some(desc) = section_map.get_scalar("description") {
-                scan_expression_refs(&mut span_map, desc);
+                scan_expression_refs(&mut span_map, desc, &section_context);
             }
 
             // Steps: mapping where keys are step IDs.
@@ -138,11 +145,13 @@ fn walk_spans(path: Option<&Path>, node: &Node) -> (SpanMap, Vec<Diagnostic>) {
                     }
 
                     // Collect step reference spans.
+                    let step_context = ReferenceContext::Step(StepId::new(step_id_scalar.as_str()));
                     if let Some(val) = step_map.get_scalar("role") {
                         push_reference(
                             &mut span_map,
                             val,
                             ReferenceTarget::Role(RoleId::new(extract_role_id(val.as_str()))),
+                            &step_context,
                         );
                     }
                     if let Some(val) = step_map.get_scalar("backend") {
@@ -150,15 +159,16 @@ fn walk_spans(path: Option<&Path>, node: &Node) -> (SpanMap, Vec<Diagnostic>) {
                             &mut span_map,
                             val,
                             ReferenceTarget::Backend(val.as_str().to_string()),
+                            &step_context,
                         );
                     }
                     if let Some(desc) = step_map.get_scalar("description") {
-                        scan_expression_refs(&mut span_map, desc);
+                        scan_expression_refs(&mut span_map, desc, &step_context);
                     }
                     if let Some(with_map) = step_map.get_mapping("with") {
                         for (_, val_node) in with_map.iter() {
                             if let Some(scalar) = val_node.as_scalar() {
-                                scan_expression_refs(&mut span_map, scalar);
+                                scan_expression_refs(&mut span_map, scalar, &step_context);
                             }
                         }
                     }
@@ -270,7 +280,11 @@ fn extract_role_id(raw: &str) -> &str {
 /// at the IR level. The LSP needs to navigate from `${material.x}` to the material
 /// declaration, so we handle it at the raw string level here.
 #[allow(clippy::arithmetic_side_effects)]
-fn scan_expression_refs(span_map: &mut SpanMap, scalar: &MarkedScalarNode) {
+fn scan_expression_refs(
+    span_map: &mut SpanMap,
+    scalar: &MarkedScalarNode,
+    context: &ReferenceContext,
+) {
     let Some(base_span) = scalar_to_span(scalar) else {
         return;
     };
@@ -304,9 +318,10 @@ fn scan_expression_refs(span_map: &mut SpanMap, scalar: &MarkedScalarNode) {
                         span: Span {
                             line: base_span.line,
                             column: col,
+                            length: Some(full_len),
                         },
-                        value_len: full_len,
                         target,
+                        context: context.clone(),
                     });
                 }
             }
@@ -316,12 +331,18 @@ fn scan_expression_refs(span_map: &mut SpanMap, scalar: &MarkedScalarNode) {
 }
 
 /// Push a reference entry into `span_map.references` for the given scalar value node.
-fn push_reference(span_map: &mut SpanMap, val: &MarkedScalarNode, target: ReferenceTarget) {
-    if let Some(span) = scalar_to_span(val) {
+fn push_reference(
+    span_map: &mut SpanMap,
+    val: &MarkedScalarNode,
+    target: ReferenceTarget,
+    context: &ReferenceContext,
+) {
+    if let Some(mut span) = scalar_to_span(val) {
+        span.length = Some(val.as_str().len());
         span_map.references.push(ReferenceEntry {
             span,
-            value_len: val.as_str().len(),
             target,
+            context: context.clone(),
         });
     }
 }
@@ -330,6 +351,7 @@ fn node_to_span(node: &Node) -> Option<Span> {
     node.span().start().map(|m| Span {
         line: m.line(),
         column: m.column(),
+        length: None,
     })
 }
 
@@ -337,6 +359,7 @@ fn scalar_to_span(scalar: &MarkedScalarNode) -> Option<Span> {
     scalar.span().start().map(|m| Span {
         line: m.line(),
         column: m.column(),
+        length: None,
     })
 }
 
@@ -344,7 +367,11 @@ fn load_error_to_diagnostic(path: Option<&Path>, err: &marked_yaml::LoadError) -
     let location = extract_load_error_location(err);
     Diagnostic {
         path: path.map(Path::to_owned),
-        span: location.map(|(line, column)| Span { line, column }),
+        span: location.map(|(line, column)| Span {
+            line,
+            column,
+            length: None,
+        }),
         severity: Severity::Error,
         message: err.to_string(),
     }

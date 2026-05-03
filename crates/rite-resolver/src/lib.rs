@@ -26,7 +26,9 @@ mod resolve;
 mod schema;
 mod serde_utils;
 
-pub use diagnostic::{Diagnostic, ReferenceEntry, ReferenceTarget, Severity, Span, SpanMap};
+pub use diagnostic::{
+    Diagnostic, ReferenceContext, ReferenceEntry, ReferenceTarget, Severity, Span, SpanMap,
+};
 pub use error::{ResolveError, ResolveResult, ResolveWarning};
 
 use rite_model::MaterialSource;

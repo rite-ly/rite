@@ -7,7 +7,7 @@
 use crate::convert;
 use rite_model::{ActId, MaterialId, ParamId, RoleId, SectionId};
 use rite_resolver::{ReferenceTarget, Span, SpanMap};
-use tower_lsp_server::ls_types::{Location, Position, Range, Uri};
+use tower_lsp_server::ls_types::{Location, Position, Uri};
 
 /// Return all reference sites for the target at the cursor position.
 ///
@@ -63,16 +63,9 @@ pub fn find_references_at(
             .references
             .iter()
             .filter(|e| e.target == target)
-            .map(|e| {
-                let start = convert::span_to_position(e.span);
-                let end = Position {
-                    line: start.line,
-                    character: start.character + e.value_len as u32,
-                };
-                Location {
-                    uri: uri.clone(),
-                    range: Range { start, end },
-                }
+            .map(|e| Location {
+                uri: uri.clone(),
+                range: convert::span_to_range(e.span),
             }),
     );
 
@@ -124,14 +117,19 @@ fn declaration_target(span_map: &SpanMap, word: &str) -> Option<ReferenceTarget>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rite_resolver::{ReferenceEntry, Span};
+    use rite_model::StepId;
+    use rite_resolver::{ReferenceContext, ReferenceEntry, Span};
 
     fn make_uri() -> Uri {
         "file:///test.yaml".parse().unwrap()
     }
 
     fn span(line: usize, column: usize) -> Span {
-        Span { line, column }
+        Span {
+            line,
+            column,
+            length: None,
+        }
     }
 
     #[test]
@@ -139,19 +137,28 @@ mod tests {
         let mut span_map = SpanMap::default();
         span_map.sections.insert(SectionId::new("main"), span(5, 7));
         span_map.references.push(ReferenceEntry {
-            span: span(10, 14),
-            value_len: 4,
+            span: Span {
+                length: Some(4),
+                ..span(10, 14)
+            },
             target: ReferenceTarget::Section(SectionId::new("main")),
+            context: ReferenceContext::Step(StepId::new("test")),
         });
         span_map.references.push(ReferenceEntry {
-            span: span(20, 14),
-            value_len: 4,
+            span: Span {
+                length: Some(4),
+                ..span(20, 14)
+            },
             target: ReferenceTarget::Section(SectionId::new("main")),
+            context: ReferenceContext::Step(StepId::new("test")),
         });
         span_map.references.push(ReferenceEntry {
-            span: span(30, 14),
-            value_len: 5,
+            span: Span {
+                length: Some(5),
+                ..span(30, 14)
+            },
             target: ReferenceTarget::Section(SectionId::new("other")),
+            context: ReferenceContext::Step(StepId::new("test")),
         });
 
         // Cursor on the first reference value (line 10, col 15 → 0-indexed: 9, 14).
@@ -172,9 +179,12 @@ mod tests {
             .sections
             .insert(SectionId::new("setup"), span(3, 7));
         span_map.references.push(ReferenceEntry {
-            span: span(15, 14),
-            value_len: 5,
+            span: Span {
+                length: Some(5),
+                ..span(15, 14)
+            },
             target: ReferenceTarget::Section(SectionId::new("setup")),
+            context: ReferenceContext::Step(StepId::new("test")),
         });
 
         // Cursor on the declaration itself (not a reference), word = "setup".
@@ -204,9 +214,12 @@ mod tests {
         let mut span_map = SpanMap::default();
         span_map.sections.insert(SectionId::new("main"), span(5, 7));
         span_map.references.push(ReferenceEntry {
-            span: span(10, 14),
-            value_len: 4,
+            span: Span {
+                length: Some(4),
+                ..span(10, 14)
+            },
             target: ReferenceTarget::Section(SectionId::new("main")),
+            context: ReferenceContext::Step(StepId::new("test")),
         });
 
         // Cursor on the reference value.

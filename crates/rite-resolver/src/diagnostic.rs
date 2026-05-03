@@ -7,12 +7,17 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// A source location within a YAML file (1-indexed line and column).
+///
+/// `length` is the byte count of the token when known; `None` signals a point location
+/// that editors may extend to a word boundary.
 #[derive(Debug, Clone, Copy)]
 pub struct Span {
     /// Line number (1-indexed).
     pub line: usize,
     /// Column number (1-indexed).
     pub column: usize,
+    /// Byte length of the token, when known.
+    pub length: Option<usize>,
 }
 
 /// Severity of a diagnostic.
@@ -65,6 +70,24 @@ impl fmt::Display for Diagnostic {
     }
 }
 
+/// The container (step or section) that owns a reference site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReferenceContext {
+    /// A reference inside a step, identified by its step ID.
+    Step(StepId),
+    /// A reference at section level, identified by the section ID.
+    Section(SectionId),
+}
+
+impl fmt::Display for ReferenceContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReferenceContext::Step(id) => write!(f, "{id}"),
+            ReferenceContext::Section(id) => write!(f, "section:{id}"),
+        }
+    }
+}
+
 /// The kind of declaration a reference points to.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReferenceTarget {
@@ -85,16 +108,16 @@ pub enum ReferenceTarget {
 /// A single reference site collected during span walking.
 ///
 /// `span` is the 1-indexed position of the value scalar in the source file.
-/// `value_len` is the byte length of the raw value string, used for cursor
-/// containment: the reference covers columns `[span.column, span.column + value_len)`.
+/// `span.length` is always set for reference entries; it covers the token byte length
+/// used for cursor containment and diagnostic range end: `[span.column, span.column + span.length)`.
 #[derive(Debug, Clone)]
 pub struct ReferenceEntry {
-    /// Source location of the reference.
+    /// Source location and token length of the reference.
     pub span: Span,
-    /// Byte length of the value string.
-    pub value_len: usize,
     /// What this reference points to.
     pub target: ReferenceTarget,
+    /// The owning step or section.
+    pub context: ReferenceContext,
 }
 
 /// Maps ceremony element IDs to their source positions for diagnostic enrichment.
@@ -127,10 +150,8 @@ impl SpanMap {
     #[allow(clippy::arithmetic_side_effects)]
     pub fn find_target_at(&self, line: usize, column: usize) -> Option<&ReferenceTarget> {
         self.references.iter().find_map(|e| {
-            if e.span.line == line
-                && column >= e.span.column
-                && column < e.span.column + e.value_len
-            {
+            let len = e.span.length.unwrap_or(0);
+            if e.span.line == line && column >= e.span.column && column < e.span.column + len {
                 Some(&e.target)
             } else {
                 None
@@ -162,9 +183,11 @@ impl SpanMap {
 
     fn span_for_error(&self, err: &ResolveError) -> Option<Span> {
         match err {
-            ResolveError::Yaml { location, .. } => {
-                location.map(|(line, col)| Span { line, column: col })
-            }
+            ResolveError::Yaml { location, .. } => location.map(|(line, col)| Span {
+                line,
+                column: col,
+                length: None,
+            }),
             ResolveError::Io { .. }
             | ResolveError::UnsupportedVersion { .. }
             | ResolveError::DuplicateOutput(_)
@@ -178,16 +201,29 @@ impl SpanMap {
             ResolveError::DuplicateMaterial(id) => self.materials.get(id).copied(),
             ResolveError::UnknownSection { step, .. }
             | ResolveError::UnknownArtifact { step, .. }
-            | ResolveError::MachineInfoWithBackend { step, .. }
-            | ResolveError::UndeclaredBackend { step, .. }
+            | ResolveError::MissingRequiredBackend { step, .. }
+            | ResolveError::MissingWithField { step, .. }
             | ResolveError::ArtifactNeverProduced { step, .. } => self.steps.get(step).copied(),
-            ResolveError::UnknownRole { context, .. }
-            | ResolveError::InvalidReferenceSyntax { context, .. }
+            ResolveError::UndeclaredBackend { step, backend } => self
+                .span_for_reference(
+                    &ReferenceTarget::Backend(backend.clone()),
+                    &ReferenceContext::Step(step.clone()),
+                )
+                .or_else(|| self.steps.get(step).copied()),
+            ResolveError::UnknownRole { role, context } => self
+                .span_for_reference(&ReferenceTarget::Role(role.clone()), context)
+                .or_else(|| self.span_for_context(context)),
+            ResolveError::UnknownAct { section, act } => self
+                .span_for_reference(
+                    &ReferenceTarget::Act(act.clone()),
+                    &ReferenceContext::Section(section.clone()),
+                )
+                .or_else(|| self.sections.get(section).copied()),
+            ResolveError::InvalidReferenceSyntax { context, .. }
             | ResolveError::ReferenceTypeMismatch { context, .. } => self.span_for_context(context),
             ResolveError::ArtifactUsedBeforeProduced { used_in, .. } => {
                 self.steps.get(used_in).copied()
             }
-            ResolveError::UnknownAct { section, .. } => self.sections.get(section).copied(),
             ResolveError::UnknownParam { param, .. }
             | ResolveError::RequiredParamMissing(param)
             | ResolveError::ParamTypeMismatch { param, .. }
@@ -201,19 +237,27 @@ impl SpanMap {
         }
     }
 
-    /// Look up a span for a free-form context string (step ID or `"section:<id>"`).
-    fn span_for_context(&self, context: &str) -> Option<Span> {
-        // Try as a step ID first (most common case).
-        let step_id = StepId::new(context);
-        if let Some(span) = self.steps.get(&step_id) {
-            return Some(*span);
+    /// Look up the span of a reference value by target and owning context.
+    ///
+    /// Returns a `Span` with `length` set from the collected token width, so callers
+    /// get a proper range rather than a point location.
+    fn span_for_reference(
+        &self,
+        target: &ReferenceTarget,
+        context: &ReferenceContext,
+    ) -> Option<Span> {
+        self.references
+            .iter()
+            .find(|e| e.target == *target && e.context == *context)
+            .map(|e| e.span)
+    }
+
+    /// Look up a declaration span for a context (step or section).
+    fn span_for_context(&self, context: &ReferenceContext) -> Option<Span> {
+        match context {
+            ReferenceContext::Step(id) => self.steps.get(id).copied(),
+            ReferenceContext::Section(id) => self.sections.get(id).copied(),
         }
-        // Try as "section:<id>" prefix.
-        if let Some(section_name) = context.strip_prefix("section:") {
-            let section_id = SectionId::new(section_name);
-            return self.sections.get(&section_id).copied();
-        }
-        None
     }
 
     fn span_for_warning(&self, w: &ResolveWarning) -> Option<Span> {
@@ -222,6 +266,7 @@ impl SpanMap {
             ResolveWarning::UnusedMaterial(id) => self.materials.get(id).copied(),
             ResolveWarning::UnusedOutput(_) | ResolveWarning::ArtifactNotOutput(_) => None,
             ResolveWarning::UnknownRoleInInputs { role } => self.roles.get(role).copied(),
+            ResolveWarning::UnusedBackend { step } => self.steps.get(step).copied(),
         }
     }
 }

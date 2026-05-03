@@ -136,6 +136,44 @@ pub enum ActionType {
 }
 
 impl ActionType {
+    /// Returns `true` if this action requires a `backend:` field in the step.
+    ///
+    /// TODO: Replace this with a nested enum split — `ActionType::Backend(BackendAction)` vs
+    /// `ActionType::Local(LocalAction)`. The `requires_backend` check then becomes
+    /// `matches!(self, ActionType::Backend(_))` with no hardcoded list, and each group gains
+    /// its own `impl` block. This is a breaking change to every match on `ActionType` variants.
+    pub fn requires_backend(self) -> bool {
+        matches!(
+            self,
+            ActionType::GenerateKeypair
+                | ActionType::WrapKey
+                | ActionType::UnwrapKey
+                | ActionType::ExportPublic
+                | ActionType::GenerateCsr
+                | ActionType::IssueCertificate
+                | ActionType::PivReadCertificate
+                | ActionType::PivSign
+                | ActionType::YubikeyAttestSlot
+                | ActionType::TpmAttest
+        )
+    }
+
+    /// Returns the `with:` field names that are required for this action.
+    ///
+    /// The resolver reports a diagnostic for each missing field.
+    ///
+    /// TODO: Replace the stringly-typed `with: serde_json::Value` in `schema::StepBody` with a
+    /// typed `WithFields` enum (one variant per action, carrying its required fields as named
+    /// struct members). Serde would then enforce required fields at parse time and this method
+    /// would no longer be needed. This is a breaking change to the schema and lowering layers.
+    pub fn required_with_fields(self) -> &'static [&'static str] {
+        match self {
+            ActionType::CheckValue => &["actual", "expected"],
+            ActionType::GenerateCsr => &["subject"],
+            _ => &[],
+        }
+    }
+
     /// Short human-readable description of what this action does.
     ///
     /// Used as fallback prose in script generation, TUI step display, and LSP

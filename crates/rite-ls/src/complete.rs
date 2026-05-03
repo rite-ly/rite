@@ -205,7 +205,11 @@ mod tests {
     use rite_resolver::{Span, SpanMap};
 
     fn dummy_span() -> Span {
-        Span { line: 1, column: 1 }
+        Span {
+            line: 1,
+            column: 1,
+            length: None,
+        }
     }
 
     /// Build a SpanMap with only the given role IDs.

@@ -1,8 +1,10 @@
 //! Error types for the ceremony resolver.
 
+use crate::diagnostic::ReferenceContext;
 use rite_model::expression::RefType;
 use rite_model::{
-    ActId, ArtifactId, MaterialId, OutputId, ParamId, ParameterType, RoleId, SectionId, StepId,
+    ActId, ActionType, ArtifactId, MaterialId, OutputId, ParamId, ParameterType, RoleId, SectionId,
+    StepId,
 };
 use std::path::PathBuf;
 use thiserror::Error;
@@ -70,8 +72,8 @@ pub enum ResolveError {
     UnknownRole {
         /// The unknown role ID.
         role: RoleId,
-        /// Where the reference appears (step ID or `"section:<id>"`).
-        context: String,
+        /// Where the reference appears.
+        context: ReferenceContext,
     },
 
     /// Step references an unknown section.
@@ -97,8 +99,8 @@ pub enum ResolveError {
     UnknownParam {
         /// The unknown parameter ID.
         param: ParamId,
-        /// Context where the reference appears.
-        context: String,
+        /// Where the reference appears.
+        context: ReferenceContext,
     },
 
     /// Reference to an unknown material.
@@ -106,8 +108,8 @@ pub enum ResolveError {
     UnknownMaterial {
         /// The unknown material ID.
         material: MaterialId,
-        /// Context where the reference appears.
-        context: String,
+        /// Where the reference appears.
+        context: ReferenceContext,
     },
 
     /// Step references an unknown artifact.
@@ -163,13 +165,6 @@ pub enum ResolveError {
         material: MaterialId,
     },
 
-    /// `machine_info` step has a `backend:` field, which is not allowed.
-    #[error("Step '{step}': machine_info does not use a backend; remove the 'backend:' field")]
-    MachineInfoWithBackend {
-        /// The step ID.
-        step: StepId,
-    },
-
     /// Step references a backend not declared in the ceremony.
     #[error("Step '{step}' references undeclared backend '{backend}'")]
     UndeclaredBackend {
@@ -177,6 +172,26 @@ pub enum ResolveError {
         step: StepId,
         /// The backend name that is not declared.
         backend: String,
+    },
+
+    /// Step uses an action that requires a backend but has no `backend:` field.
+    #[error("Step '{step}': action '{action}' requires a backend; add a 'backend:' field")]
+    MissingRequiredBackend {
+        /// The step ID.
+        step: StepId,
+        /// The action that requires a backend.
+        action: ActionType,
+    },
+
+    /// Step `with:` block is missing a required field for its action.
+    #[error("Step '{step}': action '{action}' requires 'with.{field}'")]
+    MissingWithField {
+        /// The step ID.
+        step: StepId,
+        /// The action whose parameter is missing.
+        action: ActionType,
+        /// The missing `with:` field name.
+        field: &'static str,
     },
 
     /// Duty references an unknown role.
@@ -220,8 +235,8 @@ pub enum ResolveError {
     /// Invalid reference syntax in a field.
     #[error("Invalid reference syntax '{value}' in '{context}' field '{field}'")]
     InvalidReferenceSyntax {
-        /// Where the reference appears (step ID or `"section:<id>"`).
-        context: String,
+        /// Where the reference appears.
+        context: ReferenceContext,
         /// The field name.
         field: String,
         /// The invalid value.
@@ -233,8 +248,8 @@ pub enum ResolveError {
         "Reference type mismatch in '{context}' field '{field}': expected {expected}, got {actual}"
     )]
     ReferenceTypeMismatch {
-        /// Where the reference appears (step ID or `"section:<id>"`).
-        context: String,
+        /// Where the reference appears.
+        context: ReferenceContext,
         /// The field name.
         field: String,
         /// The expected reference type.
@@ -260,6 +275,11 @@ pub enum ResolveWarning {
         /// The unknown role ID.
         role: RoleId,
     },
+    /// Step has a `backend:` field but its action does not use a backend.
+    UnusedBackend {
+        /// The step ID.
+        step: StepId,
+    },
 }
 
 impl std::fmt::Display for ResolveWarning {
@@ -283,6 +303,10 @@ impl std::fmt::Display for ResolveWarning {
             ResolveWarning::UnknownRoleInInputs { role } => write!(
                 f,
                 "inputs reference role '{role}' which is not declared in the ceremony"
+            ),
+            ResolveWarning::UnusedBackend { step } => write!(
+                f,
+                "step '{step}' has a 'backend:' field but its action does not use a backend"
             ),
         }
     }

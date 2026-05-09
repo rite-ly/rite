@@ -35,20 +35,24 @@ pub struct CeremonyInfo {
     pub fingerprint: String,
     /// Ceremony name.
     pub name: String,
-    /// Ceremony version from the DSL.
-    pub version: String,
 }
 
-/// Information about resolved ceremony inputs (parameters, etc.).
+/// Information about resolved ceremony inputs (parameters, materials).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstanceInfo {
-    /// SHA-256 fingerprint of resolved parameter values.
+    /// SHA-256 fingerprint of all resolved runtime inputs (parameters + material fingerprints).
     pub fingerprint: String,
     /// Resolved parameters (names, dates, labels).
     ///
     /// Uses `BTreeMap` for deterministic serialization order in JSONL transcripts.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, serde_json::Value>,
+    /// SHA-256 fingerprints of digital materials, keyed by material ID.
+    ///
+    /// Physical materials have no digital fingerprint and are omitted.
+    /// Uses `BTreeMap` for deterministic serialization order in JSONL transcripts.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub materials: BTreeMap<String, String>,
 }
 
 /// A participant assigned to a role for this ceremony execution.

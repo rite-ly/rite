@@ -626,7 +626,6 @@ mod tests {
             CeremonyInfo {
                 fingerprint: "sha256:ceremony123".to_string(),
                 name: "Test Ceremony".to_string(),
-                version: "1.0".to_string(),
             },
             None,
             BinaryInfo {
@@ -678,7 +677,6 @@ mod tests {
             CeremonyInfo {
                 fingerprint: "sha256:test".to_string(),
                 name: "Hash Chain Test".to_string(),
-                version: "1.0".to_string(),
             },
             None,
             BinaryInfo {
@@ -739,7 +737,6 @@ mod tests {
             CeremonyInfo {
                 fingerprint: "sha256:abc".to_string(),
                 name: "Test".to_string(),
-                version: "1.0".to_string(),
             },
             None,
             BinaryInfo {
@@ -773,7 +770,6 @@ mod tests {
             CeremonyInfo {
                 fingerprint: "sha256:abc".to_string(),
                 name: "Dry Run Test".to_string(),
-                version: "1.0".to_string(),
             },
             None,
             BinaryInfo {
@@ -807,11 +803,11 @@ mod tests {
             CeremonyInfo {
                 fingerprint: "sha256:abc".to_string(),
                 name: "Read Test".to_string(),
-                version: "1.0".to_string(),
             },
             Some(InstanceInfo {
                 fingerprint: "sha256:inst".to_string(),
                 parameters: BTreeMap::from([("key".to_string(), serde_json::json!("value"))]),
+                materials: BTreeMap::new(),
             }),
             BinaryInfo {
                 fingerprint: None,
@@ -855,7 +851,6 @@ mod tests {
             CeremonyInfo {
                 fingerprint: "sha256:abc".to_string(),
                 name: "Test".to_string(),
-                version: "1.0".to_string(),
             },
             None,
             BinaryInfo {
@@ -888,7 +883,6 @@ mod tests {
             CeremonyInfo {
                 fingerprint: "sha256:abc".to_string(),
                 name: "Test".to_string(),
-                version: "1.0".to_string(),
             },
             None,
             BinaryInfo {
@@ -937,7 +931,6 @@ mod tests {
                     "sha256:abc1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd"
                         .to_string(),
                 name: "Sub-CA Key Ceremony".to_string(),
-                version: "1.0".to_string(),
             },
             instance: Some(InstanceInfo {
                 fingerprint:
@@ -947,6 +940,7 @@ mod tests {
                     ("ceremony_date".to_string(), serde_json::json!("2025-06-15")),
                     ("key_label".to_string(), serde_json::json!("SUB-CA-PROD")),
                 ]),
+                materials: BTreeMap::new(),
             }),
             binary: BinaryInfo {
                 fingerprint: None,
@@ -1073,7 +1067,6 @@ mod tests {
             ceremony: CeremonyInfo {
                 fingerprint: "sha256:test".to_string(),
                 name: "Test".to_string(),
-                version: "1.0".to_string(),
             },
             instance: None,
             binary: BinaryInfo {

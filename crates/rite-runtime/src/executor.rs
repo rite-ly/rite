@@ -193,6 +193,50 @@ impl<R: BufRead + Send, W: Write + Send> CeremonyExecutor<R, W> {
         self
     }
 
+    /// Initialize the transcript writer and write the opening event.
+    fn init_transcript(
+        &self,
+        ceremony: &Ceremony,
+        resolved_params: &HashMap<ParamId, serde_json::Value>,
+        roles: &HashMap<RoleId, (String, Option<String>)>,
+    ) -> Result<(Box<dyn TranscriptWriter>, Option<PathBuf>), ExecutionError> {
+        let transcript_path = self.transcript_config.path.clone();
+        let mut writer: Box<dyn TranscriptWriter> = match &transcript_path {
+            Some(path) => Box::new(
+                JsonlTranscriptWriter::new(path)
+                    .map_err(|e| ExecutionError::TranscriptError(e.to_string()))?,
+            ),
+            None => Box::new(NullTranscriptWriter),
+        };
+
+        let mut sorted_roles: Vec<_> = roles.iter().collect();
+        sorted_roles.sort_by_key(|(id, _)| id.as_str());
+        let participants = sorted_roles
+            .into_iter()
+            .map(|(id, (name, person))| ParticipantRecord {
+                role_id: id.as_str().to_string(),
+                role_name: name.clone(),
+                person: person.clone(),
+            })
+            .collect();
+
+        writer
+            .begin(
+                self.transcript_config.build_ceremony_info(ceremony),
+                self.transcript_config
+                    .build_instance_info(ceremony, resolved_params),
+                transcript_config::build_binary_info(),
+                transcript_config::build_image_info(),
+                transcript_config::build_initrd_measurements(),
+                None,
+                participants,
+                self.dry_run,
+            )
+            .map_err(|e| ExecutionError::TranscriptError(e.to_string()))?;
+
+        Ok((writer, transcript_path))
+    }
+
     /// Execute a resolved ceremony.
     pub fn execute(
         &mut self,
@@ -214,22 +258,11 @@ impl<R: BufRead + Send, W: Write + Send> CeremonyExecutor<R, W> {
             )));
         }
 
-        // Build parameter map (type-safe IDs → JSON values)
         let resolved_params: HashMap<ParamId, serde_json::Value> = ceremony
             .parameters
             .iter()
             .map(|(id, p)| (id.clone(), p.value.clone()))
             .collect();
-
-        // Initialize transcript writer
-        let transcript_path = self.transcript_config.path.clone();
-        let mut transcript_writer: Box<dyn TranscriptWriter> = match &transcript_path {
-            Some(path) => Box::new(
-                JsonlTranscriptWriter::new(path)
-                    .map_err(|e| ExecutionError::TranscriptError(e.to_string()))?,
-            ),
-            None => Box::new(NullTranscriptWriter),
-        };
 
         // Build role map: ID → (display name, person)
         let roles: HashMap<RoleId, (String, Option<String>)> = ceremony
@@ -238,39 +271,8 @@ impl<R: BufRead + Send, W: Write + Send> CeremonyExecutor<R, W> {
             .map(|(id, r)| (id.clone(), (r.name.clone(), r.person.clone())))
             .collect();
 
-        let participants: Vec<ParticipantRecord> = {
-            let mut sorted: Vec<_> = roles.iter().collect();
-            sorted.sort_by_key(|(id, _)| id.as_str());
-            sorted
-                .into_iter()
-                .map(|(id, (name, person))| ParticipantRecord {
-                    role_id: id.as_str().to_string(),
-                    role_name: name.clone(),
-                    person: person.clone(),
-                })
-                .collect()
-        };
-
-        let ceremony_info = self.transcript_config.build_ceremony_info(ceremony);
-        let instance_info = self
-            .transcript_config
-            .build_instance_info(ceremony, &resolved_params);
-        let binary_info = transcript_config::build_binary_info();
-        let image_info = transcript_config::build_image_info();
-        let initrd_info = transcript_config::build_initrd_measurements();
-
-        transcript_writer
-            .begin(
-                ceremony_info,
-                instance_info,
-                binary_info,
-                image_info,
-                initrd_info,
-                None,
-                participants,
-                self.dry_run,
-            )
-            .map_err(|e| ExecutionError::TranscriptError(e.to_string()))?;
+        let (mut transcript_writer, transcript_path) =
+            self.init_transcript(ceremony, &resolved_params, &roles)?;
 
         printing::print_header(&mut self.writer, ceremony, self.dry_run)?;
 
@@ -296,14 +298,21 @@ impl<R: BufRead + Send, W: Write + Send> CeremonyExecutor<R, W> {
 
         match result {
             Ok(exec_result) => {
-                printing::print_footer(&mut self.writer, ceremony, exec_result.steps_completed)?;
+                writeln!(
+                    self.writer,
+                    "✓ Ceremony '{}' completed",
+                    ceremony.metadata.name
+                )?;
 
                 if let Some(path) = &exec_result.transcript_path {
-                    let display = path.display();
-                    writeln!(self.writer)?;
-                    writeln!(self.writer, "Transcript written to: {display}")?;
                     if let Some(ref fp) = exec_result.transcript_fingerprint {
-                        writeln!(self.writer, "Fingerprint: {fp}")?;
+                        printing::print_transcript_fingerprint(&mut self.writer, fp)?;
+                        if !self.dry_run {
+                            let mut buf = String::new();
+                            let _ = self.reader.read_line(&mut buf);
+                        }
+                    } else {
+                        writeln!(self.writer, "Transcript written to: {}", path.display())?;
                     }
                 }
 

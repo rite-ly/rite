@@ -243,6 +243,18 @@ pub fn generate_html(resolved: &Ceremony) -> String {
         html.push_str("  </ul>\n\n");
     }
 
+    html.push_str("  <h2>Transcript Fingerprint</h2>\n");
+    html.push_str("  <p>At the end of the ceremony, the transcript fingerprint is displayed. Copy at least the first line (32 characters, shown in bold) into the field below before closing the terminal, while all participants are still present.</p>\n");
+    html.push_str("  <div class=\"fingerprint-record\">\n");
+    html.push_str("    <p><strong>sha256:</strong></p>\n");
+    html.push_str(
+        "    <p class=\"fingerprint-prefix\">__ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __</p>\n",
+    );
+    html.push_str(
+        "    <p class=\"fingerprint-remainder\">__ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __</p>\n",
+    );
+    html.push_str("  </div>\n\n");
+
     if !structure.post_ceremony.is_empty() {
         html.push_str("  <h2>Post-Ceremony Duties</h2>\n");
         html.push_str("  <p class=\"duties-intro\">The following duties must be completed after the ceremony concludes.</p>\n");

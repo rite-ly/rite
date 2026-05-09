@@ -19,7 +19,7 @@ use rite_model::{
     OutputId, ParamId, RoleId, Step, StepId,
 };
 use rite_sdk::BackendError;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
@@ -199,6 +199,7 @@ impl<R: BufRead + Send, W: Write + Send> CeremonyExecutor<R, W> {
         ceremony: &Ceremony,
         resolved_params: &HashMap<ParamId, serde_json::Value>,
         roles: &HashMap<RoleId, (String, Option<String>)>,
+        material_fingerprints: BTreeMap<String, String>,
     ) -> Result<(Box<dyn TranscriptWriter>, Option<PathBuf>), ExecutionError> {
         let transcript_path = self.transcript_config.path.clone();
         let mut writer: Box<dyn TranscriptWriter> = match &transcript_path {
@@ -223,8 +224,11 @@ impl<R: BufRead + Send, W: Write + Send> CeremonyExecutor<R, W> {
         writer
             .begin(
                 self.transcript_config.build_ceremony_info(ceremony),
-                self.transcript_config
-                    .build_instance_info(ceremony, resolved_params),
+                self.transcript_config.build_instance_info(
+                    ceremony,
+                    resolved_params,
+                    material_fingerprints,
+                ),
                 transcript_config::build_binary_info(),
                 transcript_config::build_image_info(),
                 transcript_config::build_initrd_measurements(),
@@ -271,8 +275,10 @@ impl<R: BufRead + Send, W: Write + Send> CeremonyExecutor<R, W> {
             .map(|(id, r)| (id.clone(), (r.name.clone(), r.person.clone())))
             .collect();
 
+        let material_fingerprints = collect_material_fingerprints(ceremony);
+
         let (mut transcript_writer, transcript_path) =
-            self.init_transcript(ceremony, &resolved_params, &roles)?;
+            self.init_transcript(ceremony, &resolved_params, &roles, material_fingerprints)?;
 
         printing::print_header(&mut self.writer, ceremony, self.dry_run)?;
 
@@ -466,7 +472,7 @@ fn execute_core(
         let event = ExecutionEvent {
             step_id: step.id.as_str().to_string(),
             action: step.action,
-            role: step.role.as_ref().map(|r| format!("${{{r}}}")),
+            role: step.role.as_ref().map(|r| r.as_str().to_string()),
             started_at,
             completed_at,
             outcome: crate::transcript::step_outcome_to_event_outcome(&result.outcome),
@@ -549,6 +555,30 @@ fn step_info_from(step: &Step) -> StepInfo {
         step.creates.clone(),
         step.reads_resolved.clone(),
     )
+}
+
+/// Compute SHA-256 fingerprints for all digital file-backed materials.
+///
+/// Physical materials and inline-identifier sources are skipped — they have no file to hash.
+/// Errors (e.g. file not readable) are silently ignored: the real error surfaces moments
+/// later when `execute_core` loads the material for use.
+fn collect_material_fingerprints(ceremony: &Ceremony) -> BTreeMap<String, String> {
+    ceremony
+        .materials
+        .iter()
+        .filter_map(|(id, material)| {
+            if let MaterialKind::Digital {
+                source: Some(MaterialSource::File { file }),
+            } = &material.kind
+            {
+                compute_file_fingerprint(file)
+                    .ok()
+                    .map(|fp| (id.as_str().to_string(), fp))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Load a single material into an `ArtifactValue`.

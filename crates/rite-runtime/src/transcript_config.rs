@@ -58,17 +58,18 @@ impl TranscriptConfig {
         CeremonyInfo {
             fingerprint,
             name: ceremony.metadata.name.clone(),
-            version: "1.0".to_string(),
         }
     }
 
     /// Build instance info for transcript.
     ///
-    /// The fingerprint is always computed from resolved parameter values.
+    /// The fingerprint covers all runtime inputs: parameter values and digital material
+    /// fingerprints. Physical materials have no digital identity and are excluded.
     pub fn build_instance_info<S: BuildHasher>(
         &self,
         ceremony: &Ceremony,
         resolved_params: &HashMap<ParamId, serde_json::Value, S>,
+        material_fingerprints: BTreeMap<String, String>,
     ) -> Option<InstanceInfo> {
         if ceremony.parameters.is_empty()
             && ceremony.materials.is_empty()
@@ -84,13 +85,18 @@ impl TranscriptConfig {
             .map(|(id, v)| (id.as_str().to_string(), v.clone()))
             .collect();
 
-        // Always compute fingerprint from resolved params
-        let json = serde_json::to_string(&string_params).unwrap_or_default();
+        // Fingerprint covers all runtime inputs: parameters and material fingerprints.
+        let combined = serde_json::json!({
+            "parameters": string_params,
+            "materials": material_fingerprints,
+        });
+        let json = serde_json::to_string(&combined).unwrap_or_default();
         let fingerprint = crate::transcript::compute_fingerprint(json.as_bytes());
 
         Some(InstanceInfo {
             fingerprint,
             parameters: string_params,
+            materials: material_fingerprints,
         })
     }
 }

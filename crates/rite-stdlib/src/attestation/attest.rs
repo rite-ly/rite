@@ -50,7 +50,6 @@ impl ActionHandler for AttestAction {
         let role_ref = step.role_str().unwrap_or("Participant");
         let role_display = ctx.resolve_role_name(role_ref);
 
-        display::write_line(ui, &format!("Role: {role_display}"))?;
         display::write_line(ui, &format!("Statement: \"{statement}\""))?;
         display::write_blank(ui)?;
 

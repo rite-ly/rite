@@ -169,6 +169,28 @@ pub(crate) const THEME_CSS: &str = r#"
     .signature-block p {
       margin: 10px 0;
     }
+    .fingerprint-record {
+      background-color: #f5f5f5;
+      border: 1px solid #ccc;
+      border-left: 4px solid #333;
+      padding: 15px 20px;
+      margin: 15px 0;
+      page-break-inside: avoid;
+    }
+    .fingerprint-record p {
+      margin: 8px 0;
+      font-family: monospace;
+    }
+    .fingerprint-prefix {
+      font-size: 1.3em;
+      font-weight: bold;
+      letter-spacing: 0.2em;
+    }
+    .fingerprint-remainder {
+      font-size: 0.95em;
+      color: #666;
+      letter-spacing: 0.15em;
+    }
 
     /* === Report-specific === */
     .dry-run-banner {
@@ -240,6 +262,14 @@ pub(crate) const THEME_CSS: &str = r#"
       }
       .signature-block {
         border: 1px solid #000;
+      }
+      .fingerprint-record {
+        border: 1px solid #000;
+        border-left: 4px solid #000;
+        background-color: transparent !important;
+      }
+      .fingerprint-remainder {
+        color: #333 !important;
       }
       .dry-run-banner {
         background-color: #fee !important;

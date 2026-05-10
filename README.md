@@ -72,7 +72,7 @@ Run with Docker:
 ```sh
 docker run --rm -it --init \
   -v "$PWD:/workspace" \
-  ghcr.io/rite-ly/rite:0.1.0-rc.4 check ceremony.rite.yaml
+  ghcr.io/rite-ly/rite:0.1.0-rc.6 check ceremony.rite.yaml
 ```
 
 Build from source:

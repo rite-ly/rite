@@ -4,7 +4,7 @@
 # Builder: compiles from source for TARGETPLATFORM.
 # Cross-arch builds (e.g. arm64 host -> linux/amd64 image) work via buildx/qemu
 # without manually wiring Rust target triples.
-FROM --platform=$TARGETPLATFORM rust:1.95-trixie@sha256:a9cfb755b33f5bb872610cbdb25da61f527416b28fc9c052bbce4bef93e7799a AS builder
+FROM --platform=$TARGETPLATFORM rust:1.95-trixie@sha256:5b1e3484ddcd22a3738c0ec34a5e98bf19382eb295fb6db54295e62379119040 AS builder
 WORKDIR /src
 
 # Override at build time for custom feature combinations.

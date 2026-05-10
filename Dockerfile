@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Prebuilt selector: used by CI/release to avoid rebuilding from source.
 # Expects release artifacts copied into dist/ in the build context.
-FROM --platform=$TARGETPLATFORM debian:trixie-slim@sha256:cedb1ef40439206b673ee8b33a46a03a0c9fa90bf3732f54704f99cb061d2c5a AS prebuilt
+FROM --platform=$TARGETPLATFORM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b AS prebuilt
 ARG TARGETARCH
 
 COPY dist/ /dist/
@@ -33,7 +33,7 @@ COPY dist/ /dist/
 RUN install -D -m 0755 "/dist/rite-linux-${TARGETARCH}-musl/rite" /out/rite
 
 # Runtime base: minimal hardened environment. Runs as non-root.
-FROM --platform=$TARGETPLATFORM debian:trixie-slim@sha256:cedb1ef40439206b673ee8b33a46a03a0c9fa90bf3732f54704f99cb061d2c5a AS runtime-base
+FROM --platform=$TARGETPLATFORM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b AS runtime-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

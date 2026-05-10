@@ -586,6 +586,7 @@ impl ResolveContext {
                     field: "role".to_string(),
                     expected: RefType::Role,
                     actual: reference.ref_type,
+                    value: role_ref.to_string(),
                 });
                 return None;
             }
@@ -674,6 +675,7 @@ impl ResolveContext {
                 field: field.to_string(),
                 expected: RefType::Artifact,
                 actual: reference.ref_type,
+                value: ref_str.to_string(),
             });
             return None;
         }

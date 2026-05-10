@@ -7,7 +7,7 @@ use crate::error::ResolveError;
 use crate::schema::Ceremony;
 use marked_yaml::Node;
 use marked_yaml::types::MarkedScalarNode;
-use rite_model::{ActId, MaterialId, ParamId, RoleId, SectionId, StepId};
+use rite_model::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};
 use std::path::Path;
 
 /// Parse ceremony YAML, build a `SpanMap`, and return structured diagnostics.
@@ -29,7 +29,7 @@ pub(crate) fn lower_ceremony(
     };
 
     // Step B: walk spans; always runs, even if Step C fails.
-    let (span_map, structural_diags) = walk_spans(path, &node);
+    let (span_map, structural_diags) = Lowerer::new(path, yaml).walk(&node);
     diags.extend(structural_diags);
 
     // Step C: serde deserialization from the same Node tree.
@@ -57,204 +57,364 @@ pub(crate) fn lower_ceremony(
     (ceremony_opt, span_map, diags)
 }
 
-/// Extract span information from all ceremony element IDs in the Node tree.
-#[allow(clippy::too_many_lines)]
-fn walk_spans(path: Option<&Path>, node: &Node) -> (SpanMap, Vec<Diagnostic>) {
-    const KNOWN_KEYS: &[&str] = &[
-        "version",
-        "name",
-        "description",
-        "backends",
-        "roles",
-        "acts",
-        "sections",
-        "parameters",
-        "materials",
-        "prerequisites",
-        "output",
-        "after",
-    ];
+/// Walks the YAML node tree once and accumulates the [`SpanMap`] used by the LSP
+/// to enrich diagnostics with source locations and to power go-to-definition.
+///
+/// Owning `yaml`, `path`, `span_map`, and `diags` together avoids the parameter
+/// sprawl that grows every time we add a new walked field.
+struct Lowerer<'src> {
+    yaml: &'src str,
+    path: Option<&'src Path>,
+    span_map: SpanMap,
+    diags: Vec<Diagnostic>,
+}
 
-    let mut span_map = SpanMap::default();
-    let mut diags = Vec::new();
+impl<'src> Lowerer<'src> {
+    fn new(path: Option<&'src Path>, yaml: &'src str) -> Self {
+        Self {
+            yaml,
+            path,
+            span_map: SpanMap::default(),
+            diags: Vec::new(),
+        }
+    }
 
-    let Some(mapping) = node.as_mapping() else {
-        return (span_map, diags);
-    };
+    #[allow(clippy::too_many_lines)]
+    fn walk(mut self, node: &Node) -> (SpanMap, Vec<Diagnostic>) {
+        const KNOWN_KEYS: &[&str] = &[
+            "version",
+            "name",
+            "description",
+            "backends",
+            "roles",
+            "acts",
+            "sections",
+            "parameters",
+            "materials",
+            "prerequisites",
+            "output",
+            "after",
+        ];
 
-    // Sections: mapping where keys are section IDs; each section contains nested steps.
-    if let Some(sections_map) = mapping.get_mapping("sections") {
-        for (section_id_scalar, section_node) in sections_map.iter() {
-            if let Some(span) = scalar_to_span(section_id_scalar) {
-                span_map
-                    .sections
-                    .insert(SectionId::new(section_id_scalar.as_str()), span);
-            }
+        let Some(mapping) = node.as_mapping() else {
+            return (self.span_map, self.diags);
+        };
 
-            let Some(section_map) = section_node.as_mapping() else {
-                continue;
-            };
+        // Sections: mapping where keys are section IDs; each section contains nested steps.
+        if let Some(sections_map) = mapping.get_mapping("sections") {
+            for (section_id_scalar, section_node) in sections_map.iter() {
+                if let Some(span) = self.scalar_to_span(section_id_scalar) {
+                    self.span_map
+                        .sections
+                        .insert(SectionId::new(section_id_scalar.as_str()), span);
+                }
 
-            // Collect section-level reference spans.
-            let section_context =
-                ReferenceContext::Section(SectionId::new(section_id_scalar.as_str()));
-            if let Some(val) = section_map.get_scalar("act") {
-                push_reference(
-                    &mut span_map,
-                    val,
-                    ReferenceTarget::Act(ActId::new(val.as_str())),
-                    &section_context,
-                );
-            }
-            if let Some(val) = section_map.get_scalar("role") {
-                push_reference(
-                    &mut span_map,
-                    val,
-                    ReferenceTarget::Role(RoleId::new(extract_role_id(val.as_str()))),
-                    &section_context,
-                );
-            }
-            if let Some(desc) = section_map.get_scalar("description") {
-                scan_expression_refs(&mut span_map, desc, &section_context);
-            }
+                let Some(section_map) = section_node.as_mapping() else {
+                    continue;
+                };
 
-            // Steps: mapping where keys are step IDs.
-            if let Some(steps_map) = section_map.get_mapping("steps") {
-                for (step_id_scalar, step_node) in steps_map.iter() {
-                    if let Some(span) = scalar_to_span(step_id_scalar) {
-                        span_map
-                            .steps
-                            .insert(StepId::new(step_id_scalar.as_str()), span);
+                let section_context =
+                    ReferenceContext::Section(SectionId::new(section_id_scalar.as_str()));
+                if let Some(val) = section_map.get_scalar("act") {
+                    self.push_reference(
+                        val,
+                        ReferenceTarget::Act(ActId::new(val.as_str())),
+                        &section_context,
+                    );
+                }
+                if let Some(val) = section_map.get_scalar("role") {
+                    self.push_reference(
+                        val,
+                        ReferenceTarget::Role(RoleId::new(extract_role_id(val.as_str()))),
+                        &section_context,
+                    );
+                }
+                if let Some(desc) = section_map.get_scalar("description") {
+                    self.scan_expression_refs(desc, &section_context);
+                }
+
+                if let Some(steps_map) = section_map.get_mapping("steps") {
+                    for (step_id_scalar, step_node) in steps_map.iter() {
+                        self.walk_step(step_id_scalar, step_node);
                     }
+                }
+            }
+        }
 
-                    let Some(step_map) = step_node.as_mapping() else {
-                        continue;
-                    };
+        // Roles: mapping where keys are role IDs.
+        if let Some(roles_map) = mapping.get_mapping("roles") {
+            for (key_scalar, _) in roles_map.iter() {
+                if let Some(span) = self.scalar_to_span(key_scalar) {
+                    self.span_map
+                        .roles
+                        .insert(RoleId::new(key_scalar.as_str()), span);
+                }
+            }
+        }
 
-                    // Validate required field.
-                    if !mapping_has_key(step_map, "action") {
-                        diags.push(Diagnostic {
-                            path: path.map(Path::to_owned),
-                            span: node_to_span(step_node),
+        // Acts: sequence of mappings, each with an "id" scalar.
+        if let Some(acts_seq) = mapping.get_sequence("acts") {
+            for act_node in acts_seq.iter() {
+                if let Some(act_map) = act_node.as_mapping() {
+                    if !mapping_has_key(act_map, "id") {
+                        self.diags.push(Diagnostic {
+                            path: self.path.map(Path::to_owned),
+                            span: node_to_span(act_node),
                             severity: Severity::Error,
-                            message: format!(
-                                "Step '{}' is missing required field 'action'",
-                                step_id_scalar.as_str()
-                            ),
+                            message: "Act is missing required field 'id'".to_string(),
                         });
                     }
+                    if let Some(id_scalar) = act_map.get_scalar("id")
+                        && let Some(span) = node_to_span(act_node)
+                    {
+                        self.span_map
+                            .acts
+                            .insert(ActId::new(id_scalar.as_str()), span);
+                    }
+                }
+            }
+        }
 
-                    // Collect step reference spans.
-                    let step_context = ReferenceContext::Step(StepId::new(step_id_scalar.as_str()));
-                    if let Some(val) = step_map.get_scalar("role") {
-                        push_reference(
-                            &mut span_map,
-                            val,
-                            ReferenceTarget::Role(RoleId::new(extract_role_id(val.as_str()))),
-                            &step_context,
-                        );
-                    }
-                    if let Some(val) = step_map.get_scalar("backend") {
-                        push_reference(
-                            &mut span_map,
-                            val,
-                            ReferenceTarget::Backend(val.as_str().to_string()),
-                            &step_context,
-                        );
-                    }
-                    if let Some(desc) = step_map.get_scalar("description") {
-                        scan_expression_refs(&mut span_map, desc, &step_context);
-                    }
-                    if let Some(with_map) = step_map.get_mapping("with") {
-                        for (_, val_node) in with_map.iter() {
-                            if let Some(scalar) = val_node.as_scalar() {
-                                scan_expression_refs(&mut span_map, scalar, &step_context);
-                            }
-                        }
-                    }
+        // Parameters: mapping where keys are param IDs.
+        if let Some(params_map) = mapping.get_mapping("parameters") {
+            for (key_scalar, _) in params_map.iter() {
+                if let Some(span) = self.scalar_to_span(key_scalar) {
+                    self.span_map
+                        .params
+                        .insert(ParamId::new(key_scalar.as_str()), span);
+                }
+            }
+        }
+
+        // Materials: mapping where keys are material IDs.
+        if let Some(materials_map) = mapping.get_mapping("materials") {
+            for (key_scalar, _) in materials_map.iter() {
+                if let Some(span) = self.scalar_to_span(key_scalar) {
+                    self.span_map
+                        .materials
+                        .insert(MaterialId::new(key_scalar.as_str()), span);
+                }
+            }
+        }
+
+        // Backends: mapping where keys are backend names.
+        if let Some(backends_map) = mapping.get_mapping("backends") {
+            for (key_scalar, _) in backends_map.iter() {
+                if let Some(span) = self.scalar_to_span(key_scalar) {
+                    self.span_map
+                        .backends
+                        .insert(key_scalar.as_str().to_string(), span);
+                }
+            }
+        }
+
+        // Outputs: mapping where keys are output IDs.
+        if let Some(outputs_map) = mapping.get_mapping("output") {
+            for (key_scalar, _) in outputs_map.iter() {
+                if let Some(span) = self.scalar_to_span(key_scalar) {
+                    self.span_map
+                        .outputs
+                        .insert(OutputId::new(key_scalar.as_str()), span);
+                }
+            }
+        }
+
+        // Unknown top-level key detection.
+        for (key_scalar, _) in mapping.iter() {
+            if !KNOWN_KEYS.contains(&key_scalar.as_str()) {
+                let span = self.scalar_to_span(key_scalar);
+                self.diags.push(Diagnostic {
+                    path: self.path.map(Path::to_owned),
+                    span,
+                    severity: Severity::Warning,
+                    message: format!("unknown top-level key: '{}'", key_scalar.as_str()),
+                });
+            }
+        }
+
+        (self.span_map, self.diags)
+    }
+
+    fn walk_step(&mut self, step_id_scalar: &MarkedScalarNode, step_node: &Node) {
+        if let Some(span) = self.scalar_to_span(step_id_scalar) {
+            self.span_map
+                .steps
+                .insert(StepId::new(step_id_scalar.as_str()), span);
+        }
+
+        let Some(step_map) = step_node.as_mapping() else {
+            return;
+        };
+
+        // Validate required field.
+        if !mapping_has_key(step_map, "action") {
+            let span = self.scalar_to_span(step_id_scalar);
+            self.diags.push(Diagnostic {
+                path: self.path.map(Path::to_owned),
+                span,
+                severity: Severity::Error,
+                message: format!(
+                    "Step '{}' is missing required field 'action'",
+                    step_id_scalar.as_str()
+                ),
+            });
+        }
+
+        let step_context = ReferenceContext::Step(StepId::new(step_id_scalar.as_str()));
+        if let Some(val) = step_map.get_scalar("role") {
+            self.push_reference(
+                val,
+                ReferenceTarget::Role(RoleId::new(extract_role_id(val.as_str()))),
+                &step_context,
+            );
+        }
+        if let Some(val) = step_map.get_scalar("backend") {
+            self.push_reference(
+                val,
+                ReferenceTarget::Backend(val.as_str().to_string()),
+                &step_context,
+            );
+        }
+        if let Some(val) = step_map.get_scalar("creates") {
+            let id = ArtifactId::new(extract_artifact_name(val.as_str()));
+            if let Some(span) = self.scalar_to_span(val) {
+                self.span_map.artifacts.insert(id.clone(), span);
+            }
+            self.push_reference(val, ReferenceTarget::Artifact(id), &step_context);
+        }
+        if let Some(reads_node) = step_map.get_node("reads") {
+            self.walk_reads(reads_node, &step_context);
+        }
+        if let Some(desc) = step_map.get_scalar("description") {
+            self.scan_expression_refs(desc, &step_context);
+        }
+        if let Some(with_map) = step_map.get_mapping("with") {
+            for (_, val_node) in with_map.iter() {
+                if let Some(scalar) = val_node.as_scalar() {
+                    self.scan_expression_refs(scalar, &step_context);
                 }
             }
         }
     }
 
-    // Roles: mapping where keys are role IDs.
-    if let Some(roles_map) = mapping.get_mapping("roles") {
-        for (key_scalar, _) in roles_map.iter() {
-            if let Some(span) = scalar_to_span(key_scalar) {
-                span_map
-                    .roles
-                    .insert(RoleId::new(key_scalar.as_str()), span);
-            }
-        }
-    }
-
-    // Acts: sequence of mappings, each with an "id" scalar.
-    if let Some(acts_seq) = mapping.get_sequence("acts") {
-        for act_node in acts_seq.iter() {
-            if let Some(act_map) = act_node.as_mapping() {
-                if !mapping_has_key(act_map, "id") {
-                    diags.push(Diagnostic {
-                        path: path.map(Path::to_owned),
-                        span: node_to_span(act_node),
-                        severity: Severity::Error,
-                        message: "Act is missing required field 'id'".to_string(),
-                    });
-                }
-                if let Some(id_scalar) = act_map.get_scalar("id")
-                    && let Some(span) = node_to_span(act_node)
-                {
-                    span_map.acts.insert(ActId::new(id_scalar.as_str()), span);
+    fn walk_reads(&mut self, reads_node: &Node, step_context: &ReferenceContext) {
+        if let Some(scalar) = reads_node.as_scalar() {
+            // Single artifact reference: `reads: "${artifact.x}"`.
+            let id = ArtifactId::new(extract_artifact_name(scalar.as_str()));
+            self.push_reference(scalar, ReferenceTarget::Artifact(id), step_context);
+        } else if let Some(reads_map) = reads_node.as_mapping() {
+            // Named inputs: `reads: { key_to_wrap: "...", wrapping_key: "..." }`.
+            for (_, val_node) in reads_map.iter() {
+                if let Some(scalar) = val_node.as_scalar() {
+                    let id = ArtifactId::new(extract_artifact_name(scalar.as_str()));
+                    self.push_reference(scalar, ReferenceTarget::Artifact(id), step_context);
                 }
             }
         }
     }
 
-    // Parameters: mapping where keys are param IDs.
-    if let Some(params_map) = mapping.get_mapping("parameters") {
-        for (key_scalar, _) in params_map.iter() {
-            if let Some(span) = scalar_to_span(key_scalar) {
-                span_map
-                    .params
-                    .insert(ParamId::new(key_scalar.as_str()), span);
+    /// Scan a scalar value for `${prefix.NAME}` expression references and push a
+    /// `ReferenceEntry` for each recognized prefix.
+    ///
+    /// `material` is handled here even though it is not a `RefType` in the model
+    /// (it resolves as an artifact at the IR level): the LSP needs to navigate
+    /// from `${material.x}` to the material declaration. Nested property paths
+    /// like `${artifact.keypair.private}` are intentionally skipped — handle
+    /// them at the expression-parser level when richer go-to-definition is needed.
+    #[allow(clippy::arithmetic_side_effects)]
+    fn scan_expression_refs(&mut self, scalar: &MarkedScalarNode, context: &ReferenceContext) {
+        let Some(base) = self.scalar_to_span(scalar) else {
+            return;
+        };
+        let text = scalar.as_str();
+        let mut search_from = 0;
+        while let Some(rel_start) = text.get(search_from..).and_then(|s| s.find("${")) {
+            let abs_start = search_from + rel_start;
+            let after_open = abs_start + 2; // skip "${"
+            let Some(close_offset) = text.get(after_open..).and_then(|s| s.find('}')) else {
+                break;
+            };
+            let Some(expr_content) = text.get(after_open..after_open + close_offset) else {
+                break;
+            };
+            let full_len = 2 + close_offset + 1; // "${" + content + "}"
+
+            if let Some(dot_pos) = expr_content.find('.') {
+                let prefix = &expr_content[..dot_pos];
+                let name = &expr_content[dot_pos + 1..];
+                if !name.is_empty() && !name.contains('.') {
+                    let target = match prefix {
+                        "param" => Some(ReferenceTarget::Param(ParamId::new(name))),
+                        "material" => Some(ReferenceTarget::Material(MaterialId::new(name))),
+                        "artifact" => Some(ReferenceTarget::Artifact(ArtifactId::new(name))),
+                        "role" => Some(ReferenceTarget::Role(RoleId::new(name))),
+                        _ => None,
+                    };
+                    if let Some(target) = target {
+                        let value = text
+                            .get(abs_start..abs_start + full_len)
+                            .unwrap_or("")
+                            .to_string();
+                        self.span_map.references.push(ReferenceEntry {
+                            span: Span {
+                                line: base.line,
+                                column: base.column + abs_start,
+                                length: Some(full_len),
+                            },
+                            target,
+                            context: context.clone(),
+                            value,
+                        });
+                    }
+                }
             }
+            search_from = abs_start + full_len;
         }
     }
 
-    // Materials: mapping where keys are material IDs.
-    if let Some(materials_map) = mapping.get_mapping("materials") {
-        for (key_scalar, _) in materials_map.iter() {
-            if let Some(span) = scalar_to_span(key_scalar) {
-                span_map
-                    .materials
-                    .insert(MaterialId::new(key_scalar.as_str()), span);
-            }
-        }
-    }
-
-    // Backends: mapping where keys are backend names.
-    if let Some(backends_map) = mapping.get_mapping("backends") {
-        for (key_scalar, _) in backends_map.iter() {
-            if let Some(span) = scalar_to_span(key_scalar) {
-                span_map
-                    .backends
-                    .insert(key_scalar.as_str().to_string(), span);
-            }
-        }
-    }
-
-    // Unknown top-level key detection.
-    for (key_scalar, _) in mapping.iter() {
-        if !KNOWN_KEYS.contains(&key_scalar.as_str()) {
-            diags.push(Diagnostic {
-                path: path.map(Path::to_owned),
-                span: scalar_to_span(key_scalar),
-                severity: Severity::Warning,
-                message: format!("unknown top-level key: '{}'", key_scalar.as_str()),
+    /// Push a reference entry for a scalar value node (for fields like `role:`,
+    /// `backend:`, `act:`, `creates:`, `reads:`).
+    fn push_reference(
+        &mut self,
+        val: &MarkedScalarNode,
+        target: ReferenceTarget,
+        context: &ReferenceContext,
+    ) {
+        if let Some(span) = self.scalar_to_span(val) {
+            self.span_map.references.push(ReferenceEntry {
+                span,
+                target,
+                context: context.clone(),
+                value: val.as_str().to_string(),
             });
         }
     }
 
-    (span_map, diags)
+    /// Build a `Span` for a scalar value, with column at the first content character
+    /// and length covering the scalar text.
+    ///
+    /// For quoted scalars `marked_yaml` places the START marker at the opening quote,
+    /// but `scalar.as_str()` returns the content without the quotes — so we shift the
+    /// column by 1 when the source byte is `"` or `'`. This keeps byte offsets within
+    /// `as_str()` aligned with source characters for both quoted and unquoted scalars.
+    fn scalar_to_span(&self, scalar: &MarkedScalarNode) -> Option<Span> {
+        let m = scalar.span().start()?;
+        let is_quoted = self
+            .yaml
+            .as_bytes()
+            .get(m.character())
+            .is_some_and(|&b| b == b'"' || b == b'\'');
+        let column = if is_quoted {
+            m.column().saturating_add(1)
+        } else {
+            m.column()
+        };
+        Some(Span {
+            line: m.line(),
+            column,
+            length: Some(scalar.as_str().len()),
+        })
+    }
 }
 
 /// Check whether a mapping node contains a key with the given name (any value type).
@@ -269,94 +429,15 @@ fn extract_role_id(raw: &str) -> &str {
         .unwrap_or(raw)
 }
 
-/// Scan a scalar value for `${param.X}` and `${material.X}` expression references.
-///
-/// For each match, a `ReferenceEntry` is pushed into `span_map.references` with the
-/// span pointing at the `$` of the expression and `value_len` covering the full `${...}`.
-/// This enables go-to-definition when the cursor is anywhere within an expression.
-///
-/// Uses simple string scanning rather than the expression parser because `material`
-/// is not a valid `RefType` in the expression model; it is resolved as an artifact
-/// at the IR level. The LSP needs to navigate from `${material.x}` to the material
-/// declaration, so we handle it at the raw string level here.
-#[allow(clippy::arithmetic_side_effects)]
-fn scan_expression_refs(
-    span_map: &mut SpanMap,
-    scalar: &MarkedScalarNode,
-    context: &ReferenceContext,
-) {
-    let Some(base_span) = scalar_to_span(scalar) else {
-        return;
-    };
-    let text = scalar.as_str();
-    let mut search_from = 0;
-    while let Some(rel_start) = text.get(search_from..).and_then(|s| s.find("${")) {
-        let abs_start = search_from + rel_start;
-        let after_open = abs_start + 2; // skip "${"
-        let Some(close_offset) = text.get(after_open..).and_then(|s| s.find('}')) else {
-            break;
-        };
-        let Some(expr_content) = text.get(after_open..after_open + close_offset) else {
-            break;
-        };
-        let full_len = 2 + close_offset + 1; // "${" + content + "}"
-
-        if let Some(dot_pos) = expr_content.find('.') {
-            let prefix = &expr_content[..dot_pos];
-            let name = &expr_content[dot_pos + 1..];
-            // Only handle simple names (no nested dots like artifact.keypair.private).
-            if !name.is_empty() && !name.contains('.') {
-                let target = match prefix {
-                    "param" => Some(ReferenceTarget::Param(ParamId::new(name))),
-                    "material" => Some(ReferenceTarget::Material(MaterialId::new(name))),
-                    _ => None,
-                };
-                if let Some(target) = target {
-                    // Column is 1-indexed; abs_start is a byte offset from scalar start.
-                    let col = base_span.column + abs_start;
-                    span_map.references.push(ReferenceEntry {
-                        span: Span {
-                            line: base_span.line,
-                            column: col,
-                            length: Some(full_len),
-                        },
-                        target,
-                        context: context.clone(),
-                    });
-                }
-            }
-        }
-        search_from = abs_start + full_len;
-    }
-}
-
-/// Push a reference entry into `span_map.references` for the given scalar value node.
-fn push_reference(
-    span_map: &mut SpanMap,
-    val: &MarkedScalarNode,
-    target: ReferenceTarget,
-    context: &ReferenceContext,
-) {
-    if let Some(mut span) = scalar_to_span(val) {
-        span.length = Some(val.as_str().len());
-        span_map.references.push(ReferenceEntry {
-            span,
-            target,
-            context: context.clone(),
-        });
-    }
+/// Extract a plain artifact name from either `"${artifact.name}"` syntax or a bare name.
+fn extract_artifact_name(raw: &str) -> &str {
+    raw.strip_prefix("${artifact.")
+        .and_then(|s| s.strip_suffix('}'))
+        .unwrap_or(raw)
 }
 
 fn node_to_span(node: &Node) -> Option<Span> {
     node.span().start().map(|m| Span {
-        line: m.line(),
-        column: m.column(),
-        length: None,
-    })
-}
-
-fn scalar_to_span(scalar: &MarkedScalarNode) -> Option<Span> {
-    scalar.span().start().map(|m| Span {
         line: m.line(),
         column: m.column(),
         length: None,
@@ -469,6 +550,391 @@ pub(crate) fn diagnostic_to_resolve_error(d: Diagnostic) -> ResolveError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::{annotate, span_text};
+
+    #[test]
+    fn declaration_spans_cover_full_identifier() {
+        // This test verifies that every declaration span carries the token length so
+        // that editors underline the full identifier, not just the first character.
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles:
+  alice: {}
+parameters:
+  my_param:
+    type: text
+sections:
+  main:
+    steps:
+      my_step:
+        action: confirm
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+
+        let alice = *span_map
+            .roles
+            .get(&RoleId::new("alice"))
+            .expect("alice role span");
+        assert_eq!(
+            annotate(yaml, alice),
+            "  alice: {}\n  ^^^^^",
+            "role span must cover the full identifier"
+        );
+
+        let my_param = *span_map
+            .params
+            .get(&ParamId::new("my_param"))
+            .expect("my_param span");
+        assert_eq!(
+            annotate(yaml, my_param),
+            "  my_param:\n  ^^^^^^^^",
+            "parameter span must cover the full identifier"
+        );
+
+        let main = *span_map
+            .sections
+            .get(&SectionId::new("main"))
+            .expect("main section span");
+        assert_eq!(
+            annotate(yaml, main),
+            "  main:\n  ^^^^",
+            "section span must cover the full identifier"
+        );
+
+        let my_step = *span_map
+            .steps
+            .get(&StepId::new("my_step"))
+            .expect("my_step span");
+        assert_eq!(
+            annotate(yaml, my_step),
+            "      my_step:\n      ^^^^^^^",
+            "step span must cover the full identifier"
+        );
+    }
+
+    #[test]
+    fn unknown_top_level_key_warning_covers_full_key() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles: {}
+sections: {}
+unknown_key: value
+"#;
+        let (_, _, diags) = lower_ceremony(None, yaml);
+        let warning = diags
+            .iter()
+            .find(|d| d.message.contains("unknown_key"))
+            .expect("should have unknown key warning");
+        let span = warning.span.expect("warning must have a span");
+        assert_eq!(
+            annotate(yaml, span),
+            "unknown_key: value\n^^^^^^^^^^^",
+            "unknown key warning must cover the full key name"
+        );
+    }
+
+    #[test]
+    fn expression_param_ref_span_covers_full_expression() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles: {}
+parameters:
+  x:
+    type: text
+sections:
+  main:
+    steps:
+      my_step:
+        action: confirm
+        description: "${param.x}"
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+
+        let entry = span_map
+            .references
+            .iter()
+            .find(|e| matches!(&e.target, ReferenceTarget::Param(id) if id.as_str() == "x"))
+            .expect("should have a reference entry for param 'x'");
+
+        assert_eq!(
+            span_text(yaml, entry.span),
+            "${param.x}",
+            "expression span must cover the full ${{...}} token"
+        );
+        assert_eq!(entry.span.length, Some(10));
+    }
+
+    #[test]
+    fn material_declaration_span_covers_full_identifier() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles: {}
+sections: {}
+materials:
+  my_material:
+    type: digital
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+        let span = *span_map
+            .materials
+            .get(&MaterialId::new("my_material"))
+            .expect("my_material span");
+        assert_eq!(
+            annotate(yaml, span),
+            "  my_material:\n  ^^^^^^^^^^^",
+            "material span must cover the full identifier"
+        );
+    }
+
+    #[test]
+    fn backend_declaration_span_covers_full_identifier() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles: {}
+sections: {}
+backends:
+  ssl:
+    provider: openssl
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+        let span = *span_map.backends.get("ssl").expect("ssl backend span");
+        assert_eq!(
+            annotate(yaml, span),
+            "  ssl:\n  ^^^",
+            "backend span must cover the full identifier"
+        );
+    }
+
+    #[test]
+    fn output_declaration_span_covers_full_identifier() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles: {}
+sections: {}
+output:
+  signed_cert:
+    type: artifact
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+        let span = *span_map
+            .outputs
+            .get(&OutputId::new("signed_cert"))
+            .expect("signed_cert output span");
+        assert_eq!(
+            annotate(yaml, span),
+            "  signed_cert:\n  ^^^^^^^^^^^",
+            "output span must cover the full identifier"
+        );
+    }
+
+    #[test]
+    fn quoted_declaration_key_span_skips_opening_quote() {
+        // Regression: quoted YAML keys used to mis-report column at the `"`,
+        // making the underlined slice include the opening quote and miss the
+        // last character of the identifier.
+        let yaml = "
+version: \"0.2\"
+name: \"Test\"
+roles:
+  \"alice\": {}
+sections: {}
+";
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+        let span = *span_map
+            .roles
+            .get(&RoleId::new("alice"))
+            .expect("alice role span");
+        assert_eq!(
+            span_text(yaml, span),
+            "alice",
+            "quoted role key span must underline the identifier, not the opening quote"
+        );
+    }
+
+    #[test]
+    fn role_field_unquoted_value_records_reference_with_full_span() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles:
+  alice: {}
+sections:
+  main:
+    steps:
+      my_step:
+        action: confirm
+        role: "${role.alice}"
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+        let entry = span_map
+            .references
+            .iter()
+            .find(|e| matches!(&e.target, ReferenceTarget::Role(id) if id.as_str() == "alice"))
+            .expect("should have a Role reference for alice");
+        assert_eq!(span_text(yaml, entry.span), "${role.alice}");
+        assert_eq!(entry.value, "${role.alice}");
+    }
+
+    #[test]
+    fn material_expression_ref_span_covers_full_token() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles: {}
+materials:
+  my_material:
+    type: digital
+sections:
+  main:
+    steps:
+      my_step:
+        action: confirm
+        description: "see ${material.my_material} for details"
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+        let entry = span_map
+            .references
+            .iter()
+            .find(
+                |e| matches!(&e.target, ReferenceTarget::Material(id) if id.as_str() == "my_material"),
+            )
+            .expect("should have a Material reference entry");
+        assert_eq!(span_text(yaml, entry.span), "${material.my_material}");
+    }
+
+    #[test]
+    fn unterminated_expression_does_not_panic() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles: {}
+sections:
+  main:
+    steps:
+      my_step:
+        action: confirm
+        description: "${param.x"
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+        assert!(
+            !span_map
+                .references
+                .iter()
+                .any(|e| matches!(e.target, ReferenceTarget::Param(_))),
+            "unterminated expression must not produce a reference entry"
+        );
+    }
+
+    #[test]
+    fn creates_field_records_artifact_reference_and_artifact_span() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles: {}
+sections:
+  main:
+    steps:
+      gen_step:
+        action: confirm
+        creates: "${artifact.keypair}"
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+
+        // Reference entry recorded against the step.
+        let entry = span_map
+            .references
+            .iter()
+            .find(
+                |e| matches!(&e.target, ReferenceTarget::Artifact(id) if id.as_str() == "keypair"),
+            )
+            .expect("should have an Artifact reference for keypair");
+        assert_eq!(span_text(yaml, entry.span), "${artifact.keypair}");
+
+        // Artifact span is recorded so `ArtifactNotOutput` warnings can underline it.
+        let artifact_span = *span_map
+            .artifacts
+            .get(&ArtifactId::new("keypair"))
+            .expect("keypair artifact span");
+        assert_eq!(span_text(yaml, artifact_span), "${artifact.keypair}");
+    }
+
+    #[test]
+    fn reads_named_inputs_record_artifact_references() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles: {}
+sections:
+  main:
+    steps:
+      use_step:
+        action: confirm
+        reads:
+          first: "${artifact.alpha}"
+          second: "${artifact.beta}"
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+        let names: Vec<&str> = span_map
+            .references
+            .iter()
+            .filter_map(|e| match &e.target {
+                ReferenceTarget::Artifact(id) => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(names.contains(&"alpha"));
+        assert!(names.contains(&"beta"));
+    }
+
+    #[test]
+    fn reads_string_form_records_artifact_reference() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles: {}
+sections:
+  main:
+    steps:
+      use_step:
+        action: confirm
+        reads: "${artifact.alpha}"
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+        let entry = span_map
+            .references
+            .iter()
+            .find(|e| matches!(&e.target, ReferenceTarget::Artifact(id) if id.as_str() == "alpha"))
+            .expect("should record a single artifact reference for string-form reads");
+        assert_eq!(span_text(yaml, entry.span), "${artifact.alpha}");
+    }
+
+    #[test]
+    fn expression_artifact_ref_in_description_is_recorded() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles: {}
+sections:
+  main:
+    steps:
+      my_step:
+        action: confirm
+        description: "uses ${artifact.foo}"
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+        let entry = span_map
+            .references
+            .iter()
+            .find(|e| matches!(&e.target, ReferenceTarget::Artifact(id) if id.as_str() == "foo"))
+            .expect("scan_expression_refs must now handle the `artifact` prefix");
+        assert_eq!(span_text(yaml, entry.span), "${artifact.foo}");
+    }
 
     const MINIMAL_CEREMONY: &str = r#"
 version: "0.2"

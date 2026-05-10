@@ -256,6 +256,8 @@ pub enum ResolveError {
         expected: RefType,
         /// The actual reference type.
         actual: RefType,
+        /// The raw reference string, used to look up the expression span.
+        value: String,
     },
 }
 

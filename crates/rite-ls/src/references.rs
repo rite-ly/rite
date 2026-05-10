@@ -1,12 +1,12 @@
 //! Find-references for ceremony YAML.
 //!
-//! Given a cursor position, identifies the declaration target under the cursor
-//! (whether the cursor is on a reference value or a declaration key) and returns
-//! all `Location`s in the document that reference that same target.
+//! Identifies the declaration target under the cursor (whether the cursor is
+//! on a reference value or a declaration key) and returns every `Location`
+//! that references that target. Lookups delegate to `SpanMap`. See
+//! [`rite_resolver::SpanMap`] for the reference-collection model.
 
 use crate::convert;
-use rite_model::{ActId, MaterialId, ParamId, RoleId, SectionId};
-use rite_resolver::{ReferenceTarget, Span, SpanMap};
+use rite_resolver::SpanMap;
 use tower_lsp_server::ls_types::{Location, Position, Uri};
 
 /// Return all reference sites for the target at the cursor position.
@@ -14,11 +14,12 @@ use tower_lsp_server::ls_types::{Location, Position, Uri};
 /// Works in two cases:
 /// 1. Cursor is on a **reference value** (e.g. the `main` in `section: main`):
 ///    `find_target_at` identifies the target directly.
-/// 2. Cursor is on a **declaration key** (e.g. the `main` in `- id: main` under
-///    `sections:`): the word under the cursor is matched against declaration maps.
+/// 2. Cursor is on a **declaration key** (e.g. the `main` in `sections.main:`):
+///    the word under the cursor is matched against declaration maps via
+///    `SpanMap::declaration_target_for_word`.
 ///
-/// When `include_declaration` is true (matching `ReferenceContext.include_declaration` from the
-/// LSP client), the declaration site is prepended to the returned list.
+/// When `include_declaration` is true the declaration site is prepended to the
+/// returned list (matching the LSP `ReferenceContext.includeDeclaration` flag).
 ///
 /// Returns an empty vec if no known target is under the cursor.
 pub fn find_references_at(
@@ -32,93 +33,41 @@ pub fn find_references_at(
     let line_1 = pos.line as usize + 1;
     let col_1 = pos.character as usize + 1;
 
-    // Try: cursor is on a reference value.
     let target = if let Some(t) = span_map.find_target_at(line_1, col_1) {
         t.clone()
     } else {
-        // Try: cursor is on a declaration.
         let word = crate::convert::word_at_position(text, pos).unwrap_or_default();
         if word.is_empty() {
             return vec![];
         }
-        if let Some(target) = declaration_target(span_map, &word) {
-            target
-        } else {
+        let Some(target) = span_map.declaration_target_for_word(&word) else {
             return vec![];
-        }
+        };
+        target
     };
 
     let mut locs: Vec<Location> = Vec::new();
 
-    // Prepend the declaration site when the client requests it.
-    if include_declaration && let Some(decl_span) = decl_span_for_target(span_map, &target) {
+    if include_declaration && let Some(decl_span) = span_map.declaration_span(&target) {
         locs.push(Location {
             uri: uri.clone(),
             range: convert::point_range(convert::span_to_position(decl_span)),
         });
     }
 
-    locs.extend(
-        span_map
-            .references
-            .iter()
-            .filter(|e| e.target == target)
-            .map(|e| Location {
-                uri: uri.clone(),
-                range: convert::span_to_range(e.span),
-            }),
-    );
+    locs.extend(span_map.references_for_target(&target).map(|e| Location {
+        uri: uri.clone(),
+        range: convert::span_to_range(e.span),
+    }));
 
     locs
-}
-
-/// Look up the declaration span for a resolved reference target.
-fn decl_span_for_target(span_map: &SpanMap, target: &ReferenceTarget) -> Option<Span> {
-    match target {
-        ReferenceTarget::Section(id) => span_map.sections.get(id).copied(),
-        ReferenceTarget::Role(id) => span_map.roles.get(id).copied(),
-        ReferenceTarget::Act(id) => span_map.acts.get(id).copied(),
-        ReferenceTarget::Param(id) => span_map.params.get(id).copied(),
-        ReferenceTarget::Material(id) => span_map.materials.get(id).copied(),
-        ReferenceTarget::Backend(name) => span_map.backends.get(name.as_str()).copied(),
-    }
-}
-
-/// Identify a declaration target if `word` matches a known declaration ID.
-///
-/// Checks all declaration maps and returns the first match found.
-fn declaration_target(span_map: &SpanMap, word: &str) -> Option<ReferenceTarget> {
-    let section_id = SectionId::new(word);
-    if span_map.sections.contains_key(&section_id) {
-        return Some(ReferenceTarget::Section(section_id));
-    }
-    let role_id = RoleId::new(word);
-    if span_map.roles.contains_key(&role_id) {
-        return Some(ReferenceTarget::Role(role_id));
-    }
-    let act_id = ActId::new(word);
-    if span_map.acts.contains_key(&act_id) {
-        return Some(ReferenceTarget::Act(act_id));
-    }
-    let param_id = ParamId::new(word);
-    if span_map.params.contains_key(&param_id) {
-        return Some(ReferenceTarget::Param(param_id));
-    }
-    let material_id = MaterialId::new(word);
-    if span_map.materials.contains_key(&material_id) {
-        return Some(ReferenceTarget::Material(material_id));
-    }
-    if span_map.backends.contains_key(word) {
-        return Some(ReferenceTarget::Backend(word.to_string()));
-    }
-    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rite_model::StepId;
-    use rite_resolver::{ReferenceContext, ReferenceEntry, Span};
+    use rite_model::{ArtifactId, SectionId, StepId};
+    use rite_resolver::{ReferenceContext, ReferenceEntry, ReferenceTarget, Span};
 
     fn make_uri() -> Uri {
         "file:///test.yaml".parse().unwrap()
@@ -143,6 +92,7 @@ mod tests {
             },
             target: ReferenceTarget::Section(SectionId::new("main")),
             context: ReferenceContext::Step(StepId::new("test")),
+            value: "main".to_string(),
         });
         span_map.references.push(ReferenceEntry {
             span: Span {
@@ -151,6 +101,7 @@ mod tests {
             },
             target: ReferenceTarget::Section(SectionId::new("main")),
             context: ReferenceContext::Step(StepId::new("test")),
+            value: "main".to_string(),
         });
         span_map.references.push(ReferenceEntry {
             span: Span {
@@ -159,6 +110,7 @@ mod tests {
             },
             target: ReferenceTarget::Section(SectionId::new("other")),
             context: ReferenceContext::Step(StepId::new("test")),
+            value: "other".to_string(),
         });
 
         // Cursor on the first reference value (line 10, col 15 → 0-indexed: 9, 14).
@@ -185,6 +137,7 @@ mod tests {
             },
             target: ReferenceTarget::Section(SectionId::new("setup")),
             context: ReferenceContext::Step(StepId::new("test")),
+            value: "setup".to_string(),
         });
 
         // Cursor on the declaration itself (not a reference), word = "setup".
@@ -220,9 +173,9 @@ mod tests {
             },
             target: ReferenceTarget::Section(SectionId::new("main")),
             context: ReferenceContext::Step(StepId::new("test")),
+            value: "main".to_string(),
         });
 
-        // Cursor on the reference value.
         let pos = Position {
             line: 9,
             character: 14,
@@ -232,5 +185,48 @@ mod tests {
         // Declaration site (span line 5 → 0-indexed 4) comes first.
         assert_eq!(locs[0].range.start.line, 4);
         assert_eq!(locs[1].range.start.line, 9);
+    }
+
+    #[test]
+    fn finds_artifact_references_from_creates_or_reads() {
+        // Cursor on the `${artifact.keypair}` value in a `reads:` block should
+        // find both the producing `creates:` site (when include_declaration is
+        // on) and every `reads:` use.
+        let mut span_map = SpanMap::default();
+        let creates_span = Span {
+            line: 5,
+            column: 7,
+            length: Some(20),
+        };
+        span_map
+            .artifacts
+            .insert(ArtifactId::new("keypair"), creates_span);
+        // `creates:` reference entry.
+        span_map.references.push(ReferenceEntry {
+            span: creates_span,
+            target: ReferenceTarget::Artifact(ArtifactId::new("keypair")),
+            context: ReferenceContext::Step(StepId::new("gen_step")),
+            value: "${artifact.keypair}".to_string(),
+        });
+        // `reads:` reference entry — cursor lands here.
+        span_map.references.push(ReferenceEntry {
+            span: Span {
+                line: 12,
+                column: 14,
+                length: Some(20),
+            },
+            target: ReferenceTarget::Artifact(ArtifactId::new("keypair")),
+            context: ReferenceContext::Step(StepId::new("use_step")),
+            value: "${artifact.keypair}".to_string(),
+        });
+
+        let pos = Position {
+            line: 11,
+            character: 14,
+        };
+        let locs = find_references_at(&span_map, "", pos, &make_uri(), true);
+        // 1 declaration + 2 reference entries (creates: and reads:).
+        assert_eq!(locs.len(), 3);
+        assert_eq!(locs[0].range.start.line, 4); // declaration at line 5
     }
 }

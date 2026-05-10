@@ -2,17 +2,17 @@
 //!
 //! Two layers, tried in order:
 //!
-//! 1. **Reference hover**: uses `SpanMap::find_target_at` (the same mechanism as
-//!    go-to-definition) to detect when the cursor is over a `section:`, `role:`, or
-//!    `act:` value. If the resolved ceremony is available, shows the declaration's
-//!    name, description, and other metadata as Markdown.
+//! 1. **Reference hover**: `SpanMap::find_target_at` returns whichever
+//!    [`ReferenceTarget`] kind covers the cursor (section, role, act, param,
+//!    material, backend, artifact). If the resolved ceremony is available, the
+//!    target's metadata is rendered as Markdown.
 //!
 //! 2. **Action hover**: falls back to extracting the word at the cursor and looking
-//!    it up in the static action table. This is intentionally a fallback: it only fires
-//!    when the cursor is not on a known reference value.
+//!    it up in the static action table. Only fires when the cursor is not on a
+//!    known reference value.
 
 use crate::actions;
-use rite_model::{Ceremony, MaterialKind};
+use rite_model::{ArtifactId, Ceremony, MaterialId, MaterialKind};
 use rite_resolver::{ReferenceTarget, SpanMap};
 use tower_lsp_server::ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
 
@@ -28,7 +28,7 @@ pub fn hover_at(
 
     span_map
         .find_target_at(line, col)
-        .and_then(|t| hover_for_target(t, resolved))
+        .and_then(|t| hover_for_target(t, span_map, resolved))
         .map(markdown_hover)
         .or_else(|| {
             let word = crate::convert::word_at_position(text, pos)?;
@@ -41,8 +41,18 @@ pub fn hover_at(
 /// Build Markdown hover content for a resolved reference target.
 ///
 /// Returns `None` if the target can't be found in the resolved ceremony
-/// (e.g., the file has errors and resolution failed).
-fn hover_for_target(target: &ReferenceTarget, resolved: Option<&Ceremony>) -> Option<String> {
+/// (e.g., the file has errors and resolution failed). Artifacts are handled
+/// separately because their hover content can be derived from `span_map` alone
+/// when the ceremony is unresolved.
+fn hover_for_target(
+    target: &ReferenceTarget,
+    span_map: &SpanMap,
+    resolved: Option<&Ceremony>,
+) -> Option<String> {
+    if let ReferenceTarget::Artifact(id) = target {
+        return Some(artifact_hover(id, span_map, resolved));
+    }
+
     let resolved = resolved?;
     match target {
         ReferenceTarget::Section(id) => {
@@ -114,7 +124,40 @@ fn hover_for_target(target: &ReferenceTarget, resolved: Option<&Ceremony>) -> Op
                 backend.provider
             ))
         }
+        // ReferenceTarget is `#[non_exhaustive]`; Artifact is handled by the
+        // early-return above, so no other variant currently reaches this arm.
+        _ => None,
     }
+}
+
+/// Render hover content for an artifact reference, using `span_map` to
+/// distinguish a `creates:`-produced artifact from a material-backed one.
+/// Falls back to the bare ID when no metadata is available — never returns
+/// `None`, so the action-table fallback in `hover_at` doesn't fire on the
+/// same word.
+fn artifact_hover(id: &ArtifactId, span_map: &SpanMap, resolved: Option<&Ceremony>) -> String {
+    if span_map.artifacts.contains_key(id) {
+        // TODO: name the producing step (`produced by step \`gen_step\``) once a
+        // `creates_by_step: HashMap<ArtifactId, StepId>` lives on `SpanMap`.
+        return format!("**artifact** `{id}` · produced upstream");
+    }
+    if let Some(ceremony) = resolved
+        && let Some(material) = ceremony.materials.get(&MaterialId::new(id.as_str()))
+    {
+        let kind_str = match &material.kind {
+            MaterialKind::Digital { .. } => "digital",
+            MaterialKind::Physical { .. } => "physical",
+        };
+        let mut md = format!("**artifact** `{id}` · material · `{kind_str}`");
+        if let Some(title) = &material.title {
+            md.push_str(&format!("\n\n{title}"));
+        }
+        if let Some(desc) = &material.description {
+            md.push_str(&format!("\n\n{desc}"));
+        }
+        return md;
+    }
+    format!("**artifact** `{id}`")
 }
 
 fn markdown_hover(value: String) -> Hover {
@@ -130,6 +173,8 @@ fn markdown_hover(value: String) -> Hover {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rite_model::{ArtifactId, StepId};
+    use rite_resolver::{ReferenceContext, ReferenceEntry, Span};
 
     #[test]
     fn extracts_word_at_middle() {
@@ -164,5 +209,70 @@ mod tests {
             character: 14,
         };
         assert!(hover_at(text, &span_map, None, pos).is_none());
+    }
+
+    #[test]
+    fn artifact_hover_says_produced_when_creates_site_present() {
+        let mut span_map = SpanMap::default();
+        span_map.artifacts.insert(
+            ArtifactId::new("keypair"),
+            Span {
+                line: 5,
+                column: 7,
+                length: Some(20),
+            },
+        );
+        span_map.references.push(ReferenceEntry {
+            span: Span {
+                line: 12,
+                column: 14,
+                length: Some(20),
+            },
+            target: ReferenceTarget::Artifact(ArtifactId::new("keypair")),
+            context: ReferenceContext::Step(StepId::new("use_step")),
+            value: "${artifact.keypair}".to_string(),
+        });
+
+        let pos = Position {
+            line: 11,
+            character: 14,
+        };
+        let hover = hover_at("", &span_map, None, pos).expect("hover");
+        if let HoverContents::Markup(MarkupContent { value, .. }) = hover.contents {
+            assert!(value.contains("produced"), "got: {value}");
+            assert!(value.contains("keypair"), "got: {value}");
+        } else {
+            panic!("expected markup hover");
+        }
+    }
+
+    #[test]
+    fn artifact_hover_falls_through_to_basic_when_no_metadata() {
+        // No `creates:` site recorded and no resolved ceremony to look up
+        // material details — should still produce a basic artifact hover so
+        // the action-table fallback doesn't misfire on the same word.
+        let mut span_map = SpanMap::default();
+        span_map.references.push(ReferenceEntry {
+            span: Span {
+                line: 12,
+                column: 14,
+                length: Some(15),
+            },
+            target: ReferenceTarget::Artifact(ArtifactId::new("ghost")),
+            context: ReferenceContext::Step(StepId::new("use_step")),
+            value: "${artifact.ghost}".to_string(),
+        });
+
+        let pos = Position {
+            line: 11,
+            character: 14,
+        };
+        let hover = hover_at("", &span_map, None, pos).expect("hover");
+        if let HoverContents::Markup(MarkupContent { value, .. }) = hover.contents {
+            assert!(value.contains("ghost"), "got: {value}");
+            assert!(!value.contains("produced"), "got: {value}");
+        } else {
+            panic!("expected markup hover");
+        }
     }
 }

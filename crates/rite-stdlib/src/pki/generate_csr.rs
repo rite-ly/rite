@@ -181,7 +181,7 @@ impl ActionHandler for GenerateCsrAction {
             reason: format!("CSR DER encoding failed: {e}"),
         })?;
 
-        display::write_success(ui, &format!("CSR generated ({} bytes DER)", csr_der.len()))?;
+        display::write_success(ui, "CSR signed")?;
 
         let mut evidence = StepEvidence::new();
         evidence.insert("algorithm", evidence_algorithm);

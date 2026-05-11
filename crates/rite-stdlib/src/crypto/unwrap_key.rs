@@ -136,14 +136,6 @@ impl ActionHandler for UnwrapKeyAction {
                 reason: format!("Backend key unwrapping failed: {e}"),
             })?;
 
-        display::write_success(
-            ui,
-            &format!(
-                "Key unwrapped using backend (algorithm: {})",
-                key_metadata.algorithm
-            ),
-        )?;
-
         let mut evidence = StepEvidence::new();
         evidence.insert("algorithm", algorithm_str);
         evidence.insert("unwrapping_key", unwrapping_key_ref.display_name().as_str());

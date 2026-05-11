@@ -40,8 +40,8 @@ fn space_hex_pairs(hex: &str) -> String {
 // TODO: this prefix length could become a config option later.
 const FINGERPRINT_PREFIX_BYTES: usize = 16;
 const FINGERPRINT_PREFIX_HEX: usize = FINGERPRINT_PREFIX_BYTES * 2;
-const ANSI_BOLD: &str = "\x1b[1m";
-const ANSI_RESET: &str = "\x1b[0m";
+pub(crate) const ANSI_BOLD: &str = "\x1b[1m";
+pub(crate) const ANSI_RESET: &str = "\x1b[0m";
 
 /// Print the transcript fingerprint prominently and prompt the operator to record it.
 ///

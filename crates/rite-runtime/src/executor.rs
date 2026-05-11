@@ -408,7 +408,14 @@ fn execute_core(
                         .position(|(id, _)| id == act_id)
                         .map_or(1, |i| i.saturating_add(1));
                     let act_name = act.name.as_deref().unwrap_or(act_id.as_str());
-                    ui.log(Icon::Info, &format!("▸ Act {act_number}: {act_name}"));
+                    ui.log(
+                        Icon::Info,
+                        &format!(
+                            "{}Act {act_number}: {act_name}{}",
+                            printing::ANSI_BOLD,
+                            printing::ANSI_RESET
+                        ),
+                    );
                 }
                 current_act = step_act;
             }
@@ -417,7 +424,14 @@ fn execute_core(
         // Step header
         let step_label = &step.step_label;
         let step_id = &step.id;
-        ui.log(Icon::Info, &format!("⏺ Step {step_label}: {step_id}"));
+        ui.log(
+            Icon::Info,
+            &format!(
+                "{}Step {step_label}: {step_id}{}",
+                printing::ANSI_BOLD,
+                printing::ANSI_RESET
+            ),
+        );
         if let Some(role) = &step.role {
             let role_name = state.resolve_role(role);
             ui.log(Icon::Info, &format!("Role: {role_name}"));
@@ -525,10 +539,8 @@ fn execute_core(
             }
         }
 
-        // Step pacing: automated steps (no role) pause for acknowledgment.
-        // Steps with roles already pace via human interaction in prompts.
-        if step.role.is_none() && !step.silent && !dry_run {
-            ui.prompt_continue("Step complete.")?;
+        if !step.silent && !dry_run {
+            ui.prompt_continue("")?;
         }
     }
 

@@ -275,10 +275,7 @@ impl ActionHandler for IssueCertificateAction {
             reason: format!("Certificate DER encoding failed: {e}"),
         })?;
 
-        display::write_success(
-            ui,
-            &format!("Certificate issued ({} bytes DER)", cert_der.len()),
-        )?;
+        display::write_success(ui, "Certificate signed")?;
 
         let mut evidence = StepEvidence::new();
         evidence.insert("algorithm", evidence_algorithm);

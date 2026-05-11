@@ -83,8 +83,6 @@ impl ActionHandler for ExportPublicAction {
                 })?
         };
 
-        display::write_success(ui, "Public key extracted successfully")?;
-
         let public_key = ArtifactValue::PublicKey {
             key_data: public_key_bytes,
             format: KeyFormat::Pem,

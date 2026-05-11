@@ -198,8 +198,8 @@ impl<R: io::BufRead + Send, W: io::Write + Send> StepUI for ConsoleStepUI<'_, R,
         let _ = self.writer.flush();
     }
 
-    fn prompt_continue(&mut self, message: &str) -> io::Result<()> {
-        write!(self.writer, "{message} [press Enter] ")?;
+    fn prompt_continue(&mut self, _message: &str) -> io::Result<()> {
+        write!(self.writer, "  [press Enter]")?;
         self.writer.flush()?;
         let mut line = String::new();
         self.reader.read_line(&mut line)?;
@@ -208,7 +208,7 @@ impl<R: io::BufRead + Send, W: io::Write + Send> StepUI for ConsoleStepUI<'_, R,
 
     fn prompt_confirm(&mut self, message: &str) -> io::Result<bool> {
         loop {
-            write!(self.writer, "{message} [y/n]: ")?;
+            write!(self.writer, "▶ {message} [y/n]: ")?;
             self.writer.flush()?;
             let mut input = String::new();
             let bytes_read = self.reader.read_line(&mut input)?;
@@ -233,7 +233,7 @@ impl<R: io::BufRead + Send, W: io::Write + Send> StepUI for ConsoleStepUI<'_, R,
 
     fn prompt_literal(&mut self, message: &str, expected: &str) -> io::Result<bool> {
         loop {
-            write!(self.writer, "{message}: ")?;
+            write!(self.writer, "▶ {message}: ")?;
             self.writer.flush()?;
             let mut input = String::new();
             let bytes_read = self.reader.read_line(&mut input)?;
@@ -257,7 +257,7 @@ impl<R: io::BufRead + Send, W: io::Write + Send> StepUI for ConsoleStepUI<'_, R,
     }
 
     fn prompt_text(&mut self, prompt: &str) -> io::Result<String> {
-        write!(self.writer, "{prompt}: ")?;
+        write!(self.writer, "▶ {prompt}: ")?;
         self.writer.flush()?;
         let mut input = String::new();
         let bytes_read = self.reader.read_line(&mut input)?;
@@ -274,7 +274,7 @@ impl<R: io::BufRead + Send, W: io::Write + Send> StepUI for ConsoleStepUI<'_, R,
     }
 
     fn prompt_secret(&mut self, prompt: &str) -> io::Result<String> {
-        write!(self.writer, "{prompt}: ")?;
+        write!(self.writer, "▶ {prompt}: ")?;
         self.writer.flush()?;
         // rpassword reads from /dev/tty directly, bypassing self.reader.
         // This is correct for echo suppression but means secret input

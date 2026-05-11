@@ -900,6 +900,162 @@ mod tests {
         Ok(())
     }
 
+    /// Verify a fully-populated ceremony transcript round-trips through write → verify.
+    ///
+    /// Covers all optional fields that have historically caused "missing field" errors
+    /// when a struct was changed without a corresponding `#[serde(default)]`.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn test_verify_fully_populated_transcript() -> io::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("full-transcript.jsonl");
+
+        let mut writer = JsonlTranscriptWriter::new(&path)?;
+        writer.begin(
+            CeremonyInfo {
+                fingerprint:
+                    "sha256:abc1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd"
+                        .to_string(),
+                name: "Root CA Key Generation".to_string(),
+            },
+            Some(InstanceInfo {
+                fingerprint:
+                    "sha256:inst234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
+                        .to_string(),
+                parameters: BTreeMap::from([
+                    ("ceremony_date".to_string(), serde_json::json!("2026-03-28")),
+                    ("key_label".to_string(), serde_json::json!("ROOT-CA-PROD")),
+                ]),
+                materials: BTreeMap::from([(
+                    "transport_pubkey".to_string(),
+                    "sha256:897fc6eb64792722d78047f621a8cb9e7d2bb068f6d49b4150c2f28427fb5cd9"
+                        .to_string(),
+                )]),
+            }),
+            BinaryInfo {
+                fingerprint: Some(
+                    "sha256:cb1653096e691015d578db708a6bfd07439a9d7e76ceecff1ed89a0d38e7df61"
+                        .to_string(),
+                ),
+                version: "0.1.0-rc.6".to_string(),
+            },
+            None,
+            None,
+            None,
+            vec![
+                ParticipantRecord {
+                    role_id: "crypto_officer".to_string(),
+                    role_name: "Crypto Officer".to_string(),
+                    person: Some("Alice Smith".to_string()),
+                },
+                ParticipantRecord {
+                    role_id: "witness__1".to_string(),
+                    role_name: "Witness 1".to_string(),
+                    person: Some("Bob Jones".to_string()),
+                },
+                ParticipantRecord {
+                    role_id: "witness__2".to_string(),
+                    role_name: "Witness 2".to_string(),
+                    person: Some("Carol White".to_string()),
+                },
+            ],
+            false,
+        )?;
+
+        writer.record_event(ExecutionEvent {
+            step_id: "generate_root_ca".to_string(),
+            action: ActionType::GenerateKeypair,
+            role: Some("crypto_officer".to_string()),
+            started_at: Utc::now(),
+            completed_at: Utc::now(),
+            outcome: EventOutcome {
+                status: "completed".to_string(),
+                message: Some("RSA-4096 keypair generated".to_string()),
+            },
+            evidence: StepEvidence::new()
+                .with("algorithm", "RSA-4096")
+                .with("backend", "openssl")
+                .with("key_id", "key-generate_root_ca")
+                .with(
+                    "public_key_fingerprint",
+                    "sha256:def4567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                ),
+        })?;
+
+        writer.record_event(ExecutionEvent {
+            step_id: "witness1_attest".to_string(),
+            action: ActionType::Attest,
+            role: Some("witness__1".to_string()),
+            started_at: Utc::now(),
+            completed_at: Utc::now(),
+            outcome: EventOutcome {
+                status: "completed".to_string(),
+                message: Some("I witnessed the key generation.".to_string()),
+            },
+            evidence: StepEvidence::new().with(
+                "statement",
+                "I witnessed the key generation and confirm the fingerprint.",
+            ),
+        })?;
+
+        writer.finalize(TranscriptStatus::Completed)?;
+
+        match verify_transcript(&path)? {
+            VerificationResult::Valid {
+                status,
+                dry_run,
+                artifacts,
+                ..
+            } => {
+                assert_eq!(status, TranscriptStatus::Completed);
+                assert!(!dry_run);
+                assert!(artifacts.is_empty());
+            }
+            other => panic!("Expected Valid, got: {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    /// Deserialize a `ChainedEvent` from a real ceremony transcript JSON line.
+    ///
+    /// Guards against struct changes that would break reading existing transcripts:
+    /// if a required field is added or renamed without a migration, this test catches it
+    /// before the format ships.
+    #[test]
+    fn test_deserialize_real_ceremony_start() {
+        // JSON captured from an actual `rite run` of the root CA software ceremony.
+        // Manually update this fixture when the transcript format changes intentionally.
+        let json = r#"{"prev":"sha256:0000000000000000000000000000000000000000000000000000000000000000","data":{"type":"ceremony_start","schema_version":"0.1","ceremony":{"fingerprint":"sha256:6196d5c6451e1a4f61fada4ec588ea4544e849734e2e04058fc07d7aa5bb4e4d","name":"Root CA Key Generation (Software)"},"instance":{"fingerprint":"sha256:040d40115c9dcc9ad3f70a26e49817f144c9370b6c9ccd4fc908e367939b2069","parameters":{"ceremony_date":"2026-03-28"},"materials":{"transport_pubkey":"sha256:897fc6eb64792722d78047f621a8cb9e7d2bb068f6d49b4150c2f28427fb5cd9"}},"binary":{"fingerprint":"sha256:cb1653096e691015d578db708a6bfd07439a9d7e76ceecff1ed89a0d38e7df61","version":"0.1.0-rc.6"},"participants":[{"role_id":"crypto_officer","role_name":"Crypto Officer","person":"Alice Smith"},{"role_id":"witness__1","role_name":"Witness 1","person":"Bob Jones"},{"role_id":"witness__2","role_name":"Witness 2","person":"Carol White"}],"started_at":"2026-05-11T19:38:40.499354Z"},"hash":"sha256:ebbd63d6339b45ccd1924ce9b709e03979f7e595d8586820f2c3199640206b59"}"#;
+
+        let event: ChainedEvent =
+            serde_json::from_str(json).expect("Failed to deserialize CeremonyStart event");
+
+        assert_eq!(event.prev, GENESIS_HASH);
+        assert_eq!(
+            event.hash,
+            "sha256:ebbd63d6339b45ccd1924ce9b709e03979f7e595d8586820f2c3199640206b59"
+        );
+
+        match &event.data {
+            EventData::CeremonyStart {
+                schema_version,
+                binary,
+                participants,
+                ..
+            } => {
+                assert_eq!(schema_version, "0.1");
+                assert_eq!(binary.version, "0.1.0-rc.6");
+                assert_eq!(participants.len(), 3);
+                assert_eq!(
+                    participants.first().map(|p| p.role_id.as_str()),
+                    Some("crypto_officer")
+                );
+            }
+            other => panic!("Expected CeremonyStart, got: {other:?}"),
+        }
+    }
+
     /// Generate the deterministic test fixture at examples/test-fixtures/sample-transcript.jsonl.
     ///
     /// Run with: cargo test -p rite-runtime `generate_sample_transcript` -- --ignored

@@ -82,8 +82,6 @@ impl ActionHandler for GenerateKeypairAction {
                 reason: format!("Backend key generation failed: {e}"),
             })?;
 
-        display::write_success(ui, &format!("{} keypair generated", typed.algorithm))?;
-
         let keypair = ArtifactValue::BackendKey {
             backend_name: backend_name.clone(),
             key_id: metadata.key_id,

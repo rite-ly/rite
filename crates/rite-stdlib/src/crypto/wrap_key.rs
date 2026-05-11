@@ -116,10 +116,7 @@ impl ActionHandler for WrapKeyAction {
         };
 
         let fingerprint = compute_fingerprint(&wrapped_key.data);
-        display::write_success(
-            ui,
-            &format!("Key wrapped ({} bytes)", wrapped_key.data.len()),
-        )?;
+        display::write_success(ui, "Key wrapped")?;
 
         let mut evidence = StepEvidence::new();
         evidence.insert("algorithm", algorithm_str);

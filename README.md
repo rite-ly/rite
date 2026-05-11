@@ -53,9 +53,24 @@ Run it:
 ```sh
 rite check  ceremony.rite.yaml   # validate
 rite script ceremony.rite.yaml   # generate script
-rite run    ceremony.rite.yaml   # execute with transcript
-rite verify transcript.jsonl     # verify integrity
-rite report transcript.jsonl     # generate audit report
+rite run    ceremony.rite.yaml   # execute
+```
+
+Running a ceremony produces a timestamped output directory:
+
+```
+root-ca-key-generation-20260511T201639
+├── artifacts
+│   └── root_ca_public_key.pem
+└── transcript.jsonl
+```
+
+Artifacts are written as they are produced. 
+The transcript records every step, role, attestation, and artifact hash in an append-only JSONL file.
+
+```sh
+rite verify root-ca-key-generation-20260511T201639   # verify integrity
+rite report root-ca-key-generation-20260511T201639   # generate audit report
 ```
 
 ## Installation

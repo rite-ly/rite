@@ -17,8 +17,9 @@ WORKDIR /src
 ARG CARGO_BUILD_ARGS="--features openssl-vendored"
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/src/target \
+# Per-target cache IDs so the two builder stages can run in parallel under bake without racing.
+RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-amd64 \
+    --mount=type=cache,target=/src/target,id=cargo-target-amd64 \
     cargo build --locked --release -p rite-cli $CARGO_BUILD_ARGS && \
     cargo build --locked --release -p rite-ls && \
     install -D -m 0755 target/x86_64-unknown-linux-musl/release/rite    /out/rite && \
@@ -29,8 +30,8 @@ WORKDIR /src
 ARG CARGO_BUILD_ARGS="--features openssl-vendored"
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-arm64 \
+    --mount=type=cache,target=/src/target,id=cargo-target-arm64 \
     cargo build --locked --release -p rite-cli $CARGO_BUILD_ARGS && \
     cargo build --locked --release -p rite-ls && \
     install -D -m 0755 target/aarch64-unknown-linux-musl/release/rite    /out/rite && \

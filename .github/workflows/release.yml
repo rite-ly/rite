@@ -31,7 +31,7 @@ jobs:
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-  build:
+  build-native:
     name: Build (${{ matrix.rite_target }})
     needs: [validate]
     runs-on: ${{ matrix.os }}
@@ -42,34 +42,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            rust_target: x86_64-unknown-linux-gnu
-            rite_target: linux-amd64
-            use_cross: true
-          - os: ubuntu-latest
-            rust_target: x86_64-unknown-linux-musl
-            rite_target: linux-amd64-musl
-            use_cross: true
-          - os: ubuntu-latest
-            rust_target: aarch64-unknown-linux-gnu
-            rite_target: linux-arm64
-            use_cross: true
-          - os: ubuntu-latest
-            rust_target: aarch64-unknown-linux-musl
-            rite_target: linux-arm64-musl
-            use_cross: true
           - os: macos-15-intel
             rust_target: x86_64-apple-darwin
             rite_target: darwin-amd64
-            use_cross: false
           - os: macos-latest
             rust_target: aarch64-apple-darwin
             rite_target: darwin-arm64
-            use_cross: false
           - os: windows-latest
             rust_target: x86_64-pc-windows-msvc
             rite_target: windows-amd64
-            use_cross: false
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -79,15 +60,12 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           key: release-${{ matrix.rust_target }}
-      - name: Install cross
-        if: matrix.use_cross
-        run: cargo install cross --locked
 
       - name: Build rite
-        run: ${{ matrix.use_cross && 'cross' || 'cargo' }} build --release -p rite-cli --target ${{ matrix.rust_target }} --features openssl-vendored
+        run: cargo build --release -p rite-cli --target ${{ matrix.rust_target }} --features openssl-vendored
 
       - name: Build rite-ls
-        run: ${{ matrix.use_cross && 'cross' || 'cargo' }} build --release -p rite-ls --target ${{ matrix.rust_target }}
+        run: cargo build --release -p rite-ls --target ${{ matrix.rust_target }}
 
       - name: Upload rite artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -103,9 +81,103 @@ jobs:
           path: target/${{ matrix.rust_target }}/release/rite-ls${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
 
+  build-linux-and-image:
+    name: Build Linux binaries and push image
+    needs: [validate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
+        # Annotate the index (manifest list) as well as the per-platform manifests.
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index,manifest
+        with:
+          images: ghcr.io/rite-ly/rite
+          # latest=auto applies the `latest` tag only when the ref is a stable semver.
+          flavor: latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          # Static OCI labels listed explicitly so all metadata lives in one place.
+          # metadata-action also auto-fills `created`, `revision`, and `version` at build time.
+          labels: |
+            org.opencontainers.image.title=rite
+            org.opencontainers.image.description=DSL and runtime for cryptographic key ceremonies
+            org.opencontainers.image.source=https://github.com/rite-ly/rite
+            org.opencontainers.image.url=https://ritely.io
+            org.opencontainers.image.documentation=https://ritely.io/docs
+            org.opencontainers.image.vendor=Rite-ly
+            org.opencontainers.image.licenses=GPL-3.0-only
+          bake-target: image
+
+      - name: Bake binaries + image
+        uses: docker/bake-action@a66e1c87e2eca0503c343edf1d208c716d54b8a8 # v7.1.0
+        with:
+          files: |
+            ./docker-bake.hcl
+            ${{ steps.meta.outputs.bake-file }}
+          targets: default
+          set: |
+            image.output=type=registry,push=true
+            *.cache-from=type=gha,scope=release-docker
+            *.cache-to=type=gha,mode=max,scope=release-docker
+
+      - name: Stage Linux binaries for upload
+        run: |
+          mkdir -p target/x86_64-unknown-linux-musl/release target/aarch64-unknown-linux-musl/release
+          mv dist/amd64/rite    target/x86_64-unknown-linux-musl/release/rite
+          mv dist/amd64/rite-ls target/x86_64-unknown-linux-musl/release/rite-ls
+          mv dist/arm64/rite    target/aarch64-unknown-linux-musl/release/rite
+          mv dist/arm64/rite-ls target/aarch64-unknown-linux-musl/release/rite-ls
+
+      - name: Upload rite-linux-amd64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rite-linux-amd64
+          path: target/x86_64-unknown-linux-musl/release/rite
+          if-no-files-found: error
+
+      - name: Upload rite-ls-linux-amd64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rite-ls-linux-amd64
+          path: target/x86_64-unknown-linux-musl/release/rite-ls
+          if-no-files-found: error
+
+      - name: Upload rite-linux-arm64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rite-linux-arm64
+          path: target/aarch64-unknown-linux-musl/release/rite
+          if-no-files-found: error
+
+      - name: Upload rite-ls-linux-arm64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rite-ls-linux-arm64
+          path: target/aarch64-unknown-linux-musl/release/rite-ls
+          if-no-files-found: error
+
   release:
     name: Create Release
-    needs: [validate, build]
+    needs: [validate, build-native, build-linux-and-image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -127,7 +199,7 @@ jobs:
           ARTS="$(pwd)/artifacts"
 
           # Unix: rite as tarball, rite-ls as flat binary
-          for target in linux-amd64 linux-amd64-musl linux-arm64 linux-arm64-musl darwin-amd64 darwin-arm64; do
+          for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
             tmp=$(mktemp -d)
             cp "$ARTS/rite-${target}/rite" "$tmp/rite"
             chmod +x "$tmp/rite"
@@ -156,51 +228,3 @@ jobs:
             --draft \
             --notes "" \
             release/*
-
-  docker:
-    name: Publish Docker image
-    needs: [validate, build, release]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Download binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: rite-linux-*-musl
-          path: dist/
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
-        with:
-          images: ghcr.io/rite-ly/rite
-          flavor: latest=false
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-
-      - name: Build and push
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
-        with:
-          context: .
-          target: release
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          sbom: true
-          provenance: mode=max,version=v1

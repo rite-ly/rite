@@ -56,8 +56,27 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
-      - name: Build
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+      # Exercise the Dockerfile build path so PRs catch regressions in the
+      # toolchain image, bake spec, or runtime stage layout.
+      - name: Bake binaries
+        uses: docker/bake-action@a66e1c87e2eca0503c343edf1d208c716d54b8a8 # v7.1.0
         with:
-          context: .
-          push: false
+          files: ./docker-bake.hcl
+          targets: binaries
+          set: |
+            *.cache-from=type=gha,scope=ci-smoke
+            *.cache-to=type=gha,mode=max,scope=ci-smoke
+      - name: Verify static musl binaries
+        # amd64 produces "static-pie linked"; arm64 produces "statically linked"
+        # (no PIE). Both are static (zero runtime deps); the PIE asymmetry comes
+        # from Rust's target specs: x86_64-unknown-linux-musl sets
+        # `static_position_independent_executables = true`, aarch64 does not.
+        #
+        # TODO: revisit when Rust adds static-PIE to aarch64-unknown-linux-musl
+        # upstream (or set CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=
+        # "-C link-arg=-static-pie" to force it here). Then tighten the grep
+        # below back to 'static-pie linked' so a regression on either arch fails.
+        run: |
+          for f in dist/amd64/rite dist/amd64/rite-ls dist/arm64/rite dist/arm64/rite-ls; do
+            file "$f" | tee /dev/stderr | grep -qE 'static(ally|-pie) linked'
+          done

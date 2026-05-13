@@ -1,0 +1,18 @@
+# Build artifacts.
+target/
+
+# VCS and CI metadata. The Dockerfile builds from source; no git history needed.
+.git/
+.github/
+.gitignore
+.gitattributes
+
+# Docs and examples. Not referenced by any build stage.
+docs/
+examples/
+*.md
+
+# Editor / IDE local files.
+.idea/
+.vscode/
+.zed/

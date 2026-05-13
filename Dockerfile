@@ -1,44 +1,57 @@
 # syntax=docker/dockerfile:1.23@sha256:2780b5c3bab67f1f76c781860de469442999ed1a0d7992a5efdf2cffc0e3d769
 # See docs/docker.md for usage, build targets, and hardened runtime examples.
 
-# Builder: compiles from source for TARGETPLATFORM.
-# Cross-arch builds (e.g. arm64 host -> linux/amd64 image) work via buildx/qemu
-# without manually wiring Rust target triples.
-FROM --platform=$TARGETPLATFORM rust:1.95-trixie@sha256:5b1e3484ddcd22a3738c0ec34a5e98bf19382eb295fb6db54295e62379119040 AS builder
+# Per-target builder stages using rust-cross/rust-musl-cross base images.
+# Each image ships a pre-built musl cross toolchain, Rust with
+# CARGO_BUILD_TARGET pre-set to its triple, and a configured linker, so
+# `cargo build` produces a static binary for that target. No QEMU emulation
+# when the host arch matches the image arch.
+#
+# These images are linux/amd64. On amd64 build hosts (CI's ubuntu-latest)
+# they run natively. On arm64 build hosts (Apple Silicon) Docker falls back
+# to QEMU emulation for the C compile steps.
+ARG TOOLCHAIN_PLATFORM=linux/amd64
+
+FROM --platform=${TOOLCHAIN_PLATFORM} ghcr.io/rust-cross/rust-musl-cross:x86_64-musl@sha256:6c3c52df33dbd3fa999455c56db5be6fe2a9df5af63e00388194d936fd5cd003 AS builder-amd64
 WORKDIR /src
-
-# Override at build time for custom feature combinations.
-# Default is vendored OpenSSL so the resulting binary has no runtime dependency on the system library.
-# NOTE: this produces a glibc-linked binary (aarch64-unknown-linux-gnu / x86_64-unknown-linux-gnu).
-# That is fine for the Debian runtime targets, but the `binaries` export will not run on Alpine,
-# scratch, or the bootable ISO. A musl builder stage is needed for those — deferred to the
-# cross-compilation rework.
 ARG CARGO_BUILD_ARGS="--features openssl-vendored"
-
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target \
-    sh -euxc 'cargo build --locked --release -p rite-cli ${CARGO_BUILD_ARGS}' && \
-    install -D -m 0755 target/release/rite /out/rite
+    cargo build --locked --release -p rite-cli $CARGO_BUILD_ARGS && \
+    cargo build --locked --release -p rite-ls && \
+    install -D -m 0755 target/x86_64-unknown-linux-musl/release/rite    /out/rite && \
+    install -D -m 0755 target/x86_64-unknown-linux-musl/release/rite-ls /out/rite-ls
 
-# Prebuilt selector: used by CI/release to avoid rebuilding from source.
-# Expects release artifacts copied into dist/ in the build context.
-FROM --platform=$TARGETPLATFORM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b AS prebuilt
+FROM --platform=${TOOLCHAIN_PLATFORM} ghcr.io/rust-cross/rust-musl-cross:aarch64-musl@sha256:9ca69b8df8fbf4ea6f8c771b33cb66f80093d1fc1a057893e1c73445e3fa35e1 AS builder-arm64
+WORKDIR /src
+ARG CARGO_BUILD_ARGS="--features openssl-vendored"
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --locked --release -p rite-cli $CARGO_BUILD_ARGS && \
+    cargo build --locked --release -p rite-ls && \
+    install -D -m 0755 target/aarch64-unknown-linux-musl/release/rite    /out/rite && \
+    install -D -m 0755 target/aarch64-unknown-linux-musl/release/rite-ls /out/rite-ls
+
 ARG TARGETARCH
+FROM builder-${TARGETARCH} AS builder
 
-COPY dist/ /dist/
+FROM scratch AS binaries-amd64
+COPY --from=builder-amd64 /out/rite    /rite
+COPY --from=builder-amd64 /out/rite-ls /rite-ls
 
-RUN install -D -m 0755 "/dist/rite-linux-${TARGETARCH}-musl/rite" /out/rite
+FROM scratch AS binaries-arm64
+COPY --from=builder-arm64 /out/rite    /rite
+COPY --from=builder-arm64 /out/rite-ls /rite-ls
 
-# Runtime base: minimal hardened environment. Runs as non-root.
-FROM --platform=$TARGETPLATFORM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b AS runtime-base
+FROM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b AS runtime-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     jq \
-    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system --gid 1001 rite \
@@ -52,16 +65,6 @@ ENV HOME=/home/rite
 ENTRYPOINT ["rite"]
 CMD ["--help"]
 
-# CI/release target: binary sourced from dist/ artifacts.
 FROM runtime-base AS release
-COPY --from=prebuilt /out/rite /usr/local/bin/rite
-USER rite
-
-# Binary export target: extract the compiled binary to the host via --output.
-FROM scratch AS binaries
-COPY --from=builder /out/rite /rite
-
-# Default target: compiled from source, runs in hardened runtime.
-FROM runtime-base AS local
 COPY --from=builder /out/rite /usr/local/bin/rite
 USER rite

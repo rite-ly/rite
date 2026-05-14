@@ -4,6 +4,17 @@ A DSL and runtime for describing, executing, and reviewing cryptographic key cer
 
 > **Beta** — Breaking changes between 0.x versions.
 
+## The problem
+
+Cryptography makes forgery mathematically hard. 
+HSMs make key extraction physically hard.
+Neither answers the questions that determine whether a sensitive operation was actually performed correctly: Who authorized this? Who was present? Was every step followed?
+
+These questions require human attestation, role separation, and an auditable record: a _ceremony_.
+The industry has learned to take them seriously, but still lacks simple, reusable ways to describe, execute, and review them.
+
+*[Security Ceremonies: Why Secure Systems Are More Than Math →](https://ritely.io/blog/security_ceremonies/)*
+
 ## Example
 
 ```yaml

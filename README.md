@@ -98,7 +98,7 @@ Run with Docker:
 ```sh
 docker run --rm -it --init \
   -v "$PWD:/workspace" \
-  ghcr.io/rite-ly/rite:0.1.0-rc.6 check ceremony.rite.yaml
+  ghcr.io/rite-ly/rite check ceremony.rite.yaml
 ```
 
 Build from source:
@@ -110,7 +110,12 @@ cargo build --release -p rite-ls   # language server for editor support
 
 ### Editor support
 
-The `rite-ls` language server is available for editor integration (VS Code, IntelliJ, and other LSP clients).
+Install the official IDE extensions:
+
+- [VS Code](https://marketplace.visualstudio.com/items?itemName=rite-ly.rite) (Visual Studio Marketplace)
+- [IntelliJ IDEA and other JetBrains IDEs](https://plugins.jetbrains.com/plugin/31139-rite-language) (JetBrains Marketplace)
+
+Both bundle the `rite-ls` language server. For other LSP-aware editors, run `rite-ls` directly from the binaries attached to each release.
 
 ## Features
 

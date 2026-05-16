@@ -38,7 +38,7 @@ roles:
 
 sections:
   keygen:
-    role: "${role.crypto_officer}"
+    role: ${role.crypto_officer}
     steps:
       generate_root_ca:
         action: generate_keypair
@@ -50,11 +50,11 @@ sections:
       export_public_key:
         action: export_public
         backend: openssl
-        reads: "${artifact.root_ca_keypair}"
+        reads: ${artifact.root_ca_keypair}
         creates: root_ca_public_key
       attest_completion:
         action: attest
-        role: "${role.witness}"
+        role: ${role.witness}
         with:
           statement: "I witnessed the key generation and public key export."
 ```

@@ -18,7 +18,7 @@ parameters:
 materials:
   transport_pubkey:
     type: digital
-    path: test_keys/transport_public.pem
+    path: "test_keys/transport_public.pem"
     description: |
       Crypto officer's transport RSA-4096 public key.
       The corresponding private key must be kept secure, it is needed in ceremony 2
@@ -58,7 +58,7 @@ sections:
   environment:
     act: opening
     name: "Environment Verification"
-    role: "${role.crypto_officer}"
+    role: ${role.crypto_officer}
     steps:
       verify_time:
         action: clock_check
@@ -78,7 +78,7 @@ sections:
   keygen:
     act: key_generation
     name: "Key Generation"
-    role: "${role.crypto_officer}"
+    role: ${role.crypto_officer}
     steps:
       generate_root_ca:
         action: generate_keypair
@@ -94,7 +94,7 @@ sections:
         action: generate_csr
         backend: openssl
         reads:
-          signing_key: "${artifact.root_ca_keypair}"
+          signing_key: ${artifact.root_ca_keypair}
         with:
           subject: "CN=Root CA,O=Example Org"
         creates: root_ca_csr
@@ -103,8 +103,8 @@ sections:
         action: issue_certificate
         backend: openssl
         reads:
-          signing_key: "${artifact.root_ca_keypair}"
-          csr: "${artifact.root_ca_csr}"
+          signing_key: ${artifact.root_ca_keypair}
+          csr: ${artifact.root_ca_csr}
         with:
           profile: root_ca
           validity_days: 7300
@@ -114,14 +114,14 @@ sections:
   protection:
     act: key_generation
     name: "Key Protection"
-    role: "${role.crypto_officer}"
+    role: ${role.crypto_officer}
     steps:
       wrap_root_ca_key:
         action: wrap_key
         backend: openssl
         reads:
-          key_to_wrap: "${artifact.root_ca_keypair}"
-          wrapping_key: "${artifact.transport_pubkey}"
+          key_to_wrap: ${artifact.root_ca_keypair}
+          wrapping_key: ${artifact.transport_pubkey}
         with:
           algorithm: CMS-RSA-GCM
         creates: wrapped_root_ca_key
@@ -133,17 +133,17 @@ sections:
     steps:
       witness1_attest:
         action: attest
-        role: "${role.witness__1}"
+        role: ${role.witness__1}
         with:
           statement: "I witnessed the root CA key generation and private key wrapping."
       witness2_attest:
         action: attest
-        role: "${role.witness__2}"
+        role: ${role.witness__2}
         with:
           statement: "I witnessed the root CA key generation and private key wrapping."
       officer_attest:
         action: attest
-        role: "${role.crypto_officer}"
+        role: ${role.crypto_officer}
         with:
           statement: "Root CA keypair generated. Private key wrapped with transport public key and stored as encrypted backup."
 

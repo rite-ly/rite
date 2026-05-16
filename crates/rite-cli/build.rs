@@ -1,8 +1,15 @@
 use chrono::Utc;
 use std::process::Command;
 
+const UNKNOWN: &str = "unknown";
+
 fn main() {
-    println!("cargo:rerun-if-changed=../../.git/HEAD");
+    // RITE_BUILD_COMMIT and RITE_BUILD_COMMIT_DATE are computed once by the
+    // release pipeline (.github/workflows/release.yml) and exported as job-level
+    // env vars to every builder (native + docker). Local builds without them
+    // get "unknown".
+    println!("cargo:rerun-if-env-changed=RITE_BUILD_COMMIT");
+    println!("cargo:rerun-if-env-changed=RITE_BUILD_COMMIT_DATE");
 
     let target = var("TARGET");
     let profile = var("PROFILE");
@@ -10,9 +17,14 @@ fn main() {
     println!("cargo:rustc-env=RITE_BUILD_TARGET={target}");
     println!("cargo:rustc-env=RITE_BUILD_PROFILE={profile}");
     println!("cargo:rustc-env=RITE_BUILD_FEATURES={}", features());
-    let (commit, commit_date) = git_info();
-    println!("cargo:rustc-env=RITE_BUILD_COMMIT={commit}");
-    println!("cargo:rustc-env=RITE_BUILD_COMMIT_DATE={commit_date}");
+    println!(
+        "cargo:rustc-env=RITE_BUILD_COMMIT={}",
+        var("RITE_BUILD_COMMIT")
+    );
+    println!(
+        "cargo:rustc-env=RITE_BUILD_COMMIT_DATE={}",
+        var("RITE_BUILD_COMMIT_DATE")
+    );
     println!(
         "cargo:rustc-env=RITE_BUILD_DATE={}",
         Utc::now().format("%Y-%m-%d")
@@ -21,7 +33,7 @@ fn main() {
 }
 
 fn var(name: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| "unknown".to_string())
+    std::env::var(name).unwrap_or_else(|_| UNKNOWN.to_string())
 }
 
 fn features() -> String {
@@ -52,25 +64,10 @@ fn cmd_output(program: &str, args: &[&str]) -> Option<String> {
         .and_then(|o| String::from_utf8(o.stdout).ok())
 }
 
-fn trimmed(s: Option<&str>) -> String {
-    s.map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("unknown")
-        .to_string()
-}
-
-fn git_info() -> (String, String) {
-    let Some(out) = cmd_output("git", &["log", "-1", "--format=%h%n%cd", "--date=short"]) else {
-        return ("unknown".to_string(), "unknown".to_string());
-    };
-    let mut lines = out.lines();
-    (trimmed(lines.next()), trimmed(lines.next()))
-}
-
 fn rustc_version() -> String {
     cmd_output("rustc", &["--version"])
         .as_deref()
         .and_then(|s| s.trim().strip_prefix("rustc "))
-        .unwrap_or("unknown")
+        .unwrap_or(UNKNOWN)
         .to_string()
 }

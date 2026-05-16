@@ -16,6 +16,17 @@
 #
 # CI injects tags and cache scopes via `--set` on the bake-action.
 
+# Commit metadata stamped into the binaries via build args. Set RITE_BUILD_COMMIT
+# and RITE_BUILD_COMMIT_DATE in the environment (CI does this) or via `--set`.
+# Defaults to "unknown" so local `docker buildx bake` works without ceremony.
+variable "RITE_BUILD_COMMIT" {
+  default = "unknown"
+}
+
+variable "RITE_BUILD_COMMIT_DATE" {
+  default = "unknown"
+}
+
 group "default" {
   targets = ["binaries-amd64", "binaries-arm64", "image"]
 }
@@ -27,11 +38,19 @@ group "binaries" {
 target "binaries-amd64" {
   target = "binaries-amd64"
   output = ["type=local,dest=dist/amd64"]
+  args = {
+    RITE_BUILD_COMMIT      = RITE_BUILD_COMMIT
+    RITE_BUILD_COMMIT_DATE = RITE_BUILD_COMMIT_DATE
+  }
 }
 
 target "binaries-arm64" {
   target = "binaries-arm64"
   output = ["type=local,dest=dist/arm64"]
+  args = {
+    RITE_BUILD_COMMIT      = RITE_BUILD_COMMIT
+    RITE_BUILD_COMMIT_DATE = RITE_BUILD_COMMIT_DATE
+  }
 }
 
 target "image" {
@@ -41,6 +60,10 @@ target "image" {
     "type=sbom",
     "type=provenance,mode=max,version=v1",
   ]
+  args = {
+    RITE_BUILD_COMMIT      = RITE_BUILD_COMMIT
+    RITE_BUILD_COMMIT_DATE = RITE_BUILD_COMMIT_DATE
+  }
   # output / tags injected by CI: `--set image.output=type=registry,push=true`,
   # tags via the bake file produced by docker/metadata-action.
 }

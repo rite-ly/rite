@@ -166,6 +166,11 @@ pub struct SpanMap {
     /// Reference sites collected during parsing: value-scalar span → declaration target.
     /// Used by go-to-definition to map a cursor position to a declaration span.
     pub references: Vec<ReferenceEntry>,
+    /// Spans of value scalars for enum-style fields (`action:` on steps,
+    /// `provider:` on backends). The values pick from fixed registries
+    /// rather than declared identifiers, so they aren't references and
+    /// don't fit any of the maps above.
+    pub enum_values: Vec<Span>,
 }
 
 impl SpanMap {

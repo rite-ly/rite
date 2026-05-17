@@ -1,6 +1,9 @@
 //! LSP server implementation for the Rite ceremony DSL.
 
-use crate::{complete, convert, document::DocumentAnalysis, goto, hover, references, symbols};
+use crate::{
+    complete, convert, document::DocumentAnalysis, goto, hover, references, semantic_tokens,
+    symbols,
+};
 use dashmap::DashMap;
 use tower_lsp_server::{
     Client, LanguageServer,
@@ -10,7 +13,9 @@ use tower_lsp_server::{
         DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbolParams,
         DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
         HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, Location,
-        MessageType, OneOf, ReferenceParams, ServerCapabilities, TextDocumentSyncCapability,
+        MessageType, OneOf, ReferenceParams, SemanticTokens, SemanticTokensFullOptions,
+        SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
+        SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
         TextDocumentSyncKind, Uri,
     },
 };
@@ -77,6 +82,19 @@ impl LanguageServer for RiteLanguageServer {
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            legend: SemanticTokensLegend {
+                                token_types: semantic_tokens::LEGEND.to_vec(),
+                                token_modifiers: vec![],
+                            },
+                            range: Some(false),
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            ..Default::default()
+                        },
+                    ),
+                ),
                 ..Default::default()
             },
         })
@@ -189,6 +207,27 @@ impl LanguageServer for RiteLanguageServer {
         } else {
             Ok(Some(locs))
         }
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let uri = &params.text_document.uri;
+
+        let Some(analysis) = self.analyses.get(uri) else {
+            return Ok(None);
+        };
+
+        let data = semantic_tokens::tokens_for(&analysis.span_map);
+        if data.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data,
+        })))
     }
 
     async fn document_symbol(

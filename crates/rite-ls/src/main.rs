@@ -10,6 +10,7 @@ mod document;
 mod goto;
 mod hover;
 mod references;
+mod semantic_tokens;
 mod server;
 mod symbols;
 

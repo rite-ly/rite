@@ -199,11 +199,14 @@ impl<'src> Lowerer<'src> {
 
         // Backends: mapping where keys are backend names.
         if let Some(backends_map) = mapping.get_mapping("backends") {
-            for (key_scalar, _) in backends_map.iter() {
+            for (key_scalar, backend_node) in backends_map.iter() {
                 if let Some(span) = self.scalar_to_span(key_scalar) {
                     self.span_map
                         .backends
                         .insert(key_scalar.as_str().to_string(), span);
+                }
+                if let Some(backend_map) = backend_node.as_mapping() {
+                    self.record_enum_value(backend_map, "provider");
                 }
             }
         }
@@ -259,6 +262,8 @@ impl<'src> Lowerer<'src> {
                 ),
             });
         }
+
+        self.record_enum_value(step_map, "action");
 
         let step_context = ReferenceContext::Step(StepId::new(step_id_scalar.as_str()));
         if let Some(val) = step_map.get_scalar("role") {
@@ -393,8 +398,19 @@ impl<'src> Lowerer<'src> {
     /// Build a `Span` for a scalar value, with column at the first content character
     /// and length covering the scalar text.
     ///
+    /// Record the value span of a mapping entry whose value picks from a
+    /// fixed enum (currently `action:` and `provider:`). Silently skips
+    /// if the key is absent or the value is not a scalar.
+    fn record_enum_value(&mut self, map: &marked_yaml::types::MarkedMappingNode, key: &str) {
+        if let Some(scalar) = map.get_scalar(key)
+            && let Some(span) = self.scalar_to_span(scalar)
+        {
+            self.span_map.enum_values.push(span);
+        }
+    }
+
     /// For quoted scalars `marked_yaml` places the START marker at the opening quote,
-    /// but `scalar.as_str()` returns the content without the quotes — so we shift the
+    /// but `scalar.as_str()` returns the content without the quotes, so we shift the
     /// column by 1 when the source byte is `"` or `'`. This keeps byte offsets within
     /// `as_str()` aligned with source characters for both quoted and unquoted scalars.
     fn scalar_to_span(&self, scalar: &MarkedScalarNode) -> Option<Span> {

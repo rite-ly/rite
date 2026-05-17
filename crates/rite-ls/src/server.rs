@@ -1,8 +1,8 @@
 //! LSP server implementation for the Rite ceremony DSL.
 
 use crate::{
-    complete, convert, document::DocumentAnalysis, goto, hover, references, semantic_tokens,
-    symbols,
+    complete, convert, document::DocumentAnalysis, goto, hover, inlay_hints, references,
+    semantic_tokens, symbols,
 };
 use dashmap::DashMap;
 use tower_lsp_server::{
@@ -12,11 +12,11 @@ use tower_lsp_server::{
         CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
         DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbolParams,
         DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-        HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, Location,
-        MessageType, OneOf, ReferenceParams, SemanticTokens, SemanticTokensFullOptions,
-        SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
-        SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
-        TextDocumentSyncKind, Uri,
+        HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, InlayHint,
+        InlayHintParams, Location, MessageType, OneOf, ReferenceParams, SemanticTokens,
+        SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
+        SemanticTokensParams, SemanticTokensResult, SemanticTokensServerCapabilities,
+        ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
     },
 };
 
@@ -82,6 +82,7 @@ impl LanguageServer for RiteLanguageServer {
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
@@ -206,6 +207,21 @@ impl LanguageServer for RiteLanguageServer {
             Ok(None)
         } else {
             Ok(Some(locs))
+        }
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let uri = &params.text_document.uri;
+
+        let Some(analysis) = self.analyses.get(uri) else {
+            return Ok(None);
+        };
+
+        let hints = inlay_hints::hints_for(&analysis.span_map, analysis.resolved.as_ref());
+        if hints.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(hints))
         }
     }
 

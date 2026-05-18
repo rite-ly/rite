@@ -1,11 +1,15 @@
 [package]
 name = "rite-resolver"
-description = "Ceremony resolver: parse YAML, validate, and produce IR"
+description = "Parser, validator, and resolver for the Rite key ceremony DSL"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+rust-version = "1.88"
+license = "Apache-2.0 OR MIT"
 repository.workspace = true
-publish = false #TODO enable at a later time, disabled for safety
+homepage.workspace = true
+keywords = ["ceremony", "dsl", "rite"]
+categories = ["security", "parser-implementations"]
+publish = true
 
 [dependencies]
 rite-model = { path = "../rite-model" }

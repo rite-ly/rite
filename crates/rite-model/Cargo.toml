@@ -1,11 +1,15 @@
 [package]
 name = "rite-model"
-description = "Core domain model and IR for the Rite ceremony DSL"
+description = "Domain model and intermediate representation for the Rite key ceremony DSL"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+rust-version = "1.88"
+license = "Apache-2.0 OR MIT"
 repository.workspace = true
-publish = false #TODO enable at a later time, disabled for safety
+homepage.workspace = true
+keywords = ["ceremony", "dsl", "rite"]
+categories = ["security"]
+publish = true
 
 [dependencies]
 rite-sdk = { path = "../rite-sdk" }

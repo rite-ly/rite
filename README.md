@@ -15,6 +15,16 @@ The industry has learned to take them seriously, but still lacks simple, reusabl
 
 *[Security Ceremonies: Why Secure Systems Are More Than Math →](https://ritely.io/blog/security_ceremonies/)*
 
+## Lifecycle
+
+A ceremony unfolds in phases. The same YAML drives all of them:
+
+1. **Author** — write the ceremony as YAML. Editor extensions provide diagnostics, completion, and inline navigation.
+2. **Validate** — `rite check` catches missing references, undefined roles, and schema errors.
+3. **Prepare** — `rite script` produces the printed protocol participants follow and complete by hand during the ceremony, archived alongside the digital transcript.
+4. **Execute** — `rite run` walks operators and witnesses through the steps and recording every action in an append-only transcript.
+5. **Audit** — `rite verify` confirms transcript integrity; `rite report` produces a human-readable audit document for stakeholders.
+
 ## Example
 
 ```yaml
@@ -119,24 +129,35 @@ Both bundle the `rite-ls` language server. For other LSP-aware editors, run `rit
 
 ## Features
 
-- [x] YAML ceremony DSL with roles, steps, materials, and outputs
-- [x] Guided execution with console UI (`rite run`)
-- [x] OpenSSL backend (RSA and ECDSA-P256 key generation, signing, wrapping, and PKI)
-- [x] Transcript generation and `rite verify`
-- [x] Language server (`rite-ls`) with diagnostics, completions, hover, and go-to-definition
-- [x] Elliptic curve support (EC keys, ECDSA signing)
-- [ ] Post-quantum support: ML-KEM key encapsulation (hybrid KEM+wrap)
-- [ ] Interactive TUI with role-specific views
-- [ ] Hardware backends: 
-  - [ ] YubiKey PIV
-  - [ ] TPM 2.0
-  - [ ] PKCS#11
-- [ ] Bootable USB image for isolated ceremony environments
-- [x] Docker image for containerised ceremony execution
-- [ ] Error handling and ceremony resumption
-- [x] Script and report generation (`rite script`, `rite report`)
+- [x] **Ceremony DSL** — roles, steps, materials, outputs
+- [x] **Guided execution** — `rite run`
+  - [ ] Interactive TUI
+  - [ ] Error handling
+- [x] **Cryptographic backends**
+  - [x] OpenSSL: RSA, ECDSA-P256, signing, wrapping, PKI
+    - [ ] Post-quantum: ML-KEM key encapsulation
+  - [ ] Hardware backends
+    - [ ] YubiKey PIV
+    - [ ] TPM 2.0
+    - [ ] PKCS#11
+  - [ ] Plugin system for out-of-process backends
+- [x] **Evidence and verification**
+  - [x] Transcript generation and `rite verify`
+  - [ ] Hardware-attested execution (TPM PCR measurements and signed quotes)
+  - [ ] RFC3161 trusted timestamps
+- [x] **Output formats**
+  - [x] Script and report generation (`rite script`, `rite report`)
   - [ ] Themeable output via template engine
-- [ ] Plugin system for out-of-process backends
+- [x] **IDE support** — VS Code, IntelliJ
+  - [x] Language server: diagnostics, completion, hover, go-to-definition, references, symbols
+  - [x] Semantic-token highlighting (initial: expressions and reference categories)
+  - [x] Inlay hints (initial: step labels)
+  - [ ] Code lens for in-editor `check` / dry-run / run
+  - [ ] Live script preview pane
+  - [ ] Code actions for common diagnostics
+- [x] **Isolation and deployment**
+  - [x] Docker image for containerised execution
+  - [ ] Bootable USB image for air-gapped ceremonies
 
 ## Design
 

@@ -1,11 +1,15 @@
 [package]
 name = "rite-sdk"
-description = "Core backend types and traits for implementing Rite ceremony backends"
+description = "Backend traits and domain types for the Rite cryptographic key ceremony toolkit"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+rust-version = "1.88"
+license = "Apache-2.0 OR MIT"
 repository.workspace = true
-publish = false #TODO enable at a later time, disabled for safety
+homepage.workspace = true
+keywords = ["ceremony", "rite"]
+categories = ["security", "development-tools"]
+publish = true
 
 [dependencies]
 serde = { workspace = true }

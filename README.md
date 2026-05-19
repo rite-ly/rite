@@ -170,4 +170,6 @@ Ceremonies are human protocols with machine assistance: operators, witnesses, an
 
 ## License
 
-GPLv3. The `rite-sdk` and `rite-model` crates are expected to move to MIT or Apache 2.0 in a future release.
+Licensing is split per crate. 
+The `rite-sdk`, `rite-model`, and `rite-resolver` crates are dual-licensed under `Apache-2.0 OR MIT`, so backend authors and third-party tooling can integrate with Rite without GPL obligations. 
+The runtime, stdlib, OpenSSL backend, CLI, and language server are licensed under `GPL-3.0-only`.

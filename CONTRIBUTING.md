@@ -3,7 +3,9 @@
 Rite is early-stage and the design is still evolving. 
 Pull requests are welcome, but opening an issue to discuss the change first is strongly preferred, it avoids wasted effort on both sides.
 
-CLI behavior conventions are documented in `docs/cli-conventions.md`.
+CLI behavior conventions are documented in `docs/development/cli-conventions.md`.
+Runtime and frontend architecture is documented in `docs/development/runtime-and-frontend.md`,
+crate layout in `docs/development/crate-layout.md`.
 
 ## Local checks
 

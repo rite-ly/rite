@@ -1,42 +1,34 @@
-//! Report data extraction from parsed transcripts.
+//! Report data extraction from a verified [`StepFact`] stream.
+//!
+//! The output is a `serde::Serialize` snapshot consumed by the built-in
+//! HTML renderer and, in the future, by template engines.
 
-use chrono::{DateTime, Utc};
-use rite_model::transcript::{ChainedEvent, EventData, ParsedTranscript, ParticipantRecord};
-use rite_model::{ActionType, Ceremony};
+use chrono::{DateTime, Duration, Utc};
+use rite_model::{StepFact, StepOutcome};
 use serde::Serialize;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
-/// All data needed to render a report, extracted from a transcript and an optional ceremony.
+/// Top-level report shape consumed by the renderer.
 ///
-/// Produced by [`build_report_data`]. This is the template context for both the built-in
-/// HTML renderer and any custom renderer (template engine, JSON export, etc.).
-#[derive(Serialize)]
+/// Built from a verified `StepFact` stream plus the transcript's final
+/// fingerprint. All fields are derived from the stream; no ceremony YAML
+/// is consulted in v1.
+#[derive(Debug, Clone, Serialize)]
 pub struct ReportData {
-    /// Display name of the ceremony as recorded in the transcript.
+    /// Display name of the ceremony, as recorded in `CeremonyStarted`.
     pub ceremony_name: String,
-    /// Hash fingerprint of the ceremony definition file.
-    pub ceremony_fingerprint: String,
-    /// Hash fingerprint of the full transcript.
+    /// Hash fingerprint of the full transcript (sidecar value).
     pub transcript_fingerprint: String,
-    /// Whether this was a dry-run execution.
-    pub dry_run: bool,
-    /// Final ceremony status in `snake_case` (e.g. `"completed"`, `"interrupted"`, `"in_progress"`).
-    pub status: String,
+    /// Final ceremony status.
+    pub status: ReportStatus,
     /// UTC timestamp of ceremony start.
     pub started_at: DateTime<Utc>,
-    /// UTC timestamp of ceremony completion, if reached.
+    /// UTC timestamp of ceremony completion or failure, if reached.
     pub completed_at: Option<DateTime<Utc>>,
-    /// All ceremony parameter key-value pairs, sorted by key.
-    ///
-    /// When the ceremony definition is available, includes all parameters (defaults + supplied).
-    /// Falls back to values recorded in the transcript's `CeremonyStart` event.
-    pub parameters: Vec<(String, String)>,
-    /// Version string of the `rite` binary that ran the ceremony.
-    pub binary_version: String,
-    /// Hash fingerprint of the `rite` binary, if recorded.
-    pub binary_fingerprint: Option<String>,
-    /// Participants in role order.
-    pub participants: Vec<ReportParticipant>,
+    /// Wall-clock duration in seconds, when both ends are known.
+    pub duration_seconds: Option<i64>,
+    /// Failure summary, populated when `status == Failed`.
+    pub failure: Option<ReportFailure>,
     /// Steps in execution order.
     pub steps: Vec<ReportStep>,
     /// Artifacts produced during the ceremony.
@@ -45,292 +37,235 @@ pub struct ReportData {
     pub deviations: Vec<ReportDeviation>,
 }
 
-/// A ceremony participant with their role assignment.
-#[derive(Serialize)]
-pub struct ReportParticipant {
-    /// Role identifier as defined in the ceremony DSL.
-    pub role_id: String,
-    /// Human-readable role display name.
-    pub display_name: String,
-    /// Name of the person assigned to this role, if known.
-    pub person: Option<String>,
+/// Terminal status of a ceremony.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportStatus {
+    /// `CeremonyCompleted` was recorded.
+    Completed,
+    /// `CeremonyFailed` was recorded.
+    Failed,
+    /// Neither terminal fact was seen, the run was cut off before completion.
+    InProgress,
+}
+
+/// Failure summary, extracted from `CeremonyFailed`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportFailure {
+    /// Stable error kind label.
+    pub kind: String,
+    /// Human-readable message.
+    pub message: String,
 }
 
 /// Execution record for a single ceremony step.
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReportStep {
-    /// Step identifier as defined in the ceremony DSL.
+    /// Step identifier as declared in the DSL.
     pub step_id: String,
-    /// Action type that was executed.
-    pub action: ActionType,
-    /// Display name of the role that performed this step, if any.
-    pub role: Option<String>,
-    /// UTC timestamp when step execution began.
+    /// Step label as authored in the DSL.
+    pub label: String,
+    /// Human-readable role name, as recorded in the transcript.
+    pub role: String,
+    /// UTC timestamp when the step started.
     pub started_at: DateTime<Utc>,
-    /// UTC timestamp when step execution completed.
-    pub completed_at: DateTime<Utc>,
-    /// Outcome status string (e.g. `"ok"`, `"failed"`).
+    /// UTC timestamp when the step completed, when a `StepCompleted`
+    /// fact was recorded.
+    pub completed_at: Option<DateTime<Utc>>,
+    /// Step outcome status: `"completed"`, `"skipped"`, or `"in_progress"`.
     pub outcome_status: String,
-    /// Optional message attached to the outcome.
+    /// Message attached to the outcome, if any.
     pub outcome_message: Option<String>,
 }
 
-/// An artifact produced during ceremony execution.
-#[derive(Serialize)]
+/// An artifact produced during the ceremony.
+#[derive(Debug, Clone, Serialize)]
 pub struct ReportArtifact {
-    /// Output identifier that produced this artifact.
-    pub source: String,
-    /// File path where the artifact was written.
+    /// Step that produced the artifact.
+    pub step_id: String,
+    /// Artifact name as declared in the DSL.
+    pub name: String,
+    /// Path on disk.
     pub path: String,
-    /// Hash of the artifact contents.
-    pub hash: String,
-    /// File size in bytes.
-    pub size: u64,
+    /// Lowercase hex SHA-256 of the artifact bytes.
+    pub sha256: String,
 }
 
-/// A deviation recorded during ceremony execution.
-#[derive(Serialize)]
+/// A deviation logged by the operator during the ceremony.
+#[derive(Debug, Clone, Serialize)]
 pub struct ReportDeviation {
-    /// Human-readable reason for the deviation.
-    pub reason: String,
-    /// Step identifier associated with the deviation, if any.
-    pub step_id: Option<String>,
+    /// Step in which the deviation was recorded.
+    pub step_id: String,
+    /// Verbatim deviation text.
+    pub text: String,
     /// UTC timestamp when the deviation was recorded.
     pub recorded_at: DateTime<Utc>,
 }
 
-/// Mutable accumulator for transcript event ingestion.
+/// Build a [`ReportData`] from a verified `StepFact` stream and the
+/// transcript's final fingerprint.
 ///
-/// Fields here include both `ReportData` outputs and intermediate state
-/// (`role_ids`, `transcript_participants`) used to derive the final participants
-/// list and role-name enrichment.
-#[derive(Default)]
+/// `transcript_fingerprint` is expected to come from the same call to
+/// the runtime's `read_verified_transcript` that produced `facts`.
+#[must_use]
+pub fn build_report_data(facts: &[StepFact], transcript_fingerprint: &str) -> ReportData {
+    let mut builder = Builder::new(transcript_fingerprint.to_string());
+    for fact in facts {
+        builder.ingest(fact);
+    }
+    builder.finish()
+}
+
 struct Builder {
+    transcript_fingerprint: String,
     ceremony_name: String,
-    ceremony_fingerprint: String,
-    started_at: DateTime<Utc>,
+    started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
-    /// Fallback parameters from the transcript (used when no ceremony file is provided).
-    transcript_parameters: Vec<(String, String)>,
-    binary_version: String,
-    binary_fingerprint: Option<String>,
-    role_ids: BTreeSet<String>,
-    transcript_participants: Vec<ParticipantRecord>,
+    status: ReportStatus,
+    failure: Option<ReportFailure>,
     steps: Vec<ReportStep>,
+    step_index: HashMap<String, usize>,
     artifacts: Vec<ReportArtifact>,
     deviations: Vec<ReportDeviation>,
 }
 
 impl Builder {
-    fn ingest(&mut self, event: &ChainedEvent) {
-        match &event.data {
-            EventData::CeremonyStart {
-                ceremony,
-                instance,
-                binary,
-                environment: env,
-                participants,
-                started_at: start,
-                ..
-            } => {
-                self.ceremony_name.clone_from(&ceremony.name);
-                self.ceremony_fingerprint.clone_from(&ceremony.fingerprint);
-                self.started_at = *start;
-                self.binary_version.clone_from(&binary.version);
-                self.binary_fingerprint.clone_from(&binary.fingerprint);
-                if let Some(inst) = instance {
-                    let mut sorted: Vec<_> = inst.parameters.iter().collect();
-                    sorted.sort_by_key(|(k, _)| k.as_str());
-                    self.transcript_parameters = sorted
-                        .into_iter()
-                        .map(|(k, v)| (k.clone(), crate::html::json_value_to_string(v)))
-                        .collect();
-                }
-                let _ = env; // TODO: capture environment when the runtime populates it
-                self.transcript_participants.clone_from(participants);
+    fn new(transcript_fingerprint: String) -> Self {
+        Self {
+            transcript_fingerprint,
+            ceremony_name: String::new(),
+            started_at: None,
+            completed_at: None,
+            status: ReportStatus::InProgress,
+            failure: None,
+            steps: Vec::new(),
+            step_index: HashMap::new(),
+            artifacts: Vec::new(),
+            deviations: Vec::new(),
+        }
+    }
+
+    fn ingest(&mut self, fact: &StepFact) {
+        match fact {
+            StepFact::CeremonyStarted { name, started_at } => {
+                self.ceremony_name.clone_from(name);
+                self.started_at = Some(*started_at);
             }
-            EventData::Step {
-                step_id,
-                action,
-                role,
-                started_at: step_start,
-                completed_at: step_end,
-                outcome,
+            StepFact::StepStarted {
+                id,
+                label,
+                role_name,
+                started_at,
                 ..
             } => {
-                if let Some(r) = role {
-                    self.role_ids.insert(r.clone());
-                }
+                let step_id = id.as_str().to_string();
+                self.step_index.insert(step_id.clone(), self.steps.len());
                 self.steps.push(ReportStep {
-                    step_id: step_id.clone(),
-                    action: *action,
-                    role: role.clone(),
-                    started_at: *step_start,
-                    completed_at: *step_end,
-                    outcome_status: outcome.status.clone(),
-                    outcome_message: outcome.message.clone(),
+                    step_id,
+                    label: label.clone(),
+                    role: role_name.clone(),
+                    started_at: *started_at,
+                    completed_at: None,
+                    outcome_status: "in_progress".to_string(),
+                    outcome_message: None,
                 });
             }
-            EventData::ArtifactProduce {
-                source,
+            StepFact::StepCompleted {
+                id,
+                outcome,
+                completed_at,
+            } => {
+                if let Some(step) = self
+                    .step_index
+                    .get(id.as_str())
+                    .and_then(|i| self.steps.get_mut(*i))
+                {
+                    step.completed_at = Some(*completed_at);
+                    let (status, message) = describe_outcome(outcome);
+                    step.outcome_status = status;
+                    step.outcome_message = message;
+                }
+            }
+            StepFact::ArtifactWritten {
+                step,
+                name,
                 path,
-                hash,
-                size,
-                ..
+                sha256,
             } => {
                 self.artifacts.push(ReportArtifact {
-                    source: source.clone(),
-                    path: path.clone(),
-                    hash: hash.clone(),
-                    size: *size,
+                    step_id: step.as_str().to_string(),
+                    name: name.clone(),
+                    path: path.display().to_string(),
+                    sha256: sha256.clone(),
                 });
             }
-            EventData::Deviation {
-                reason,
-                step_id,
-                recorded_at,
-            } => {
+            StepFact::DeviationRecorded { step, text, at } => {
                 self.deviations.push(ReportDeviation {
-                    reason: reason.clone(),
-                    step_id: step_id.clone(),
-                    recorded_at: *recorded_at,
+                    step_id: step.as_str().to_string(),
+                    text: text.clone(),
+                    recorded_at: *at,
                 });
             }
-            EventData::CeremonyComplete {
-                completed_at: end, ..
-            } => {
-                self.completed_at = Some(*end);
+            StepFact::CeremonyCompleted { completed_at, .. } => {
+                self.status = ReportStatus::Completed;
+                self.completed_at = Some(*completed_at);
             }
-            // TODO: capture EvidenceAdd events (photos, signed documents) in the report
-            // TODO: capture image/initrd from CeremonyStart for hardware-secured ceremony reports
+            StepFact::CeremonyFailed { error, failed_at } => {
+                self.status = ReportStatus::Failed;
+                self.completed_at = Some(*failed_at);
+                self.failure = Some(ReportFailure {
+                    kind: error.kind.clone(),
+                    message: error.message.clone(),
+                });
+            }
+            // PromptAnswered / BackendOperation / AttestationRecorded /
+            // ActStarted are not surfaced in v1; per-step detail is a
+            // follow-up.
             _ => {}
         }
     }
-}
 
-/// Build the parameters list from the best available source.
-///
-/// When the ceremony definition is available, all parameters (including those with defaults)
-/// are extracted directly from it. Falls back to values recorded in the transcript.
-fn build_parameters(b: &Builder, ceremony: Option<&Ceremony>) -> Vec<(String, String)> {
-    if let Some(cer) = ceremony {
-        let mut params: Vec<_> = cer
-            .parameters
-            .iter()
-            .map(|(id, param)| {
-                (
-                    id.as_str().to_string(),
-                    crate::html::json_value_to_string(&param.value),
-                )
-            })
-            .collect();
-        params.sort_by(|(a, _), (b, _)| a.cmp(b));
-        return params;
-    }
-    b.transcript_parameters.clone()
-}
-
-/// Build the participants list, in priority order: ceremony file → transcript
-/// participants → step-event role IDs (last-resort for legacy transcripts).
-fn build_participants(b: &Builder, ceremony: Option<&Ceremony>) -> Vec<ReportParticipant> {
-    if let Some(cer) = ceremony {
-        return cer
-            .roles
-            .iter()
-            .map(|(role_id, role)| ReportParticipant {
-                role_id: role_id.as_str().to_string(),
-                display_name: role.name.clone(),
-                person: role.person.clone(),
-            })
-            .collect();
-    }
-    if !b.transcript_participants.is_empty() {
-        return b
-            .transcript_participants
-            .iter()
-            .map(|p| ReportParticipant {
-                role_id: p.role_id.clone(),
-                display_name: p.role_name.clone(),
-                person: p.person.clone(),
-            })
-            .collect();
-    }
-    b.role_ids
-        .iter()
-        .map(|role_id| ReportParticipant {
-            role_id: role_id.clone(),
-            display_name: role_id.clone(),
-            person: None,
-        })
-        .collect()
-}
-
-/// Build a `role_id → display_name` lookup from the best available source.
-/// Returns `None` when no enrichment source exists; callers leave step roles unchanged.
-fn build_role_lookup(b: &Builder, ceremony: Option<&Ceremony>) -> Option<HashMap<String, String>> {
-    if let Some(cer) = ceremony {
-        return Some(
-            cer.roles
-                .iter()
-                .map(|(id, r)| (id.as_str().to_string(), r.name.clone()))
-                .collect(),
-        );
-    }
-    if !b.transcript_participants.is_empty() {
-        return Some(
-            b.transcript_participants
-                .iter()
-                .map(|p| (p.role_id.clone(), p.role_name.clone()))
-                .collect(),
-        );
-    }
-    None
-}
-
-/// Extract structured report data from a parsed transcript.
-///
-/// Walks `transcript.events` once. If `ceremony` is `Some`, enriches role IDs
-/// with display names from the ceremony definition.
-pub fn build_report_data(transcript: &ParsedTranscript, ceremony: Option<&Ceremony>) -> ReportData {
-    let mut b = Builder::default();
-    for event in &transcript.events {
-        b.ingest(event);
-    }
-
-    let parameters = build_parameters(&b, ceremony);
-    let participants = build_participants(&b, ceremony);
-    let role_lookup = build_role_lookup(&b, ceremony);
-
-    let mut steps = b.steps;
-    if let Some(lookup) = role_lookup {
-        for step in &mut steps {
-            if let Some(role_id) = &step.role
-                && let Some(name) = lookup.get(role_id)
-            {
-                step.role = Some(name.clone());
-            }
+    fn finish(self) -> ReportData {
+        let duration_seconds = match (self.started_at, self.completed_at) {
+            (Some(start), Some(end)) => Some(end.signed_duration_since(start).num_seconds()),
+            _ => None,
+        };
+        ReportData {
+            ceremony_name: self.ceremony_name,
+            transcript_fingerprint: self.transcript_fingerprint,
+            status: self.status,
+            started_at: self.started_at.unwrap_or_else(Utc::now),
+            completed_at: self.completed_at,
+            duration_seconds,
+            failure: self.failure,
+            steps: self.steps,
+            artifacts: self.artifacts,
+            deviations: self.deviations,
         }
     }
+}
 
-    let status = serde_json::to_value(&transcript.status)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_else(|| format!("{:?}", transcript.status));
+fn describe_outcome(outcome: &StepOutcome) -> (String, Option<String>) {
+    match outcome {
+        StepOutcome::Completed { message } => ("completed".to_string(), Some(message.clone())),
+        _ => ("unknown".to_string(), None),
+    }
+}
 
-    ReportData {
-        ceremony_name: b.ceremony_name,
-        ceremony_fingerprint: b.ceremony_fingerprint,
-        transcript_fingerprint: transcript.fingerprint.clone(),
-        dry_run: transcript.dry_run,
-        status,
-        started_at: b.started_at,
-        completed_at: b.completed_at,
-        parameters,
-        binary_version: b.binary_version,
-        binary_fingerprint: b.binary_fingerprint,
-        participants,
-        steps,
-        artifacts: b.artifacts,
-        deviations: b.deviations,
+/// Format a `chrono::Duration` as a short human string (e.g. `2m 7s`).
+///
+/// Exposed for renderer reuse; not part of the public report data.
+#[must_use]
+pub(crate) fn format_duration(duration: Duration) -> String {
+    let total = duration.num_seconds().max(0);
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let seconds = total % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
     }
 }

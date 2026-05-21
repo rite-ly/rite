@@ -7,10 +7,11 @@
 //! - **Crypto**: `generate_keypair`, `export_public`, `wrap_key`, `unwrap_key`
 //! - **PKI**: `generate_csr`, `issue_certificate`
 //!
-//! # Backend Integration
+//! # Backend integration
 //!
-//! All crypto and PKI actions require a backend; there are no software fallbacks.
-//! For dry-run mode, configure a `MockBackend` in your ceremony YAML.
+//! All crypto and PKI actions require a backend; there are no software
+//! fallbacks. For dry-run mode, configure a `MockBackend` in your
+//! ceremony YAML.
 //!
 //! # Features
 //!
@@ -59,14 +60,15 @@ pub use verification::{
     CheckValueAction, ClockCheckAction, ConfirmAction, MachineInfoAction, OralReadbackAction,
 };
 
-/// Creates a new action registry with all standard library actions registered.
+/// Create a new action registry with all standard-library actions registered.
+#[must_use]
 pub fn default_registry() -> ActionRegistry {
     let mut registry = ActionRegistry::new();
     register_stdlib(&mut registry);
     registry
 }
 
-/// Registers all standard library actions into an existing registry.
+/// Register all standard-library actions into an existing registry.
 #[allow(unused_variables)]
 pub fn register_stdlib(registry: &mut ActionRegistry) {
     #[cfg(feature = "verification")]
@@ -98,9 +100,10 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
     }
 }
 
-/// Build the default `BackendFactory` closure.
+/// Build the default [`BackendFactory`] closure.
 ///
 /// Wraps [`default_backend_factory`] for convenience.
+#[must_use]
 pub fn stdlib_backend_factory() -> BackendFactory {
     default_backend_factory()
 }

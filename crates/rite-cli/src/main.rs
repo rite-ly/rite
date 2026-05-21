@@ -4,6 +4,8 @@
 
 mod check;
 mod common;
+mod console;
+mod headless;
 #[cfg(feature = "render")]
 mod report;
 mod run;
@@ -75,7 +77,7 @@ fn main() {
         #[cfg(feature = "render")]
         Commands::Script(args) => script::run(&args),
         #[cfg(feature = "render")]
-        Commands::Report(args) => report::run(args),
+        Commands::Report(args) => report::run(&args),
         Commands::Version(args) => version::run(&args),
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();

@@ -1,23 +1,23 @@
-//! Clock check action - verify system clock is correct.
+//! `clock_check` action, record the system clock at ceremony start.
 
 use chrono::{Local, Utc};
-use rite_model::ActionType;
+use rite_model::{ActionType, Prompt};
 use rite_runtime::{
-    ActionCategory, ActionHandler, ActionMetadata, ExecutionError, HandlerContext, StepEvidence,
-    StepInfo, StepResult, StepUI, display,
+    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, Response,
+    StepInfo, StepResult, parse_params,
 };
 use rite_sdk::Backend;
 
 use crate::params::ClockCheckParams;
 
-/// Clock check action - verify system clock is correct.
+/// Clock check action, display the current system time (UTC + local) and
+/// require operator confirmation that it is correct.
 ///
-/// Displays the current system time (both local and UTC) and requires
-/// operator confirmation that the time is correct. This should typically
-/// be the first step in a ceremony to establish machine context.
+/// Typically the first step in a ceremony so that every subsequent
+/// timestamp can be referenced to a known-correct wall clock.
 pub struct ClockCheckAction;
 
-impl ActionHandler for ClockCheckAction {
+impl Action for ClockCheckAction {
     fn metadata(&self) -> ActionMetadata {
         ActionMetadata {
             action_type: ActionType::ClockCheck,
@@ -28,18 +28,16 @@ impl ActionHandler for ClockCheckAction {
 
     fn execute(
         &self,
-        step: &StepInfo,
+        _step: &StepInfo,
         ctx: &HandlerContext,
         params: &serde_json::Value,
-        ui: &mut dyn StepUI,
+        reporter: &mut Reporter<'_>,
         _backend: Option<&mut dyn Backend>,
-    ) -> Result<(StepResult, StepEvidence), ExecutionError> {
-        let typed: ClockCheckParams = serde_json::from_value(params.clone())
-            .map_err(|e| ExecutionError::InvalidParams(e.to_string()))?;
+    ) -> Result<StepResult, ActionError> {
+        let typed: ClockCheckParams = parse_params(params)?;
 
         if let Some(message) = &typed.message {
-            display::write_line(ui, message)?;
-            display::write_blank(ui)?;
+            reporter.log(Icon::Info, message.as_str())?;
         }
 
         let utc_time = Utc::now();
@@ -48,40 +46,24 @@ impl ActionHandler for ClockCheckAction {
         let utc_formatted = utc_time.format("%Y-%m-%d %H:%M:%S UTC").to_string();
         let local_formatted = local_time.format("%Y-%m-%d %H:%M:%S %Z").to_string();
 
-        display::write_line(ui, &format!("UTC time:    {utc_formatted}"))?;
-        display::write_line(ui, &format!("Local time:  {local_formatted}"))?;
-        display::write_blank(ui)?;
-        display::write_line(ui, "All ceremony timestamps will be recorded in UTC.")?;
-        display::write_blank(ui)?;
+        reporter.log(Icon::Info, format!("UTC time:    {utc_formatted}"))?;
+        reporter.log(Icon::Info, format!("Local time:  {local_formatted}"))?;
+        reporter.log(
+            Icon::Info,
+            "All ceremony timestamps will be recorded in UTC.",
+        )?;
 
         if ctx.dry_run {
-            display::write_dry_run(ui, "auto-confirming clock")?;
-            let mut evidence = StepEvidence::new();
-            if let Some(message) = typed.message {
-                evidence.insert("prompt", message);
-            }
-            evidence.insert("utc_time", utc_time.to_rfc3339());
-            evidence.insert("local_time", local_time.to_rfc3339());
-            evidence.insert("timezone", local_time.format("%Z").to_string());
-            evidence.insert("confirmed", true);
-            return Ok((StepResult::completed("Clock verified (dry run)"), evidence));
+            reporter.log(Icon::Info, "[dry run, auto-confirming clock]")?;
+            return Ok(StepResult::completed("Clock verified (dry run)"));
         }
 
-        if display::prompt_yes_no(ui, "Is the system clock correct?")? {
-            let result = StepResult::completed("Clock verified");
-
-            let mut evidence = StepEvidence::new();
-            if let Some(message) = typed.message {
-                evidence.insert("prompt", message);
-            }
-            evidence.insert("utc_time", utc_time.to_rfc3339());
-            evidence.insert("local_time", local_time.to_rfc3339());
-            evidence.insert("timezone", local_time.format("%Z").to_string());
-            evidence.insert("confirmed", true);
-
-            Ok((result, evidence))
-        } else {
-            Err(ExecutionError::StepAborted(step.id.clone()))
+        match reporter.prompt(&Prompt::Confirm {
+            question: "Is the system clock correct?".to_string(),
+            default: None,
+        })? {
+            Response::Bool(true) => Ok(StepResult::completed("Clock verified")),
+            _ => Err(ActionError::Aborted),
         }
     }
 }

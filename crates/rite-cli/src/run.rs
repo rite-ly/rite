@@ -1,10 +1,27 @@
 //! `rite run`: execute a ceremony interactively.
 
+use std::path::PathBuf;
+
+use clap::{Args as ClapArgs, ValueEnum};
+use crossbeam_channel::unbounded;
+
+use rite_runtime::{ExecEvent, Executor, InMemorySink, JsonlFileSink, TranscriptSink, UiCommand};
+
 use crate::common::{
     InputArgs, build_inputs_or_exit, preflight_check_materials, prompt_missing_params,
 };
-use clap::Args as ClapArgs;
-use std::path::PathBuf;
+
+/// Which frontend drives the ceremony.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum Frontend {
+    /// Interactive terminal UI (TEA-style). Default when stdout is a TTY.
+    #[cfg(feature = "tui")]
+    Tui,
+    /// Plain stdin/stdout driver. Reference implementation of the protocol.
+    Console,
+    /// Auto-answering driver for CI / smoke tests.
+    Headless,
+}
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -24,14 +41,15 @@ pub struct Args {
     /// Disable transcript generation
     #[arg(long)]
     pub no_transcript: bool,
+    /// Frontend driver. Auto-detected when omitted: `tui` if stdout is a
+    /// TTY and the `tui` feature is built in, else `console`.
+    #[arg(long, value_enum)]
+    pub frontend: Option<Frontend>,
 }
 
 pub fn run(args: Args) {
     let mut inputs = build_inputs_or_exit(&args.input);
 
-    // Interactive prompting for missing required parameters.
-    // Parse ceremony with no inputs first (skips required-param validation),
-    // so we can discover which parameters need prompting before full resolution.
     if !args.no_prompt {
         let (ceremony_opt, _diags) = rite_resolver::analyze(&args.file, None);
         if let Some(ceremony) = ceremony_opt {
@@ -39,7 +57,6 @@ pub fn run(args: Args) {
         }
     }
 
-    // Full resolution with all inputs.
     let result = rite_resolver::resolve_files(&args.file, Some(&inputs));
 
     if !result.errors.is_empty() {
@@ -50,19 +67,16 @@ pub fn run(args: Args) {
         std::process::exit(1);
     }
 
-    // errors is empty, so into_result() cannot fail.
     let Ok(resolved) = result.into_result() else {
         eprintln!("Internal error: resolution failed with no errors");
         std::process::exit(1);
     };
 
-    // Preflight: verify material files exist before starting I/O.
     if let Err(e) = preflight_check_materials(&resolved) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
 
-    // Build output configuration: <base>/<ceremony-slug>-<timestamp>/
     let output_config =
         rite_runtime::OutputConfig::for_ceremony(args.output, &resolved.metadata.name);
     let output_dir = output_config.base_dir().to_path_buf();
@@ -72,14 +86,7 @@ pub fn run(args: Args) {
         std::process::exit(1);
     }
 
-    let transcript_config = if args.no_transcript {
-        rite_runtime::TranscriptConfig::disabled()
-    } else {
-        rite_runtime::TranscriptConfig::from_output_config(&output_config)
-            .with_ceremony_file(args.file.clone())
-    };
-
-    // Declare backends from resolved configuration (lazy; no hardware touched yet).
+    // Backends from resolved configuration (lazy; no hardware touched yet).
     let mut backend_registry =
         rite_runtime::BackendRegistry::with_factory(rite_stdlib::stdlib_backend_factory());
     for (name, config) in &resolved.backends {
@@ -87,16 +94,52 @@ pub fn run(args: Args) {
     }
 
     let registry = rite_stdlib::default_registry();
-    let mut executor = rite_runtime::CeremonyExecutor::new_interactive_with_transcript(
-        args.dry_run,
-        registry,
-        output_config,
-        transcript_config,
-    );
 
-    match executor.execute(&resolved, backend_registry) {
-        Ok(_) => {
-            println!("Output directory: {}", output_dir.display());
+    let sink: Box<dyn TranscriptSink> = if args.no_transcript {
+        Box::new(InMemorySink::new())
+    } else {
+        let file_sink = JsonlFileSink::create(&output_dir).unwrap_or_else(|e| {
+            eprintln!("Failed to create transcript: {e}");
+            std::process::exit(1);
+        });
+        Box::new(file_sink)
+    };
+
+    let frontend = args.frontend.unwrap_or_else(default_frontend);
+
+    let (cmd_tx, cmd_rx) = unbounded::<UiCommand>();
+    let (event_tx, event_rx) = unbounded::<ExecEvent>();
+
+    let executor = Executor::new(
+        resolved,
+        registry,
+        backend_registry,
+        output_config,
+        args.dry_run,
+    );
+    let exec_handle = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
+
+    let frontend_result = run_frontend(frontend, &cmd_tx, event_rx);
+
+    // Drop our cmd_tx so the executor's recv unblocks cleanly if the
+    // frontend exits before the ceremony completes.
+    drop(cmd_tx);
+
+    let Ok(exec_result) = exec_handle.join() else {
+        eprintln!("Executor thread panicked");
+        std::process::exit(2);
+    };
+
+    if let Err(e) = frontend_result {
+        eprintln!("Frontend error: {e}");
+    }
+
+    match exec_result {
+        Ok(summary) => {
+            if !args.no_transcript {
+                println!("Output directory: {}", output_dir.display());
+                println!("Transcript fingerprint: {}", summary.transcript_fingerprint);
+            }
             std::process::exit(0);
         }
         Err(e) => {
@@ -104,4 +147,32 @@ pub fn run(args: Args) {
             std::process::exit(1);
         }
     }
+}
+
+fn run_frontend(
+    frontend: Frontend,
+    cmd_tx: &crossbeam_channel::Sender<UiCommand>,
+    event_rx: crossbeam_channel::Receiver<ExecEvent>,
+) -> std::io::Result<()> {
+    match frontend {
+        #[cfg(feature = "tui")]
+        Frontend::Tui => rite_tui::run(cmd_tx, event_rx),
+        Frontend::Console => crate::console::run(cmd_tx, &event_rx),
+        Frontend::Headless => crate::headless::run(cmd_tx, &event_rx),
+    }
+}
+
+fn default_frontend() -> Frontend {
+    #[cfg(feature = "tui")]
+    {
+        if is_stdout_tty() {
+            return Frontend::Tui;
+        }
+    }
+    Frontend::Console
+}
+
+fn is_stdout_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
 }

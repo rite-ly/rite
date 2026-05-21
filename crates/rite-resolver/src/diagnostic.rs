@@ -90,7 +90,6 @@ impl fmt::Display for ReferenceContext {
 
 /// The kind of declaration a reference points to.
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
 pub enum ReferenceTarget {
     /// A section declaration.
     Section(SectionId),

@@ -1,488 +1,636 @@
-//! Transcript data types for ceremony audit trails.
+//! Persisted transcript schema.
 //!
-//! These types model the structure of ceremony execution records. A transcript
-//! is a hash-chained sequence of [`ChainedEvent`] values that captures what
-//! happened during a ceremony run, who participated, and what was produced.
+//! These types are the **durable** audit surface: what gets written to
+//! `transcript.jsonl`, what `rite verify` reads back, what report and
+//! audit tooling consume. They are deliberately kept independent of the
+//! executor and the channel plumbing, a third-party verifier can parse
+//! a transcript with only `rite-model` on its dependency list.
 //!
-//! The runtime-side functions (`read_transcript`, `verify_transcript`,
-//! `compute_fingerprint`) live in `rite-runtime` — their signatures may still
-//! evolve before the first stable release. The types here are the stable,
-//! semver-committed portion of the transcript API.
+//! The live runtime↔frontend channel protocol (`ExecEvent`, `UiCommand`,
+//! `Response`, `Icon`, …) lives in `rite-runtime` next to the executor
+//! that owns the channels. The boundary is **persisted vs in-flight**.
+
+use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
 
-use crate::ActionType;
+use crate::ir::{ActId, RoleId, StepId};
 
-/// Schema version for the JSONL transcript format.
-///
-/// Increment when the format changes in a way that breaks existing parsers or
-/// verification tools.
-pub const TRANSCRIPT_SCHEMA_VERSION: &str = "0.1";
-
-/// Genesis hash for the first event in the hash chain.
-///
-/// Uses all-zeros — a valid SHA-256 representation that cannot collide with any
-/// real event hash. The first event has `prev: GENESIS_HASH`.
-pub const GENESIS_HASH: &str =
-    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-
-/// Information about the ceremony definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CeremonyInfo {
-    /// SHA-256 fingerprint of the ceremony YAML file.
-    pub fingerprint: String,
-    /// Ceremony name.
-    pub name: String,
-}
-
-/// Information about resolved ceremony inputs (parameters, materials).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InstanceInfo {
-    /// SHA-256 fingerprint of all resolved runtime inputs (parameters + material fingerprints).
-    pub fingerprint: String,
-    /// Resolved parameters (names, dates, labels).
-    ///
-    /// Uses `BTreeMap` for deterministic serialization order in JSONL transcripts.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub parameters: BTreeMap<String, serde_json::Value>,
-    /// SHA-256 fingerprints of digital materials, keyed by material ID.
-    ///
-    /// Physical materials have no digital fingerprint and are omitted.
-    /// Uses `BTreeMap` for deterministic serialization order in JSONL transcripts.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub materials: BTreeMap<String, String>,
-}
-
-/// A participant assigned to a role for this ceremony execution.
-///
-/// Recorded in `CeremonyStart` so the transcript is self-contained: a verifier
-/// can identify every participant without consulting external sources.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ParticipantRecord {
-    /// Role identifier (e.g. `crypto_officer`, `witness__1`).
-    pub role_id: String,
-    /// Human-readable role name (e.g. "Crypto Officer").
-    pub role_name: String,
-    /// Named individual assigned to this role, if specified.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub person: Option<String>,
-}
-
-/// A single component in the release manifest (filesystem or binary).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageComponent {
-    /// SHA-256 hash of this component.
-    pub hash: String,
-}
-
-/// Release manifest, inlined from the USB image at ceremony runtime startup.
-///
-/// Build-time values with stronger provenance than self-reported hashes:
-/// computed outside the running binary and embedded in the ISO at build time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageManifest {
-    /// Image version string.
-    pub version: String,
-    /// Filesystem (squashfs) component measurements.
-    pub filesystem: ImageComponent,
-    /// Binary component measurements.
-    pub binary: ImageComponent,
-    /// PCR measurements from the TPM (if available).
-    // External data from the ISO; order irrelevant — keep HashMap
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pcr: Option<HashMap<String, String>>,
-}
-
-/// A single component measured by the initrd hook.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InitrdComponent {
-    /// SHA-256 hash of this component (if measured).
-    pub hash: Option<String>,
-    /// Whether the hash was verified against the manifest.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verified: Option<bool>,
-}
-
-/// Measurements written by the initrd hook before squashfs was mounted.
-///
-/// Read from `/run/rite/initrd-measurements.json` at runtime startup.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InitrdMeasurements {
-    /// Filesystem image measurements.
-    pub filesystem: InitrdComponent,
-    /// Ceremony file measurements.
-    pub ceremony: InitrdComponent,
-}
-
-/// Information about the rite binary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BinaryInfo {
-    /// SHA-256 fingerprint of the binary (if available).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fingerprint: Option<String>,
-    /// Binary version.
-    pub version: String,
-}
-
-/// Transcript completion status.
+/// Validator applied by the runtime to a free-form text or literal response
+/// before it is accepted.
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TranscriptStatus {
-    /// Ceremony completed successfully.
-    Completed,
-    /// Ceremony was interrupted (crash, abort, error).
-    Interrupted,
-    /// Ceremony is still in progress.
-    InProgress,
-}
-
-/// Outcome of a step execution as recorded in the transcript.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EventOutcome {
-    /// Status: `completed` or `skipped`.
-    pub status: String,
-    /// Human-readable message or skip reason.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum ValidatorSpec {
+    /// Reject empty or whitespace-only input.
+    NonEmpty,
+    /// Input must match this regular expression.
+    Regex(String),
+    /// Named, runtime-defined predicate (e.g. `serial_number`).
+    Predefined(String),
 }
 
-/// Evidence produced by a step execution.
-///
-/// Uses `BTreeMap` for deterministic serialization order in JSONL transcripts.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct StepEvidence {
-    /// Generic key-value evidence data.
-    #[serde(flatten)]
-    pub data: BTreeMap<String, serde_json::Value>,
-}
-
-impl StepEvidence {
-    /// Create a new empty evidence set.
-    pub fn new() -> Self {
-        Self {
-            data: BTreeMap::new(),
-        }
-    }
-
-    /// Insert a key-value pair into the evidence.
-    pub fn insert(&mut self, key: impl Into<String>, value: impl Into<serde_json::Value>) {
-        self.data.insert(key.into(), value.into());
-    }
-
-    /// Insert a key-value pair and return self (builder pattern).
-    #[must_use]
-    pub fn with(mut self, key: impl Into<String>, value: impl Into<serde_json::Value>) -> Self {
-        self.insert(key, value);
-        self
-    }
-}
-
-/// Event data types for JSONL transcript entries.
+/// Request for user input, recorded into the transcript as part of
+/// [`StepFact::PromptAnswered`].
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-#[allow(clippy::large_enum_variant)]
-pub enum EventData {
-    /// Ceremony started.
-    CeremonyStart {
-        /// Transcript format version.
-        schema_version: String,
-        /// Whether this is a dry run.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        dry_run: bool,
-        /// Ceremony identity and fingerprint.
-        ceremony: CeremonyInfo,
-        /// Instance-specific parameters (absent if ceremony has no parameters).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        instance: Option<InstanceInfo>,
-        /// Binary identity and version.
-        binary: BinaryInfo,
-        /// Live USB image manifest (absent when not running from a live image).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        image: Option<ImageManifest>,
-        /// Initrd measurements (absent when not running from a live image).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        initrd: Option<InitrdMeasurements>,
-        /// OS environment variables at ceremony start (if captured).
-        // environment order is irrelevant — keep HashMap
-        #[serde(skip_serializing_if = "Option::is_none")]
-        environment: Option<HashMap<String, String>>,
-        /// Participants assigned to roles for this execution.
-        ///
-        /// Makes the transcript self-contained: role names and person assignments
-        /// are recorded here so audit records are standalone.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        participants: Vec<ParticipantRecord>,
-        /// Timestamp when the ceremony started.
-        started_at: DateTime<Utc>,
+pub enum Prompt {
+    /// Yes / no question with an optional default.
+    Confirm {
+        /// Question shown to the user.
+        question: String,
+        /// Default selection if the user presses Enter without choosing.
+        default: Option<bool>,
     },
-    /// Step execution.
-    Step {
-        /// Step identifier from the ceremony definition.
-        step_id: String,
-        /// Action type performed.
-        action: ActionType,
-        /// Role that performed this step (if role-bound).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        role: Option<String>,
-        /// When the step started.
-        started_at: DateTime<Utc>,
-        /// When the step completed.
-        completed_at: DateTime<Utc>,
-        /// Whether the step completed or was skipped.
-        outcome: EventOutcome,
-        /// Action-specific evidence collected during execution.
-        evidence: StepEvidence,
+    /// Free-form text input, validated against a [`ValidatorSpec`].
+    Text {
+        /// Label shown to the user.
+        label: String,
+        /// Validator applied before the response is accepted.
+        validator: ValidatorSpec,
     },
-    /// Evidence file added (photo, document, etc.).
-    EvidenceAdd {
-        /// Path to the evidence file.
-        path: String,
-        /// SHA-256 fingerprint of the file.
-        hash: String,
-        /// File size in bytes.
-        size: u64,
-        /// MIME type (if known).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        mime: Option<String>,
+    /// Sensitive input (PIN, password). Echo is suppressed; plaintext is
+    /// never serialized to the transcript.
+    Secret {
+        /// Label shown to the user.
+        label: String,
     },
-    /// Artifact produced by ceremony.
-    ArtifactProduce {
-        /// Artifact ID (from the ceremony definition).
-        source: String,
-        /// Path where the artifact was written.
-        path: String,
-        /// SHA-256 fingerprint of the written file.
-        hash: String,
-        /// File size in bytes.
-        size: u64,
-        /// MIME type (if known).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        mime: Option<String>,
-    },
-    /// Deviation from expected procedure.
-    Deviation {
-        /// Human-readable reason for the deviation.
-        reason: String,
-        /// Step being deviated from (if applicable).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        step_id: Option<String>,
-        /// When the deviation was recorded.
-        recorded_at: DateTime<Utc>,
-    },
-    /// Ceremony completed.
-    CeremonyComplete {
-        /// When the ceremony finished.
-        completed_at: DateTime<Utc>,
-        /// Final completion status.
-        status: TranscriptStatus,
-    },
-}
-
-/// A hash-chained event in the JSONL transcript.
-///
-/// The `hash` field is `H(H(prev) || H(data))` using SHA-256, encoded as
-/// `"sha256:{lowercase_hex}"`. Use `read_transcript` in `rite-runtime` to
-/// parse and verify a transcript; individual hashes are verified there.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChainedEvent {
-    /// Hash of the previous event (`GENESIS_HASH` for the first event).
-    pub prev: String,
-    /// Event data.
-    pub data: EventData,
-    /// SHA-256 hash of this event computed as H(H(prev) || H(data)).
-    pub hash: String,
-}
-
-/// Result of verifying a single artifact file.
-#[derive(Debug, Clone)]
-pub struct ArtifactVerification {
-    /// Artifact ID (from the ceremony definition).
-    pub source: String,
-    /// Path where the artifact was written.
-    pub path: String,
-    /// Expected SHA-256 fingerprint (from transcript).
-    pub expected_hash: String,
-    /// Whether the computed hash matched the expected hash.
-    pub verified: bool,
-    /// Error description if verification failed.
-    pub error: Option<String>,
-}
-
-/// Result of transcript verification.
-#[non_exhaustive]
-#[derive(Debug)]
-#[allow(clippy::large_enum_variant)]
-pub enum VerificationResult {
-    /// Transcript is valid and fingerprint matches.
-    Valid {
-        /// Final SHA-256 fingerprint of the transcript chain.
-        fingerprint: String,
-        /// Completion status recorded in the final event.
-        status: TranscriptStatus,
-        /// Whether this was a dry run (no actual operations performed).
-        dry_run: bool,
-        /// Artifact file verification results.
-        artifacts: Vec<ArtifactVerification>,
-        /// Build-time image manifest (from `CeremonyStart`).
-        image: Option<ImageManifest>,
-        /// Boot-time initrd measurements (from `CeremonyStart`).
-        initrd: Option<InitrdMeasurements>,
-        /// Nonce from the first `tpm_attest` step evidence, if any.
-        tpm_nonce: Option<String>,
-        /// PCR values from the first `tpm_attest` step evidence, if any.
-        ///
-        /// Uses `BTreeMap` for deterministic display order.
-        tpm_pcrs: BTreeMap<String, String>,
-    },
-    /// Transcript has been tampered with.
-    Invalid {
-        /// Expected hash (from the `hash` field of the final event).
+    /// User must type a specific literal string exactly. Validation is
+    /// performed by the runtime against `expected`.
+    Literal {
+        /// Label shown to the user.
+        label: String,
+        /// Exact string the user must type.
         expected: String,
-        /// Computed hash (recomputed from transcript content).
-        computed: String,
     },
-    /// Transcript is incomplete (no final fingerprint).
-    Incomplete {
-        /// Last recorded status.
-        status: TranscriptStatus,
-        /// Number of events parsed before the transcript ends.
-        events_count: usize,
+    /// Wait for the user to acknowledge before proceeding. Used for pacing.
+    Continue {
+        /// Optional hint such as "Press Enter when ready".
+        hint: Option<String>,
     },
 }
 
-impl std::fmt::Display for VerificationResult {
-    #[allow(clippy::too_many_lines)]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            VerificationResult::Valid {
-                fingerprint,
-                status,
-                dry_run,
-                artifacts,
-                image,
-                initrd,
-                tpm_nonce,
-                tpm_pcrs,
-            } => {
-                if *dry_run {
-                    writeln!(
-                        f,
-                        "WARNING: This is a DRY RUN transcript - no actual cryptographic operations were performed"
-                    )?;
-                }
-                writeln!(f, "Transcript integrity verified.")?;
-                writeln!(f, "  Status:      {status:?}")?;
-                writeln!(f, "  Fingerprint: {fingerprint}")?;
+/// Serializable, redacted form of a user response.
+///
+/// Used inside [`StepFact::PromptAnswered`] so that the transcript records
+/// what was answered without ever persisting plaintext secrets. The
+/// in-flight `Response` type lives next to the channel protocol in
+/// `rite-runtime`; conversion happens at the moment the prompt is accepted.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseRecord {
+    /// Yes / no answer.
+    Bool {
+        /// The answer.
+        value: bool,
+    },
+    /// Free-form text answer.
+    Text {
+        /// The answer.
+        value: String,
+    },
+    /// Secret answer, replaced by a deterministic hash of the plaintext so
+    /// verifiers can confirm a specific secret was provided without seeing it.
+    SecretRedacted {
+        /// Lowercase hex of `sha256(plaintext)`.
+        sha256_of_plaintext: String,
+    },
+    /// Acknowledgement of a [`Prompt::Continue`].
+    Acknowledged,
+}
 
-                if let Some(img) = image {
-                    writeln!(f, "\nImage (build-time):")?;
-                    writeln!(f, "  Version:    {}", img.version)?;
-                    writeln!(f, "  Filesystem: {}", img.filesystem.hash)?;
-                    writeln!(f, "  Binary:     {}", img.binary.hash)?;
-                }
+/// Structured error record for transcript serialization.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorRecord {
+    /// Stable kind label (e.g. `aborted`, `step_failed`, `material_load_failed`).
+    pub kind: String,
+    /// Human-readable message.
+    pub message: String,
+}
 
-                if let Some(imd) = initrd {
-                    writeln!(f, "\nInitrd measurements (boot-time, pre-mount):")?;
-                    let fs_hash = imd.filesystem.hash.as_deref().unwrap_or("(none)");
-                    let fs_verified = match imd.filesystem.verified {
-                        Some(true) => " [verified]",
-                        Some(false) => " [not verified]",
-                        None => "",
-                    };
-                    writeln!(f, "  Filesystem: {fs_hash}{fs_verified}")?;
-                    let cer_hash = imd.ceremony.hash.as_deref().unwrap_or("(none)");
-                    writeln!(f, "  Ceremony:   {cer_hash}")?;
-                }
-
-                if let (Some(img), Some(imd)) = (image, initrd) {
-                    writeln!(f, "\nCross-checks:")?;
-                    if let Some(ref fs_hash) = imd.filesystem.hash {
-                        let matches = fs_hash == &img.filesystem.hash;
-                        writeln!(
-                            f,
-                            "  initrd.filesystem == image.filesystem: {}",
-                            if matches { "match" } else { "MISMATCH" }
-                        )?;
-                    }
-                    match imd.filesystem.verified {
-                        Some(true) => writeln!(f, "  initrd verification gate:            passed")?,
-                        Some(false) => {
-                            writeln!(f, "  initrd verification gate:            FAILED")?;
-                        }
-                        None => {}
-                    }
-                }
-
-                if !tpm_pcrs.is_empty() || tpm_nonce.is_some() {
-                    writeln!(f, "\nTPM attestation:")?;
-                    if let Some(nonce) = tpm_nonce {
-                        writeln!(f, "  Nonce: {nonce}")?;
-                    }
-                    for (pcr, val) in tpm_pcrs {
-                        writeln!(f, "  PCR {pcr}: {val}")?;
-                    }
-                } else {
-                    writeln!(
-                        f,
-                        "\nNo hardware attestation recorded (no tpm_attest step in transcript)."
-                    )?;
-                }
-
-                if !artifacts.is_empty() {
-                    let verified_count = artifacts.iter().filter(|a| a.verified).count();
-                    let total = artifacts.len();
-                    writeln!(
-                        f,
-                        "\nArtifact verification: {verified_count}/{total} files verified"
-                    )?;
-                    for artifact in artifacts {
-                        if artifact.verified {
-                            writeln!(f, "  \u{2713} {} ({})", artifact.path, artifact.source)?;
-                        } else if let Some(error) = &artifact.error {
-                            writeln!(
-                                f,
-                                "  \u{2717} {} ({}): {}",
-                                artifact.path, artifact.source, error
-                            )?;
-                        } else {
-                            writeln!(
-                                f,
-                                "  \u{2717} {} ({}): Hash mismatch",
-                                artifact.path, artifact.source
-                            )?;
-                        }
-                    }
-                }
-                Ok(())
-            }
-            VerificationResult::Invalid { expected, computed } => write!(
-                f,
-                "TAMPERED: Fingerprint mismatch!\n  Expected: {expected}\n  Computed: {computed}"
-            ),
-            VerificationResult::Incomplete {
-                status,
-                events_count,
-            } => write!(
-                f,
-                "Incomplete transcript (no final fingerprint). Status: {status:?}. Events recorded: {events_count}"
-            ),
+impl ErrorRecord {
+    /// Construct an error record.
+    pub fn new(kind: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            message: message.into(),
         }
     }
 }
 
-/// A fully parsed and verified transcript.
-#[derive(Debug)]
-pub struct ParsedTranscript {
-    /// All chained events in order.
-    pub events: Vec<ChainedEvent>,
-    /// Final chain fingerprint (hash of the last event).
-    pub fingerprint: String,
-    /// Whether this was a dry run.
-    pub dry_run: bool,
-    /// Completion status.
-    pub status: TranscriptStatus,
+/// Outcome of a single step, carried by [`StepFact::StepCompleted`].
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum StepOutcome {
+    /// Step executed successfully.
+    Completed {
+        /// Human-readable completion message.
+        message: String,
+    },
+}
+
+/// Durable, transcript-worthy fact.
+///
+/// Every variant is recorded by the runtime's transcript sink synchronously
+/// before being forwarded to the UI. Action handlers emit
+/// [`BackendOperation`] and [`AttestationRecorded`]; all other variants are
+/// emitted by the executor at the corresponding lifecycle boundary.
+///
+/// [`BackendOperation`]: StepFact::BackendOperation
+/// [`AttestationRecorded`]: StepFact::AttestationRecorded
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StepFact {
+    /// Ceremony has started running.
+    CeremonyStarted {
+        /// Ceremony name from the DSL.
+        name: String,
+        /// Wall-clock timestamp at start.
+        started_at: DateTime<Utc>,
+    },
+    /// Beginning of an act (named subdivision of a ceremony).
+    ActStarted {
+        /// Act identifier.
+        id: ActId,
+        /// Act label as authored in the DSL.
+        label: String,
+    },
+    /// Beginning of a step.
+    StepStarted {
+        /// Step identifier.
+        id: StepId,
+        /// Step label as authored in the DSL.
+        label: String,
+        /// Role responsible for this step (stable id).
+        role: RoleId,
+        /// Human-readable role name, from the ceremony's role definition.
+        /// Carried alongside the id so transcripts stay self-contained for
+        /// reports and verifiers without re-reading the ceremony YAML.
+        role_name: String,
+        /// Wall-clock timestamp at start.
+        started_at: DateTime<Utc>,
+    },
+    /// A prompt has been answered and validated.
+    PromptAnswered {
+        /// Step that issued the prompt.
+        step: StepId,
+        /// The prompt as issued.
+        prompt: Prompt,
+        /// Redacted response record.
+        response: ResponseRecord,
+        /// Wall-clock timestamp when the response was accepted.
+        at: DateTime<Utc>,
+    },
+    /// A backend operation completed and produced structured evidence.
+    BackendOperation {
+        /// Step under which the operation ran.
+        step: StepId,
+        /// Stable operation kind (e.g. `generate_keypair`, `sign_data`).
+        kind: String,
+        /// Structured inputs to the operation (parameters, references).
+        inputs: serde_json::Value,
+        /// Structured outputs from the operation (artifact ids, hashes).
+        outputs: serde_json::Value,
+        /// Optional fingerprint of the produced material.
+        fingerprint: Option<String>,
+    },
+    /// A human attestation was recorded.
+    AttestationRecorded {
+        /// Step under which the attestation was recorded.
+        step: StepId,
+        /// Role that issued the attestation.
+        role: RoleId,
+        /// Verbatim attestation statement.
+        statement: String,
+        /// Wall-clock timestamp when the attestation was recorded.
+        at: DateTime<Utc>,
+    },
+    /// An artifact was written to disk.
+    ArtifactWritten {
+        /// Step that produced the artifact.
+        step: StepId,
+        /// Artifact name as declared in the DSL.
+        name: String,
+        /// Path on disk.
+        path: PathBuf,
+        /// Lowercase hex SHA-256 of the artifact bytes.
+        sha256: String,
+    },
+    /// A deviation was logged by the operator.
+    DeviationRecorded {
+        /// Step in which the deviation was logged.
+        step: StepId,
+        /// Verbatim deviation text.
+        text: String,
+        /// Wall-clock timestamp when the deviation was recorded.
+        at: DateTime<Utc>,
+    },
+    /// Step finished executing.
+    StepCompleted {
+        /// Step identifier.
+        id: StepId,
+        /// Outcome (completed or skipped).
+        outcome: StepOutcome,
+        /// Wall-clock timestamp at completion.
+        completed_at: DateTime<Utc>,
+    },
+    /// Ceremony finished successfully.
+    ///
+    /// The transcript's cryptographic identity is `SHA-256(line_bytes)`
+    /// for this line, recoverable by any reader, so the fact itself
+    /// carries no fingerprint field. The runtime forwards the value to
+    /// frontends through an out-of-band channel event.
+    CeremonyCompleted {
+        /// Wall-clock timestamp at completion.
+        completed_at: DateTime<Utc>,
+    },
+    /// Ceremony failed or was aborted.
+    CeremonyFailed {
+        /// Structured error record.
+        error: ErrorRecord,
+        /// Wall-clock timestamp at failure.
+        failed_at: DateTime<Utc>,
+    },
+}
+
+/// JSON-shape snapshot tests, the tripwire for accidental wire-format breaks.
+///
+/// Every variant of [`StepFact`], [`Prompt`], [`ResponseRecord`], [`StepOutcome`],
+/// and [`ValidatorSpec`] is serialized once with fixed payloads and compared
+/// against an inline JSON literal. The on-disk transcript schema is what
+/// `rite verify`, `rite report`, and any third-party verifier consume; a
+/// rename, a `serde(tag)` change, a `rename_all` flip, or a timestamp format
+/// swap must surface here, not in the field.
+///
+/// Breaking the format is allowed in early beta, **deliberately**, update
+/// the fixture in the same commit so the diff documents the wire change.
+#[cfg(test)]
+mod schema_snapshot_tests {
+    use super::*;
+    use chrono::TimeZone;
+    use serde_json::json;
+
+    fn ts() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap()
+    }
+
+    fn assert_json(fact: &StepFact, expected: &serde_json::Value) {
+        let actual = serde_json::to_value(fact).expect("serialize StepFact");
+        assert_eq!(&actual, expected, "wire-format drift for {fact:?}");
+    }
+
+    #[test]
+    fn ceremony_started() {
+        assert_json(
+            &StepFact::CeremonyStarted {
+                name: "Root CA".to_string(),
+                started_at: ts(),
+            },
+            &json!({
+                "type": "ceremony_started",
+                "name": "Root CA",
+                "started_at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn act_started() {
+        assert_json(
+            &StepFact::ActStarted {
+                id: ActId::new("setup"),
+                label: "Setup".to_string(),
+            },
+            &json!({
+                "type": "act_started",
+                "id": "setup",
+                "label": "Setup",
+            }),
+        );
+    }
+
+    #[test]
+    fn step_started() {
+        assert_json(
+            &StepFact::StepStarted {
+                id: StepId::new("s1"),
+                label: "2.1".to_string(),
+                role: RoleId::new("crypto_officer"),
+                role_name: "Crypto Officer".to_string(),
+                started_at: ts(),
+            },
+            &json!({
+                "type": "step_started",
+                "id": "s1",
+                "label": "2.1",
+                "role": "crypto_officer",
+                "role_name": "Crypto Officer",
+                "started_at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn prompt_answered_confirm_bool() {
+        assert_json(
+            &StepFact::PromptAnswered {
+                step: StepId::new("s1"),
+                prompt: Prompt::Confirm {
+                    question: "Proceed?".to_string(),
+                    default: Some(true),
+                },
+                response: ResponseRecord::Bool { value: true },
+                at: ts(),
+            },
+            &json!({
+                "type": "prompt_answered",
+                "step": "s1",
+                "prompt": { "type": "confirm", "question": "Proceed?", "default": true },
+                "response": { "type": "bool", "value": true },
+                "at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn prompt_answered_text_nonempty() {
+        assert_json(
+            &StepFact::PromptAnswered {
+                step: StepId::new("s1"),
+                prompt: Prompt::Text {
+                    label: "Name".to_string(),
+                    validator: ValidatorSpec::NonEmpty,
+                },
+                response: ResponseRecord::Text {
+                    value: "Alice".to_string(),
+                },
+                at: ts(),
+            },
+            &json!({
+                "type": "prompt_answered",
+                "step": "s1",
+                "prompt": {
+                    "type": "text",
+                    "label": "Name",
+                    "validator": { "kind": "non_empty" },
+                },
+                "response": { "type": "text", "value": "Alice" },
+                "at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn prompt_answered_text_regex() {
+        assert_json(
+            &StepFact::PromptAnswered {
+                step: StepId::new("s1"),
+                prompt: Prompt::Text {
+                    label: "SN".to_string(),
+                    validator: ValidatorSpec::Regex(r"^[A-Z0-9]+$".to_string()),
+                },
+                response: ResponseRecord::Text {
+                    value: "AB12".to_string(),
+                },
+                at: ts(),
+            },
+            &json!({
+                "type": "prompt_answered",
+                "step": "s1",
+                "prompt": {
+                    "type": "text",
+                    "label": "SN",
+                    "validator": { "kind": "regex", "value": "^[A-Z0-9]+$" },
+                },
+                "response": { "type": "text", "value": "AB12" },
+                "at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn prompt_answered_text_predefined() {
+        assert_json(
+            &StepFact::PromptAnswered {
+                step: StepId::new("s1"),
+                prompt: Prompt::Text {
+                    label: "SN".to_string(),
+                    validator: ValidatorSpec::Predefined("serial_number".to_string()),
+                },
+                response: ResponseRecord::Text {
+                    value: "ABCD".to_string(),
+                },
+                at: ts(),
+            },
+            &json!({
+                "type": "prompt_answered",
+                "step": "s1",
+                "prompt": {
+                    "type": "text",
+                    "label": "SN",
+                    "validator": { "kind": "predefined", "value": "serial_number" },
+                },
+                "response": { "type": "text", "value": "ABCD" },
+                "at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn prompt_answered_secret_redacted() {
+        assert_json(
+            &StepFact::PromptAnswered {
+                step: StepId::new("s1"),
+                prompt: Prompt::Secret {
+                    label: "PIN".to_string(),
+                },
+                response: ResponseRecord::SecretRedacted {
+                    sha256_of_plaintext: "f".repeat(64),
+                },
+                at: ts(),
+            },
+            &json!({
+                "type": "prompt_answered",
+                "step": "s1",
+                "prompt": { "type": "secret", "label": "PIN" },
+                "response": {
+                    "type": "secret_redacted",
+                    "sha256_of_plaintext": "f".repeat(64),
+                },
+                "at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn prompt_answered_literal_text() {
+        assert_json(
+            &StepFact::PromptAnswered {
+                step: StepId::new("s1"),
+                prompt: Prompt::Literal {
+                    label: "Type 'attest'".to_string(),
+                    expected: "attest".to_string(),
+                },
+                response: ResponseRecord::Text {
+                    value: "attest".to_string(),
+                },
+                at: ts(),
+            },
+            &json!({
+                "type": "prompt_answered",
+                "step": "s1",
+                "prompt": { "type": "literal", "label": "Type 'attest'", "expected": "attest" },
+                "response": { "type": "text", "value": "attest" },
+                "at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn prompt_answered_continue_acknowledged() {
+        assert_json(
+            &StepFact::PromptAnswered {
+                step: StepId::new("s1"),
+                prompt: Prompt::Continue {
+                    hint: Some("Press Enter".to_string()),
+                },
+                response: ResponseRecord::Acknowledged,
+                at: ts(),
+            },
+            &json!({
+                "type": "prompt_answered",
+                "step": "s1",
+                "prompt": { "type": "continue", "hint": "Press Enter" },
+                "response": { "type": "acknowledged" },
+                "at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn backend_operation() {
+        assert_json(
+            &StepFact::BackendOperation {
+                step: StepId::new("s1"),
+                kind: "generate_keypair".to_string(),
+                inputs: json!({ "algorithm": "rsa", "bits": 4096 }),
+                outputs: json!({ "key_id": "k1" }),
+                fingerprint: Some("sha256:deadbeef".to_string()),
+            },
+            &json!({
+                "type": "backend_operation",
+                "step": "s1",
+                "kind": "generate_keypair",
+                "inputs": { "algorithm": "rsa", "bits": 4096 },
+                "outputs": { "key_id": "k1" },
+                "fingerprint": "sha256:deadbeef",
+            }),
+        );
+    }
+
+    #[test]
+    fn attestation_recorded() {
+        assert_json(
+            &StepFact::AttestationRecorded {
+                step: StepId::new("s1"),
+                role: RoleId::new("crypto_officer"),
+                statement: "I confirm.".to_string(),
+                at: ts(),
+            },
+            &json!({
+                "type": "attestation_recorded",
+                "step": "s1",
+                "role": "crypto_officer",
+                "statement": "I confirm.",
+                "at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn artifact_written() {
+        assert_json(
+            &StepFact::ArtifactWritten {
+                step: StepId::new("s1"),
+                name: "root.crt".to_string(),
+                path: "/out/root.crt".into(),
+                sha256: "a".repeat(64),
+            },
+            &json!({
+                "type": "artifact_written",
+                "step": "s1",
+                "name": "root.crt",
+                "path": "/out/root.crt",
+                "sha256": "a".repeat(64),
+            }),
+        );
+    }
+
+    #[test]
+    fn deviation_recorded() {
+        assert_json(
+            &StepFact::DeviationRecorded {
+                step: StepId::new("s1"),
+                text: "phone rang".to_string(),
+                at: ts(),
+            },
+            &json!({
+                "type": "deviation_recorded",
+                "step": "s1",
+                "text": "phone rang",
+                "at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn step_completed_completed() {
+        assert_json(
+            &StepFact::StepCompleted {
+                id: StepId::new("s1"),
+                outcome: StepOutcome::Completed {
+                    message: "done".to_string(),
+                },
+                completed_at: ts(),
+            },
+            &json!({
+                "type": "step_completed",
+                "id": "s1",
+                "outcome": { "status": "completed", "message": "done" },
+                "completed_at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn ceremony_completed() {
+        assert_json(
+            &StepFact::CeremonyCompleted { completed_at: ts() },
+            &json!({
+                "type": "ceremony_completed",
+                "completed_at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn ceremony_failed() {
+        assert_json(
+            &StepFact::CeremonyFailed {
+                error: ErrorRecord::new("aborted", "ceremony aborted by operator"),
+                failed_at: ts(),
+            },
+            &json!({
+                "type": "ceremony_failed",
+                "error": { "kind": "aborted", "message": "ceremony aborted by operator" },
+                "failed_at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
 }

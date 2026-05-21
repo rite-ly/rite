@@ -1,13 +1,13 @@
-//! Oral readback action - verbal verification using NATO phonetic or other formats.
+//! `oral_readback` action, verbal verification using NATO phonetic or other formats.
 
-use rite_model::ActionType;
+use rite_model::{ActionType, Prompt};
 use rite_runtime::{
-    ActionCategory, ActionHandler, ActionMetadata, ExecutionError, HandlerContext, Icon,
-    StepEvidence, StepInfo, StepResult, StepUI, display,
+    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, Response,
+    StepInfo, StepResult, parse_params,
 };
 use rite_sdk::Backend;
 
-use crate::params::OralReadbackParams;
+use crate::params::{OralReadbackParams, ReadbackFormat};
 
 /// NATO phonetic alphabet mapping.
 const NATO_ALPHABET: &[(&str, &str)] = &[
@@ -82,7 +82,7 @@ fn to_hex_format(input: &str) -> String {
 /// Oral readback action for verbal verification.
 pub struct OralReadbackAction;
 
-impl ActionHandler for OralReadbackAction {
+impl Action for OralReadbackAction {
     fn metadata(&self) -> ActionMetadata {
         ActionMetadata {
             action_type: ActionType::OralReadback,
@@ -93,86 +93,52 @@ impl ActionHandler for OralReadbackAction {
 
     fn execute(
         &self,
-        step: &StepInfo,
+        _step: &StepInfo,
         ctx: &HandlerContext,
         params: &serde_json::Value,
-        ui: &mut dyn StepUI,
+        reporter: &mut Reporter<'_>,
         _backend: Option<&mut dyn Backend>,
-    ) -> Result<(StepResult, StepEvidence), ExecutionError> {
-        let typed: OralReadbackParams = serde_json::from_value(params.clone())
-            .map_err(|e| ExecutionError::InvalidParams(e.to_string()))?;
+    ) -> Result<StepResult, ActionError> {
+        let typed: OralReadbackParams = parse_params(params)?;
 
         let value = typed
             .value
             .as_deref()
-            .ok_or_else(|| ExecutionError::InvalidParams("'value' is required".to_string()))?;
+            .ok_or_else(|| ActionError::Failed("'value' is required".to_string()))?;
 
-        let display_value = if let Some(limit) = typed.characters {
-            &value[..value.len().min(limit as usize)]
-        } else {
-            value
+        let display_value: String = match typed.characters {
+            Some(limit) => value.chars().take(limit as usize).collect(),
+            None => value.to_string(),
         };
 
-        let format = typed.format.as_deref().unwrap_or("nato_phonetic");
+        let format = typed.format.unwrap_or_default();
         let formatted = match format {
-            "nato_phonetic" | "nato" => to_nato_phonetic(display_value),
-            "hex" => to_hex_format(display_value),
-            "raw" => display_value.to_string(),
-            other => {
-                return Err(ExecutionError::InvalidParams(format!(
-                    "Unknown format: '{other}'. Valid formats: nato_phonetic, hex, raw"
-                )));
-            }
+            ReadbackFormat::NatoPhonetic => to_nato_phonetic(&display_value),
+            ReadbackFormat::Hex => to_hex_format(&display_value),
+            ReadbackFormat::Raw => display_value.clone(),
         };
 
-        display::write_line(ui, "READER: Please read aloud the following value:")?;
-        display::write_blank(ui)?;
-        ui.log(Icon::Info, &format!("    Raw value: {display_value}"));
-        display::write_blank(ui)?;
-        ui.log(Icon::Info, &format!("    {format}: {formatted}"));
-        display::write_blank(ui)?;
+        reporter.log(Icon::Info, "READER: Please read aloud the following value:")?;
+        reporter.log(Icon::Info, format!("    Raw value: {display_value}"))?;
+        reporter.log(Icon::Info, format!("    {}: {formatted}", format.label()))?;
 
         if ctx.dry_run {
-            display::write_dry_run(ui, "auto-confirming")?;
-            let mut evidence = StepEvidence::new();
-            if !typed.sensitive {
-                evidence.insert("value", display_value.to_string());
-            }
-            evidence.insert("format", format);
-            if let Some(chars) = typed.characters {
-                evidence.insert("characters_read", chars);
-            }
-            evidence.insert("verified", true);
-            return Ok((
-                StepResult::completed("Oral readback completed (dry run)"),
-                evidence,
-            ));
+            reporter.log(Icon::Info, "[dry run, auto-confirming]")?;
+            return Ok(StepResult::completed("Oral readback completed (dry run)"));
         }
 
-        display::write_line(ui, "CONFIRMER: Verify the reader spoke the correct value.")?;
-        display::write_blank(ui)?;
+        reporter.log(
+            Icon::Info,
+            "CONFIRMER: Verify the reader spoke the correct value.",
+        )?;
 
-        if !display::prompt_yes_no(ui, "Confirmer verifies readback is correct?")? {
-            return Err(ExecutionError::StepAborted(step.id.clone()));
+        match reporter.prompt(&Prompt::Confirm {
+            question: "Confirmer verifies readback is correct?".to_string(),
+            default: None,
+        })? {
+            Response::Bool(true) => Ok(StepResult::completed("Oral readback verified")),
+            _ => Err(ActionError::Aborted),
         }
-
-        let result = StepResult::completed("Oral readback verified");
-
-        let mut evidence = StepEvidence::new();
-
-        if !typed.sensitive {
-            evidence.insert("value", value.to_string());
-        }
-
-        if let Some(format) = typed.format {
-            evidence.insert("format", format);
-        }
-        if let Some(chars) = typed.characters {
-            evidence.insert("characters_read", chars);
-        }
-        evidence.insert("verified", true);
-
-        Ok((result, evidence))
     }
 }
 

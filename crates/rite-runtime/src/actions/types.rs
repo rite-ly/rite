@@ -14,7 +14,6 @@ pub enum KeyFormat {
 }
 
 /// Runtime representation of an artifact.
-#[non_exhaustive]
 #[derive(Debug)]
 pub enum ArtifactValue {
     /// Cryptographic key managed by a backend (software, HSM, `YubiKey`).

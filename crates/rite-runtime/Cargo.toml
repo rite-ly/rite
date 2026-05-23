@@ -20,7 +20,7 @@ sha2       = { workspace = true }
 base16ct   = { workspace = true }
 base32ct   = { workspace = true }
 base64ct   = { workspace = true }
-rpassword  = "=7.5.2"
+rpassword  = "=7.5.3"
 
 [dev-dependencies]
 rite-resolver = { path = "../rite-resolver" }

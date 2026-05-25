@@ -5,7 +5,9 @@
 //! AST `Step` type in the handler interface, enabling cleaner separation
 //! between resolution and execution.
 
-use rite_model::{ArtifactId, RoleId, StepId, StepInputs};
+use rite_model::{ArtifactId, ArtifactRef, RoleId, StepId, StepInputs};
+
+use crate::runner::ActionError;
 
 /// Information about a step needed by action handlers.
 ///
@@ -62,6 +64,29 @@ impl StepInfo {
     /// Get the role as a string reference (for display).
     pub fn role_str(&self) -> Option<&str> {
         self.role.as_ref().map(rite_model::RoleId::as_str)
+    }
+
+    /// Look up a named input by key, returning `None` if missing or if the
+    /// step uses a single (positional) input.
+    #[must_use]
+    pub fn named_input(&self, key: &str) -> Option<&ArtifactRef> {
+        self.typed_inputs.as_ref().and_then(|i| i.get(key))
+    }
+
+    /// Look up a required named input, returning a uniform `ActionError`
+    /// when the input is missing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ActionError::Failed`] if the input is missing or if the
+    /// step uses a single (positional) input.
+    pub fn required_named_input(
+        &self,
+        key: &str,
+        action: &'static str,
+    ) -> Result<&ArtifactRef, ActionError> {
+        self.named_input(key)
+            .ok_or_else(|| ActionError::Failed(format!("{action}: missing required input '{key}'")))
     }
 }
 

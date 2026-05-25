@@ -322,9 +322,8 @@ fn apply_concat(args: &[Expression], ctx: &HandlerContext) -> Result<Value, Exec
 
 /// Evaluate an `ExprValue` to a JSON value.
 ///
-/// This is the new entry point for expression evaluation. Unlike `evaluate_json_value`,
-/// this function receives pre-parsed expressions and performs NO string parsing.
-/// All `${...}` patterns have already been parsed by the resolver.
+/// The function receives pre-parsed expressions and performs NO string
+/// parsing. All `${...}` patterns have already been parsed by the resolver.
 ///
 /// # Examples
 ///

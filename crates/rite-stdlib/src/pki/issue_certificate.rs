@@ -1,27 +1,28 @@
-//! Issue X.509 certificate from CSR action.
+//! Issue an X.509 certificate from a PKCS#10 CSR.
 //!
-//! This action takes a PKCS#10 CSR and a backend-managed signing key, assembles a
-//! `TbsCertificate`, signs it via the backend's `SignBackend`, and produces a DER-encoded
+//! Assembles a `TbsCertificate` from the CSR plus a chosen profile,
+//! signs it via the backend's `SignBackend`, and produces a DER-encoded
 //! X.509 certificate.
 //!
-//! ## Design
+//! # Design
 //!
-//! Certificate construction (`TbsCertificate` assembly, DER encoding) lives entirely in
-//! this action. The backend only provides raw signature bytes via `SignBackend::sign`.
-//! This means the action works with any backend implementing `SignBackend` (software,
-//! PKCS#11, `YubiKey`) without each backend needing custom cert-building code.
+//! Certificate construction (`TbsCertificate` assembly, DER encoding)
+//! lives entirely in this action. The backend only provides raw
+//! signature bytes via `SignBackend::sign`. This means the action works
+//! with any backend implementing `SignBackend` (software, PKCS#11,
+//! `YubiKey`) without per-backend cert-building code.
 
 use der::{
     Decode, DecodePem, Encode,
     asn1::{BitString, ObjectIdentifier, OctetString},
 };
-use rite_model::{ActionType, StepInputs};
+use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    ActionCategory, ActionHandler, ActionMetadata, ArtifactValue, ExecutionError, HandlerContext,
-    StepEvidence, StepInfo, StepResult, StepUI, display, resolve_artifact_bytes,
-    resolve_backend_key,
+    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
+    Reporter, StepInfo, StepResult, parse_params, resolve_artifact_bytes, resolve_backend_key,
 };
 use rite_sdk::Backend;
+use serde_json::json;
 use x509_cert::{
     Certificate, TbsCertificate, Version,
     ext::pkix::{
@@ -83,10 +84,10 @@ impl CertProfile {
     }
 }
 
-/// Issue X.509 certificate from CSR action.
+/// Issue an X.509 certificate from a PKCS#10 CSR.
 pub struct IssueCertificateAction;
 
-impl ActionHandler for IssueCertificateAction {
+impl Action for IssueCertificateAction {
     fn metadata(&self) -> ActionMetadata {
         ActionMetadata {
             action_type: ActionType::IssueCertificate,
@@ -101,36 +102,22 @@ impl ActionHandler for IssueCertificateAction {
         step: &StepInfo,
         ctx: &HandlerContext,
         params: &serde_json::Value,
-        ui: &mut dyn StepUI,
+        reporter: &mut Reporter<'_>,
         backend: Option<&mut dyn Backend>,
-    ) -> Result<(StepResult, StepEvidence), ExecutionError> {
-        let typed: IssueCertificateParams = serde_json::from_value(params.clone())
-            .map_err(|e| ExecutionError::InvalidParams(e.to_string()))?;
+    ) -> Result<StepResult, ActionError> {
+        let typed: IssueCertificateParams = parse_params(params)?;
 
         let validity_days = typed.validity_days.unwrap_or(3650);
         let profile = parse_profile(typed.profile.as_deref(), typed.path_len)?;
 
-        let named = step.typed_inputs.as_ref().and_then(StepInputs::as_named);
-
-        let signing_key_ref = named.and_then(|m| m.get("signing_key"));
-        let csr_ref = named.and_then(|m| m.get("csr"));
-        let issuer_cert_ref = named.and_then(|m| m.get("issuer_cert"));
-
-        let signing_key_ref = signing_key_ref.ok_or_else(|| {
-            ExecutionError::InvalidParams(
-                "issue_certificate: 'signing_key' named input is required".to_string(),
-            )
-        })?;
-        let csr_ref = csr_ref.ok_or_else(|| {
-            ExecutionError::InvalidParams(
-                "issue_certificate: 'csr' named input is required".to_string(),
-            )
-        })?;
+        let signing_key_ref = step.required_named_input("signing_key", "issue_certificate")?;
+        let csr_ref = step.required_named_input("csr", "issue_certificate")?;
+        let issuer_cert_ref = step.named_input("issuer_cert");
 
         let signing_key_id = signing_key_ref.artifact_id();
         let (key_backend_name, key_id, key_algorithm, _) =
             resolve_backend_key(ctx.artifacts, &signing_key_id).map_err(|e| {
-                ExecutionError::InvalidParams(format!(
+                ActionError::Failed(format!(
                     "signing_key '{}' must be a BackendKey: {e}",
                     signing_key_ref.display_name()
                 ))
@@ -141,35 +128,34 @@ impl ActionHandler for IssueCertificateAction {
         let csr_id = csr_ref.artifact_id();
         let csr_bytes = resolve_artifact_bytes(ctx.artifacts, &csr_id, csr_ref.property())
             .map_err(|e| {
-                ExecutionError::InvalidParams(format!(
+                ActionError::Failed(format!(
                     "csr '{}' could not be resolved: {e}",
                     csr_ref.display_name()
                 ))
             })?;
 
         let csr = parse_csr(&csr_bytes)
-            .map_err(|e| ExecutionError::InvalidParams(format!("Failed to parse CSR: {e}")))?;
+            .map_err(|e| ActionError::Failed(format!("Failed to parse CSR: {e}")))?;
 
-        display::write_line(ui, "Parsed CSR successfully")?;
-        display::write_line(ui, &format!("Subject: {}", csr.info.subject))?;
+        reporter.log(Icon::Info, "Parsed CSR successfully")?;
+        reporter.log(Icon::Info, format!("Subject: {}", csr.info.subject))?;
 
-        verify_csr_signature(&csr).map_err(ExecutionError::InvalidParams)?;
-        display::write_line(ui, "CSR signature verified")?;
+        verify_csr_signature(&csr).map_err(ActionError::Failed)?;
+        reporter.log(Icon::Checkmark, "CSR signature verified")?;
 
         let issuer_cert_opt = if let Some(issuer_ref) = issuer_cert_ref {
             let issuer_id = issuer_ref.artifact_id();
             let issuer_bytes =
                 resolve_artifact_bytes(ctx.artifacts, &issuer_id, issuer_ref.property()).map_err(
                     |e| {
-                        ExecutionError::InvalidParams(format!(
+                        ActionError::Failed(format!(
                             "issuer_cert '{}' could not be resolved: {e}",
                             issuer_ref.display_name()
                         ))
                     },
                 )?;
-            let issuer_cert = parse_certificate(&issuer_bytes).map_err(|e| {
-                ExecutionError::InvalidParams(format!("Failed to parse issuer cert: {e}"))
-            })?;
+            let issuer_cert = parse_certificate(&issuer_bytes)
+                .map_err(|e| ActionError::Failed(format!("Failed to parse issuer cert: {e}")))?;
             Some(issuer_cert)
         } else {
             None
@@ -181,20 +167,18 @@ impl ActionHandler for IssueCertificateAction {
             let cn = typed.issuer_cn.as_deref().unwrap_or("Root CA");
             format!("CN={cn}")
                 .parse()
-                .map_err(|e| ExecutionError::InvalidParams(format!("Invalid issuer CN: {e}")))?
+                .map_err(|e| ActionError::Failed(format!("Invalid issuer CN: {e}")))?
         };
 
-        let serial = build_serial().map_err(|e| {
-            ExecutionError::InvalidParams(format!("Failed to generate serial number: {e}"))
-        })?;
+        let serial = build_serial()
+            .map_err(|e| ActionError::Failed(format!("Failed to generate serial number: {e}")))?;
 
-        let validity = build_validity(validity_days).map_err(|e| {
-            ExecutionError::InvalidParams(format!("Failed to build validity period: {e}"))
-        })?;
+        let validity = build_validity(validity_days)
+            .map_err(|e| ActionError::Failed(format!("Failed to build validity period: {e}")))?;
 
         let (sign_algorithm, sig_alg, evidence_algorithm) =
             sig_profile_for_algorithm(key_algorithm).map_err(|e| {
-                ExecutionError::InvalidParams(format!("Failed to build signature algorithm: {e}"))
+                ActionError::Failed(format!("Failed to build signature algorithm: {e}"))
             })?;
 
         let issuer_spki = issuer_cert_opt
@@ -203,9 +187,7 @@ impl ActionHandler for IssueCertificateAction {
 
         let san_ext = extract_san_from_csr(&csr);
         let extensions = build_extensions(&profile, &csr.info.public_key, issuer_spki, san_ext)
-            .map_err(|e| {
-                ExecutionError::InvalidParams(format!("Failed to build extensions: {e}"))
-            })?;
+            .map_err(|e| ActionError::Failed(format!("Failed to build extensions: {e}")))?;
 
         let tbs = TbsCertificate {
             version: Version::V3,
@@ -220,90 +202,87 @@ impl ActionHandler for IssueCertificateAction {
             extensions: Some(extensions),
         };
 
-        let tbs_der = tbs.to_der().map_err(|e| ExecutionError::StepFailed {
-            step: step.id.clone(),
-            reason: format!("TBSCertificate DER encoding failed: {e}"),
-        })?;
+        let tbs_der = tbs
+            .to_der()
+            .map_err(|e| ActionError::Failed(format!("TBSCertificate DER encoding failed: {e}")))?;
 
-        display::write_line(ui, "Signing TBSCertificate...")?;
+        reporter.log(Icon::Spinner, "Signing TBSCertificate...")?;
 
-        let backend = backend.ok_or_else(|| ExecutionError::StepFailed {
-            step: step.id.clone(),
-            reason: "Backend required for certificate signing (use MockBackend for dry-run)"
-                .to_string(),
+        let backend = backend.ok_or_else(|| {
+            ActionError::Failed(
+                "Backend required for certificate signing (use MockBackend for dry-run)"
+                    .to_string(),
+            )
         })?;
 
         let backend_fingerprint = backend.fingerprint();
         let backend_name = backend.name().to_string();
 
         if backend_name != key_backend_name {
-            return Err(ExecutionError::StepFailed {
-                step: step.id.clone(),
-                reason: format!(
-                    "Signing key is on backend '{key_backend_name}', but step backend is '{backend_name}'"
-                ),
-            });
+            return Err(ActionError::Failed(format!(
+                "Signing key is on backend '{key_backend_name}', but step backend is '{backend_name}'"
+            )));
         }
 
-        let sign_backend = backend
-            .as_sign_mut()
-            .ok_or_else(|| ExecutionError::StepFailed {
-                step: step.id.clone(),
-                reason: format!("Backend '{backend_name}' does not support signing"),
-            })?;
+        let sign_backend = backend.as_sign_mut().ok_or_else(|| {
+            ActionError::Failed(format!("Backend '{backend_name}' does not support signing"))
+        })?;
 
         let signature_bytes = sign_backend
             .sign(&key_id, &tbs_der, sign_algorithm)
-            .map_err(|e| ExecutionError::StepFailed {
-                step: step.id.clone(),
-                reason: format!("Signing failed: {e}"),
-            })?;
+            .map_err(|e| ActionError::Failed(format!("Signing failed: {e}")))?;
 
         let cert = Certificate {
             tbs_certificate: tbs,
             signature_algorithm: sig_alg,
             signature: BitString::from_bytes(&signature_bytes).map_err(|e| {
-                ExecutionError::StepFailed {
-                    step: step.id.clone(),
-                    reason: format!("Failed to encode signature as BitString: {e}"),
-                }
+                ActionError::Failed(format!("Failed to encode signature as BitString: {e}"))
             })?,
         };
 
-        let cert_der = cert.to_der().map_err(|e| ExecutionError::StepFailed {
+        let cert_der = cert
+            .to_der()
+            .map_err(|e| ActionError::Failed(format!("Certificate DER encoding failed: {e}")))?;
+
+        reporter.log(Icon::Checkmark, "Certificate signed")?;
+
+        reporter.fact(StepFact::BackendOperation {
             step: step.id.clone(),
-            reason: format!("Certificate DER encoding failed: {e}"),
+            kind: "issue_certificate".to_string(),
+            inputs: json!({
+                "algorithm": evidence_algorithm,
+                "profile": profile.canonical_name(),
+                "validity_days": validity_days,
+                "signing_key": signing_key_ref.display_name(),
+                "csr": csr_ref.display_name(),
+            }),
+            outputs: json!({
+                "backend": backend_name,
+                "backend_fingerprint": backend_fingerprint,
+            }),
+            fingerprint: None,
         })?;
-
-        display::write_success(ui, "Certificate signed")?;
-
-        let mut evidence = StepEvidence::new();
-        evidence.insert("algorithm", evidence_algorithm);
-        evidence.insert("profile", profile.canonical_name());
-        evidence.insert("validity_days", validity_days.to_string().as_str());
-        evidence.insert("signing_key", signing_key_ref.display_name().as_str());
-        evidence.insert("csr", csr_ref.display_name().as_str());
-        evidence.insert("backend", backend_name.as_str());
-        evidence.insert("backend_fingerprint", backend_fingerprint.as_str());
 
         let artifact = ArtifactValue::Certificate { der: cert_der };
         let message = "X.509 certificate issued from CSR".to_string();
 
         if let Some(produces) = &step.produces {
-            display::write_line(ui, &format!("Certificate stored as artifact '{produces}'"))?;
-            let result = StepResult::completed_with_artifact(message, produces.clone(), artifact);
-            Ok((result, evidence))
+            reporter.log(
+                Icon::Info,
+                format!("Certificate stored as artifact '{produces}'"),
+            )?;
+            Ok(StepResult::completed_with_artifact(
+                message,
+                produces.clone(),
+                artifact,
+            ))
         } else {
-            let result = StepResult::completed(message);
-            Ok((result, evidence))
+            Ok(StepResult::completed(message))
         }
     }
 }
 
-fn parse_profile(
-    profile: Option<&str>,
-    path_len: Option<u8>,
-) -> Result<CertProfile, ExecutionError> {
+fn parse_profile(profile: Option<&str>, path_len: Option<u8>) -> Result<CertProfile, ActionError> {
     match profile {
         None | Some("end_entity") => Ok(CertProfile::EndEntity),
         Some("root_ca") => Ok(CertProfile::RootCa),
@@ -312,7 +291,7 @@ fn parse_profile(
         }),
         Some("tls_server") => Ok(CertProfile::TlsServer),
         Some("code_signing") => Ok(CertProfile::CodeSigning),
-        Some(other) => Err(ExecutionError::InvalidParams(format!(
+        Some(other) => Err(ActionError::Failed(format!(
             "Unknown certificate profile '{other}'. Supported: root_ca, sub_ca, tls_server, \
              code_signing, end_entity"
         ))),
@@ -485,8 +464,6 @@ const SHA256_DIGEST_INFO_PREFIX: &[u8] = &[
 fn verify_csr_signature(csr: &CertReq) -> Result<(), String> {
     let oid = csr.algorithm.oid;
 
-    // Both branches need these; p256 and rsa crates use different type hierarchies
-    // from x509-cert/der, so a DER round-trip is the only cross-crate bridge available.
     let spki_der = csr
         .info
         .public_key
@@ -559,11 +536,8 @@ fn parse_certificate(bytes: &[u8]) -> Result<Certificate, der::Error> {
 
 /// Build a random 8-byte positive serial number.
 fn build_serial() -> Result<SerialNumber, der::Error> {
-    // Ensure MSB is clear (positive DER integer) and at least one bit is set.
     let value = rand::random::<u64>() & 0x7FFF_FFFF_FFFF_FFFFu64 | 0x0000_0000_0000_0001u64;
     let bytes = value.to_be_bytes();
-    // The OR with 0x1 guarantees at least the last byte is non-zero, so
-    // position() always finds a non-zero byte; default 0 is safe as a fallback.
     let start = bytes.iter().position(|&b| b != 0).unwrap_or(0);
     let serial_bytes = bytes.get(start..).unwrap_or(&bytes);
     SerialNumber::new(serial_bytes)

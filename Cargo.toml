@@ -10,6 +10,7 @@ members = [
     "crates/rite-script",
     "crates/rite-cli",
     "crates/rite-ls",
+    "crates/rite-tui",
 ]
 
 [workspace.package]
@@ -33,6 +34,7 @@ indexmap = { version = "2.14.0", features = ["serde"] }
 chrono = { version = "0.4.44", default-features = false, features = ["clock", "std", "serde"] }
 insta = { version = "1.47.2", features = ["yaml"] }
 secrecy = "0.10.3"
+rpassword = "7.5.2"
 base16ct = { version = "1.0.0", features = ["alloc"] }
 base32ct = { version = "0.3.1", features = ["alloc"] }
 base64ct = { version = "1.8.3", features = ["alloc"] }
@@ -43,6 +45,12 @@ clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = "4.6.2"
 tokio = "1.52.1"
 tower-lsp-server = "0.23.0"
+crossbeam-channel = "0.5.15"
+ratatui = { version = "0.30.0", default-features = false, features = [
+  "crossterm",
+  "unstable-rendered-line-info",
+] }
+crossterm = "0.29.0"
 dashmap = "6.1.0"
 subtle = "2.6.1"
 sysinfo = { version = "0.39.0", default-features = false, features = ["system"] }

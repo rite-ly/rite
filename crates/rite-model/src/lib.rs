@@ -8,6 +8,7 @@
 //!
 //! - [`ir`]: IR types: [`Ceremony`], [`Step`], [`Role`], etc. and typed ID newtypes
 //! - [`expression`]: Expression parsing for `${artifact.name | sha256 | hex}` syntax
+//! - [`transcript`]: Persisted transcript schema (`StepFact` + friends)
 //! - `types` (private): Shared semantic enums: [`ActionType`], [`DutyType`], etc.
 //!
 //! # `BackendConfig`
@@ -36,3 +37,5 @@ pub use ir::{
     OutputId, ParamId, Parameter, PostCeremonyDuty, Role, RoleId, Section, SectionId, Step, StepId,
     StepInputs, SymbolTable,
 };
+
+pub use transcript::{ErrorRecord, Prompt, ResponseRecord, StepFact, StepOutcome, ValidatorSpec};

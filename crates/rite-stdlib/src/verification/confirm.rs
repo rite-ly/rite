@@ -1,18 +1,18 @@
-//! Confirm action - simple confirmation.
+//! `confirm` action, record an operator confirmation.
 
-use rite_model::ActionType;
+use rite_model::{ActionType, Prompt};
 use rite_runtime::{
-    ActionCategory, ActionHandler, ActionMetadata, ExecutionError, HandlerContext, StepEvidence,
-    StepInfo, StepResult, StepUI, display,
+    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, Response,
+    StepInfo, StepResult, parse_params,
 };
 use rite_sdk::Backend;
 
 use crate::params::ConfirmParams;
 
-/// Confirm action - simple confirmation.
+/// Confirm action, pause the ceremony and require a yes/no acknowledgement.
 pub struct ConfirmAction;
 
-impl ActionHandler for ConfirmAction {
+impl Action for ConfirmAction {
     fn metadata(&self) -> ActionMetadata {
         ActionMetadata {
             action_type: ActionType::Confirm,
@@ -23,48 +23,33 @@ impl ActionHandler for ConfirmAction {
 
     fn execute(
         &self,
-        step: &StepInfo,
+        _step: &StepInfo,
         ctx: &HandlerContext,
         params: &serde_json::Value,
-        ui: &mut dyn StepUI,
+        reporter: &mut Reporter<'_>,
         _backend: Option<&mut dyn Backend>,
-    ) -> Result<(StepResult, StepEvidence), ExecutionError> {
-        let typed: ConfirmParams = serde_json::from_value(params.clone())
-            .map_err(|e| ExecutionError::InvalidParams(e.to_string()))?;
+    ) -> Result<StepResult, ActionError> {
+        let typed: ConfirmParams = parse_params(params)?;
 
         let message = typed
             .message
             .as_deref()
             .unwrap_or("Please confirm to proceed");
 
-        display::write_line(ui, message)?;
-        display::write_blank(ui)?;
+        reporter.log(Icon::Info, message)?;
 
         if ctx.dry_run {
-            display::write_dry_run(ui, "auto-confirming")?;
-            let mut evidence = StepEvidence::new();
-            if let Some(msg) = typed.message {
-                evidence.insert("prompt", msg);
-            }
-            evidence.insert("confirmed", true);
-            return Ok((
-                StepResult::completed("Verification confirmed (dry run)"),
-                evidence,
-            ));
+            reporter.log(Icon::Info, "[dry run, auto-confirming]")?;
+            return Ok(StepResult::completed("Verification confirmed (dry run)"));
         }
 
-        if display::prompt_yes_no(ui, "Confirm?")? {
-            let result = StepResult::completed("Verification confirmed");
-
-            let mut evidence = StepEvidence::new();
-            if let Some(msg) = typed.message {
-                evidence.insert("prompt", msg);
-            }
-            evidence.insert("confirmed", true);
-
-            Ok((result, evidence))
-        } else {
-            Err(ExecutionError::StepAborted(step.id.clone()))
+        let response = reporter.prompt(&Prompt::Confirm {
+            question: "Confirm?".to_string(),
+            default: None,
+        })?;
+        match response {
+            Response::Bool(true) => Ok(StepResult::completed("Verification confirmed")),
+            _ => Err(ActionError::Aborted),
         }
     }
 }

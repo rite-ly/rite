@@ -1,19 +1,19 @@
-//! Machine info action - capture device information as evidence.
+//! `machine_info` action, capture device information as evidence.
 
-use rite_model::ActionType;
+use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    ActionCategory, ActionHandler, ActionMetadata, ExecutionError, HandlerContext, StepEvidence,
-    StepInfo, StepResult, StepUI, display,
+    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, StepInfo,
+    StepResult, parse_params,
 };
 use rite_sdk::Backend;
 use sysinfo::System;
 
 use crate::params::MachineInfoParams;
 
-/// Machine info action - capture device information as evidence.
+/// Capture hostname, machine ID, CPU model, OS information, and a
+/// snapshot of platform security features as transcript evidence.
 ///
-/// Captures hostname, machine ID, CPU model, and OS information to prove which
-/// physical device ran the ceremony. The machine ID is hashed with SHA-256 for privacy.
+/// The machine ID (when available) is hashed with SHA-256 for privacy.
 pub struct MachineInfoAction;
 
 fn get_hostname() -> String {
@@ -37,7 +37,7 @@ fn get_machine_id() -> Option<String> {
     None
 }
 
-/// Security feature status, each field is a human-readable status string.
+/// Security feature status. Each field is a human-readable status string.
 struct SecurityFeatures {
     hardware_ram_encryption: String,
     iommu_dma_protection: String,
@@ -51,8 +51,6 @@ fn collect_security_features() -> SecurityFeatures {
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
 
-    // AMD SME: kernel logs "AMD Memory Encryption Features active: SME"
-    // Intel TME: kernel logs "x86/tme: enabled by BIOS" or "x86/mktme: enabled by BIOS"
     let hardware_ram_encryption =
         if dmesg_out.contains("AMD Memory Encryption Features active: SME") {
             "AMD SME active".to_string()
@@ -78,7 +76,6 @@ fn collect_security_features() -> SecurityFeatures {
             }
         };
 
-    // IOMMU: /sys/class/iommu/ entries are created when the kernel assigns IOMMU groups.
     let iommu_count = std::fs::read_dir("/sys/class/iommu").map_or(0, std::iter::Iterator::count);
     let iommu_dma_protection = if iommu_count > 0 {
         format!("active ({iommu_count} groups)")
@@ -149,7 +146,7 @@ fn collect_system_info() -> (
     )
 }
 
-impl ActionHandler for MachineInfoAction {
+impl Action for MachineInfoAction {
     fn metadata(&self) -> ActionMetadata {
         ActionMetadata {
             action_type: ActionType::MachineInfo,
@@ -160,103 +157,115 @@ impl ActionHandler for MachineInfoAction {
 
     fn execute(
         &self,
-        _step: &StepInfo,
+        step: &StepInfo,
         _ctx: &HandlerContext,
         params: &serde_json::Value,
-        ui: &mut dyn StepUI,
+        reporter: &mut Reporter<'_>,
         _backend: Option<&mut dyn Backend>,
-    ) -> Result<(StepResult, StepEvidence), ExecutionError> {
-        let typed: MachineInfoParams = serde_json::from_value(params.clone())
-            .map_err(|e| ExecutionError::InvalidParams(e.to_string()))?;
+    ) -> Result<StepResult, ActionError> {
+        let typed: MachineInfoParams = parse_params(params)?;
 
         if let Some(message) = &typed.message {
-            display::write_line(ui, message)?;
-            display::write_blank(ui)?;
+            reporter.log(Icon::Info, message.as_str())?;
         }
 
-        display::write_line(ui, "Capturing machine information...")?;
-        display::write_blank(ui)?;
+        reporter.log(Icon::Info, "Capturing machine information...")?;
 
         let hostname = get_hostname();
         let machine_id = get_machine_id();
         let (cpu_model, os_name, os_version, kernel_version) = collect_system_info();
 
-        display::write_line(ui, &format!("Hostname:        {hostname}"))?;
+        reporter.log(Icon::Info, format!("Hostname:        {hostname}"))?;
 
         if typed.include_machine_id
             && let Some(ref mid) = machine_id
         {
-            display::write_line(ui, &format!("Machine ID:      {mid}"))?;
+            reporter.log(Icon::Info, format!("Machine ID:      {mid}"))?;
         }
 
         if typed.include_cpu
             && let Some(ref cpu) = cpu_model
         {
-            display::write_line(ui, &format!("CPU:             {cpu}"))?;
+            reporter.log(Icon::Info, format!("CPU:             {cpu}"))?;
         }
 
         if typed.include_os {
             if let Some(ref os) = os_name {
-                display::write_line(ui, &format!("OS:              {os}"))?;
+                reporter.log(Icon::Info, format!("OS:              {os}"))?;
             }
             if let Some(ref osv) = os_version {
-                display::write_line(ui, &format!("OS Version:      {osv}"))?;
+                reporter.log(Icon::Info, format!("OS Version:      {osv}"))?;
             }
             if let Some(ref kv) = kernel_version {
-                display::write_line(ui, &format!("Kernel Version:  {kv}"))?;
+                reporter.log(Icon::Info, format!("Kernel Version:  {kv}"))?;
             }
         }
 
         let security_features = if typed.include_security_features {
             let f = collect_security_features();
-            display::write_line(
-                ui,
-                &format!("RAM Encryption:  {}", f.hardware_ram_encryption),
+            reporter.log(
+                Icon::Info,
+                format!("RAM Encryption:  {}", f.hardware_ram_encryption),
             )?;
-            display::write_line(ui, &format!("DMA Protection:  {}", f.iommu_dma_protection))?;
-            display::write_line(ui, &format!("Page Zeroing:    {}", f.freed_page_zeroing))?;
+            reporter.log(
+                Icon::Info,
+                format!("DMA Protection:  {}", f.iommu_dma_protection),
+            )?;
+            reporter.log(
+                Icon::Info,
+                format!("Page Zeroing:    {}", f.freed_page_zeroing),
+            )?;
             Some(f)
         } else {
             None
         };
 
-        display::write_blank(ui)?;
-
-        let result = StepResult::completed("Machine info captured");
-
-        let mut evidence = StepEvidence::new();
-        evidence.insert("hostname", hostname);
-
+        let mut outputs = serde_json::Map::new();
+        outputs.insert("hostname".to_string(), hostname.into());
         if typed.include_machine_id
             && let Some(mid) = machine_id
         {
-            evidence.insert("machine_id", mid);
+            outputs.insert("machine_id".to_string(), mid.into());
         }
-
         if typed.include_cpu
             && let Some(cpu) = cpu_model
         {
-            evidence.insert("cpu_model", cpu);
+            outputs.insert("cpu_model".to_string(), cpu.into());
         }
-
         if typed.include_os {
             if let Some(os) = os_name {
-                evidence.insert("os_name", os);
+                outputs.insert("os_name".to_string(), os.into());
             }
             if let Some(osv) = os_version {
-                evidence.insert("os_version", osv);
+                outputs.insert("os_version".to_string(), osv.into());
             }
             if let Some(kv) = kernel_version {
-                evidence.insert("kernel_version", kv);
+                outputs.insert("kernel_version".to_string(), kv.into());
             }
         }
-
         if let Some(f) = security_features {
-            evidence.insert("hardware_ram_encryption", f.hardware_ram_encryption);
-            evidence.insert("iommu_dma_protection", f.iommu_dma_protection);
-            evidence.insert("freed_page_zeroing", f.freed_page_zeroing);
+            outputs.insert(
+                "hardware_ram_encryption".to_string(),
+                f.hardware_ram_encryption.into(),
+            );
+            outputs.insert(
+                "iommu_dma_protection".to_string(),
+                f.iommu_dma_protection.into(),
+            );
+            outputs.insert(
+                "freed_page_zeroing".to_string(),
+                f.freed_page_zeroing.into(),
+            );
         }
 
-        Ok((result, evidence))
+        reporter.fact(StepFact::BackendOperation {
+            step: step.id.clone(),
+            kind: "machine_info".to_string(),
+            inputs: serde_json::Value::Null,
+            outputs: serde_json::Value::Object(outputs),
+            fingerprint: None,
+        })?;
+
+        Ok(StepResult::completed("Machine info captured"))
     }
 }

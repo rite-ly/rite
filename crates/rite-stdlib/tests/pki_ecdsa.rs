@@ -1,11 +1,12 @@
-// Integration tests for ECDSA-P256 PKI flow through stdlib action handlers.
+// Integration tests for ECDSA-P256 PKI flow through the stdlib actions.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use openssl::x509::X509;
 use rite_model::{ArtifactId, ArtifactRef, StepId, StepInputs};
 use rite_openssl::OpenSslBackend;
-use rite_runtime::ActionHandler;
-use rite_runtime::{ArtifactValue, ExecutionState, MinimalStepUI, StepInfo};
+use rite_runtime::{
+    Action, ArtifactValue, ExecutionState, StepInfo, test_support::ReporterHarness,
+};
 use rite_stdlib::{GenerateCsrAction, GenerateKeypairAction, IssueCertificateAction};
 use std::collections::HashMap;
 
@@ -50,9 +51,10 @@ fn step_with_inputs(id: &str, produces: &str, inputs: StepInputs) -> StepInfo {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn test_ecdsa_p256_pki_flow() {
     let mut backend = OpenSslBackend::try_new("test").unwrap();
-    let mut ui = MinimalStepUI::silent();
+    let mut harness = ReporterHarness::new();
 
     // ── generate_keypair ────────────────────────────────────────────────────
     let keypair_id = ArtifactId::new("root_ca_keypair");
@@ -60,14 +62,15 @@ fn test_ecdsa_p256_pki_flow() {
     let keygen_params = serde_json::json!({ "algorithm": "ECDSA-P256" });
 
     let mut state = make_state();
-    let (keygen_result, _) = {
+    let keygen_result = {
         let ctx = state.handler_context();
+        let mut reporter = harness.reporter(keygen_step.id.clone());
         GenerateKeypairAction
             .execute(
                 &keygen_step,
                 &ctx,
                 &keygen_params,
-                &mut ui,
+                &mut reporter,
                 Some(&mut backend),
             )
             .expect("generate_keypair ECDSA-P256 must succeed")
@@ -96,10 +99,17 @@ fn test_ecdsa_p256_pki_flow() {
     );
     let csr_params = serde_json::json!({ "subject": "CN=Test Root CA ECDSA" });
 
-    let (csr_result, _) = {
+    let csr_result = {
         let ctx = state.handler_context();
+        let mut reporter = harness.reporter(csr_step.id.clone());
         GenerateCsrAction
-            .execute(&csr_step, &ctx, &csr_params, &mut ui, Some(&mut backend))
+            .execute(
+                &csr_step,
+                &ctx,
+                &csr_params,
+                &mut reporter,
+                Some(&mut backend),
+            )
             .expect("generate_csr with ECDSA-P256 must succeed")
     };
 
@@ -131,10 +141,17 @@ fn test_ecdsa_p256_pki_flow() {
     );
     let cert_params = serde_json::json!({ "profile": "root_ca", "validity_days": 3650 });
 
-    let (cert_result, _) = {
+    let cert_result = {
         let ctx = state.handler_context();
+        let mut reporter = harness.reporter(cert_step.id.clone());
         IssueCertificateAction
-            .execute(&cert_step, &ctx, &cert_params, &mut ui, Some(&mut backend))
+            .execute(
+                &cert_step,
+                &ctx,
+                &cert_params,
+                &mut reporter,
+                Some(&mut backend),
+            )
             .expect("issue_certificate with ECDSA-P256 must succeed")
     };
 
@@ -161,4 +178,6 @@ fn test_ecdsa_p256_pki_flow() {
         "Test Root CA ECDSA",
         "certificate CN must match CSR subject"
     );
+
+    drop(harness);
 }

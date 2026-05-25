@@ -1,50 +1,55 @@
 //! `rite report`: generate an HTML post-ceremony report from a transcript.
 
-use crate::common::resolve_or_exit;
 use clap::Args as ClapArgs;
-use rite_script::{ReportConfig, ReportInput, generate_report_html};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use rite_runtime::read_verified_transcript;
+use rite_script::report::{build_report_data, generate_report_html};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
-    /// Path to the transcript JSONL file or output folder
+    /// Path to the transcript JSONL file or to the output directory
+    /// produced by `rite run` (containing `transcript.jsonl`).
     pub transcript: PathBuf,
-    /// Path to the ceremony YAML file (for role names and post-ceremony duties)
-    #[arg(long)]
-    pub ceremony: Option<PathBuf>,
-    /// Write output to this file (default: stdout)
+    /// Write the report to this file (default: stdout).
     #[arg(long, short)]
     pub output: Option<PathBuf>,
 }
 
-pub fn run(args: Args) {
-    let transcript_path = if args.transcript.is_dir() {
-        rite_runtime::OutputConfig::new(args.transcript.clone()).transcript_path()
-    } else {
-        args.transcript
-    };
+pub fn run(args: &Args) {
+    let jsonl_path = resolve_transcript_path(&args.transcript);
 
-    let transcript = match rite_runtime::read_transcript(&transcript_path) {
-        Ok(t) => t,
-        Err(e) => {
+    let loaded = match read_verified_transcript(&jsonl_path) {
+        Ok(loaded) => loaded,
+        Err(err) => {
             eprintln!(
-                "Failed to read transcript {}: {e}",
-                transcript_path.display()
+                "rite report: could not read transcript at {}: {err}",
+                jsonl_path.display(),
             );
-            std::process::exit(1);
+            std::process::exit(2);
         }
     };
 
-    let resolved = args
-        .ceremony
-        .as_ref()
-        .map(|path| resolve_or_exit(path, None));
+    let data = build_report_data(&loaded.facts, loaded.fingerprint.as_str());
+    let html = generate_report_html(&data);
 
-    let html = generate_report_html(&ReportInput {
-        transcript: &transcript,
-        ceremony: resolved.as_ref(),
-        config: ReportConfig::default(),
-    });
+    if let Some(output) = &args.output {
+        if let Err(err) = fs::write(output, html.as_bytes()) {
+            eprintln!("rite report: failed to write {}: {err}", output.display());
+            std::process::exit(2);
+        }
+        eprintln!("Report written to {}", output.display());
+    } else {
+        print!("{html}");
+    }
+}
 
-    crate::script::write_output(&html, args.output.as_deref());
+/// Accept either the JSONL file directly or the parent output directory.
+fn resolve_transcript_path(input: &Path) -> PathBuf {
+    if input.is_dir() {
+        input.join("transcript.jsonl")
+    } else {
+        input.to_path_buf()
+    }
 }

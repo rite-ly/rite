@@ -1,67 +1,77 @@
 //! Execution runtime for Rite ceremonies.
 //!
-//! `rite-runtime` provides the execution engine for Rite ceremony files.
-//! It defines the action handler interface, the backend registry, the transcript
-//! system, and the executor that drives a resolved ceremony to completion.
+//! `rite-runtime` defines the protocol that frontends use to drive a
+//! ceremony to completion, the executor that walks the ceremony plan,
+//! and the supporting machinery for transcripts and action handlers.
 //!
 //! # Key types
 //!
-//! - [`CeremonyExecutor`]: drives ceremony execution with console I/O
-//! - [`ActionRegistry`] / [`ActionHandler`]: register and look up step handlers
-//! - [`BackendRegistry`] / [`BackendFactory`]: lazy-initializing backend store
-//! - [`StepUI`]: abstraction over user interaction (console, TUI, headless)
-//! - [`TranscriptWriter`]: structured JSONL audit log with hash chaining
+//! - [`Executor`], channel-driven engine that walks a ceremony plan.
+//! - [`Action`] / [`ActionRegistry`], the handler trait and registry.
+//! - [`BackendRegistry`] / [`BackendFactory`], lazy backend store.
+//! - [`Reporter`], action-facing handle for facts, signals, and prompts.
+//! - [`TranscriptSink`], durable JSONL audit log with hash chaining.
 
 #![warn(missing_docs)]
 
 mod actions;
 mod artifact_resolver;
 mod backend;
+mod display;
 mod executor;
 mod expressions;
 mod output_config;
-mod printing;
+mod protocol;
+mod reporter;
+mod runner;
 mod state;
 mod step_info;
-mod step_ui;
+pub mod test_support;
 mod transcript;
-mod transcript_config;
+mod transcript_sink;
 
 // Execution
-pub use executor::{CeremonyExecutor, ExecutionError, ExecutionResult, StepOutcome};
+pub use executor::ExecutionError;
 
 // Actions
-pub use actions::{
-    ActionCategory, ActionHandler, ActionMetadata, ActionRegistry, ArtifactValue, KeyFormat,
-};
-// Display helpers for downstream action handler crates (rite-stdlib, etc.)
-pub use actions::display;
+pub use actions::{ActionCategory, ActionMetadata, ArtifactValue, KeyFormat};
 
 // Backend registry (traits live in `rite-sdk`, not here)
 pub use backend::{BackendFactory, BackendRegistry};
 
-// UI
-pub use step_ui::{ConsoleStepUI, Icon, MinimalStepUI, StepUI};
+// Channel vocabulary for the runtime ↔ frontend boundary.
+// Persisted transcript types (`StepFact`, `Prompt`, `ResponseRecord`, …)
+// live in `rite_model::transcript` and are not re-exported here.
+pub use protocol::{ExecEvent, Icon, PromptId, Response, UiCommand, UiSignal};
 
-// State (needed by `ActionHandler` implementors in downstream crates)
+// Shared formatter for live frontends.
+pub use display::{fact_summary, signal_summary, truncate_for_display};
+
+// Reporter: action-facing handle for facts, signals, and prompts.
+pub use reporter::{Reporter, ReporterError};
+
+// Executor and its action trait.
+pub use runner::{Action, ActionError, ActionRegistry, ExecutionSummary, Executor, parse_params};
+
+// Transcript sink, the durable consumer of `StepFact`s.
+pub use transcript_sink::{
+    InMemorySink, JsonlFileSink, LoadedTranscript, TranscriptFingerprint, TranscriptSink,
+    TranscriptVerified, VerifyError, read_verified_transcript,
+    verify_transcript as verify_step_fact_transcript,
+};
+
+// State (needed by `Action` implementors in downstream crates).
 pub use state::{ExecutionState, HandlerContext, StepResult};
 pub use step_info::StepInfo;
 
-// Transcript
+// Output / fingerprint helpers.
 pub use output_config::OutputConfig;
-pub use transcript::{
-    ArtifactVerification, BinaryInfo, CeremonyInfo, ChainedEvent, EventData, EventOutcome,
-    ExecutionEvent, GENESIS_HASH, ImageManifest, InitrdMeasurements, InstanceInfo,
-    JsonlTranscriptWriter, NullTranscriptWriter, ParsedTranscript, ParticipantRecord, StepEvidence,
-    TRANSCRIPT_SCHEMA_VERSION, TranscriptStatus, TranscriptWriter, VerificationResult,
-    compute_file_fingerprint, compute_fingerprint, read_transcript, verify_transcript,
-};
-pub use transcript_config::TranscriptConfig;
+pub use transcript::{compute_file_fingerprint, compute_fingerprint};
 
-// Expression evaluation (used by action handler implementors)
+// Expression evaluation (used by action implementors).
 pub use expressions::{
     evaluate, evaluate_expr_value, evaluate_expr_value_to_string, value_to_json,
 };
 
-// Artifact resolution (used by action handler implementors)
+// Artifact resolution (used by action implementors).
 pub use artifact_resolver::{resolve_artifact_bytes, resolve_backend_key};

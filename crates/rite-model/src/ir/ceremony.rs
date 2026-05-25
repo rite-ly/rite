@@ -3,9 +3,6 @@
 //! These types represent a fully resolved ceremony, ready for execution.
 //! All references have been validated, execution order computed, and
 //! parameter values merged with defaults.
-//!
-//! Types are named without the `Resolved` prefix used in the `PoC`; they are
-//! the ceremony model, not one of two competing representations.
 
 use super::SymbolTable;
 use super::ids::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};

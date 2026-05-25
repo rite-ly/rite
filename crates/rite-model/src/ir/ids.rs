@@ -11,7 +11,8 @@ use std::hash::Hash;
 macro_rules! define_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Eq, PartialEq, Hash, Debug)]
+        #[derive(Clone, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+        #[serde(transparent)]
         pub struct $name(String);
 
         impl $name {

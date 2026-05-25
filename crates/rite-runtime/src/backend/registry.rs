@@ -29,13 +29,10 @@ use std::collections::HashMap;
 
 /// A closure that creates a concrete backend from its name and config.
 ///
-/// This is the bridge between `rite-runtime` (which defines the registry) and
-/// `rite-stdlib` (which provides the concrete implementations). The CLI
-/// injects `rite_stdlib::backend::create_backend` as this closure.
-///
-/// **Transitional**: This type will be removed when the plugin system is implemented
-/// (v1 target). The registry will spawn plugin processes rather than invoking a factory
-/// closure.
+/// This is the bridge between `rite-runtime` (which defines the
+/// registry) and `rite-stdlib` (which provides the concrete
+/// implementations). The CLI injects `rite_stdlib::backend::create_backend`
+/// as this closure.
 pub type BackendFactory =
     Box<dyn Fn(String, &BackendConfig) -> Result<Box<dyn Backend>, BackendError> + Send + Sync>;
 

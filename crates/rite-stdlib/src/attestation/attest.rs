@@ -1,18 +1,23 @@
-//! Attest action - formal attestation recording.
+//! `attest` action, record a formal attestation by a named role.
 
-use rite_model::ActionType;
+use chrono::Utc;
+use rite_model::{ActionType, Prompt, RoleId, StepFact};
 use rite_runtime::{
-    ActionCategory, ActionHandler, ActionMetadata, ExecutionError, HandlerContext, StepEvidence,
-    StepInfo, StepResult, StepUI, display,
+    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, StepInfo,
+    StepResult, parse_params,
 };
 use rite_sdk::Backend;
 
 use crate::params::AttestParams;
 
-/// Attestation action.
+const DEFAULT_STATEMENT: &str = "I attest to the accuracy of the above";
+
+/// Record a formal attestation. The operator must type the literal
+/// `attest` to confirm; on success a [`StepFact::AttestationRecorded`]
+/// fact is added to the transcript.
 pub struct AttestAction;
 
-impl ActionHandler for AttestAction {
+impl Action for AttestAction {
     fn metadata(&self) -> ActionMetadata {
         ActionMetadata {
             action_type: ActionType::Attest,
@@ -27,7 +32,7 @@ impl ActionHandler for AttestAction {
         }
         if let Some(obj) = params.as_object_mut() {
             obj.entry("statement".to_string())
-                .or_insert_with(|| serde_json::json!("I attest to the accuracy of the above"));
+                .or_insert_with(|| serde_json::json!(DEFAULT_STATEMENT));
         }
     }
 
@@ -36,48 +41,45 @@ impl ActionHandler for AttestAction {
         step: &StepInfo,
         ctx: &HandlerContext,
         params: &serde_json::Value,
-        ui: &mut dyn StepUI,
+        reporter: &mut Reporter<'_>,
         _backend: Option<&mut dyn Backend>,
-    ) -> Result<(StepResult, StepEvidence), ExecutionError> {
-        let typed: AttestParams = serde_json::from_value(params.clone())
-            .map_err(|e| ExecutionError::InvalidParams(e.to_string()))?;
+    ) -> Result<StepResult, ActionError> {
+        let typed: AttestParams = parse_params(params)?;
 
         let statement = typed
             .statement
-            .as_deref()
-            .unwrap_or("I attest to the accuracy of the above");
-
+            .clone()
+            .unwrap_or_else(|| DEFAULT_STATEMENT.to_string());
         let role_ref = step.role_str().unwrap_or("Participant");
         let role_display = ctx.resolve_role_name(role_ref);
 
-        display::write_line(ui, &format!("Statement: \"{statement}\""))?;
-        display::write_blank(ui)?;
+        reporter.log(Icon::Info, format!("Statement: \"{statement}\""))?;
 
         if ctx.dry_run {
-            display::write_dry_run(ui, "auto-attesting")?;
-            let result = StepResult::completed(format!("Attestation recorded for {role_display}"));
-            let evidence = StepEvidence::new();
-            return Ok((result, evidence));
-        }
-
-        display::write_line(ui, "By typing 'attest', you confirm the above statement.")?;
-
-        if display::prompt_exact(ui, "Type 'attest' to confirm", "attest")? {
-            let result = StepResult::completed(format!("Attestation recorded for {role_display}"));
-
-            let mut evidence = StepEvidence::new();
-            if let Some(s) = typed.statement {
-                evidence.insert("statement", s);
-            } else {
-                evidence.insert("statement", "I attest to the accuracy of the above");
-            }
-            if let Some(role) = step.role_str() {
-                evidence.insert("attester_role", role.to_string());
-            }
-
-            Ok((result, evidence))
+            reporter.log(Icon::Info, "[dry run, auto-attesting]")?;
         } else {
-            Err(ExecutionError::StepAborted(step.id.clone()))
+            reporter.log(
+                Icon::Info,
+                "By typing 'attest', you confirm the above statement.",
+            )?;
+            reporter.prompt(&Prompt::Literal {
+                label: "Type 'attest' to confirm".to_string(),
+                expected: "attest".to_string(),
+            })?;
         }
+
+        let role = step
+            .role_str()
+            .map_or_else(|| RoleId::new("participant"), RoleId::new);
+        reporter.fact(StepFact::AttestationRecorded {
+            step: step.id.clone(),
+            role,
+            statement: statement.clone(),
+            at: Utc::now(),
+        })?;
+
+        Ok(StepResult::completed(format!(
+            "Attestation recorded for {role_display}"
+        )))
     }
 }

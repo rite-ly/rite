@@ -18,15 +18,41 @@ pub struct ConfirmParams {
     pub message: Option<String>,
 }
 
+/// Display format for the `oral_readback` action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadbackFormat {
+    /// NATO phonetic alphabet (default).
+    #[default]
+    #[serde(alias = "nato")]
+    NatoPhonetic,
+    /// Hex pairs, grouped by 4 bytes.
+    Hex,
+    /// Raw value, no transformation.
+    Raw,
+}
+
+impl ReadbackFormat {
+    /// Short label suitable for transcript display.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            ReadbackFormat::NatoPhonetic => "nato_phonetic",
+            ReadbackFormat::Hex => "hex",
+            ReadbackFormat::Raw => "raw",
+        }
+    }
+}
+
 /// Params for `oral_readback` action.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OralReadbackParams {
     /// Value to read aloud. Can be a literal string or artifact reference.
     #[serde(default)]
     pub value: Option<String>,
-    /// Display format: `"nato_phonetic"` (default), `"hex"`, `"raw"`.
+    /// Display format. Defaults to NATO phonetic.
     #[serde(default)]
-    pub format: Option<String>,
+    pub format: Option<ReadbackFormat>,
     /// Limit number of characters to read (for long values).
     #[serde(default)]
     pub characters: Option<u32>,

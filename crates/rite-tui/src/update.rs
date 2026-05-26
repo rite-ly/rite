@@ -18,15 +18,34 @@ use crate::model::{
 };
 use crate::msg::{Cmd, Msg};
 
+/// Number of ticks (each [`super::runtime::TICK_INTERVAL`] long,
+/// 100ms today) between successive pops from the drip queue. `1`
+/// gives ~100ms between log lines, which reads as a brisk type-out
+/// for a burst of facts. Set to `0` to apply events immediately and
+/// disable the effect.
+const LOG_DRIP_TICKS: u64 = 1;
+
 /// Apply a [`Msg`] to the model and return any side effects to perform.
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::Tick => {
             model.tick = model.tick.wrapping_add(1);
+            model.now = chrono::Local::now();
+            if drip_due(model)
+                && let Some(event) = model.pending_events.pop_front()
+            {
+                return handle_exec_event(model, event);
+            }
             Vec::new()
         }
         Msg::Key(key) => handle_key(model, key),
-        Msg::Exec(event) => handle_exec_event(model, event),
+        // Don't apply executor events directly: queue them so a burst of
+        // facts from a single step types out one log line at a time.
+        // `Msg::Tick` drains the queue at `LOG_DRIP_TICKS` cadence.
+        Msg::Exec(event) => {
+            model.pending_events.push_back(event);
+            Vec::new()
+        }
         // The forwarder sends Msg::Quit when the executor's channel
         // closes, which happens right after the terminal fact. Don't
         // tear the TUI down underneath the operator before they've
@@ -40,6 +59,14 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         }
         Msg::Resize { .. } | Msg::Mouse(_) => Vec::new(),
     }
+}
+
+/// Whether the current tick should drain one event from the drip queue.
+fn drip_due(model: &Model) -> bool {
+    if model.pending_events.is_empty() {
+        return false;
+    }
+    LOG_DRIP_TICKS == 0 || model.tick.is_multiple_of(LOG_DRIP_TICKS)
 }
 
 fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
@@ -62,29 +89,39 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
         _ => {}
     }
 
-    // Tab and Log-tab scroll keys take precedence over the pending prompt ,
-    // the operator must be able to switch to the Log view and look back
-    // at history mid-prompt without first answering it.
+    // Tab and scroll keys take precedence over the pending prompt: the
+    // operator must be able to look back at history mid-prompt without
+    // first answering it. Both tabs share the same `log_scroll` so the
+    // view position carries across when switching with Tab.
     if matches!(key.code, KeyCode::Tab)
         && let Screen::Step { tab } = &mut model.screen
     {
         *tab = match *tab {
-            StepTab::Step => StepTab::Log,
-            StepTab::Log => StepTab::Step,
+            StepTab::Ceremony => StepTab::Deviations,
+            StepTab::Deviations => StepTab::Ceremony,
         };
         return Vec::new();
     }
-    if let Screen::Step { tab: StepTab::Log } = &model.screen
-        && handle_log_scroll(model, key.code)
+    if matches!(
+        &model.screen,
+        Screen::Step {
+            tab: StepTab::Ceremony
+        }
+    ) && handle_log_scroll(model, key.code)
     {
         return Vec::new();
     }
 
-    // Prompt routing only fires on the Step tab. On the Log tab the
-    // prompt is paused, the operator scrolls history, then switches
-    // back via Tab to answer.
+    // Prompt routing only fires on the Ceremony tab. On the Deviations
+    // tab the prompt is paused; the operator switches back via Tab to
+    // answer.
     if model.pending_prompt.is_some()
-        && matches!(&model.screen, Screen::Step { tab: StepTab::Step })
+        && matches!(
+            &model.screen,
+            Screen::Step {
+                tab: StepTab::Ceremony
+            }
+        )
     {
         return handle_prompt_key(model, key);
     }
@@ -352,6 +389,11 @@ fn handle_fact(model: &mut Model, fact: &StepFact) -> Vec<Cmd> {
         StepFact::CeremonyStarted { name, .. } => {
             model.ceremony_name = Some(name.clone());
         }
+        StepFact::ActStarted { label, .. } => {
+            model.push_log(LogLine::ActDivider {
+                label: label.clone(),
+            });
+        }
         StepFact::StepStarted {
             id,
             label,
@@ -372,10 +414,11 @@ fn handle_fact(model: &mut Model, fact: &StepFact) -> Vec<Cmd> {
         StepFact::StepCompleted { .. } => {
             model.pending_prompt = None;
         }
-        StepFact::DeviationRecorded { step, text, .. } => {
+        StepFact::DeviationRecorded { step, text, at } => {
             model.deviations.push(DeviationView {
                 step: Some(step.clone()),
                 text: text.clone(),
+                at: at.with_timezone(&chrono::Local),
             });
         }
         StepFact::CeremonyCompleted { .. } => {
@@ -391,12 +434,15 @@ fn handle_fact(model: &mut Model, fact: &StepFact) -> Vec<Cmd> {
         _ => {}
     }
 
-    // Mirror the console driver's line in the log feed. Skip StepStarted
-    // (the divider above already conveys the same info).
-    if !matches!(fact, StepFact::StepStarted { .. })
-        && let Some((icon, text)) = fact_summary(fact)
+    // Mirror the console driver's line in the log feed. Skip the facts
+    // that already get a dedicated visual divider so we don't echo them
+    // as a plain log line right after the divider.
+    if !matches!(
+        fact,
+        StepFact::StepStarted { .. } | StepFact::ActStarted { .. }
+    ) && let Some((icon, text)) = fact_summary(fact)
     {
-        model.push_log(LogLine::Entry { icon, text });
+        model.push_entry(icon, text);
     }
 
     Vec::new()
@@ -404,7 +450,7 @@ fn handle_fact(model: &mut Model, fact: &StepFact) -> Vec<Cmd> {
 
 fn handle_signal(model: &mut Model, signal: &UiSignal) -> Vec<Cmd> {
     if let Some((icon, text)) = signal_summary(signal) {
-        model.push_log(LogLine::Entry { icon, text });
+        model.push_entry(icon, text);
     }
     Vec::new()
 }
@@ -418,6 +464,13 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    /// Push an exec event and drain it from the drip queue with a tick
+    /// so unit tests don't have to drive both messages explicitly.
+    fn apply_exec(model: &mut Model, event: ExecEvent) -> Vec<Cmd> {
+        let _ = update(model, Msg::Exec(event));
+        update(model, Msg::Tick)
     }
 
     #[test]
@@ -523,15 +576,15 @@ mod tests {
     #[test]
     fn step_started_pushes_a_divider_into_the_log_feed() {
         let mut model = Model::new();
-        let _ = update(
+        let _ = apply_exec(
             &mut model,
-            Msg::Exec(ExecEvent::Fact(StepFact::StepStarted {
+            ExecEvent::Fact(StepFact::StepStarted {
                 id: StepId::new("s1"),
                 label: "2.1".to_string(),
                 role: rite_model::RoleId::new("crypto_officer"),
                 role_name: "Crypto Officer".to_string(),
                 started_at: Utc::now(),
-            })),
+            }),
         );
         assert!(matches!(model.screen, Screen::Step { .. }));
         match model.log.front() {
@@ -547,9 +600,19 @@ mod tests {
     fn tab_switches_step_tabs() {
         let mut model = Model::new();
         let _ = update(&mut model, Msg::Key(key(KeyCode::Tab)));
-        assert!(matches!(model.screen, Screen::Step { tab: StepTab::Log }));
+        assert!(matches!(
+            model.screen,
+            Screen::Step {
+                tab: StepTab::Deviations
+            }
+        ));
         let _ = update(&mut model, Msg::Key(key(KeyCode::Tab)));
-        assert!(matches!(model.screen, Screen::Step { tab: StepTab::Step }));
+        assert!(matches!(
+            model.screen,
+            Screen::Step {
+                tab: StepTab::Ceremony
+            }
+        ));
     }
 
     #[test]
@@ -562,7 +625,7 @@ mod tests {
             role_name: "Operator".to_string(),
             started_at: Utc::now(),
         };
-        let _ = update(&mut model, Msg::Exec(ExecEvent::Fact(fact)));
+        let _ = apply_exec(&mut model, ExecEvent::Fact(fact));
         let s = model.current_step.expect("current step");
         assert_eq!(s.id, StepId::new("s1"));
         assert_eq!(s.label, "Step One");
@@ -626,7 +689,7 @@ mod tests {
         let fact = StepFact::CeremonyCompleted {
             completed_at: Utc::now(),
         };
-        let _ = update(&mut model, Msg::Exec(ExecEvent::Fact(fact)));
+        let _ = apply_exec(&mut model, ExecEvent::Fact(fact));
         assert!(matches!(
             model.screen,
             Screen::Completed {
@@ -636,11 +699,11 @@ mod tests {
         ));
         assert!(matches!(model.running, RunningState::Done));
 
-        let _ = update(
+        let _ = apply_exec(
             &mut model,
-            Msg::Exec(ExecEvent::Finalized {
+            ExecEvent::Finalized {
                 fingerprint: "sha256:abc".to_string(),
-            }),
+            },
         );
         match &model.screen {
             Screen::Completed {
@@ -652,6 +715,25 @@ mod tests {
     }
 
     #[test]
+    fn exec_event_queues_until_next_tick() {
+        let mut model = Model::new();
+        let signal = UiSignal::LogLine {
+            step: None,
+            icon: rite_runtime::Icon::Info,
+            text: "queued".to_string(),
+        };
+        // Msg::Exec alone leaves the log empty and the queue non-empty.
+        let _ = update(&mut model, Msg::Exec(ExecEvent::Signal(signal)));
+        assert!(model.log.is_empty());
+        assert_eq!(model.pending_events.len(), 1);
+
+        // The next Tick drains one event.
+        let _ = update(&mut model, Msg::Tick);
+        assert!(model.pending_events.is_empty());
+        assert_eq!(model.log.len(), 1);
+    }
+
+    #[test]
     fn log_signal_pushes_log_line() {
         let mut model = Model::new();
         let signal = UiSignal::LogLine {
@@ -659,7 +741,7 @@ mod tests {
             icon: rite_runtime::Icon::Info,
             text: "hi".to_string(),
         };
-        let _ = update(&mut model, Msg::Exec(ExecEvent::Signal(signal)));
+        let _ = apply_exec(&mut model, ExecEvent::Signal(signal));
         assert_eq!(model.log.len(), 1);
         match model.log.front() {
             Some(LogLine::Entry { text, .. }) => assert_eq!(text, "hi"),

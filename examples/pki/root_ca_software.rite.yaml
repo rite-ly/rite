@@ -73,7 +73,7 @@ sections:
       verify_air_gap:
         action: confirm
         with:
-          message: "Confirm the workstation has no active network connections (WiFi, Ethernet, and Bluetooth are all off)"
+          message: "Confirm the workstation has no active network connections"
 
   keygen:
     act: key_generation

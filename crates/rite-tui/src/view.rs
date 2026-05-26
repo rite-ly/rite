@@ -1,19 +1,58 @@
 //! Pure `view(model, frame)`. Renders the current model into a ratatui
 //! frame. Never mutates the model, never touches I/O.
 
+use chrono::{DateTime, Local, Timelike};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use rite_model::Prompt;
 use rite_runtime::Icon;
 
 use crate::model::{LogLine, Model, Screen, StepTab};
 
+/// Shared color palette. Three muted tones plus the terminal-default
+/// text color: titles, borders, and the footer all step back so the
+/// content of each step is what the operator's eye lands on first.
+mod theme {
+    use ratatui::style::{Color, Style};
+
+    /// Body text — terminal default foreground.
+    pub const TEXT: Color = Color::Reset;
+    /// Headings: ceremony name, tabs, box titles, log step dividers, clock.
+    /// Muted blue-grey, deliberately less prominent than body text.
+    pub const TITLE: Color = Color::Rgb(110, 138, 190);
+    /// Box borders. `Color::DarkGray` is ANSI 8, the designated muted /
+    /// secondary companion to the default foreground. It auto-adapts to
+    /// the terminal theme: lighter on dark backgrounds, darker on light
+    /// backgrounds, always distinct from default text (unlike
+    /// `Color::Gray` which is ANSI 7 and aliases the default fg).
+    pub const BORDER: Color = Color::DarkGray;
+    /// Footer hint line. Same grey as borders.
+    pub const FOOTER: Color = Color::DarkGray;
+
+    pub fn text() -> Style {
+        Style::default().fg(TEXT)
+    }
+    pub fn title() -> Style {
+        Style::default().fg(TITLE)
+    }
+    pub fn border() -> Style {
+        Style::default().fg(BORDER)
+    }
+    pub fn footer() -> Style {
+        Style::default().fg(FOOTER)
+    }
+}
+
 /// Spinner animation frames cycled by [`spinner_glyph`] for `Icon::Spinner`.
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Tab labels, rendered as a centered pill row.
+const TAB_LABELS: [&str; 2] = [" Ceremony ", " Deviations "];
+const TAB_DIVIDER: &str = "│";
 
 /// Static glyph for a non-spinner [`Icon`]. The TUI owns its glyph mapping;
 /// the runtime does not provide one so frontends can choose their own.
@@ -27,77 +66,154 @@ fn icon_glyph(icon: Icon) -> &'static str {
     }
 }
 
-/// Render the current model into the given frame.
-pub fn view(model: &Model, frame: &mut Frame<'_>) {
+/// Render the current model into the given frame. Returns the clamped
+/// `log_scroll` value the render actually used so the runtime loop can
+/// cap `model.log_scroll` to the real max (the user's Up key keeps
+/// growing the counter past the visible top otherwise, then takes that
+/// many Down presses before the view moves again).
+pub fn view(model: &Model, frame: &mut Frame<'_>) -> usize {
     let area = frame.area();
     let [header_area, body_area, footer_area] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2), // header
+            Constraint::Length(1), // header (no divider underneath)
             Constraint::Min(0),    // body
             Constraint::Length(1), // footer
         ])
         .areas(area);
 
     render_header(model, frame, header_area);
-    render_body(model, frame, body_area);
+    let applied_scroll = render_body(model, frame, body_area);
     render_footer(model, frame, footer_area);
+    applied_scroll
 }
 
+/// The leading `█` is a brand marker, not content; it picks up the
+/// TITLE color so it reads as part of the heading line.
 fn render_header(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     let title = model
         .ceremony_name
         .as_deref()
-        .unwrap_or("rite: starting ceremony");
-    let spinner = spinner_glyph(model.tick);
-    let spans = vec![
-        Span::styled(spinner, Style::default().add_modifier(Modifier::DIM)),
-        Span::raw(" "),
-        Span::styled(title, Style::default().add_modifier(Modifier::BOLD)),
-    ];
-    let header = Paragraph::new(Line::from(spans)).block(Block::default().borders(Borders::BOTTOM));
-    frame.render_widget(header, area);
+        .unwrap_or("starting ceremony");
+    let version = concat!("Rite v", env!("CARGO_PKG_VERSION"));
+    let version_width = u16::try_from(version.chars().count()).unwrap_or(0);
+
+    let [left_area, right_area] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(version_width)]).areas(area);
+
+    let left = Line::from(vec![
+        Span::styled("█ ", theme::title()),
+        Span::styled(title, theme::title().add_modifier(Modifier::BOLD)),
+    ]);
+    frame.render_widget(Paragraph::new(left), left_area);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(version, theme::title()))),
+        right_area,
+    );
 }
 
-fn render_body(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+fn render_body(model: &Model, frame: &mut Frame<'_>, area: Rect) -> usize {
     match &model.screen {
         Screen::Step { tab } => render_step_screen(model, *tab, frame, area),
-        Screen::DeviationModal { input } => render_deviation_modal(input, frame, area),
-        Screen::AbortConfirm => render_abort_confirm(frame, area),
+        Screen::DeviationModal { input } => {
+            render_deviation_modal(input, frame, area);
+            model.log_scroll
+        }
+        Screen::AbortConfirm => {
+            render_abort_confirm(frame, area);
+            model.log_scroll
+        }
         Screen::Completed { fingerprint, .. } => {
             render_completed(fingerprint.as_deref(), frame, area);
+            model.log_scroll
         }
-        Screen::Failed { reason } => render_failed(reason, frame, area),
+        Screen::Failed { reason } => {
+            render_failed(reason, frame, area);
+            model.log_scroll
+        }
     }
 }
 
-fn render_step_screen(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: Rect) {
+fn render_step_screen(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: Rect) -> usize {
     let [tabs_area, content_area] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .areas(area);
 
-    let selected = match tab {
-        StepTab::Step => 0,
-        StepTab::Log => 1,
-    };
-    let tabs = Tabs::new(vec![Line::from(" Step "), Line::from(" Log ")])
-        .select(selected)
-        .divider(Span::raw("│"))
-        .highlight_style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED));
-    frame.render_widget(tabs, tabs_area);
+    render_tabs_row(model, tab, frame, tabs_area);
 
     match tab {
-        StepTab::Step => render_step(model, frame, content_area),
-        StepTab::Log => render_log(model, frame, content_area),
+        StepTab::Ceremony => render_ceremony(model, frame, content_area),
+        StepTab::Deviations => {
+            render_deviations(model, frame, content_area);
+            model.log_scroll
+        }
     }
+}
+
+/// One-line tabs row with the wall clock right-aligned. The clock has a
+/// blinking colon (off on odd seconds) so the operator sees a heartbeat
+/// even when the executor is idle.
+fn render_tabs_row(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: Rect) {
+    let clock = clock_text(&model.now);
+    let clock_width = u16::try_from(clock.chars().count()).unwrap_or(0);
+
+    // Mirror the clock width on the left so the tabs sit at the visual
+    // center of the full row, not just the center of the leftover space.
+    let [_, tabs_area, clock_area] = Layout::horizontal([
+        Constraint::Length(clock_width),
+        Constraint::Fill(1),
+        Constraint::Length(clock_width),
+    ])
+    .areas(area);
+
+    let selected = match tab {
+        StepTab::Ceremony => 0,
+        StepTab::Deviations => 1,
+    };
+    let mut spans: Vec<Span<'_>> = Vec::with_capacity(TAB_LABELS.len().saturating_mul(2));
+    for (i, label) in TAB_LABELS.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(TAB_DIVIDER, theme::border()));
+        }
+        let style = if i == selected {
+            theme::title().add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else {
+            theme::title()
+        };
+        spans.push(Span::styled(*label, style));
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
+        tabs_area,
+    );
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(clock, theme::title()))).alignment(Alignment::Right),
+        clock_area,
+    );
+}
+
+/// We use ISO 8601 and a numeric offset rather than a locale-formatted
+/// date and time-zone name to stay deterministic and portable;
+/// `chrono`'s `unstable-locales` feature (or `sys-locale`) is the route
+/// if locale-aware formatting becomes a real requirement.
+fn clock_text(now: &DateTime<Local>) -> String {
+    let sep = if now.second().is_multiple_of(2) {
+        ':'
+    } else {
+        ' '
+    };
+    let date = now.format("%Y-%m-%d");
+    let offset = now.format("%:z");
+    format!("{date} {:02}{sep}{:02} {offset}", now.hour(), now.minute())
 }
 
 fn render_deviation_modal(input: &str, frame: &mut Frame<'_>, area: Rect) {
     let lines = vec![
         Line::from(Span::styled(
             "Log a deviation",
-            Style::default().add_modifier(Modifier::BOLD),
+            theme::text().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from("Describe what happened, then press Enter."),
@@ -106,13 +222,13 @@ fn render_deviation_modal(input: &str, frame: &mut Frame<'_>, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "Enter: submit  ·  Esc: cancel",
-            Style::default().add_modifier(Modifier::DIM),
+            theme::footer(),
         )),
     ];
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title("Deviation")),
+            .block(titled_block("Deviation")),
         area,
     );
 }
@@ -121,7 +237,7 @@ fn render_abort_confirm(frame: &mut Frame<'_>, area: Rect) {
     let lines = vec![
         Line::from(Span::styled(
             "Abort the ceremony?",
-            Style::default().add_modifier(Modifier::BOLD),
+            theme::text().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(
@@ -131,53 +247,32 @@ fn render_abort_confirm(frame: &mut Frame<'_>, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "y: abort  ·  n / Esc: cancel",
-            Style::default().add_modifier(Modifier::DIM),
+            theme::footer(),
         )),
     ];
     frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Confirm abort"),
-        ),
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(titled_block("Confirm abort")),
         area,
     );
 }
 
-fn render_step(model: &Model, frame: &mut Frame<'_>, area: Rect) {
-    let [step_header_area, body_area] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // step header (plain inline)
-            Constraint::Min(0),    // prompt + log area
-        ])
-        .areas(area);
-
-    let step_text = if let Some(step) = &model.current_step {
-        format!(
-            "Step {label} ({id}), role: {role}",
-            label = step.label,
-            id = step.id,
-            role = step.role_name,
-        )
-    } else {
-        "Waiting for first step…".to_string()
-    };
-    frame.render_widget(
-        Paragraph::new(step_text).style(Style::default().add_modifier(Modifier::BOLD)),
-        step_header_area,
-    );
-
+/// Ceremony tab: timestamped table of log entries with past-step
+/// dimming, scrollable, plus the pending prompt pinned at the bottom.
+/// This is the operator's working surface during execution.
+fn render_ceremony(model: &Model, frame: &mut Frame<'_>, area: Rect) -> usize {
     if let Some(pending) = &model.pending_prompt {
         let prompt_height = prompt_block_height(pending);
         let [logs_area, prompt_area] = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(prompt_height)])
-            .areas(body_area);
-        render_recent_logs(model, frame, logs_area);
+            .areas(area);
+        let applied = render_ceremony_table(model, frame, logs_area);
         render_prompt(pending, frame, prompt_area);
+        applied
     } else {
-        render_recent_logs(model, frame, body_area);
+        render_ceremony_table(model, frame, area)
     }
 }
 
@@ -196,14 +291,7 @@ fn prompt_block_height(pending: &crate::model::PendingPrompt) -> u16 {
 
 fn render_prompt(pending: &crate::model::PendingPrompt, frame: &mut Frame<'_>, area: Rect) {
     let body: Vec<Line<'_>> = match &pending.prompt {
-        Prompt::Confirm { question, default } => {
-            let hint = match default {
-                Some(true) => " [Y/n]",
-                Some(false) => " [y/N]",
-                None => " [y/n]",
-            };
-            vec![Line::from(format!("{question}{hint}"))]
-        }
+        Prompt::Confirm { question, .. } => vec![Line::from(question.clone())],
         Prompt::Continue { hint } => vec![Line::from(
             hint.clone()
                 .unwrap_or_else(|| "Press Enter to continue".to_string()),
@@ -218,11 +306,6 @@ fn render_prompt(pending: &crate::model::PendingPrompt, frame: &mut Frame<'_>, a
         ],
         _ => vec![Line::from("(unknown prompt type)")],
     };
-    let title = if pending.rejection.is_some() {
-        "Prompt (last attempt rejected)"
-    } else {
-        "Prompt"
-    };
     let mut lines = body;
     if let Some(reason) = &pending.rejection {
         lines.push(Line::from(Span::styled(
@@ -233,114 +316,201 @@ fn render_prompt(pending: &crate::model::PendingPrompt, frame: &mut Frame<'_>, a
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title(title)),
+            .block(plain_block().title(prompt_title(pending))),
         area,
     );
 }
 
-/// Format a [`LogLine`] as a styled ratatui line.
+/// Compose the prompt box title. `Prompt` proper is shown in the muted
+/// title color; the `[y/n]` hint (Confirm prompts) and the "(last
+/// attempt rejected)" suffix step further back into footer gray so the
+/// word `Prompt` reads as the heading and the rest as annotation.
+fn prompt_title(pending: &crate::model::PendingPrompt) -> Line<'_> {
+    let mut spans = vec![Span::styled("Prompt", theme::title())];
+    if let Prompt::Confirm { default, .. } = &pending.prompt {
+        let hint = match default {
+            Some(true) => "Y/n",
+            Some(false) => "y/N",
+            None => "y/n",
+        };
+        spans.push(Span::styled(format!(" [{hint}]"), theme::footer()));
+    }
+    if pending.rejection.is_some() {
+        spans.push(Span::styled(" (last attempt rejected)", theme::footer()));
+    }
+    Line::from(spans)
+}
+
+/// Render a [`LogLine`] as a single styled line in the Ceremony table.
 ///
-/// `tick` advances the spinner glyph for `Icon::Spinner` entries.
-/// `inner_width` is the available width *inside* the surrounding block,
-/// used to size step-divider rule strokes.
-fn log_line(line: &LogLine, tick: u64, inner_width: u16) -> Line<'_> {
+/// `Entry` becomes a `step | time | message` columnar row.
+/// `StepDivider` and `ActDivider` become full-width section markers —
+/// the dividers carry section structure that the per-row step column
+/// can't (role for steps, name for acts), and act dividers use a
+/// double rule to convey the act-contains-steps hierarchy.
+///
+/// `current` selects active vs. muted styling: current-section content
+/// keeps its full color; past content drops to footer gray.
+fn log_table_row(line: &LogLine, tick: u64, current: bool, inner_width: u16) -> Line<'_> {
     match line {
-        LogLine::Entry { icon, text } => {
+        LogLine::Entry {
+            icon,
+            text,
+            step,
+            at,
+        } => {
             let prefix = match icon {
                 Icon::Spinner => spinner_glyph(tick),
                 other => icon_glyph(*other),
             };
-            Line::from(format!("{prefix} {text}"))
+            let step_col = format!("{:>STEP_COL_WIDTH$}", step.as_deref().unwrap_or("·"));
+            let time_col = at.format("%H:%M:%S").to_string();
+            let message_style = if current {
+                theme::text()
+            } else {
+                theme::footer()
+            };
+            Line::from(vec![
+                Span::styled(step_col, theme::footer()),
+                Span::raw("  "),
+                Span::styled(time_col, theme::footer()),
+                Span::raw("  "),
+                Span::styled(format!("{prefix} {text}"), message_style),
+            ])
         }
-        LogLine::StepDivider { label, role_name } => {
-            let title = format!(" {label} · {role_name} ");
-            let pad =
-                usize::from(inner_width).saturating_sub(title.chars().count().saturating_add(2));
-            let left = "── ";
-            let right_len = pad.saturating_sub(left.chars().count());
-            let right: String = std::iter::repeat_n('─', right_len).collect();
-            Line::from(Span::styled(
-                format!("{left}{title}{right}"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ))
+        LogLine::StepDivider { label, role_name } => divider_line(
+            &format!("Step {label} · {role_name}"),
+            '─',
+            current,
+            inner_width,
+        ),
+        LogLine::ActDivider { label } => {
+            divider_line(&format!("Act: {label}"), '═', current, inner_width)
         }
     }
 }
 
-/// Build a wrapping [`Paragraph`] from the bounded log feed, sized to
-/// the visible area and scrolled by `lines_from_tail` wrapped lines.
-///
-/// Returns `(paragraph, max_scroll)` so the caller can render the title
-/// with the actual (clamped) scroll value.
-fn log_paragraph<'a>(
-    model: &'a Model,
-    area: Rect,
-    title: impl Into<Line<'a>>,
+/// Width of the step column in the table view. Five characters fits
+/// the longest realistic label (e.g. `10.12`) and a single dot fallback.
+const STEP_COL_WIDTH: usize = 5;
+
+/// Build a section divider line: `<rule> <label> <rule…>` filling
+/// `inner_width` cells. `rule` controls the rule glyph (`─` for steps,
+/// `═` for acts). Style is TITLE blue + bold when `current`, footer
+/// gray + bold for past sections.
+fn divider_line(label: &str, rule: char, current: bool, inner_width: u16) -> Line<'static> {
+    let style = if current {
+        theme::title().add_modifier(Modifier::BOLD)
+    } else {
+        theme::footer().add_modifier(Modifier::BOLD)
+    };
+    let middle = format!(" {label} ");
+    let left = format!("{rule}{rule} ");
+    let used = left.chars().count().saturating_add(middle.chars().count());
+    let right_len = usize::from(inner_width).saturating_sub(used);
+    let right: String = std::iter::repeat_n(rule, right_len).collect();
+    Line::from(Span::styled(format!("{left}{middle}{right}"), style))
+}
+
+/// Wrap `lines` into a paragraph scrolled by `lines_from_tail` (counted
+/// from the tail of the feed). Returns the paragraph plus the *clamped*
+/// scroll value so callers can show a scroll indicator. The paragraph
+/// is returned without a block; callers wrap it themselves.
+fn scrolled_paragraph(
+    lines: Vec<Line<'_>>,
+    inner_width: u16,
+    visible_height: u16,
     lines_from_tail: usize,
-) -> (Paragraph<'a>, usize) {
-    let inner_width = area.width.saturating_sub(2);
-    let visible_height = usize::from(area.height).saturating_sub(2);
-    let lines: Vec<Line<'a>> = model
-        .log
-        .iter()
-        .map(|line| log_line(line, model.tick, inner_width))
-        .collect();
-    let paragraph = Paragraph::new(Text::from(lines))
-        .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::ALL).title(title));
+) -> (Paragraph<'_>, usize) {
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     let total = paragraph.line_count(inner_width);
-    let max_scroll = total.saturating_sub(visible_height);
+    let max_scroll = total.saturating_sub(usize::from(visible_height));
     let scroll = lines_from_tail.min(max_scroll);
     let scroll_y = u16::try_from(max_scroll.saturating_sub(scroll)).unwrap_or(u16::MAX);
     (paragraph.scroll((scroll_y, 0)), scroll)
 }
 
-fn render_recent_logs(model: &Model, frame: &mut Frame<'_>, area: Rect) {
-    let (paragraph, _) = log_paragraph(model, area, "Recent", 0);
-    frame.render_widget(paragraph, area);
+fn render_ceremony_table(model: &Model, frame: &mut Frame<'_>, area: Rect) -> usize {
+    let inner_width = area.width.saturating_sub(2);
+    let visible_height = area.height.saturating_sub(2);
+    // Per-line currency:
+    //  - an act/step divider is "current" iff it is the most recent of
+    //    its kind — acts span multiple steps so the current act stays
+    //    bright even when newer step dividers land beneath it
+    //  - entries are current iff at or after the most recent boundary
+    //    (a step divider if any, else the most recent act divider)
+    let last_act = model
+        .log
+        .iter()
+        .rposition(|l| matches!(l, LogLine::ActDivider { .. }));
+    let last_step = model
+        .log
+        .iter()
+        .rposition(|l| matches!(l, LogLine::StepDivider { .. }));
+    let entry_boundary = last_step.or(last_act).unwrap_or(0);
+
+    let lines: Vec<Line<'_>> = model
+        .log
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let current = match line {
+                LogLine::ActDivider { .. } => Some(i) == last_act,
+                LogLine::StepDivider { .. } => Some(i) == last_step,
+                LogLine::Entry { .. } => i >= entry_boundary,
+            };
+            log_table_row(line, model.tick, current, inner_width)
+        })
+        .collect();
+    let (paragraph, applied_scroll) =
+        scrolled_paragraph(lines, inner_width, visible_height, model.log_scroll);
+    frame.render_widget(paragraph.block(scrollable_box(applied_scroll)), area);
+    applied_scroll
 }
 
-fn render_log(model: &Model, frame: &mut Frame<'_>, area: Rect) {
-    let [log_area, dev_area] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-        .areas(area);
+/// `plain_block` with the standard scroll-position indicator on the
+/// bottom border when the operator has scrolled back into history.
+/// Tailing logs stay quiet.
+fn scrollable_box(applied_scroll: usize) -> Block<'static> {
+    let block = plain_block();
+    if applied_scroll == 0 {
+        return block;
+    }
+    let noun = if applied_scroll == 1 { "line" } else { "lines" };
+    let label = format!(" scrolled {applied_scroll} {noun} ");
+    block.title_bottom(Line::from(Span::styled(label, theme::title())).centered())
+}
 
-    let (paragraph, applied_scroll) = log_paragraph(model, log_area, "Log", model.log_scroll);
-    let title = if applied_scroll == 0 {
-        Line::from("Log")
-    } else {
-        Line::from(format!(
-            "Log  (scrolled {applied_scroll} lines · End: tail)"
-        ))
-    };
-    frame.render_widget(
-        paragraph.block(Block::default().borders(Borders::ALL).title(title)),
-        log_area,
-    );
-
+/// Deviations tab. Currently just the deviations list; reserved for
+/// future side content (operator notes, attestation summary).
+fn render_deviations(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     let dev_lines: Vec<Line<'_>> = model
         .deviations
         .iter()
         .map(|d| {
-            let line = match &d.step {
+            let time = d.at.format("%H:%M:%S").to_string();
+            let body = match &d.step {
                 Some(step) => format!("⚠ ({step}) {}", d.text),
                 None => format!("⚠ {}", d.text),
             };
-            Line::from(line)
+            Line::from(vec![
+                Span::styled(time, theme::footer()),
+                Span::raw("  "),
+                Span::raw(body),
+            ])
         })
         .collect();
     frame.render_widget(
         Paragraph::new(Text::from(dev_lines))
             .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title("Deviations")),
-        dev_area,
+            .block(titled_block("Deviations")),
+        area,
     );
 }
 
 fn render_completed(fingerprint: Option<&str>, frame: &mut Frame<'_>, area: Rect) {
-    let bold = Style::default().add_modifier(Modifier::BOLD);
-    let dim = Style::default().add_modifier(Modifier::DIM);
+    let bold = theme::text().add_modifier(Modifier::BOLD);
+    let dim = theme::footer();
 
     let mut lines = vec![
         Line::from(Span::styled("Transcript fingerprint", bold)),
@@ -359,7 +529,7 @@ fn render_completed(fingerprint: Option<&str>, frame: &mut Frame<'_>, area: Rect
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title("Completed")),
+            .block(titled_block("Completed")),
         area,
     );
 }
@@ -402,7 +572,7 @@ fn render_failed(reason: &str, frame: &mut Frame<'_>, area: Rect) {
     let lines = vec![
         Line::from(Span::styled(
             "Ceremony failed",
-            Style::default().add_modifier(Modifier::BOLD),
+            theme::text().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(reason.to_string()),
@@ -412,7 +582,7 @@ fn render_failed(reason: &str, frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title("Failed")),
+            .block(titled_block("Failed")),
         area,
     );
 }
@@ -423,25 +593,36 @@ fn render_footer(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         Screen::AbortConfirm => "y: abort  ·  n / Esc: cancel",
         Screen::Completed { .. } | Screen::Failed { .. } => "q / Enter / Esc: exit",
         Screen::Step { tab } => match (tab, model.pending_prompt.is_some()) {
-            (StepTab::Step, true) => "Enter: submit  ·  Tab: log  ·  Esc: abort  ·  Ctrl+C: quit",
-            (StepTab::Step, false) => "Tab: log  ·  d: deviation  ·  Esc / a: abort  ·  q: quit",
-            (StepTab::Log, true) => {
-                "↑/↓ · PgUp/PgDn: scroll  ·  Home/End: top/tail  ·  Tab: step  ·  Esc: abort"
+            (StepTab::Ceremony, true) => {
+                "Enter: submit  ·  ↑/↓ · PgUp/PgDn: scroll  ·  Tab: deviations  ·  Esc: abort"
             }
-            (StepTab::Log, false) => {
-                "↑/↓ · PgUp/PgDn: scroll  ·  Home/End: top/tail  ·  \
-                 Tab: step  ·  d: deviation  ·  Esc / a: abort  ·  q: quit"
+            (StepTab::Ceremony, false) => {
+                "↑/↓ · PgUp/PgDn: scroll  ·  Tab: deviations  ·  \
+                 d: deviation  ·  Esc / a: abort  ·  q: quit"
+            }
+            (StepTab::Deviations, _) => {
+                "Tab: ceremony  ·  d: deviation  ·  Esc / a: abort  ·  q: quit"
             }
         },
     };
-    frame.render_widget(
-        Paragraph::new(hint).style(Style::default().add_modifier(Modifier::DIM)),
-        area,
-    );
+    frame.render_widget(Paragraph::new(hint).style(theme::footer()), area);
 }
 
 fn spinner_glyph(tick: u64) -> &'static str {
     // SPINNER_FRAMES has 10 entries, so the modulo always fits in usize.
     let idx = usize::try_from(tick.rem_euclid(SPINNER_FRAMES.len() as u64)).unwrap_or(0);
     SPINNER_FRAMES.get(idx).copied().unwrap_or("·")
+}
+
+/// Bordered block with no title. The single place where the border
+/// color decision lives, so every box in the TUI stays consistent.
+fn plain_block() -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::border())
+}
+
+/// [`plain_block`] with a `&str` title styled in the muted title color.
+fn titled_block(title: &str) -> Block<'_> {
+    plain_block().title(Line::from(Span::styled(title.to_string(), theme::title())))
 }

@@ -16,8 +16,6 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 crossbeam-channel = { workspace = true }
 secrecy = { workspace = true }
-
-[dev-dependencies]
 chrono = { workspace = true }
 
 [lints]

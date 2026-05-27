@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use rite_model::Prompt;
-use rite_runtime::Icon;
+use rite_runtime::{Icon, MaterialOverview, MaterialOverviewKind};
 
 use crate::model::{LogLine, Model, Screen, StepTab};
 
@@ -51,7 +51,7 @@ mod theme {
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Tab labels, rendered as a centered pill row.
-const TAB_LABELS: [&str; 2] = [" Ceremony ", " Deviations "];
+const TAB_LABELS: [&str; 3] = [" Overview ", " Ceremony ", " Deviations "];
 const TAB_DIVIDER: &str = "│";
 
 /// Static glyph for a non-spinner [`Icon`]. The TUI owns its glyph mapping;
@@ -143,6 +143,10 @@ fn render_step_screen(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: 
     render_tabs_row(model, tab, frame, tabs_area);
 
     match tab {
+        StepTab::Overview => {
+            render_overview(model, frame, content_area);
+            model.log_scroll
+        }
         StepTab::Ceremony => render_ceremony(model, frame, content_area),
         StepTab::Deviations => {
             render_deviations(model, frame, content_area);
@@ -168,8 +172,9 @@ fn render_tabs_row(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: Rec
     .areas(area);
 
     let selected = match tab {
-        StepTab::Ceremony => 0,
-        StepTab::Deviations => 1,
+        StepTab::Overview => 0,
+        StepTab::Ceremony => 1,
+        StepTab::Deviations => 2,
     };
     let mut spans: Vec<Span<'_>> = Vec::with_capacity(TAB_LABELS.len().saturating_mul(2));
     for (i, label) in TAB_LABELS.iter().enumerate() {
@@ -481,6 +486,130 @@ fn scrollable_box(applied_scroll: usize) -> Block<'static> {
     block.title_bottom(Line::from(Span::styled(label, theme::title())).centered())
 }
 
+/// Overview tab: description, step count, declared materials. Does
+/// **not** render the pending prompt; the ceremony-start `Continue` is
+/// answered from the Ceremony tab, so the operator's path is "review
+/// here, switch tab, confirm".
+fn render_overview(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    if let Some(desc) = &model.ceremony_description {
+        lines.push(Line::from(Span::styled(
+            "Description",
+            theme::title().add_modifier(Modifier::BOLD),
+        )));
+        append_prose_paragraphs(&mut lines, desc, 0, theme::text());
+        lines.push(Line::from(""));
+    }
+    if let Some(count) = model.ceremony_step_count {
+        let noun = if count == 1 { "step" } else { "steps" };
+        lines.push(Line::from(Span::styled(
+            format!("{count} {noun} in this ceremony"),
+            theme::footer(),
+        )));
+        lines.push(Line::from(""));
+    }
+    lines.push(Line::from(Span::styled(
+        "Materials",
+        theme::title().add_modifier(Modifier::BOLD),
+    )));
+    if model.ceremony_materials.is_empty() {
+        lines.push(Line::from(Span::styled("(none declared)", theme::footer())));
+    } else {
+        for material in &model.ceremony_materials {
+            lines.extend(material_lines(material));
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(plain_block()),
+        area,
+    );
+}
+
+/// Render one material as a heading line plus an optional dimmed
+/// description, so the overview reads as a scannable bulleted list.
+fn material_lines(material: &MaterialOverview) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![
+        Span::raw("• "),
+        Span::styled(
+            material.display_title().to_string(),
+            theme::text().add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(kind_summary(&material.kind), theme::footer()),
+    ])];
+    if let Some(desc) = &material.description {
+        append_prose_paragraphs(&mut lines, desc, 2, theme::footer());
+    }
+    lines
+}
+
+/// One-line summary of a material kind, joined with `" · "`.
+fn kind_summary(kind: &MaterialOverviewKind) -> String {
+    match kind {
+        MaterialOverviewKind::Digital => "digital".to_string(),
+        MaterialOverviewKind::Physical {
+            identifier,
+            quantity,
+        } => {
+            let mut s = String::from("physical");
+            if let Some(q) = quantity {
+                use std::fmt::Write as _;
+                let _ = write!(s, " · ×{q}");
+            }
+            if let Some(id) = identifier {
+                s.push_str(" · ");
+                s.push_str(id);
+            }
+            s
+        }
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Render an author-written prose blob (e.g. a YAML `description: |` block)
+/// as a sequence of Markdown-style paragraphs:
+///
+/// * a single newline is treated as a soft break and folded to a space, so
+///   line breaks added for source readability don't surface in the UI
+/// * a blank line is a paragraph boundary and produces an empty `Line` in
+///   the output
+///
+/// Each paragraph is wrapped independently by ratatui at render time.
+/// `indent` is the number of leading spaces prepended to every output
+/// line (used to nest material descriptions under their bullet).
+fn append_prose_paragraphs(out: &mut Vec<Line<'static>>, text: &str, indent: usize, style: Style) {
+    let prefix: String = " ".repeat(indent);
+    let mut first = true;
+    for paragraph in text.split("\n\n") {
+        let mut folded = String::with_capacity(paragraph.len());
+        for line in paragraph.lines().map(str::trim_end) {
+            if !folded.is_empty() {
+                folded.push(' ');
+            }
+            folded.push_str(line);
+        }
+        let trimmed = folded.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !first {
+            out.push(Line::from(""));
+        }
+        first = false;
+        let spans = if indent == 0 {
+            vec![Span::styled(trimmed.to_string(), style)]
+        } else {
+            vec![
+                Span::raw(prefix.clone()),
+                Span::styled(trimmed.to_string(), style),
+            ]
+        };
+        out.push(Line::from(spans));
+    }
+}
+
 /// Deviations tab. Currently just the deviations list; reserved for
 /// future side content (operator notes, attestation summary).
 fn render_deviations(model: &Model, frame: &mut Frame<'_>, area: Rect) {
@@ -591,18 +720,16 @@ fn render_footer(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     let hint = match &model.screen {
         Screen::DeviationModal { .. } => "Enter: submit  ·  Backspace: edit  ·  Esc: cancel",
         Screen::AbortConfirm => "y: abort  ·  n / Esc: cancel",
-        Screen::Completed { .. } | Screen::Failed { .. } => "q / Enter / Esc: exit",
+        Screen::Completed { .. } | Screen::Failed { .. } => "Enter / Esc: exit",
         Screen::Step { tab } => match (tab, model.pending_prompt.is_some()) {
+            (StepTab::Overview, _) => "Tab: ceremony  ·  Esc: abort",
             (StepTab::Ceremony, true) => {
                 "Enter: submit  ·  ↑/↓ · PgUp/PgDn: scroll  ·  Tab: deviations  ·  Esc: abort"
             }
             (StepTab::Ceremony, false) => {
-                "↑/↓ · PgUp/PgDn: scroll  ·  Tab: deviations  ·  \
-                 d: deviation  ·  Esc / a: abort  ·  q: quit"
+                "↑/↓ · PgUp/PgDn: scroll  ·  Tab: deviations  ·  Esc: abort"
             }
-            (StepTab::Deviations, _) => {
-                "Tab: ceremony  ·  d: deviation  ·  Esc / a: abort  ·  q: quit"
-            }
+            (StepTab::Deviations, _) => "d: log deviation  ·  Tab: overview  ·  Esc: abort",
         },
     };
     frame.render_widget(Paragraph::new(hint).style(theme::footer()), area);

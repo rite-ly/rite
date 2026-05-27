@@ -55,11 +55,22 @@ pub fn run(cmd_tx: &Sender<UiCommand>, event_rx: Receiver<ExecEvent>) -> io::Res
     spawn_exec_forwarder(event_rx, msg_tx);
 
     let mut model = Model::new();
-    terminal.draw(|frame| view(&model, frame))?;
+    let mut applied_scroll = 0usize;
+    terminal.draw(|frame| {
+        applied_scroll = view(&model, frame);
+    })?;
+    model.log_scroll = applied_scroll;
+    // Tracks the most recently rendered header-clock signature so Tick
+    // messages can skip redraws that wouldn't change a single cell —
+    // the colon blink and the minute roll-over are the only sub-frame
+    // animations on a typical idle screen.
+    let mut last_clock_key = Some(model.clock_display_key());
 
     'main: loop {
         let Ok(msg) = msg_rx.recv() else { break 'main };
-        let needs_redraw = !matches!(msg, Msg::Tick) || model.needs_animation();
+        let is_tick = matches!(msg, Msg::Tick);
+        let is_exec = matches!(msg, Msg::Exec(_));
+        let pending_before = model.pending_events.len();
 
         for cmd in update(&mut model, msg) {
             match cmd {
@@ -71,9 +82,28 @@ pub fn run(cmd_tx: &Sender<UiCommand>, event_rx: Receiver<ExecEvent>) -> io::Res
                 Cmd::Quit => break 'main,
             }
         }
+        let drip_applied = model.pending_events.len() < pending_before;
+
+        let needs_redraw = if is_tick {
+            let key = model.clock_display_key();
+            Some(key) != last_clock_key || model.has_active_spinner() || drip_applied
+        } else if is_exec {
+            // Pure queue push, nothing visible changed yet — the next
+            // tick will drain and redraw.
+            false
+        } else {
+            true
+        };
 
         if needs_redraw {
-            terminal.draw(|frame| view(&model, frame))?;
+            last_clock_key = Some(model.clock_display_key());
+            terminal.draw(|frame| {
+                applied_scroll = view(&model, frame);
+            })?;
+            // Cap log_scroll at what the view actually rendered, so the
+            // operator never accumulates "phantom scroll" past the top
+            // that has to be undone before the view starts moving back.
+            model.log_scroll = applied_scroll;
         }
     }
 

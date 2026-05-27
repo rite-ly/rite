@@ -2,8 +2,9 @@
 
 use std::collections::VecDeque;
 
+use chrono::{DateTime, Local, Timelike};
 use rite_model::{Prompt, StepId};
-use rite_runtime::{Icon, PromptId};
+use rite_runtime::{ExecEvent, Icon, PromptId};
 
 /// Maximum length of a deviation note. Anything longer is rejected before
 /// the command is sent, keeps the transcript line readable.
@@ -15,7 +16,7 @@ pub(crate) const LOG_CAPACITY: usize = 200;
 /// Top-level UI state. A single [`Screen`] discriminant captures what
 /// the user is looking at, so the borrow checker enforces that we can't
 /// render two contradictory views.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Model {
     /// Ceremony name, as soon as `CeremonyStarted` arrives.
     pub ceremony_name: Option<String>,
@@ -36,17 +37,28 @@ pub struct Model {
     pub running: RunningState,
     /// Frame counter for spinner animation. Advances on every `Tick`.
     pub tick: u64,
+    /// Wall-clock snapshot, refreshed on every `Tick`. Rendered in the
+    /// header bar; kept in the model so `view` stays pure and snapshot
+    /// tests can pin a deterministic time.
+    pub now: DateTime<Local>,
     /// Log-tab scroll offset, counted in lines *up from the tail*.
     /// `0` = following the tail; positive = scrolled into history.
     /// Clamped to `log.len()` whenever the feed is pushed or evicted.
     pub log_scroll: usize,
+    /// FIFO of executor events waiting to be applied. `Msg::Exec` pushes
+    /// here; `Msg::Tick` pops at most one per `LOG_DRIP_TICKS` ticks so
+    /// a burst of facts from a single step types out one line at a time
+    /// instead of landing in the log all at once.
+    pub(crate) pending_events: VecDeque<ExecEvent>,
 }
 
 impl Default for Model {
     fn default() -> Self {
         Self {
             ceremony_name: None,
-            screen: Screen::Step { tab: StepTab::Step },
+            screen: Screen::Step {
+                tab: StepTab::Ceremony,
+            },
             return_to: None,
             current_step: None,
             log: VecDeque::with_capacity(LOG_CAPACITY),
@@ -54,7 +66,9 @@ impl Default for Model {
             pending_prompt: None,
             running: RunningState::Active,
             tick: 0,
+            now: Local::now(),
             log_scroll: 0,
+            pending_events: VecDeque::new(),
         }
     }
 }
@@ -92,6 +106,20 @@ impl Model {
         }
     }
 
+    /// Push a regular log entry, tagging it with the current step label
+    /// and the model's wall-clock snapshot so the Ceremony tab can render
+    /// a per-row step and timestamp column.
+    pub(crate) fn push_entry(&mut self, icon: Icon, text: String) {
+        let step = self.current_step.as_ref().map(|s| s.label.clone());
+        let at = self.now;
+        self.push_log(LogLine::Entry {
+            icon,
+            text,
+            step,
+            at,
+        });
+    }
+
     /// Push a modal in front of the current screen, remembering what to
     /// return to when it is dismissed. Idempotent if already inside a modal.
     pub(crate) fn open_modal(&mut self, modal: Screen) {
@@ -108,15 +136,12 @@ impl Model {
         }
     }
 
-    /// Whether anything currently rendered changes between ticks.
-    ///
-    /// Used by the main loop to skip a `terminal.draw` on `Msg::Tick` when
-    /// the frame would be byte-identical anyway, keeps the TUI idle at 0%
-    /// CPU while waiting on a prompt.
+    /// Whether the log feed currently ends with an active spinner that
+    /// must keep animating. Invariant: `push_log` converts any prior
+    /// trailing `Icon::Spinner` to a `Checkmark`, so at most the tail
+    /// entry can be an active spinner.
     #[must_use]
-    pub fn needs_animation(&self) -> bool {
-        // Invariant: `push_log` converts any prior trailing Spinner to a
-        // Checkmark, so at most the tail entry can be an active spinner.
+    pub fn has_active_spinner(&self) -> bool {
         matches!(
             self.log.back(),
             Some(LogLine::Entry {
@@ -124,6 +149,14 @@ impl Model {
                 ..
             })
         )
+    }
+
+    /// Equivalence key for the visible header clock. The colon blinks
+    /// on second parity and the minute is the smallest displayed unit,
+    /// so the rendered header changes iff this key changes.
+    #[must_use]
+    pub fn clock_display_key(&self) -> (u32, u32) {
+        (self.now.minute(), self.now.second() % 2)
     }
 }
 
@@ -166,13 +199,15 @@ impl Screen {
     }
 }
 
-/// Active tab on the [`Screen::Step`] screen.
+/// Active tab on the main screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepTab {
-    /// Step narration and prompt area.
-    Step,
-    /// Cumulative log feed and deviations.
-    Log,
+    /// Unified ceremony view: timestamped log feed with past-step
+    /// dimming and the pending prompt pinned at the bottom.
+    Ceremony,
+    /// Deviations side panel. Reserved for non-log content (operator
+    /// notes, attestation summary, etc.) once those land.
+    Deviations,
 }
 
 /// Lifecycle phase of the ceremony as observed by the UI.
@@ -206,6 +241,12 @@ pub enum LogLine {
         icon: Icon,
         /// Line text.
         text: String,
+        /// Step the entry belongs to (the current step at push time).
+        /// Rendered as a per-row step column on the Ceremony tab.
+        step: Option<String>,
+        /// Wall-clock instant at push time; rendered as `HH:MM:SS` in
+        /// the Ceremony tab's timestamp column.
+        at: DateTime<Local>,
     },
     /// Visual marker pushed at every `StepStarted`. Replaces the old
     /// role-transition modal, operators see the boundary inline.
@@ -214,6 +255,13 @@ pub enum LogLine {
         label: String,
         /// Human-readable role name for the new step.
         role_name: String,
+    },
+    /// Visual marker pushed at every `ActStarted`. Acts subdivide
+    /// ceremonies and contain steps; the divider visualises the
+    /// hierarchical boundary above [`Self::StepDivider`].
+    ActDivider {
+        /// Act label as authored in the DSL.
+        label: String,
     },
 }
 
@@ -224,6 +272,9 @@ pub struct DeviationView {
     pub step: Option<StepId>,
     /// Verbatim deviation text.
     pub text: String,
+    /// Wall-clock instant from the fact's timestamp, rendered as
+    /// `HH:MM:SS` in the Deviations tab.
+    pub at: DateTime<Local>,
 }
 
 /// In-flight prompt the UI is awaiting an answer to.

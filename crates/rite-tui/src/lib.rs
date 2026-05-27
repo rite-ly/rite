@@ -18,6 +18,8 @@
 
 mod model;
 mod msg;
+#[cfg(test)]
+mod preview;
 mod runtime;
 mod update;
 mod view;

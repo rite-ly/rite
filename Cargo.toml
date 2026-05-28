@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/rite-ly/rite"
@@ -22,8 +22,8 @@ homepage = "https://ritely.io"
 
 [workspace.dependencies]
 # Workspace-internal crates. The `version` only matters at publish time.
-rite-sdk = { path = "crates/rite-sdk", version = "0.1" }
-rite-model = { path = "crates/rite-model", version = "0.1" }
+rite-sdk = { path = "crates/rite-sdk", version = "0.2" }
+rite-model = { path = "crates/rite-model", version = "0.2" }
 
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["raw_value"] }

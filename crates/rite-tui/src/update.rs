@@ -70,11 +70,10 @@ fn drip_due(model: &Model) -> bool {
 }
 
 fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
-    // Global shortcuts first.
+    // Ctrl+C is the hard-quit escape hatch and is intentionally not
+    // advertised in the footer: Esc is the documented abort path.
+    // Closes the channel; the executor sees the disconnect and unwinds.
     if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
-        // Ctrl+C is treated as a quit request, distinct from `q` (graceful)
-        // and `a` (executor abort). Closes the channel; the executor will
-        // see the disconnect and unwind.
         return vec![Cmd::Quit];
     }
 
@@ -91,14 +90,15 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
 
     // Tab and scroll keys take precedence over the pending prompt: the
     // operator must be able to look back at history mid-prompt without
-    // first answering it. Both tabs share the same `log_scroll` so the
-    // view position carries across when switching with Tab.
+    // first answering it. Tabs share the same `log_scroll` so the view
+    // position carries across when switching with Tab.
     if matches!(key.code, KeyCode::Tab)
         && let Screen::Step { tab } = &mut model.screen
     {
         *tab = match *tab {
+            StepTab::Overview => StepTab::Ceremony,
             StepTab::Ceremony => StepTab::Deviations,
-            StepTab::Deviations => StepTab::Ceremony,
+            StepTab::Deviations => StepTab::Overview,
         };
         return Vec::new();
     }
@@ -112,9 +112,10 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
         return Vec::new();
     }
 
-    // Prompt routing only fires on the Ceremony tab. On the Deviations
-    // tab the prompt is paused; the operator switches back via Tab to
-    // answer.
+    // Prompt routing only fires on the Ceremony tab. The pending prompt
+    // is rendered there; the Overview tab deliberately omits it so the
+    // operator has to switch tabs to answer (a deliberate "are you ready
+    // to move on" act). The Deviations tab pauses the prompt the same way.
     if model.pending_prompt.is_some()
         && matches!(
             &model.screen,
@@ -128,12 +129,18 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
 
     // Default key bindings on the step screen.
     match key.code {
-        KeyCode::Char('q') => vec![Cmd::Quit],
-        KeyCode::Char('a') | KeyCode::Esc => {
+        KeyCode::Esc => {
             model.open_modal(Screen::AbortConfirm);
             Vec::new()
         }
-        KeyCode::Char('d') => {
+        KeyCode::Char('d')
+            if matches!(
+                &model.screen,
+                Screen::Step {
+                    tab: StepTab::Deviations
+                }
+            ) =>
+        {
             model.open_modal(Screen::DeviationModal {
                 input: String::new(),
             });
@@ -183,7 +190,7 @@ fn handle_log_scroll(model: &mut Model, code: KeyCode) -> bool {
 
 fn handle_terminal_key(key: KeyEvent) -> Vec<Cmd> {
     match key.code {
-        KeyCode::Char('q') | KeyCode::Enter | KeyCode::Esc => vec![Cmd::Quit],
+        KeyCode::Enter | KeyCode::Esc => vec![Cmd::Quit],
         _ => Vec::new(),
     }
 }
@@ -400,6 +407,12 @@ fn handle_fact(model: &mut Model, fact: &StepFact) -> Vec<Cmd> {
             role_name,
             ..
         } => {
+            // First StepStarted is the natural boundary between pre-step
+            // overview and live execution: auto-switch to the Ceremony
+            // tab if the operator is still on Overview, so the action
+            // narrative is visible without a manual Tab press. Subsequent
+            // step transitions don't re-trigger the switch.
+            let is_first_step = model.current_step.is_none();
             model.push_log(LogLine::StepDivider {
                 label: label.clone(),
                 role_name: role_name.clone(),
@@ -410,13 +423,20 @@ fn handle_fact(model: &mut Model, fact: &StepFact) -> Vec<Cmd> {
                 role_name: role_name.clone(),
             });
             model.pending_prompt = None;
+            if is_first_step
+                && let Screen::Step {
+                    tab: tab @ StepTab::Overview,
+                } = &mut model.screen
+            {
+                *tab = StepTab::Ceremony;
+            }
         }
         StepFact::StepCompleted { .. } => {
             model.pending_prompt = None;
         }
         StepFact::DeviationRecorded { step, text, at } => {
             model.deviations.push(DeviationView {
-                step: Some(step.clone()),
+                step: step.clone(),
                 text: text.clone(),
                 at: at.with_timezone(&chrono::Local),
             });
@@ -449,6 +469,17 @@ fn handle_fact(model: &mut Model, fact: &StepFact) -> Vec<Cmd> {
 }
 
 fn handle_signal(model: &mut Model, signal: &UiSignal) -> Vec<Cmd> {
+    if let UiSignal::CeremonyOverview {
+        description,
+        materials,
+        step_count,
+    } = signal
+    {
+        model.ceremony_description.clone_from(description);
+        model.ceremony_materials.clone_from(materials);
+        model.ceremony_step_count = Some(*step_count);
+        return Vec::new();
+    }
     if let Some((icon, text)) = signal_summary(signal) {
         model.push_entry(icon, text);
     }
@@ -482,16 +513,17 @@ mod tests {
     }
 
     #[test]
-    fn quit_returns_cmd_quit() {
+    fn ctrl_c_returns_cmd_quit() {
         let mut model = Model::new();
-        let cmds = update(&mut model, Msg::Key(key(KeyCode::Char('q'))));
+        let event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let cmds = update(&mut model, Msg::Key(event));
         assert!(matches!(cmds.as_slice(), [Cmd::Quit]));
     }
 
     #[test]
-    fn pressing_a_opens_abort_confirm_modal_without_aborting_yet() {
+    fn esc_opens_abort_confirm_modal_without_aborting_yet() {
         let mut model = Model::new();
-        let cmds = update(&mut model, Msg::Key(key(KeyCode::Char('a'))));
+        let cmds = update(&mut model, Msg::Key(key(KeyCode::Esc)));
         assert!(cmds.is_empty());
         assert!(matches!(model.screen, Screen::AbortConfirm));
         assert!(matches!(model.running, RunningState::Active));
@@ -500,9 +532,7 @@ mod tests {
     #[test]
     fn abort_confirm_yes_sends_abort_and_closes_modal() {
         let mut model = Model::new();
-        // Open the modal.
-        let _ = update(&mut model, Msg::Key(key(KeyCode::Char('a'))));
-        // Confirm.
+        let _ = update(&mut model, Msg::Key(key(KeyCode::Esc)));
         let cmds = update(&mut model, Msg::Key(key(KeyCode::Char('y'))));
         assert!(matches!(model.running, RunningState::Aborting));
         assert!(matches!(
@@ -515,7 +545,7 @@ mod tests {
     #[test]
     fn abort_confirm_no_cancels() {
         let mut model = Model::new();
-        let _ = update(&mut model, Msg::Key(key(KeyCode::Char('a'))));
+        let _ = update(&mut model, Msg::Key(key(KeyCode::Esc)));
         let cmds = update(&mut model, Msg::Key(key(KeyCode::Char('n'))));
         assert!(cmds.is_empty());
         assert!(matches!(model.screen, Screen::Step { .. }));
@@ -525,6 +555,10 @@ mod tests {
     #[test]
     fn deviation_modal_collects_input_then_submits_on_enter() {
         let mut model = Model::new();
+        // The deviation key is wired only on the Deviations tab.
+        model.screen = Screen::Step {
+            tab: StepTab::Deviations,
+        };
         model.current_step = Some(StepView {
             id: StepId::new("step1"),
             label: "L".to_string(),
@@ -555,6 +589,9 @@ mod tests {
     #[test]
     fn deviation_modal_escape_cancels_without_emitting() {
         let mut model = Model::new();
+        model.screen = Screen::Step {
+            tab: StepTab::Deviations,
+        };
         let _ = update(&mut model, Msg::Key(key(KeyCode::Char('d'))));
         let _ = update(&mut model, Msg::Key(key(KeyCode::Char('x'))));
         let cmds = update(&mut model, Msg::Key(key(KeyCode::Esc)));
@@ -564,8 +601,25 @@ mod tests {
     }
 
     #[test]
+    fn deviation_key_is_ignored_outside_deviations_tab() {
+        for tab in [StepTab::Overview, StepTab::Ceremony] {
+            let mut model = Model::new();
+            model.screen = Screen::Step { tab };
+            let cmds = update(&mut model, Msg::Key(key(KeyCode::Char('d'))));
+            assert!(cmds.is_empty(), "d on {tab:?} must be a no-op");
+            assert!(
+                matches!(model.screen, Screen::Step { tab: t } if t == tab),
+                "d on {tab:?} must not open the modal",
+            );
+        }
+    }
+
+    #[test]
     fn deviation_modal_empty_input_does_not_submit() {
         let mut model = Model::new();
+        model.screen = Screen::Step {
+            tab: StepTab::Deviations,
+        };
         let _ = update(&mut model, Msg::Key(key(KeyCode::Char('d'))));
         let cmds = update(&mut model, Msg::Key(key(KeyCode::Enter)));
         assert!(cmds.is_empty());
@@ -597,8 +651,22 @@ mod tests {
     }
 
     #[test]
-    fn tab_switches_step_tabs() {
+    fn tab_cycles_overview_ceremony_deviations() {
         let mut model = Model::new();
+        // Default tab is Overview.
+        assert!(matches!(
+            model.screen,
+            Screen::Step {
+                tab: StepTab::Overview
+            }
+        ));
+        let _ = update(&mut model, Msg::Key(key(KeyCode::Tab)));
+        assert!(matches!(
+            model.screen,
+            Screen::Step {
+                tab: StepTab::Ceremony
+            }
+        ));
         let _ = update(&mut model, Msg::Key(key(KeyCode::Tab)));
         assert!(matches!(
             model.screen,
@@ -610,9 +678,122 @@ mod tests {
         assert!(matches!(
             model.screen,
             Screen::Step {
+                tab: StepTab::Overview
+            }
+        ));
+    }
+
+    #[test]
+    fn first_step_auto_switches_overview_to_ceremony() {
+        let mut model = Model::new();
+        let _ = apply_exec(
+            &mut model,
+            ExecEvent::Fact(StepFact::StepStarted {
+                id: StepId::new("s1"),
+                label: "1".to_string(),
+                role: rite_model::RoleId::new("op"),
+                role_name: "Operator".to_string(),
+                started_at: Utc::now(),
+            }),
+        );
+        assert!(matches!(
+            model.screen,
+            Screen::Step {
                 tab: StepTab::Ceremony
             }
         ));
+    }
+
+    #[test]
+    fn second_step_does_not_override_manual_tab_choice() {
+        let mut model = Model::new();
+        // First step transition auto-switches to Ceremony.
+        let _ = apply_exec(
+            &mut model,
+            ExecEvent::Fact(StepFact::StepStarted {
+                id: StepId::new("s1"),
+                label: "1".to_string(),
+                role: rite_model::RoleId::new("op"),
+                role_name: "Operator".to_string(),
+                started_at: Utc::now(),
+            }),
+        );
+        // Operator switches back to Overview to re-read the description.
+        let _ = update(&mut model, Msg::Key(key(KeyCode::Tab))); // → Deviations
+        let _ = update(&mut model, Msg::Key(key(KeyCode::Tab))); // → Overview
+        assert!(matches!(
+            model.screen,
+            Screen::Step {
+                tab: StepTab::Overview
+            }
+        ));
+        // Second step must not yank the operator off Overview.
+        let _ = apply_exec(
+            &mut model,
+            ExecEvent::Fact(StepFact::StepStarted {
+                id: StepId::new("s2"),
+                label: "2".to_string(),
+                role: rite_model::RoleId::new("op"),
+                role_name: "Operator".to_string(),
+                started_at: Utc::now(),
+            }),
+        );
+        assert!(matches!(
+            model.screen,
+            Screen::Step {
+                tab: StepTab::Overview
+            }
+        ));
+    }
+
+    #[test]
+    fn ceremony_started_fact_populates_only_the_name() {
+        let mut model = Model::new();
+        let _ = apply_exec(
+            &mut model,
+            ExecEvent::Fact(StepFact::CeremonyStarted {
+                name: "Root CA".to_string(),
+                started_at: Utc::now(),
+            }),
+        );
+        assert_eq!(model.ceremony_name.as_deref(), Some("Root CA"));
+        // Description, materials, step count travel via UiSignal::CeremonyOverview,
+        // not the fact: the transcript intentionally doesn't carry them.
+        assert!(model.ceremony_description.is_none());
+        assert!(model.ceremony_materials.is_empty());
+        assert!(model.ceremony_step_count.is_none());
+    }
+
+    #[test]
+    fn ceremony_overview_signal_populates_metadata() {
+        let mut model = Model::new();
+        let _ = apply_exec(
+            &mut model,
+            ExecEvent::Signal(UiSignal::CeremonyOverview {
+                description: Some("Generate offline root.".to_string()),
+                materials: vec![rite_runtime::MaterialOverview {
+                    id: rite_model::MaterialId::new("yk"),
+                    title: Some("YubiKey".to_string()),
+                    description: None,
+                    kind: rite_runtime::MaterialOverviewKind::Digital,
+                }],
+                step_count: 5,
+            }),
+        );
+        assert_eq!(
+            model.ceremony_description.as_deref(),
+            Some("Generate offline root."),
+        );
+        assert_eq!(model.ceremony_step_count, Some(5));
+        assert_eq!(model.ceremony_materials.len(), 1);
+        assert_eq!(
+            model
+                .ceremony_materials
+                .first()
+                .expect("material populated")
+                .display_title(),
+            "YubiKey",
+        );
     }
 
     #[test]
@@ -634,6 +815,11 @@ mod tests {
     #[test]
     fn confirm_y_responds_with_true() {
         let mut model = Model::new();
+        // Prompt routing only fires on the Ceremony tab; the default tab
+        // is Overview which deliberately ignores the prompt.
+        model.screen = Screen::Step {
+            tab: StepTab::Ceremony,
+        };
         install_prompt(
             &mut model,
             PromptId::new(1),
@@ -659,6 +845,9 @@ mod tests {
     #[test]
     fn text_prompt_collects_input_then_sends_on_enter() {
         let mut model = Model::new();
+        model.screen = Screen::Step {
+            tab: StepTab::Ceremony,
+        };
         install_prompt(
             &mut model,
             PromptId::new(2),

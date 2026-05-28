@@ -121,6 +121,23 @@ impl<'a> Reporter<'a> {
         Ok(())
     }
 
+    /// Emit a raw [`UiSignal`]. Never recorded to the transcript.
+    ///
+    /// Most callers should use the specialized helpers ([`Reporter::log`]
+    /// for narration, [`Reporter::progress`] for spinners). This method
+    /// exists for structured one-shot signals (e.g. the pre-ceremony
+    /// overview) that don't fit either shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReporterError::Disconnected`] if the frontend is gone.
+    pub fn signal(&mut self, signal: UiSignal) -> Result<(), ReporterError> {
+        self.event_tx
+            .send(ExecEvent::Signal(signal))
+            .map_err(|_| ReporterError::Disconnected)?;
+        Ok(())
+    }
+
     /// Emit a UI-only narration line. Never recorded to the transcript.
     ///
     /// # Errors
@@ -203,10 +220,7 @@ impl<'a> Reporter<'a> {
     /// [`ReporterError::Disconnected`] if the frontend went away, or
     /// [`ReporterError::Transcript`] if the fact cannot be recorded.
     pub fn prompt(&mut self, prompt: &Prompt) -> Result<Response, ReporterError> {
-        let step = self
-            .current_step
-            .clone()
-            .ok_or(ReporterError::NoCurrentStep("prompt"))?;
+        let step = self.current_step.clone();
         let prompt_id = self.allocate_prompt_id();
         let mut previous_rejection: Option<String> = None;
 
@@ -272,10 +286,7 @@ impl<'a> Reporter<'a> {
         match cmd {
             UiCommand::Abort => Err(ReporterError::Aborted),
             UiCommand::LogDeviation { text } => {
-                let step = self
-                    .current_step
-                    .clone()
-                    .ok_or(ReporterError::NoCurrentStep("deviation"))?;
+                let step = self.current_step.clone();
                 self.emit_deviation(step, text)
             }
             // A stray prompt response outside any prompt context is dropped.
@@ -283,7 +294,7 @@ impl<'a> Reporter<'a> {
         }
     }
 
-    fn emit_deviation(&mut self, step: StepId, text: String) -> Result<(), ReporterError> {
+    fn emit_deviation(&mut self, step: Option<StepId>, text: String) -> Result<(), ReporterError> {
         self.fact(StepFact::DeviationRecorded {
             step,
             text,
@@ -385,7 +396,7 @@ mod tests {
 
         reporter
             .fact(StepFact::DeviationRecorded {
-                step: ids("s1"),
+                step: Some(ids("s1")),
                 text: "minor".to_string(),
                 at: Utc::now(),
             })

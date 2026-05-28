@@ -104,7 +104,7 @@ fn render_fact<W: Write>(out: &mut W, fact: &StepFact) -> io::Result<()> {
 fn render_signal<W: Write>(out: &mut W, signal: &UiSignal) -> io::Result<()> {
     match signal {
         UiSignal::LogLine { text, .. } => writeln!(out, "  {text}"),
-        UiSignal::Progress { .. } => Ok(()),
+        UiSignal::Progress { .. } | UiSignal::CeremonyOverview { .. } => Ok(()),
     }
 }
 
@@ -191,7 +191,7 @@ mod tests {
             .expect("send fact");
         event_tx
             .send(ExecEvent::AwaitPrompt {
-                step: StepId::new("s1"),
+                step: Some(StepId::new("s1")),
                 prompt_id: PromptId::new(0),
                 prompt: Prompt::Continue { hint: None },
                 previous_attempt_rejected_because: None,

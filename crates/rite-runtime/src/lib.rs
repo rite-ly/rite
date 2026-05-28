@@ -42,7 +42,10 @@ pub use backend::{BackendFactory, BackendRegistry};
 // Channel vocabulary for the runtime ↔ frontend boundary.
 // Persisted transcript types (`StepFact`, `Prompt`, `ResponseRecord`, …)
 // live in `rite_model::transcript` and are not re-exported here.
-pub use protocol::{ExecEvent, Icon, PromptId, Response, UiCommand, UiSignal};
+pub use protocol::{
+    ExecEvent, Icon, MaterialOverview, MaterialOverviewKind, PromptId, Response, UiCommand,
+    UiSignal,
+};
 
 // Shared formatter for live frontends.
 pub use display::{fact_summary, signal_summary, truncate_for_display};

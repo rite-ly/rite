@@ -13,7 +13,7 @@
 //!   converted to [`rite_model::ResponseRecord`] when persisted)
 //! - [`UiSignal`], [`Icon`], UI narration, never on disk
 
-use rite_model::{Prompt, StepFact, StepId};
+use rite_model::{Material, MaterialId, MaterialKind, Prompt, StepFact, StepId};
 use secrecy::SecretString;
 
 /// Identifier that pairs a prompt request with its matching response.
@@ -77,6 +77,83 @@ pub enum Response {
     Acknowledge,
 }
 
+/// Overview of a declared material, carried by
+/// [`UiSignal::CeremonyOverview`] so the live UI can render the material
+/// list. In-flight only: the ceremony YAML is the source of truth for
+/// material metadata, so this never reaches the transcript.
+#[derive(Debug, Clone)]
+pub struct MaterialOverview {
+    /// Material identifier.
+    pub id: MaterialId,
+    /// Optional title; falls back to `id` for display.
+    pub title: Option<String>,
+    /// Optional human-readable description.
+    pub description: Option<String>,
+    /// Kind of material (digital file or physical item).
+    pub kind: MaterialOverviewKind,
+}
+
+/// Kind of material in [`MaterialOverview`]. Mirrors the structural
+/// distinction of the IR's [`MaterialKind`] without the load-time
+/// implementation detail (file sources).
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub enum MaterialOverviewKind {
+    /// File-backed digital material.
+    Digital,
+    /// Tangible item with optional identifier and quantity.
+    Physical {
+        /// Human-readable identifier (e.g. serial number).
+        identifier: Option<String>,
+        /// Item count for checklist rendering.
+        quantity: Option<u32>,
+    },
+}
+
+impl MaterialOverviewKind {
+    /// Construct a [`MaterialOverviewKind::Physical`] with optional
+    /// identifier and quantity. Needed because the variant is reachable
+    /// only via the constructor when the enum stays `#[non_exhaustive]`.
+    #[must_use]
+    pub fn physical(identifier: Option<String>, quantity: Option<u32>) -> Self {
+        Self::Physical {
+            identifier,
+            quantity,
+        }
+    }
+}
+
+impl MaterialOverview {
+    /// Display name: the optional title, falling back to the material id.
+    /// Mirrors [`Material::display_name`] for the channel-side shape.
+    #[must_use]
+    pub fn display_title(&self) -> &str {
+        self.title.as_deref().unwrap_or(self.id.as_str())
+    }
+
+    /// Project a resolved IR [`Material`] onto the overview shape sent to
+    /// frontends.
+    #[must_use]
+    pub fn from_material(material: &Material) -> Self {
+        let kind = match &material.kind {
+            MaterialKind::Digital { .. } => MaterialOverviewKind::Digital,
+            MaterialKind::Physical {
+                identifier,
+                quantity,
+            } => MaterialOverviewKind::Physical {
+                identifier: identifier.clone(),
+                quantity: *quantity,
+            },
+        };
+        Self {
+            id: material.id.clone(),
+            title: material.title.clone(),
+            description: material.description.clone(),
+            kind,
+        }
+    }
+}
+
 /// Transient UI-only signal. Never written to the transcript.
 #[derive(Debug, Clone)]
 pub enum UiSignal {
@@ -98,6 +175,20 @@ pub enum UiSignal {
         /// Optional completion fraction in `[0.0, 1.0]`.
         fraction: Option<f32>,
     },
+    /// Descriptive metadata for the pre-ceremony overview screen. Emitted
+    /// once, right after [`StepFact::CeremonyStarted`]. Deliberately kept
+    /// out of the transcript: the YAML is the source of truth for these
+    /// fields, and embedding them in the persisted record would bloat
+    /// every transcript with data that the verifier could pull from the
+    /// ceremony source instead.
+    CeremonyOverview {
+        /// Optional ceremony description.
+        description: Option<String>,
+        /// Declared materials, in declaration order.
+        materials: Vec<MaterialOverview>,
+        /// Total number of steps in the execution plan.
+        step_count: usize,
+    },
 }
 
 /// Event emitted by the runtime to the frontend.
@@ -111,8 +202,10 @@ pub enum ExecEvent {
     /// The runtime is waiting for a user response. The frontend must reply
     /// with [`UiCommand::PromptResponse`] carrying the matching `prompt_id`.
     AwaitPrompt {
-        /// Step that issued the prompt.
-        step: StepId,
+        /// Step that issued the prompt, if any. `None` for ceremony-level
+        /// prompts (e.g. the ceremony-start confirmation emitted before
+        /// the first step).
+        step: Option<StepId>,
         /// Identifier echoed back in the matching response.
         prompt_id: PromptId,
         /// The prompt itself.

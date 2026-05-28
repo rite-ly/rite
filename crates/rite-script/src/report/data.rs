@@ -147,7 +147,9 @@ impl Builder {
 
     fn ingest(&mut self, fact: &StepFact) {
         match fact {
-            StepFact::CeremonyStarted { name, started_at } => {
+            StepFact::CeremonyStarted {
+                name, started_at, ..
+            } => {
                 self.ceremony_name.clone_from(name);
                 self.started_at = Some(*started_at);
             }
@@ -201,7 +203,10 @@ impl Builder {
             }
             StepFact::DeviationRecorded { step, text, at } => {
                 self.deviations.push(ReportDeviation {
-                    step_id: step.as_str().to_string(),
+                    step_id: step
+                        .as_ref()
+                        .map(|s| s.as_str().to_string())
+                        .unwrap_or_default(),
                     text: text.clone(),
                     recorded_at: *at,
                 });

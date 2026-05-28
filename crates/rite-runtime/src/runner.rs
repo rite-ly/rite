@@ -47,7 +47,7 @@ use crate::executor::{
 };
 use crate::expressions;
 use crate::output_config::OutputConfig;
-use crate::protocol::{ExecEvent, Icon, UiCommand};
+use crate::protocol::{ExecEvent, Icon, MaterialOverview, UiCommand, UiSignal};
 use crate::reporter::{Reporter, ReporterError};
 use crate::state::{ExecutionState, HandlerContext, StepResult};
 use crate::step_info::StepInfo;
@@ -327,11 +327,35 @@ impl Executor {
     ) -> Result<StepCounts, ExecutionError> {
         let dry_run = self.dry_run;
 
-        // CeremonyStarted
         reporter.fact(StepFact::CeremonyStarted {
             name: self.ceremony.metadata.name.clone(),
             started_at: Utc::now(),
         })?;
+
+        // Pre-ceremony overview: descriptive metadata for the UI's
+        // Overview screen. Sent as a UI-only signal, not a transcript
+        // fact, because the YAML is the source of truth for these fields
+        // and the run record shouldn't duplicate them.
+        reporter.signal(UiSignal::CeremonyOverview {
+            description: self.ceremony.metadata.description.clone(),
+            materials: self
+                .ceremony
+                .materials
+                .iter()
+                .map(|(_, m)| MaterialOverview::from_material(m))
+                .collect(),
+            step_count: self.ceremony.execution_plan.len(),
+        })?;
+
+        // Ceremony-start gate: let the operator review the overview
+        // before any side effect (material loading, first step body). The
+        // prompt is emitted with no current step set, so it carries
+        // `step: None` through to the frontend.
+        if !dry_run {
+            reporter.prompt(&Prompt::Continue {
+                hint: Some("Press Enter to start the ceremony".to_string()),
+            })?;
+        }
 
         let mut state = ExecutionState::new(resolved_params, roles, materials_map, dry_run);
 
@@ -389,6 +413,18 @@ impl Executor {
                 role_name,
                 started_at,
             })?;
+
+            // Pacing: gate the step body on operator acknowledgement. The
+            // prompt fires with the step header already visible, so the
+            // operator confirms "ready for step X" rather than "what just
+            // happened was fine". `silent` skips it for auto-advancing
+            // bookkeeping steps; `dry_run` skips it for non-interactive
+            // verification.
+            if !step.silent && !dry_run {
+                reporter.prompt(&Prompt::Continue {
+                    hint: Some(format!("Press Enter to start step {}", step.step_label)),
+                })?;
+            }
 
             // Look up handler
             let handler = self
@@ -476,11 +512,6 @@ impl Executor {
                         sha256: hash,
                     })?;
                 }
-            }
-
-            // Pacing: pause unless silent or dry run.
-            if !step.silent && !dry_run {
-                reporter.prompt(&Prompt::Continue { hint: None })?;
             }
         }
 
@@ -649,6 +680,152 @@ sections:
         );
 
         drop(cmd_tx);
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum PacingTrace {
+        CeremonyStarted,
+        StepStarted(String),
+        ContinuePrompt { step: Option<String> },
+        StepCompleted,
+        CeremonyCompleted,
+    }
+
+    /// Two-step ceremony with pacing enabled: each step's body must be
+    /// gated on a `Continue` prompt that the executor emits **between**
+    /// `StepStarted` and the handler. After the last step there must be
+    /// no trailing pause, only `StepCompleted` and `CeremonyCompleted`.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn pacing_prompts_fire_at_step_start_not_step_end() {
+        let yaml = r#"
+version: "0.2"
+name: "Pacing"
+roles:
+  participant:
+    person: "Alice"
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      first:
+        action: attest
+        with:
+          statement: "first"
+      second:
+        action: attest
+        with:
+          statement: "second"
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("resolve");
+        let mut registry = ActionRegistry::new();
+        registry.register(Arc::new(PingAction));
+
+        let (cmd_tx, cmd_rx) = unbounded::<UiCommand>();
+        let (event_tx, event_rx) = unbounded::<ExecEvent>();
+        let sink: Box<dyn TranscriptSink> = Box::new(InMemorySink::new());
+
+        let executor = Executor::new(
+            ceremony,
+            registry,
+            BackendRegistry::new(),
+            dry_run_output_config(),
+            false, // dry_run=false so prompts actually fire
+        );
+
+        // Drive the frontend on a worker so the executor's prompt waits
+        // don't deadlock. Acknowledge every Continue that arrives and
+        // collect a trace of the events the executor emitted.
+        let frontend = std::thread::spawn({
+            let cmd_tx = cmd_tx.clone();
+            move || {
+                let mut trace = Vec::new();
+                while let Ok(event) = event_rx.recv() {
+                    match event {
+                        ExecEvent::Fact(StepFact::CeremonyStarted { .. }) => {
+                            trace.push(PacingTrace::CeremonyStarted);
+                        }
+                        ExecEvent::Fact(StepFact::StepStarted { label, .. }) => {
+                            trace.push(PacingTrace::StepStarted(label));
+                        }
+                        ExecEvent::Fact(StepFact::StepCompleted { .. }) => {
+                            trace.push(PacingTrace::StepCompleted);
+                        }
+                        ExecEvent::Fact(StepFact::CeremonyCompleted { .. }) => {
+                            trace.push(PacingTrace::CeremonyCompleted);
+                        }
+                        ExecEvent::AwaitPrompt {
+                            prompt_id,
+                            prompt: Prompt::Continue { .. },
+                            step,
+                            ..
+                        } => {
+                            trace.push(PacingTrace::ContinuePrompt {
+                                step: step.map(|s| s.as_str().to_string()),
+                            });
+                            let _ = cmd_tx.send(UiCommand::PromptResponse {
+                                prompt_id,
+                                response: crate::protocol::Response::Acknowledge,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                trace
+            }
+        });
+
+        let summary = executor
+            .run(&cmd_rx, &event_tx, sink)
+            .expect("ceremony runs");
+        assert_eq!(summary.steps_completed, 2);
+        // Drop the local senders so the frontend thread sees the
+        // event channel close and returns.
+        drop(event_tx);
+        drop(cmd_tx);
+        let trace = frontend.join().expect("frontend join");
+
+        // Required order:
+        //   CeremonyStarted, Continue{None},
+        //   StepStarted(1), Continue{Some(1)}, StepCompleted,
+        //   StepStarted(2), Continue{Some(2)}, StepCompleted,
+        //   CeremonyCompleted
+        let mut iter = trace.iter();
+        assert_eq!(iter.next(), Some(&PacingTrace::CeremonyStarted));
+        assert_eq!(
+            iter.next(),
+            Some(&PacingTrace::ContinuePrompt { step: None })
+        );
+        let first_step = match iter.next() {
+            Some(PacingTrace::StepStarted(label)) => label.clone(),
+            other => panic!("expected first StepStarted, got {other:?}"),
+        };
+        assert_eq!(
+            iter.next(),
+            Some(&PacingTrace::ContinuePrompt {
+                step: Some("first".to_string()),
+            }),
+            "first step's Continue prompt must fire after StepStarted and before the body",
+        );
+        assert_eq!(iter.next(), Some(&PacingTrace::StepCompleted));
+        let second_step = match iter.next() {
+            Some(PacingTrace::StepStarted(label)) => label.clone(),
+            other => panic!("expected second StepStarted, got {other:?}"),
+        };
+        assert_eq!(
+            iter.next(),
+            Some(&PacingTrace::ContinuePrompt {
+                step: Some("second".to_string()),
+            }),
+        );
+        assert_eq!(iter.next(), Some(&PacingTrace::StepCompleted));
+        assert_eq!(iter.next(), Some(&PacingTrace::CeremonyCompleted));
+        assert_eq!(iter.next(), None, "no further events expected");
+        // Steps are auto-numbered when there's only one section.
+        assert_eq!(first_step, "1");
+        assert_eq!(second_step, "2");
     }
 
     #[test]

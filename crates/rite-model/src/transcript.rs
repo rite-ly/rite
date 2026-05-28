@@ -178,8 +178,11 @@ pub enum StepFact {
     },
     /// A prompt has been answered and validated.
     PromptAnswered {
-        /// Step that issued the prompt.
-        step: StepId,
+        /// Step that issued the prompt, if any. `None` for ceremony-level
+        /// prompts emitted before the first step (e.g. the ceremony-start
+        /// confirmation) or after the last step.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        step: Option<StepId>,
         /// The prompt as issued.
         prompt: Prompt,
         /// Redacted response record.
@@ -224,8 +227,11 @@ pub enum StepFact {
     },
     /// A deviation was logged by the operator.
     DeviationRecorded {
-        /// Step in which the deviation was logged.
-        step: StepId,
+        /// Step in which the deviation was logged, if any. `None` for
+        /// deviations logged outside of a step (before the first step or
+        /// while a ceremony-level prompt is pending).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        step: Option<StepId>,
         /// Verbatim deviation text.
         text: String,
         /// Wall-clock timestamp when the deviation was recorded.
@@ -340,7 +346,7 @@ mod schema_snapshot_tests {
     fn prompt_answered_confirm_bool() {
         assert_json(
             &StepFact::PromptAnswered {
-                step: StepId::new("s1"),
+                step: Some(StepId::new("s1")),
                 prompt: Prompt::Confirm {
                     question: "Proceed?".to_string(),
                     default: Some(true),
@@ -362,7 +368,7 @@ mod schema_snapshot_tests {
     fn prompt_answered_text_nonempty() {
         assert_json(
             &StepFact::PromptAnswered {
-                step: StepId::new("s1"),
+                step: Some(StepId::new("s1")),
                 prompt: Prompt::Text {
                     label: "Name".to_string(),
                     validator: ValidatorSpec::NonEmpty,
@@ -390,7 +396,7 @@ mod schema_snapshot_tests {
     fn prompt_answered_text_regex() {
         assert_json(
             &StepFact::PromptAnswered {
-                step: StepId::new("s1"),
+                step: Some(StepId::new("s1")),
                 prompt: Prompt::Text {
                     label: "SN".to_string(),
                     validator: ValidatorSpec::Regex(r"^[A-Z0-9]+$".to_string()),
@@ -418,7 +424,7 @@ mod schema_snapshot_tests {
     fn prompt_answered_text_predefined() {
         assert_json(
             &StepFact::PromptAnswered {
-                step: StepId::new("s1"),
+                step: Some(StepId::new("s1")),
                 prompt: Prompt::Text {
                     label: "SN".to_string(),
                     validator: ValidatorSpec::Predefined("serial_number".to_string()),
@@ -446,7 +452,7 @@ mod schema_snapshot_tests {
     fn prompt_answered_secret_redacted() {
         assert_json(
             &StepFact::PromptAnswered {
-                step: StepId::new("s1"),
+                step: Some(StepId::new("s1")),
                 prompt: Prompt::Secret {
                     label: "PIN".to_string(),
                 },
@@ -472,7 +478,7 @@ mod schema_snapshot_tests {
     fn prompt_answered_literal_text() {
         assert_json(
             &StepFact::PromptAnswered {
-                step: StepId::new("s1"),
+                step: Some(StepId::new("s1")),
                 prompt: Prompt::Literal {
                     label: "Type 'attest'".to_string(),
                     expected: "attest".to_string(),
@@ -496,7 +502,7 @@ mod schema_snapshot_tests {
     fn prompt_answered_continue_acknowledged() {
         assert_json(
             &StepFact::PromptAnswered {
-                step: StepId::new("s1"),
+                step: Some(StepId::new("s1")),
                 prompt: Prompt::Continue {
                     hint: Some("Press Enter".to_string()),
                 },
@@ -576,7 +582,7 @@ mod schema_snapshot_tests {
     fn deviation_recorded() {
         assert_json(
             &StepFact::DeviationRecorded {
-                step: StepId::new("s1"),
+                step: Some(StepId::new("s1")),
                 text: "phone rang".to_string(),
                 at: ts(),
             },

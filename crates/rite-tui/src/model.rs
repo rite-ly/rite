@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use chrono::{DateTime, Local, Timelike};
 use rite_model::{Prompt, StepId};
-use rite_runtime::{ExecEvent, Icon, PromptId};
+use rite_runtime::{ExecEvent, Icon, MaterialOverview, PromptId};
 
 /// Maximum length of a deviation note. Anything longer is rejected before
 /// the command is sent, keeps the transcript line readable.
@@ -20,6 +20,12 @@ pub(crate) const LOG_CAPACITY: usize = 200;
 pub struct Model {
     /// Ceremony name, as soon as `CeremonyStarted` arrives.
     pub ceremony_name: Option<String>,
+    /// Ceremony description, as authored in the DSL.
+    pub ceremony_description: Option<String>,
+    /// Declared materials. Populated from `CeremonyStarted`.
+    pub ceremony_materials: Vec<MaterialOverview>,
+    /// Total number of steps in the execution plan, when known.
+    pub ceremony_step_count: Option<usize>,
     /// Current screen.
     pub screen: Screen,
     /// Screen to restore when a modal is dismissed. `None` when the
@@ -56,8 +62,11 @@ impl Default for Model {
     fn default() -> Self {
         Self {
             ceremony_name: None,
+            ceremony_description: None,
+            ceremony_materials: Vec::new(),
+            ceremony_step_count: None,
             screen: Screen::Step {
-                tab: StepTab::Ceremony,
+                tab: StepTab::Overview,
             },
             return_to: None,
             current_step: None,
@@ -202,6 +211,10 @@ impl Screen {
 /// Active tab on the main screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepTab {
+    /// Pre-step ceremony overview: name, description, declared
+    /// materials, step count. Default tab on boot; the operator
+    /// confirms here before the first step runs.
+    Overview,
     /// Unified ceremony view: timestamped log feed with past-step
     /// dimming and the pending prompt pinned at the bottom.
     Ceremony,

@@ -12,8 +12,8 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 
-use rite_model::{Prompt, StepId, ValidatorSpec};
-use rite_runtime::{Icon, PromptId};
+use rite_model::{MaterialId, Prompt, StepId, ValidatorSpec};
+use rite_runtime::{Icon, MaterialOverview, MaterialOverviewKind, PromptId};
 
 use crate::model::{LogLine, Model, PendingPrompt, Screen, StepTab, StepView};
 use crate::view::view;
@@ -38,10 +38,69 @@ fn entry(icon: Icon, text: &str, step: &str, at: DateTime<Local>) -> LogLine {
     }
 }
 
+/// Pre-ceremony model: the Overview tab is current, metadata has been
+/// populated by `CeremonyStarted`, and the ceremony-start `Continue`
+/// prompt is pending. No step has begun yet.
+fn sample_overview() -> Model {
+    let mut m = Model::new();
+    m.now = at(14, 32, 10);
+    m.ceremony_name = Some("Root CA Key Generation".to_string());
+    // Mirror what a YAML `description: |` literal block produces: a
+    // multi-line string where authors break lines for source readability
+    // (single \n = soft break, folded to a space) and use blank lines
+    // (\n\n) for explicit paragraph boundaries. The Markdown convention.
+    m.ceremony_description = Some(
+        "Generate the offline root CA keypair on an air-gapped machine.\n\
+         The private key is wrapped with a transport public key and stored\n\
+         as an encrypted backup.\n\
+         \n\
+         The keyholder of the transport private key is the sole custodian\n\
+         of the wrapped backup."
+            .to_string(),
+    );
+    m.ceremony_step_count = Some(12);
+    m.ceremony_materials = vec![
+        MaterialOverview {
+            id: MaterialId::new("yubikey_primary"),
+            title: Some("YubiKey 5C - primary".to_string()),
+            description: Some(
+                "Holds the long-term signing key. Stored in safe deposit\n\
+                 box A-12 between ceremonies."
+                    .to_string(),
+            ),
+            kind: MaterialOverviewKind::physical(Some("SN-15832119".to_string()), Some(1)),
+        },
+        MaterialOverview {
+            id: MaterialId::new("yubikey_backup"),
+            title: Some("YubiKey 5C - backup".to_string()),
+            description: None,
+            kind: MaterialOverviewKind::physical(Some("SN-15832120".to_string()), Some(1)),
+        },
+        MaterialOverview {
+            id: MaterialId::new("policy_template"),
+            title: None,
+            description: Some("X.509 policy template.".to_string()),
+            kind: MaterialOverviewKind::Digital,
+        },
+    ];
+    m.pending_prompt = Some(PendingPrompt {
+        prompt_id: PromptId::new(0),
+        prompt: Prompt::Continue {
+            hint: Some("Press Enter to start the ceremony".to_string()),
+        },
+        input: String::new(),
+        rejection: None,
+    });
+    m
+}
+
 /// Build a realistic mid-ceremony model with a few log lines and an
 /// active step. No pending prompt.
 fn sample_running() -> Model {
     let mut m = Model::new();
+    m.screen = Screen::Step {
+        tab: StepTab::Ceremony,
+    };
     // Pin the clock so previews are deterministic. Even second → colon
     // visible; switch to an odd second in a dedicated test if you want
     // to inspect the blink-off state.
@@ -118,6 +177,13 @@ fn buffer_to_string(buf: &Buffer) -> String {
         out.push('\n');
     }
     out
+}
+
+#[test]
+fn preview_overview_tab() {
+    let m = sample_overview();
+    let out = render(&m, 100, 24);
+    eprintln!("--- overview tab / ceremony-start prompt (100x24) ---\n{out}");
 }
 
 #[test]

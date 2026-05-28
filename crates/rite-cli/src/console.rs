@@ -29,7 +29,10 @@ use crossbeam_channel::{Receiver, Sender};
 use secrecy::SecretString;
 
 use rite_model::{Prompt, StepFact};
-use rite_runtime::{ExecEvent, Icon, Response, UiCommand, UiSignal, fact_summary, signal_summary};
+use rite_runtime::{
+    ExecEvent, Icon, MaterialOverview, MaterialOverviewKind, Response, UiCommand, UiSignal,
+    fact_summary, signal_summary,
+};
 
 /// Console glyph for an [`Icon`]. Owned by the frontend so the runtime
 /// stays presentation-free.
@@ -101,7 +104,56 @@ fn render_fact<W: Write>(out: &mut W, fact: &StepFact) -> io::Result<()> {
     }
 }
 
+/// One-line description of a declared material for the console feed.
+/// Mirrors the TUI's Overview rendering at a coarser granularity.
+fn material_summary(material: &MaterialOverview) -> String {
+    let title = material.display_title();
+    let kind = match &material.kind {
+        MaterialOverviewKind::Digital => "digital".to_string(),
+        MaterialOverviewKind::Physical {
+            identifier,
+            quantity,
+        } => {
+            let mut parts = vec!["physical".to_string()];
+            if let Some(q) = quantity {
+                parts.push(format!("x{q}"));
+            }
+            if let Some(id) = identifier {
+                parts.push(id.clone());
+            }
+            parts.join(" ")
+        }
+        _ => "unknown".to_string(),
+    };
+    match &material.description {
+        Some(desc) => format!("{title} ({kind}), {desc}"),
+        None => format!("{title} ({kind})"),
+    }
+}
+
 fn render_signal<W: Write>(out: &mut W, signal: &UiSignal) -> io::Result<()> {
+    // The overview signal carries structured pre-ceremony metadata; print
+    // it as a bulleted preamble so the operator sees the same context the
+    // TUI shows on its Overview tab.
+    if let UiSignal::CeremonyOverview {
+        description,
+        materials,
+        step_count,
+    } = signal
+    {
+        if let Some(desc) = description {
+            writeln!(out, "  {desc}")?;
+        }
+        let step_noun = if *step_count == 1 { "step" } else { "steps" };
+        writeln!(out, "  {step_count} {step_noun}")?;
+        if !materials.is_empty() {
+            writeln!(out, "  Materials:")?;
+            for material in materials {
+                writeln!(out, "    - {}", material_summary(material))?;
+            }
+        }
+        return Ok(());
+    }
     match signal_summary(signal) {
         Some((icon, text)) => writeln!(out, "{} {text}", glyph(icon)),
         None => Ok(()),
@@ -194,7 +246,7 @@ mod tests {
                 started_at: Utc::now(),
             },
             StepFact::PromptAnswered {
-                step: StepId::new("a"),
+                step: Some(StepId::new("a")),
                 prompt: Prompt::Confirm {
                     question: "ok?".to_string(),
                     default: None,
@@ -276,7 +328,7 @@ mod tests {
             .expect("send fact");
         event_tx
             .send(ExecEvent::AwaitPrompt {
-                step: StepId::new("a"),
+                step: Some(StepId::new("a")),
                 prompt_id,
                 prompt: Prompt::Continue { hint: None },
                 previous_attempt_rejected_because: None,

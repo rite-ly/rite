@@ -131,7 +131,7 @@ Both bundle the `rite-ls` language server. For other LSP-aware editors, run `rit
 
 - [x] **Ceremony DSL** — roles, steps, materials, outputs
 - [x] **Guided execution** — `rite run`
-  - [ ] Interactive TUI
+  - [x] Interactive TUI
   - [ ] Error handling
 - [x] **Cryptographic backends**
   - [x] OpenSSL: RSA, ECDSA-P256, signing, wrapping, PKI

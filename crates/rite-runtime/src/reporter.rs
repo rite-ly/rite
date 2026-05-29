@@ -105,9 +105,12 @@ impl<'a> Reporter<'a> {
 
     /// Record a transcript-worthy fact.
     ///
-    /// Writes to the transcript sink synchronously, then forwards to the
-    /// UI as [`ExecEvent::Fact`]. The transcript is flushed before the UI
-    /// observes the fact.
+    /// Facts are the audit record: everything durable flows through here, and
+    /// it comes from an action in the plan (plus the runner's own lifecycle
+    /// facts). Writes to the transcript sink synchronously, then forwards to
+    /// the UI as [`ExecEvent::Fact`]. The transcript is flushed before the UI
+    /// observes the fact. To surface something to the operator *without*
+    /// recording it, use [`Reporter::signal`] / [`Reporter::log`] instead.
     ///
     /// # Errors
     ///
@@ -123,10 +126,13 @@ impl<'a> Reporter<'a> {
 
     /// Emit a raw [`UiSignal`]. Never recorded to the transcript.
     ///
-    /// Most callers should use the specialized helpers ([`Reporter::log`]
-    /// for narration, [`Reporter::progress`] for spinners). This method
-    /// exists for structured one-shot signals (e.g. the pre-ceremony
-    /// overview) that don't fit either shape.
+    /// Signals are ephemeral operator-assistance: a frontend may drop any of
+    /// them without affecting correctness or the transcript. They are never
+    /// promoted into the audit record; use [`Reporter::fact`] for anything
+    /// that must persist. Most callers should use the specialized helpers
+    /// ([`Reporter::log`] for narration, [`Reporter::progress`] for spinners).
+    /// This method exists for structured signals (e.g. the pre-ceremony
+    /// overview, the system snapshot) that don't fit either shape.
     ///
     /// # Errors
     ///

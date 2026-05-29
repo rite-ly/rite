@@ -104,7 +104,10 @@ fn render_fact<W: Write>(out: &mut W, fact: &StepFact) -> io::Result<()> {
 fn render_signal<W: Write>(out: &mut W, signal: &UiSignal) -> io::Result<()> {
     match signal {
         UiSignal::LogLine { text, .. } => writeln!(out, "  {text}"),
-        UiSignal::Progress { .. } | UiSignal::CeremonyOverview { .. } => Ok(()),
+        UiSignal::Progress { .. }
+        | UiSignal::CeremonyOverview { .. }
+        | UiSignal::SystemInfo(_)
+        | UiSignal::Environment(_) => Ok(()),
     }
 }
 

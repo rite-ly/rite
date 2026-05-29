@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use chrono::{DateTime, Local, Timelike};
 use rite_model::{Prompt, StepId};
-use rite_runtime::{ExecEvent, Icon, MaterialOverview, PromptId};
+use rite_runtime::{Environment, ExecEvent, Icon, MaterialOverview, PromptId, SystemInfo};
 
 /// Maximum length of a deviation note. Anything longer is rejected before
 /// the command is sent, keeps the transcript line readable.
@@ -26,6 +26,12 @@ pub struct Model {
     pub ceremony_materials: Vec<MaterialOverview>,
     /// Total number of steps in the execution plan, when known.
     pub ceremony_step_count: Option<usize>,
+    /// Static build/host identity for the System tab. Populated from
+    /// `UiSignal::SystemInfo`, emitted once at ceremony start.
+    pub system_info: Option<SystemInfo>,
+    /// Live device environment for the System tab. Populated from
+    /// `UiSignal::Environment`; replaced wholesale on each re-emission.
+    pub environment: Option<Environment>,
     /// Current screen.
     pub screen: Screen,
     /// Screen to restore when a modal is dismissed. `None` when the
@@ -65,6 +71,8 @@ impl Default for Model {
             ceremony_description: None,
             ceremony_materials: Vec::new(),
             ceremony_step_count: None,
+            system_info: None,
+            environment: None,
             screen: Screen::Step {
                 tab: StepTab::Overview,
             },
@@ -221,6 +229,10 @@ pub enum StepTab {
     /// Deviations side panel. Reserved for non-log content (operator
     /// notes, attestation summary, etc.) once those land.
     Deviations,
+    /// Environment dashboard: build/host identity header plus the live
+    /// device inventory (disks today; peripherals and network later).
+    /// Situational awareness during the run, not part of the transcript.
+    System,
 }
 
 /// Lifecycle phase of the ceremony as observed by the UI.

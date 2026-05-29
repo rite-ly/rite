@@ -11,6 +11,7 @@ mod report;
 mod run;
 #[cfg(feature = "render")]
 mod script;
+mod system_info;
 mod verify;
 mod version;
 

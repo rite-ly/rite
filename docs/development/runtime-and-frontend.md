@@ -40,6 +40,42 @@ frontend is an [`ExecEvent`]; everything a frontend sends back is a
 | `AwaitPrompt { … }`         | runtime → frontend | no (the answer becomes a fact)               | Block until the operator answers.                                     |
 | `Finalized { fingerprint }` | runtime → frontend | no (out-of-band)                             | Sent after the terminal fact so frontends can display the chain head. |
 
+### Data flow: facts vs signals vs out-of-band evidence
+
+Two questions decide how any piece of information moves through the system:
+*who produces it* (a ceremony action, or the tool gathering something
+ambiently) and *is it evidence* (recorded, or ephemeral). That gives four
+positions:
+
+|                     | Recorded (evidence)                                                                    | Ephemeral (UI only)                                                     |
+|---------------------|----------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| **Ceremony-driven** | `StepFact` from an action (`machine_info`, key generation, attestation)                | an action's own `UiSignal` for live step feedback (`Progress`)          |
+| **Tool-driven**     | out-of-band artifact + an anchoring `ArtifactWritten` fact (future background capture) | `UiSignal` (`CeremonyOverview`, `SystemInfo`, `Environment`, `LogLine`) |
+
+Four rules keep this stable as the protocol grows:
+
+1. **Transcript = facts = actions.** Anything auditable is a `StepFact`
+   produced by an action in the plan. The only exception is the runner's own
+   lifecycle facts (`CeremonyStarted` / `CeremonyCompleted` / `CeremonyFailed`
+   and the step/act boundaries): the small core run-metadata set.
+2. **Signals are ephemeral and droppable.** A frontend that ignores every
+   `UiSignal` still produces a correct transcript and outcome (this is why
+   `console` and `headless` ignore most of them). Never make correctness
+   depend on a signal.
+3. **A checkpoint is an action, not a promoted signal.** To put something in
+   the transcript, emit a `StepFact` from an action; it may *also* emit a
+   signal for live display. A signal is never silently promoted into the
+   transcript.
+4. **Background evidence anchors by hash.** Continuous capture (not yet
+   implemented) lives outside the JSONL; the transcript carries only the
+   content-hash fact, sealed at stop time.
+
+`UiSignal` variants fall into three sub-families, so new ones have an obvious
+home: *narration* (`LogLine`, `Progress`), *one-shot structured* (a single
+snapshot at ceremony start, `CeremonyOverview` and `SystemInfo`), and
+*re-emittable structured* (state the runtime may resend during the run;
+`Environment`, which a frontend replaces wholesale on each emission).
+
 ### `StepFact`
 
 Every variant of `StepFact` is what would convince a future auditor that

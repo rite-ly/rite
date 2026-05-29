@@ -13,7 +13,10 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 
 use rite_model::{MaterialId, Prompt, StepId, ValidatorSpec};
-use rite_runtime::{Icon, MaterialOverview, MaterialOverviewKind, PromptId};
+use rite_runtime::{
+    BackendVersion, BuildInfo, Disk, Environment, HostInfo, Icon, MaterialOverview,
+    MaterialOverviewKind, PromptId, SystemInfo,
+};
 
 use crate::model::{LogLine, Model, PendingPrompt, Screen, StepTab, StepView};
 use crate::view::view;
@@ -151,6 +154,65 @@ fn sample_with_prompt() -> Model {
     m
 }
 
+/// System tab: build/host identity header plus a small disk inventory,
+/// as populated by the `SystemInfo` and `Environment` signals.
+fn sample_system() -> Model {
+    let mut m = sample_running();
+    m.system_info = Some(SystemInfo {
+        build: BuildInfo {
+            version: "0.2.0".to_string(),
+            commit: "a1b2c3d".to_string(),
+            commit_date: "2026-05-20".to_string(),
+            build_date: "2026-05-25".to_string(),
+            target: "aarch64-apple-darwin".to_string(),
+            profile: "release".to_string(),
+            features: "attestation,crypto,openssl,pki,render,verification".to_string(),
+            rustc: "1.95.0".to_string(),
+        },
+        host: HostInfo {
+            arch: "aarch64".to_string(),
+            os: Some("Darwin".to_string()),
+            os_version: Some("macOS 15.4".to_string()),
+            kernel_version: None,
+            hostname: Some("ceremony-air-gap".to_string()),
+            machine_id: None,
+            cpu_model: None,
+            hardening: None,
+        },
+        backends: vec![BackendVersion {
+            provider: "openssl".to_string(),
+            version: "OpenSSL 3.6.2 7 Apr 2026".to_string(),
+            source: Some("system".to_string()),
+        }],
+    });
+    m.environment = Some(Environment {
+        disks: vec![
+            Disk {
+                name: "disk0s1".to_string(),
+                mount_point: "/".to_string(),
+                file_system: Some("apfs".to_string()),
+                total_bytes: 994_662_584_320,
+                available_bytes: 612_339_499_008,
+                removable: false,
+                kind: Some("SSD".to_string()),
+            },
+            Disk {
+                name: "disk4s1".to_string(),
+                mount_point: "/Volumes/CEREMONY".to_string(),
+                file_system: Some("exfat".to_string()),
+                total_bytes: 31_914_983_424,
+                available_bytes: 31_900_000_000,
+                removable: true,
+                kind: None,
+            },
+        ],
+    });
+    m.screen = Screen::Step {
+        tab: StepTab::System,
+    };
+    m
+}
+
 /// Render `model` into a width×height buffer and return its plain-text
 /// dump, one row per line.
 fn render(model: &Model, width: u16, height: u16) -> String {
@@ -229,6 +291,13 @@ fn preview_deviations_tab() {
     };
     let out = render(&m, 100, 24);
     eprintln!("--- deviations tab (100x24) ---\n{out}");
+}
+
+#[test]
+fn preview_system_tab() {
+    let m = sample_system();
+    let out = render(&m, 100, 24);
+    eprintln!("--- system tab (100x24) ---\n{out}");
 }
 
 #[test]

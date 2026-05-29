@@ -26,6 +26,7 @@ mod reporter;
 mod runner;
 mod state;
 mod step_info;
+mod system_info;
 pub mod test_support;
 mod transcript;
 mod transcript_sink;
@@ -45,6 +46,12 @@ pub use backend::{BackendFactory, BackendRegistry};
 pub use protocol::{
     ExecEvent, Icon, MaterialOverview, MaterialOverviewKind, PromptId, Response, UiCommand,
     UiSignal,
+};
+
+// Structured machine/build/environment facts carried by UI signals.
+pub use system_info::{
+    BackendVersion, BuildInfo, Disk, Environment, FeatureCheck, FeatureStatus, Hardening, HostInfo,
+    ParseError as SystemInfoParseError, StartupSnapshot, SystemInfo,
 };
 
 // Shared formatter for live frontends.

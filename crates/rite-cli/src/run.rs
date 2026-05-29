@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use clap::{Args as ClapArgs, ValueEnum};
 use crossbeam_channel::unbounded;
 
-use rite_runtime::{ExecEvent, Executor, InMemorySink, JsonlFileSink, TranscriptSink, UiCommand};
+use rite_runtime::{
+    ExecEvent, Executor, InMemorySink, JsonlFileSink, StartupSnapshot, TranscriptSink, UiCommand,
+};
 
 use crate::common::{
     InputArgs, build_inputs_or_exit, preflight_check_materials, prompt_missing_params,
@@ -110,12 +112,18 @@ pub fn run(args: Args) {
     let (cmd_tx, cmd_rx) = unbounded::<UiCommand>();
     let (event_tx, event_rx) = unbounded::<ExecEvent>();
 
+    let startup = StartupSnapshot {
+        system: crate::system_info::gather_system(),
+        environment: crate::system_info::gather_environment(),
+    };
+
     let executor = Executor::new(
         resolved,
         registry,
         backend_registry,
         output_config,
         args.dry_run,
+        startup,
     );
     let exec_handle = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
 

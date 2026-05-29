@@ -106,7 +106,8 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
         *tab = match *tab {
             StepTab::Overview => StepTab::Ceremony,
             StepTab::Ceremony => StepTab::Deviations,
-            StepTab::Deviations => StepTab::Overview,
+            StepTab::Deviations => StepTab::System,
+            StepTab::System => StepTab::Overview,
         };
         return Vec::new();
     }
@@ -477,19 +478,27 @@ fn handle_fact(model: &mut Model, fact: &StepFact) -> Vec<Cmd> {
 }
 
 fn handle_signal(model: &mut Model, signal: &UiSignal) -> Vec<Cmd> {
-    if let UiSignal::CeremonyOverview {
-        description,
-        materials,
-        step_count,
-    } = signal
-    {
-        model.ceremony_description.clone_from(description);
-        model.ceremony_materials.clone_from(materials);
-        model.ceremony_step_count = Some(*step_count);
-        return Vec::new();
-    }
-    if let Some((icon, text)) = signal_summary(signal) {
-        model.push_entry(icon, text);
+    // Exhaustive (no wildcard) so a new UiSignal variant forces a decision
+    // here, matching the protocol's deliberate not-`#[non_exhaustive]` choice.
+    match signal {
+        UiSignal::CeremonyOverview {
+            description,
+            materials,
+            step_count,
+        } => {
+            model.ceremony_description.clone_from(description);
+            model.ceremony_materials.clone_from(materials);
+            model.ceremony_step_count = Some(*step_count);
+        }
+        UiSignal::SystemInfo(info) => model.system_info = Some((**info).clone()),
+        // Re-emittable: a later observer can resend the environment; replace
+        // the whole view each time rather than merging.
+        UiSignal::Environment(env) => model.environment = Some(env.clone()),
+        UiSignal::LogLine { .. } | UiSignal::Progress { .. } => {
+            if let Some((icon, text)) = signal_summary(signal) {
+                model.push_entry(icon, text);
+            }
+        }
     }
     Vec::new()
 }
@@ -610,7 +619,7 @@ mod tests {
 
     #[test]
     fn deviation_key_is_ignored_outside_deviations_tab() {
-        for tab in [StepTab::Overview, StepTab::Ceremony] {
+        for tab in [StepTab::Overview, StepTab::Ceremony, StepTab::System] {
             let mut model = Model::new();
             model.screen = Screen::Step { tab };
             let cmds = update(&mut model, Msg::Key(key(KeyCode::Char('d'))));
@@ -659,7 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_overview_ceremony_deviations() {
+    fn tab_cycles_overview_ceremony_deviations_system() {
         let mut model = Model::new();
         // Default tab is Overview.
         assert!(matches!(
@@ -680,6 +689,13 @@ mod tests {
             model.screen,
             Screen::Step {
                 tab: StepTab::Deviations
+            }
+        ));
+        let _ = update(&mut model, Msg::Key(key(KeyCode::Tab)));
+        assert!(matches!(
+            model.screen,
+            Screen::Step {
+                tab: StepTab::System
             }
         ));
         let _ = update(&mut model, Msg::Key(key(KeyCode::Tab)));
@@ -728,6 +744,7 @@ mod tests {
         );
         // Operator switches back to Overview to re-read the description.
         let _ = update(&mut model, Msg::Key(key(KeyCode::Tab))); // → Deviations
+        let _ = update(&mut model, Msg::Key(key(KeyCode::Tab))); // → System
         let _ = update(&mut model, Msg::Key(key(KeyCode::Tab))); // → Overview
         assert!(matches!(
             model.screen,

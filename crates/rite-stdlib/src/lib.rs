@@ -57,7 +57,8 @@ pub use crypto::{ExportPublicAction, GenerateKeypairAction, UnwrapKeyAction, Wra
 pub use pki::{GenerateCsrAction, IssueCertificateAction};
 #[cfg(feature = "verification")]
 pub use verification::{
-    CheckValueAction, ClockCheckAction, ConfirmAction, MachineInfoAction, OralReadbackAction,
+    CheckValueAction, ClockCheckAction, ConfirmAction, HostInfoScope, MachineInfoAction,
+    OralReadbackAction, gather_environment, gather_host_info,
 };
 
 /// Create a new action registry with all standard-library actions registered.

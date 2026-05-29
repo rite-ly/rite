@@ -51,6 +51,7 @@ use crate::protocol::{ExecEvent, Icon, MaterialOverview, UiCommand, UiSignal};
 use crate::reporter::{Reporter, ReporterError};
 use crate::state::{ExecutionState, HandlerContext, StepResult};
 use crate::step_info::StepInfo;
+use crate::system_info::StartupSnapshot;
 use crate::transcript_sink::{TranscriptFingerprint, TranscriptSink};
 use rite_model::{ErrorRecord, Prompt, StepFact, StepOutcome};
 
@@ -207,10 +208,15 @@ pub struct Executor {
     backend_registry: BackendRegistry,
     output_config: OutputConfig,
     dry_run: bool,
+    startup: StartupSnapshot,
 }
 
 impl Executor {
     /// Build an executor for a single ceremony run.
+    ///
+    /// `startup` carries the system identity and device environment the CLI
+    /// gathered at launch; the executor echoes them to the frontend as UI
+    /// signals at ceremony start and does not otherwise inspect them.
     #[must_use]
     pub fn new(
         ceremony: Ceremony,
@@ -218,6 +224,7 @@ impl Executor {
         backend_registry: BackendRegistry,
         output_config: OutputConfig,
         dry_run: bool,
+        startup: StartupSnapshot,
     ) -> Self {
         Self {
             ceremony,
@@ -225,6 +232,7 @@ impl Executor {
             backend_registry,
             output_config,
             dry_run,
+            startup,
         }
     }
 
@@ -346,6 +354,13 @@ impl Executor {
                 .collect(),
             step_count: self.ceremony.execution_plan.len(),
         })?;
+
+        // Machine identity and device environment for the System tab. Both
+        // UI-only: identity that belongs in the transcript is recorded by the
+        // `machine_info` action, not fed in here. `Environment` is emitted
+        // once today but shaped to be re-emitted by a future live observer.
+        reporter.signal(UiSignal::SystemInfo(Box::new(self.startup.system.clone())))?;
+        reporter.signal(UiSignal::Environment(self.startup.environment.clone()))?;
 
         // Ceremony-start gate: let the operator review the overview
         // before any side effect (material loading, first step body). The
@@ -653,6 +668,7 @@ sections:
             BackendRegistry::new(),
             dry_run_output_config(),
             true,
+            StartupSnapshot::placeholder(),
         );
 
         let join = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
@@ -733,6 +749,7 @@ sections:
             BackendRegistry::new(),
             dry_run_output_config(),
             false, // dry_run=false so prompts actually fire
+            StartupSnapshot::placeholder(),
         );
 
         // Drive the frontend on a worker so the executor's prompt waits
@@ -865,6 +882,7 @@ sections:
             BackendRegistry::new(),
             dry_run_output_config(),
             true,
+            StartupSnapshot::placeholder(),
         );
 
         let join = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));

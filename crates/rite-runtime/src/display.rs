@@ -66,9 +66,10 @@ pub fn fact_summary(fact: &StepFact) -> Option<(Icon, String)> {
 
 /// One-line summary of a [`UiSignal`] for live-frontend display.
 ///
-/// Returns `None` for signals that frontends handle out-of-band
-/// (currently [`UiSignal::CeremonyOverview`], which populates structured
-/// fields rather than a single narration line).
+/// Returns `None` for the structured signals that frontends handle
+/// out-of-band ([`UiSignal::CeremonyOverview`], [`UiSignal::SystemInfo`],
+/// [`UiSignal::Environment`]), which populate structured fields rather than a
+/// single narration line.
 #[must_use]
 pub fn signal_summary(signal: &UiSignal) -> Option<(Icon, String)> {
     match signal {
@@ -82,7 +83,9 @@ pub fn signal_summary(signal: &UiSignal) -> Option<(Icon, String)> {
             };
             Some((Icon::Spinner, text))
         }
-        UiSignal::CeremonyOverview { .. } => None,
+        UiSignal::CeremonyOverview { .. } | UiSignal::SystemInfo(_) | UiSignal::Environment(_) => {
+            None
+        }
     }
 }
 

@@ -16,6 +16,8 @@
 use rite_model::{Material, MaterialId, MaterialKind, Prompt, StepFact, StepId};
 use secrecy::SecretString;
 
+use crate::system_info::{Environment, SystemInfo};
+
 /// Identifier that pairs a prompt request with its matching response.
 ///
 /// Issued by the runtime when emitting [`ExecEvent::AwaitPrompt`]; echoed back
@@ -155,8 +157,31 @@ impl MaterialOverview {
 }
 
 /// Transient UI-only signal. Never written to the transcript.
+///
+/// Signals are operator-assistance, not evidence. A frontend may **drop any
+/// variant** without affecting correctness or the transcript (this is exactly
+/// why `headless` and `console` ignore most of them). To persist information,
+/// emit a [`StepFact`] from an action; nothing here is ever promoted into the
+/// transcript. See `docs/development/runtime-and-frontend.md` for the full
+/// fact-vs-signal model.
+///
+/// The enum is intentionally **not** `#[non_exhaustive]`: it is a
+/// workspace-internal protocol type, and forcing every frontend to match each
+/// variant exhaustively (no wildcard arms) is the wanted compile-time check
+/// that a new signal is consciously handled or ignored everywhere. Public-API
+/// enums still get `#[non_exhaustive]`.
+///
+/// Variants fall into three sub-families:
+/// - **narration**: ephemeral lines and progress ([`LogLine`](Self::LogLine),
+///   [`Progress`](Self::Progress)).
+/// - **one-shot structured**: a single snapshot emitted at ceremony start
+///   ([`CeremonyOverview`](Self::CeremonyOverview),
+///   [`SystemInfo`](Self::SystemInfo)).
+/// - **re-emittable structured**: state the runtime may resend during the run;
+///   the frontend replaces its view on each ([`Environment`](Self::Environment)).
 #[derive(Debug, Clone)]
 pub enum UiSignal {
+    // --- narration ---
     /// Human-readable narration line for the live UI.
     LogLine {
         /// Step the line belongs to (if any).
@@ -175,6 +200,8 @@ pub enum UiSignal {
         /// Optional completion fraction in `[0.0, 1.0]`.
         fraction: Option<f32>,
     },
+
+    // --- one-shot structured ---
     /// Descriptive metadata for the pre-ceremony overview screen. Emitted
     /// once, right after [`StepFact::CeremonyStarted`]. Deliberately kept
     /// out of the transcript: the YAML is the source of truth for these
@@ -189,6 +216,22 @@ pub enum UiSignal {
         /// Total number of steps in the execution plan.
         step_count: usize,
     },
+    /// Static build and host identity for the System tab. Emitted once, right
+    /// after [`CeremonyOverview`](Self::CeremonyOverview). UI-only: machine
+    /// identity that belongs in the transcript is recorded by the
+    /// `machine_info` action, not fed in through this channel.
+    ///
+    /// Boxed: [`SystemInfo`] is much larger than the other variants, and
+    /// keeping the enum (and `ExecEvent`) small avoids bloating every
+    /// channel message.
+    SystemInfo(Box<SystemInfo>),
+
+    // --- re-emittable structured ---
+    /// Live device inventory for the System tab. Emitted once today, but
+    /// shaped to be **re-emitted**: the frontend replaces its environment view
+    /// on each, so a future live observer is purely additive. UI-only, never
+    /// persisted.
+    Environment(Environment),
 }
 
 /// Event emitted by the runtime to the frontend.

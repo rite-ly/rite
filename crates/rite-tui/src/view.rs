@@ -51,7 +51,7 @@ mod theme {
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Tab labels, rendered as a centered pill row.
-const TAB_LABELS: [&str; 3] = [" Overview ", " Ceremony ", " Deviations "];
+const TAB_LABELS: [&str; 4] = [" Overview ", " Ceremony ", " Deviations ", " System "];
 const TAB_DIVIDER: &str = "│";
 
 /// Static glyph for a non-spinner [`Icon`]. The TUI owns its glyph mapping;
@@ -152,6 +152,10 @@ fn render_step_screen(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: 
             render_deviations(model, frame, content_area);
             model.log_scroll
         }
+        StepTab::System => {
+            render_system(model, frame, content_area);
+            model.log_scroll
+        }
     }
 }
 
@@ -175,6 +179,7 @@ fn render_tabs_row(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: Rec
         StepTab::Overview => 0,
         StepTab::Ceremony => 1,
         StepTab::Deviations => 2,
+        StepTab::System => 3,
     };
     let mut spans: Vec<Span<'_>> = Vec::with_capacity(TAB_LABELS.len().saturating_mul(2));
     for (i, label) in TAB_LABELS.iter().enumerate() {
@@ -527,6 +532,160 @@ fn render_overview(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     );
 }
 
+/// System tab: a static build/host identity header, then the live device
+/// environment. Situational awareness for the operator during the run; none
+/// of this is recorded to the transcript (the `machine_info` action covers
+/// machine identity as evidence).
+fn render_system(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+    let mut lines: Vec<Line<'_>> = Vec::new();
+
+    if let Some(info) = &model.system_info {
+        lines.push(section_heading("Build"));
+        lines.push(kv_line("rite", &info.build.version));
+        lines.push(kv_line("commit", &info.build.commit));
+        lines.push(kv_line("built", &info.build.build_date));
+        lines.push(kv_line("target", &info.build.target));
+        lines.push(kv_line("profile", &info.build.profile));
+        if !info.build.features.is_empty() {
+            lines.push(kv_line("features", &info.build.features));
+        }
+        lines.push(Line::from(""));
+
+        lines.push(section_heading("Host"));
+        let os = match (&info.host.os, &info.host.os_version) {
+            (Some(os), Some(v)) => format!("{os} ({v})"),
+            (Some(os), None) => os.clone(),
+            (None, _) => "unknown".to_string(),
+        };
+        lines.push(kv_line("os", &os));
+        lines.push(kv_line("arch", &info.host.arch));
+        if let Some(hostname) = &info.host.hostname {
+            lines.push(kv_line("hostname", hostname));
+        }
+        lines.push(Line::from(""));
+
+        lines.push(section_heading("Backends"));
+        if info.backends.is_empty() {
+            lines.push(dim_line("(none linked)"));
+        } else {
+            for backend in &info.backends {
+                let value = match &backend.source {
+                    Some(source) => format!("{} ({source})", backend.version),
+                    None => backend.version.clone(),
+                };
+                lines.push(kv_line(&backend.provider, &value));
+            }
+        }
+        lines.push(Line::from(""));
+    } else {
+        lines.push(dim_line("(system information unavailable)"));
+        lines.push(Line::from(""));
+    }
+
+    lines.push(section_heading("Disks"));
+    match model.environment.as_ref().map(|e| &e.disks) {
+        Some(disks) if !disks.is_empty() => {
+            for disk in disks {
+                lines.extend(disk_lines(disk));
+            }
+        }
+        Some(_) => lines.push(dim_line("(none detected)")),
+        None => lines.push(dim_line("(not yet collected)")),
+    }
+    lines.push(Line::from(""));
+
+    lines.push(section_heading("Peripherals"));
+    lines.push(dim_line("(not yet collected)"));
+    lines.push(Line::from(""));
+    lines.push(section_heading("Network"));
+    lines.push(dim_line("(not yet collected)"));
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(plain_block()),
+        area,
+    );
+}
+
+/// A bold section heading line, styled like the Overview tab's headings.
+fn section_heading(text: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        text.to_string(),
+        theme::title().add_modifier(Modifier::BOLD),
+    ))
+}
+
+/// A dimmed standalone line (placeholders, "none" markers).
+fn dim_line(text: &str) -> Line<'static> {
+    Line::from(Span::styled(text.to_string(), theme::footer()))
+}
+
+/// A `label   value` line: dimmed label in a fixed-width column, value in
+/// body text.
+fn kv_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<11}"), theme::footer()),
+        Span::styled(value.to_string(), theme::text()),
+    ])
+}
+
+/// Render one disk as a bullet heading plus a dimmed detail line.
+fn disk_lines(disk: &rite_runtime::Disk) -> Vec<Line<'static>> {
+    let mut head = vec![
+        Span::raw("• "),
+        Span::styled(
+            disk.mount_point.clone(),
+            theme::text().add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(disk.name.clone(), theme::footer()),
+    ];
+    if disk.removable {
+        head.push(Span::styled("  · removable", theme::footer()));
+    }
+    let mut detail = format!(
+        "{} free of {}",
+        format_bytes(disk.available_bytes),
+        format_bytes(disk.total_bytes),
+    );
+    if let Some(fs) = &disk.file_system {
+        detail.push_str(" · ");
+        detail.push_str(fs);
+    }
+    if let Some(kind) = &disk.kind {
+        detail.push_str(" · ");
+        detail.push_str(kind);
+    }
+    vec![
+        Line::from(head),
+        Line::from(Span::styled(format!("  {detail}"), theme::footer())),
+    ]
+}
+
+/// Human-readable byte size with binary (1024) units. Explicit thresholds
+/// rather than a divide-and-count loop, to stay clear of the integer
+/// arithmetic and indexing lints.
+#[allow(clippy::cast_precision_loss)]
+fn format_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1 << 10;
+    const MIB: u64 = 1 << 20;
+    const GIB: u64 = 1 << 30;
+    const TIB: u64 = 1 << 40;
+    let scaled = |unit: u64| bytes as f64 / unit as f64;
+    if bytes >= TIB {
+        format!("{:.1} TiB", scaled(TIB))
+    } else if bytes >= GIB {
+        format!("{:.1} GiB", scaled(GIB))
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", scaled(MIB))
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", scaled(KIB))
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 /// Render one material as a heading line plus an optional dimmed
 /// description, so the overview reads as a scannable bulleted list.
 fn material_lines(material: &MaterialOverview) -> Vec<Line<'static>> {
@@ -729,7 +888,8 @@ fn render_footer(model: &Model, frame: &mut Frame<'_>, area: Rect) {
             (StepTab::Ceremony, false) => {
                 "↑/↓ · PgUp/PgDn: scroll  ·  Tab: deviations  ·  Esc: abort"
             }
-            (StepTab::Deviations, _) => "d: log deviation  ·  Tab: overview  ·  Esc: abort",
+            (StepTab::Deviations, _) => "d: log deviation  ·  Tab: system  ·  Esc: abort",
+            (StepTab::System, _) => "Tab: overview  ·  Esc: abort",
         },
     };
     frame.render_widget(Paragraph::new(hint).style(theme::footer()), area);

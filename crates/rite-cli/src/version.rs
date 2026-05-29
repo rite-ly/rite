@@ -1,5 +1,7 @@
 use clap::Args as ClapArgs;
 
+use crate::system_info::gather_system;
+
 #[derive(ClapArgs, Debug)]
 pub struct Args {
     /// Print detailed build and environment diagnostics
@@ -8,29 +10,23 @@ pub struct Args {
 }
 
 pub fn run(args: &Args) {
-    println!("rite {}", env!("CARGO_PKG_VERSION"));
+    let info = gather_system();
+    println!("rite {}", info.build.version);
     if args.verbose {
-        println!("target: {}", env!("RITE_BUILD_TARGET"));
-        println!("profile: {}", env!("RITE_BUILD_PROFILE"));
-        println!("features: {}", env!("RITE_BUILD_FEATURES"));
-        println!("commit: {}", env!("RITE_BUILD_COMMIT"));
-        println!("commit_date: {}", env!("RITE_BUILD_COMMIT_DATE"));
-        println!("build_date: {}", env!("RITE_BUILD_DATE"));
-        println!("rustc: {}", env!("RITE_BUILD_RUSTC"));
-        #[cfg(feature = "openssl")]
-        println!("openssl: {}", openssl::version::version());
-        #[cfg(feature = "openssl")]
-        println!("openssl_source: {}", openssl_source());
+        println!("target: {}", info.build.target);
+        println!("profile: {}", info.build.profile);
+        println!("features: {}", info.build.features);
+        println!("commit: {}", info.build.commit);
+        println!("commit_date: {}", info.build.commit_date);
+        println!("build_date: {}", info.build.build_date);
+        println!("rustc: {}", info.build.rustc);
+        for backend in &info.backends {
+            println!("{}: {}", backend.provider, backend.version);
+            if let Some(source) = &backend.source {
+                println!("{}_source: {source}", backend.provider);
+            }
+        }
         println!("os: {}", std::env::consts::OS);
         println!("arch: {}", std::env::consts::ARCH);
-    }
-}
-
-#[cfg(feature = "openssl")]
-fn openssl_source() -> &'static str {
-    if cfg!(feature = "openssl-vendored") {
-        "vendored"
-    } else {
-        "system"
     }
 }

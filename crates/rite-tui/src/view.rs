@@ -229,16 +229,11 @@ fn render_deviation_modal(input: &str, frame: &mut Frame<'_>, area: Rect) {
         Line::from("Describe what happened, then press Enter."),
         Line::from(""),
         Line::from(format!("> {input}")),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Enter: submit  ·  Esc: cancel",
-            theme::footer(),
-        )),
     ];
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(titled_block("Deviation")),
+            .block(plain_block()),
         area,
     );
 }
@@ -272,18 +267,34 @@ fn render_abort_confirm(frame: &mut Frame<'_>, area: Rect) {
 /// dimming, scrollable, plus the pending prompt pinned at the bottom.
 /// This is the operator's working surface during execution.
 fn render_ceremony(model: &Model, frame: &mut Frame<'_>, area: Rect) -> usize {
-    if let Some(pending) = &model.pending_prompt {
-        let prompt_height = prompt_block_height(pending);
-        let [logs_area, prompt_area] = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(prompt_height)])
-            .areas(area);
-        let applied = render_ceremony_table(model, frame, logs_area);
-        render_prompt(pending, frame, prompt_area);
-        applied
-    } else {
-        render_ceremony_table(model, frame, area)
+    // Always reserve the prompt panel, even with no pending prompt, so the
+    // log area keeps a constant size: otherwise the box resizes and flickers
+    // each time a prompt appears or clears while an action runs.
+    let prompt_height = model
+        .pending_prompt
+        .as_ref()
+        .map_or(EMPTY_PROMPT_HEIGHT, prompt_block_height);
+    let [logs_area, prompt_area] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(prompt_height)])
+        .areas(area);
+    let applied = render_ceremony_table(model, frame, logs_area);
+    match &model.pending_prompt {
+        Some(pending) => render_prompt(pending, frame, prompt_area),
+        None => render_empty_prompt(frame, prompt_area),
     }
+    applied
+}
+
+/// Height of the placeholder prompt box: one content line plus borders,
+/// matching a single-line prompt so the log area doesn't jump when most
+/// prompts appear.
+const EMPTY_PROMPT_HEIGHT: u16 = 3;
+
+/// Render the empty placeholder where the prompt box sits, holding the
+/// layout steady while no prompt is pending.
+fn render_empty_prompt(frame: &mut Frame<'_>, area: Rect) {
+    frame.render_widget(Paragraph::new("").block(plain_block()), area);
 }
 
 /// Conservative fixed height for the prompt panel, including its border.
@@ -338,10 +349,12 @@ fn render_prompt(pending: &crate::model::PendingPrompt, frame: &mut Frame<'_>, a
 fn prompt_title(pending: &crate::model::PendingPrompt) -> Line<'_> {
     let mut spans = vec![Span::styled("Prompt", theme::title())];
     if let Prompt::Confirm { default, .. } = &pending.prompt {
+        // The capitalized letter is the one Enter submits. With no explicit
+        // default the handler submits yes (`default.unwrap_or(true)`), so the
+        // hint capitalizes Y to match.
         let hint = match default {
-            Some(true) => "Y/n",
+            Some(true) | None => "Y/n",
             Some(false) => "y/N",
-            None => "y/n",
         };
         spans.push(Span::styled(format!(" [{hint}]"), theme::footer()));
     }
@@ -353,27 +366,23 @@ fn prompt_title(pending: &crate::model::PendingPrompt) -> Line<'_> {
 
 /// Render a [`LogLine`] as a single styled line in the Ceremony table.
 ///
-/// `Entry` becomes a `step | time | message` columnar row.
+/// `Entry` becomes a `time | message` row. The owning step is carried by
+/// the `StepDivider` above it (and the header's Step section), so it is not
+/// repeated per line.
 /// `StepDivider` and `ActDivider` become full-width section markers —
-/// the dividers carry section structure that the per-row step column
-/// can't (role for steps, name for acts), and act dividers use a
-/// double rule to convey the act-contains-steps hierarchy.
+/// the dividers carry section structure (role for steps, name for acts),
+/// and act dividers use a double rule to convey the act-contains-steps
+/// hierarchy.
 ///
 /// `current` selects active vs. muted styling: current-section content
 /// keeps its full color; past content drops to footer gray.
 fn log_table_row(line: &LogLine, tick: u64, current: bool, inner_width: u16) -> Line<'_> {
     match line {
-        LogLine::Entry {
-            icon,
-            text,
-            step,
-            at,
-        } => {
+        LogLine::Entry { icon, text, at, .. } => {
             let prefix = match icon {
                 Icon::Spinner => spinner_glyph(tick),
                 other => icon_glyph(*other),
             };
-            let step_col = format!("{:>STEP_COL_WIDTH$}", step.as_deref().unwrap_or("·"));
             let time_col = at.format("%H:%M:%S").to_string();
             let message_style = if current {
                 theme::text()
@@ -381,8 +390,6 @@ fn log_table_row(line: &LogLine, tick: u64, current: bool, inner_width: u16) -> 
                 theme::footer()
             };
             Line::from(vec![
-                Span::styled(step_col, theme::footer()),
-                Span::raw("  "),
                 Span::styled(time_col, theme::footer()),
                 Span::raw("  "),
                 Span::styled(format!("{prefix} {text}"), message_style),
@@ -399,10 +406,6 @@ fn log_table_row(line: &LogLine, tick: u64, current: bool, inner_width: u16) -> 
         }
     }
 }
-
-/// Width of the step column in the table view. Five characters fits
-/// the longest realistic label (e.g. `10.12`) and a single dot fallback.
-const STEP_COL_WIDTH: usize = 5;
 
 /// Build a section divider line: `<rule> <label> <rule…>` filling
 /// `inner_width` cells. `rule` controls the rule glyph (`─` for steps,
@@ -772,26 +775,33 @@ fn append_prose_paragraphs(out: &mut Vec<Line<'static>>, text: &str, indent: usi
 /// Deviations tab. Currently just the deviations list; reserved for
 /// future side content (operator notes, attestation summary).
 fn render_deviations(model: &Model, frame: &mut Frame<'_>, area: Rect) {
-    let dev_lines: Vec<Line<'_>> = model
-        .deviations
-        .iter()
-        .map(|d| {
-            let time = d.at.format("%H:%M:%S").to_string();
-            let body = match &d.step {
-                Some(step) => format!("⚠ ({step}) {}", d.text),
-                None => format!("⚠ {}", d.text),
-            };
-            Line::from(vec![
-                Span::styled(time, theme::footer()),
-                Span::raw("  "),
-                Span::raw(body),
-            ])
-        })
-        .collect();
+    let dev_lines: Vec<Line<'_>> = if model.deviations.is_empty() {
+        vec![Line::from(Span::styled(
+            "Press d to log a deviation",
+            theme::footer(),
+        ))]
+    } else {
+        model
+            .deviations
+            .iter()
+            .map(|d| {
+                let time = d.at.format("%H:%M:%S").to_string();
+                let body = match &d.step {
+                    Some(step) => format!("⚠ ({step}) {}", d.text),
+                    None => format!("⚠ {}", d.text),
+                };
+                Line::from(vec![
+                    Span::styled(time, theme::footer()),
+                    Span::raw("  "),
+                    Span::raw(body),
+                ])
+            })
+            .collect()
+    };
     frame.render_widget(
         Paragraph::new(Text::from(dev_lines))
             .wrap(Wrap { trim: false })
-            .block(titled_block("Deviations")),
+            .block(plain_block()),
         area,
     );
 }
@@ -881,18 +891,22 @@ fn render_footer(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         Screen::AbortConfirm => "y: abort  ·  n / Esc: cancel",
         Screen::Completed { .. } | Screen::Failed { .. } => "Enter / Esc: exit",
         Screen::Step { tab } => match (tab, model.pending_prompt.is_some()) {
-            (StepTab::Overview, _) => "Tab: ceremony  ·  Esc: abort",
+            (StepTab::Overview | StepTab::System, _) => "Tab: next tab  ·  Esc: abort",
             (StepTab::Ceremony, true) => {
-                "Enter: submit  ·  ↑/↓ · PgUp/PgDn: scroll  ·  Tab: deviations  ·  Esc: abort"
+                "Enter: submit  ·  ↑/↓ · PgUp/PgDn: scroll  ·  Tab: next tab  ·  Esc: abort"
             }
             (StepTab::Ceremony, false) => {
-                "↑/↓ · PgUp/PgDn: scroll  ·  Tab: deviations  ·  Esc: abort"
+                "↑/↓ · PgUp/PgDn: scroll  ·  Tab: next tab  ·  Esc: abort"
             }
-            (StepTab::Deviations, _) => "d: log deviation  ·  Tab: system  ·  Esc: abort",
-            (StepTab::System, _) => "Tab: overview  ·  Esc: abort",
+            (StepTab::Deviations, _) => "d: log deviation  ·  Tab: next tab  ·  Esc: abort",
         },
     };
-    frame.render_widget(Paragraph::new(hint).style(theme::footer()), area);
+    frame.render_widget(
+        Paragraph::new(hint)
+            .style(theme::footer())
+            .alignment(Alignment::Center),
+        area,
+    );
 }
 
 fn spinner_glyph(tick: u64) -> &'static str {

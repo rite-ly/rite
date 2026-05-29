@@ -294,6 +294,26 @@ fn preview_deviations_tab() {
 }
 
 #[test]
+fn preview_deviations_empty() {
+    let mut m = sample_running();
+    m.screen = Screen::Step {
+        tab: StepTab::Deviations,
+    };
+    let out = render(&m, 100, 24);
+    eprintln!("--- deviations tab / empty (100x24) ---\n{out}");
+}
+
+#[test]
+fn preview_deviation_modal() {
+    let mut m = sample_running();
+    m.screen = Screen::DeviationModal {
+        input: "Clock drift of 3s observed against atomic reference".to_string(),
+    };
+    let out = render(&m, 100, 24);
+    eprintln!("--- deviation modal (100x24) ---\n{out}");
+}
+
+#[test]
 fn preview_system_tab() {
     let m = sample_system();
     let out = render(&m, 100, 24);

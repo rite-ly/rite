@@ -1,9 +1,8 @@
 version: "0.2"
-name: "Root CA Key Generation (Software)"
+name: "Root CA Key Generation"
 description: |
-  Generate the offline root CA keypair on an air-gapped machine. The private key is
-  wrapped with a transport public key and stored as an encrypted backup.
-  The keyholder of the transport private key is the sole custodian of the wrapped backup.
+  Generate the offline root CA keypair on an air-gapped machine.
+  The private key is wrapped with a transport public key and stored as an encrypted backup.
 
 backends:
   openssl:
@@ -21,8 +20,6 @@ materials:
     path: "test_keys/transport_public.pem"
     description: |
       Crypto officer's transport RSA-4096 public key.
-      The corresponding private key must be kept secure, it is needed in ceremony 2
-      to unwrap the root CA key for signing.
 
 output:
   root_ca_cert:
@@ -145,7 +142,7 @@ sections:
         action: attest
         role: ${role.crypto_officer}
         with:
-          statement: "Root CA keypair generated. Private key wrapped with transport public key and stored as encrypted backup."
+          statement: "Root CA keypair generated."
 
 after:
   archive:

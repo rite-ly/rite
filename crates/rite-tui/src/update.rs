@@ -47,10 +47,18 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             Vec::new()
         }
         // The forwarder sends Msg::Quit when the executor's channel
-        // closes, which happens right after the terminal fact. Don't
-        // tear the TUI down underneath the operator before they've
-        // read the Completed/Failed screen; require an explicit key.
+        // closes, which happens right after the terminal fact. The
+        // terminal fact (CeremonyCompleted / CeremonyFailed) and the
+        // Finalized fingerprint usually arrive still queued in the drip
+        // buffer, so flush it now: otherwise the screen isn't terminal
+        // yet and we'd tear the TUI down before the operator ever sees
+        // the completion screen (and the fingerprint to write down).
+        // Once flushed, only stay if we actually reached a terminal
+        // screen; require an explicit key to leave it.
         Msg::Quit => {
+            while let Some(event) = model.pending_events.pop_front() {
+                handle_exec_event(model, event);
+            }
             if model.screen.is_terminal() {
                 Vec::new()
             } else {
@@ -901,6 +909,54 @@ mod tests {
             } => assert_eq!(fp, "sha256:abc"),
             other => panic!("expected fingerprinted Completed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn quit_flushes_queued_terminal_fact_so_completion_screen_shows() {
+        let mut model = Model::new();
+        // At ceremony end the executor emits CeremonyCompleted then the
+        // Finalized fingerprint and closes the channel; the forwarder turns
+        // the close into Msg::Quit. The two facts are still queued in the
+        // drip buffer when Quit arrives.
+        let _ = update(
+            &mut model,
+            Msg::Exec(ExecEvent::Fact(StepFact::CeremonyCompleted {
+                completed_at: Utc::now(),
+            })),
+        );
+        let _ = update(
+            &mut model,
+            Msg::Exec(ExecEvent::Finalized {
+                fingerprint: "sha256:abc".to_string(),
+            }),
+        );
+        assert_eq!(model.pending_events.len(), 2);
+        assert!(!model.screen.is_terminal());
+
+        // Quit must flush the queue first, so it lands on the Completed
+        // screen (with the fingerprint) instead of tearing the TUI down.
+        let cmds = update(&mut model, Msg::Quit);
+        assert!(
+            cmds.is_empty(),
+            "Quit must not tear down before the completion screen is shown",
+        );
+        assert!(model.pending_events.is_empty());
+        match &model.screen {
+            Screen::Completed {
+                fingerprint: Some(fp),
+                ..
+            } => assert_eq!(fp, "sha256:abc"),
+            other => panic!("expected fingerprinted Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn quit_mid_ceremony_still_tears_down() {
+        // Channel closed without a terminal fact (e.g. executor crash): with
+        // nothing terminal to show, Quit should still request teardown.
+        let mut model = Model::new();
+        let cmds = update(&mut model, Msg::Quit);
+        assert!(matches!(cmds.as_slice(), [Cmd::Quit]));
     }
 
     #[test]

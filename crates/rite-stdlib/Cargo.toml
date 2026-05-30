@@ -1,12 +1,15 @@
 [package]
 name        = "rite-stdlib"
-description = "Standard action library for Rite ceremony execution"
+description = "Built-in action library for Rite ceremonies (internal to the `rite` CLI; no stable API)"
 version.workspace    = true
 edition.workspace    = true
+rust-version.workspace = true
 license.workspace    = true
 repository.workspace = true
 homepage.workspace = true
-publish = false #TODO enable at a later time, disabled for safety
+keywords = []
+categories = []
+publish = true
 
 [features]
 default      = ["verification", "attestation", "crypto", "pki", "openssl"]
@@ -19,10 +22,10 @@ openssl-vendored = ["openssl", "rite-openssl/vendored"]
 full             = ["verification", "attestation", "crypto", "pki", "openssl"]
 
 [dependencies]
-rite-sdk     = { path = "../rite-sdk" }
-rite-model   = { path = "../rite-model" }
-rite-runtime = { path = "../rite-runtime" }
-rite-openssl = { path = "../rite-openssl", optional = true }
+rite-sdk     = { workspace = true }
+rite-model   = { workspace = true }
+rite-runtime = { workspace = true }
+rite-openssl = { workspace = true, optional = true }
 
 serde      = { workspace = true }
 serde_json = { workspace = true }
@@ -39,7 +42,7 @@ rsa       = { workspace = true, optional = true }
 p256      = { workspace = true, optional = true }
 
 [dev-dependencies]
-rite-openssl = { path = "../rite-openssl" }
+rite-openssl = { workspace = true }
 openssl      = { workspace = true }
 
 [lints]

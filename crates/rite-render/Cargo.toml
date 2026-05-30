@@ -1,15 +1,18 @@
 [package]
-name = "rite-script"
-description = "HTML ceremony script and report generation for Rite"
+name = "rite-render"
+description = "Document generation (scripts and reports) for Rite ceremonies (internal to the `rite` CLI; no stable API)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-publish = false
+keywords = []
+categories = []
+publish = true
 
 [dependencies]
-rite-model = { path = "../rite-model" }
+rite-model = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

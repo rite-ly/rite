@@ -7,7 +7,7 @@ members = [
     "crates/rite-runtime",
     "crates/rite-stdlib",
     "crates/rite-openssl",
-    "crates/rite-script",
+    "crates/rite-render",
     "crates/rite-cli",
     "crates/rite-ls",
     "crates/rite-tui",
@@ -16,14 +16,25 @@ members = [
 [workspace.package]
 version = "0.2.1"
 edition = "2024"
+rust-version = "1.88"
 license = "GPL-3.0-only"
 repository = "https://github.com/rite-ly/rite"
 homepage = "https://ritely.io"
 
 [workspace.dependencies]
-# Workspace-internal crates. The `version` only matters at publish time.
+# Workspace-internal crates. The `version` only matters at publish time, where it
+# pins the inter-crate dependency for users installing from crates.io. Every crate
+# is published together at the same version each release: the runtime, stdlib,
+# OpenSSL backend, renderer, and TUI carry no cross-version API guarantee.
 rite-sdk = { path = "crates/rite-sdk", version = "0.2" }
 rite-model = { path = "crates/rite-model", version = "0.2" }
+rite-resolver = { path = "crates/rite-resolver", version = "0.2" }
+rite-runtime = { path = "crates/rite-runtime", version = "0.2" }
+rite-openssl = { path = "crates/rite-openssl", version = "0.2" }
+# Sole consumer (rite-cli) builds it without default features.
+rite-stdlib = { path = "crates/rite-stdlib", version = "0.2", default-features = false }
+rite-render = { path = "crates/rite-render", version = "0.2" }
+rite-tui = { path = "crates/rite-tui", version = "0.2" }
 
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["raw_value"] }

@@ -4,8 +4,8 @@ use clap::Args as ClapArgs;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use rite_render::report::{build_report_data, generate_report_html};
 use rite_runtime::read_verified_transcript;
-use rite_script::report::{build_report_data, generate_report_html};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {

@@ -1,16 +1,19 @@
 [package]
 name = "rite-runtime"
-description = "Execution runtime for Rite ceremonies"
+description = "Execution engine for Rite ceremonies (internal to the `rite` CLI; no stable API)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-publish = false #TODO enable at a later time, disabled for safety
+keywords = []
+categories = []
+publish = true
 
 [dependencies]
-rite-sdk   = { path = "../rite-sdk" }
-rite-model = { path = "../rite-model" }
+rite-sdk   = { workspace = true }
+rite-model = { workspace = true }
 
 serde      = { workspace = true }
 serde_json = { workspace = true }
@@ -24,7 +27,7 @@ secrecy    = { workspace = true }
 crossbeam-channel = { workspace = true }
 
 [dev-dependencies]
-rite-resolver = { path = "../rite-resolver" }
+rite-resolver = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

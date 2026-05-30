@@ -13,6 +13,12 @@
 //! returns a list of [`Cmd`]s the runtime interprets (sending commands
 //! back to the executor, quitting). `view(model, frame)` is pure and the
 //! only place rendering happens.
+//!
+//! # Stability
+//!
+//! Internal crate. This is an implementation detail of the `rite` CLI, with no
+//! stable API and no semver guarantees across releases. Build against the
+//! public `rite-sdk`, `rite-model`, or `rite-resolver` crates instead.
 
 #![warn(missing_docs)]
 

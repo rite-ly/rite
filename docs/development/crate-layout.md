@@ -9,7 +9,7 @@ flowchart TD
     openssl[rite-openssl<br/>backend impl]
     runtime[rite-runtime<br/>protocol, executor, transcript]
     resolver[rite-resolver<br/>YAML → IR, diagnostics]
-    script[rite-script<br/>HTML script generation]
+    render[rite-render<br/>document generation]
     model[rite-model<br/>IR + transcript schema]
     sdk[rite-sdk<br/>backend traits, key types]
 
@@ -17,7 +17,7 @@ flowchart TD
     cli --> runtime
     cli --> stdlib
     cli --> openssl
-    cli --> script
+    cli --> render
     cli --> resolver
     tui --> runtime
     ls --> resolver
@@ -25,7 +25,7 @@ flowchart TD
     openssl --> sdk
     runtime --> sdk
     runtime --> model
-    script --> model
+    render --> model
     resolver --> model
 ```
 
@@ -39,7 +39,7 @@ flowchart TD
 | `rite-openssl`  | OpenSSL-backed `Backend` implementation.                                                                                                            |
 | `rite-tui`      | TEA-based interactive frontend (ratatui + crossterm).                                                                                               |
 | `rite-cli`      | `rite` binary; hosts the console and headless drivers and wires every crate above together.                                                         |
-| `rite-script`   | HTML ceremony script generation.                                                                                                                    |
+| `rite-render`   | Document generation: ceremony scripts and post-ceremony reports (HTML/PDF).                                                                          |
 | `rite-ls`       | Language server for editor integration.                                                                                                             |
 
 ## Boundary rules

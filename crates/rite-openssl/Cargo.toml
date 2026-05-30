@@ -1,19 +1,22 @@
 [package]
 name        = "rite-openssl"
-description = "OpenSSL backend for Rite ceremonies — system-linked or vendored"
+description = "OpenSSL backend for Rite ceremonies, system-linked or vendored (internal to the `rite` CLI; no stable API)"
 version.workspace    = true
 edition.workspace    = true
+rust-version.workspace = true
 license.workspace    = true
 repository.workspace = true
 homepage.workspace = true
-publish = false #TODO enable at a later time, disabled for safety
+keywords = []
+categories = []
+publish = true
 
 [features]
 default  = []
 vendored = ["openssl/vendored"]
 
 [dependencies]
-rite-sdk = { path = "../rite-sdk" }
+rite-sdk = { workspace = true }
 openssl = { workspace = true }
 base16ct = { workspace = true }
 

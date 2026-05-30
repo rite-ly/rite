@@ -1,16 +1,19 @@
 [package]
 name = "rite-tui"
-description = "Interactive terminal frontend for Rite ceremonies"
+description = "Interactive terminal frontend for Rite ceremonies (internal to the `rite` CLI; no stable API)"
 version.workspace = true
 edition.workspace = true
-license = "GPL-3.0-only"
+rust-version.workspace = true
+license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-publish = false
+keywords = []
+categories = []
+publish = true
 
 [dependencies]
-rite-model = { path = "../rite-model" }
-rite-runtime = { path = "../rite-runtime" }
+rite-model = { workspace = true }
+rite-runtime = { workspace = true }
 
 ratatui = { workspace = true }
 crossterm = { workspace = true }

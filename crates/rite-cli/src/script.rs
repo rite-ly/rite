@@ -19,7 +19,7 @@ pub fn run(args: &Args) {
     let inputs = build_inputs_or_exit(&args.input);
     let resolved = resolve_or_exit(&args.file, (!inputs.is_empty()).then_some(&inputs));
 
-    let html = rite_script::generate_html(&resolved);
+    let html = rite_render::generate_html(&resolved);
     write_output(&html, args.output.as_deref());
 }
 

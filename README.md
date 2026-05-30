@@ -143,11 +143,12 @@ Both bundle the `rite-ls` language server. For other LSP-aware editors, run `rit
   - [ ] Plugin system for out-of-process backends
 - [x] **Evidence and verification**
   - [x] Transcript generation and `rite verify`
+  - [ ] Verifiable randomness (#75)
   - [ ] Hardware-attested execution (TPM PCR measurements and signed quotes)
   - [ ] RFC3161 trusted timestamps
 - [x] **Output formats**
   - [x] Script and report generation (`rite script`, `rite report`)
-  - [ ] Themeable output via template engine
+  - [ ] Themeable output via template engine (#21)
 - [x] **IDE support** — VS Code, IntelliJ
   - [x] Language server: diagnostics, completion, hover, go-to-definition, references, symbols
   - [x] Semantic-token highlighting (initial: expressions and reference categories)

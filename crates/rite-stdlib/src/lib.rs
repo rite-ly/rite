@@ -28,6 +28,12 @@
 //!
 //! let registry = default_registry();
 //! ```
+//!
+//! # Stability
+//!
+//! Internal crate. This is an implementation detail of the `rite` CLI, with no
+//! stable API and no semver guarantees across releases. Build against the
+//! public `rite-sdk`, `rite-model`, or `rite-resolver` crates instead.
 
 #![warn(missing_docs)]
 

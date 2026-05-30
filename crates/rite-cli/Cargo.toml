@@ -1,10 +1,16 @@
 [package]
 name = "rite-cli"
+description = "Author, execute, and verify cryptographic key ceremonies (the `rite` CLI)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+keywords = ["cli", "ceremony", "rite"]
+categories = ["security", "command-line-utilities"]
+# Gated on the crates.io `rite` name.
+# At publish time, rename this package to `rite` and set `publish = true`; the binary is already named `rite`.
 publish = false
 
 [[bin]]
@@ -13,7 +19,7 @@ path = "src/main.rs"
 
 [features]
 default = ["render", "openssl", "verification", "attestation", "crypto", "pki", "tui"]
-render = ["dep:rite-script"]
+render = ["dep:rite-render"]
 openssl = ["rite-stdlib/openssl", "dep:openssl"]
 verification = ["rite-stdlib/verification"]
 attestation = ["rite-stdlib/attestation"]
@@ -23,12 +29,12 @@ openssl-vendored = ["rite-stdlib/openssl-vendored", "openssl"]
 tui = ["dep:rite-tui"]
 
 [dependencies]
-rite-model = { path = "../rite-model" }
-rite-resolver = { path = "../rite-resolver" }
-rite-runtime = { path = "../rite-runtime" }
-rite-script = { path = "../rite-script", optional = true }
-rite-stdlib = { path = "../rite-stdlib", default-features = false }
-rite-tui = { path = "../rite-tui", optional = true }
+rite-model = { workspace = true }
+rite-resolver = { workspace = true }
+rite-runtime = { workspace = true }
+rite-render = { workspace = true, optional = true }
+rite-stdlib = { workspace = true }
+rite-tui = { workspace = true, optional = true }
 openssl = { workspace = true, optional = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }

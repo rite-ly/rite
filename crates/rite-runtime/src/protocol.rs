@@ -1,7 +1,7 @@
 //! Channel vocabulary between the executor and a frontend.
 //!
 //! The persisted transcript schema (`StepFact` + friends) lives in
-//! [`rite_model::transcript`] so non-executor consumers (`rite-script`,
+//! [`rite_model::transcript`] so non-executor consumers (`rite-render`,
 //! third-party verifiers) can parse a transcript without depending on
 //! the runtime. This module owns only the **in-flight** vocabulary ,
 //! channel events and commands, prompt response values that carry

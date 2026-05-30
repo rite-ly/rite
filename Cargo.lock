@@ -1566,9 +1566,9 @@ dependencies = [
  "insta",
  "openssl",
  "rite-model",
+ "rite-render",
  "rite-resolver",
  "rite-runtime",
- "rite-script",
  "rite-stdlib",
  "rite-tui",
  "rpassword",
@@ -1610,6 +1610,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rite-render"
+version = "0.2.1"
+dependencies = [
+ "chrono",
+ "rite-model",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rite-resolver"
 version = "0.2.1"
 dependencies = [
@@ -1639,16 +1649,6 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "thiserror",
-]
-
-[[package]]
-name = "rite-script"
-version = "0.2.1"
-dependencies = [
- "chrono",
- "rite-model",
- "serde",
- "serde_json",
 ]
 
 [[package]]

@@ -50,7 +50,7 @@ mod theme {
 /// Spinner animation frames cycled by [`spinner_glyph`] for `Icon::Spinner`.
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// Tab labels, rendered as a centered pill row.
+/// Tab labels, rendered as a left-aligned pill row.
 const TAB_LABELS: [&str; 4] = [" Overview ", " Ceremony ", " Deviations ", " System "];
 const TAB_DIVIDER: &str = "│";
 
@@ -61,8 +61,12 @@ fn icon_glyph(icon: Icon) -> &'static str {
         Icon::Spinner => SPINNER_FRAMES[0],
         Icon::Checkmark => "✓",
         Icon::Cross => "✗",
-        Icon::Info => "ℹ",
-        Icon::Warning => "⚠",
+        // Info/Warning use ASCII so they align with ✓/✗ and never render as
+        // emoji. The symbol forms (ℹ U+2139, ⚠ U+26A0) draw as double-width
+        // colour emoji in some renderers (e.g. agg), and the circled/triangle
+        // alternatives sit at a different cell width and misalign the column.
+        Icon::Info => "i",
+        Icon::Warning => "!",
     }
 }
 
@@ -88,8 +92,13 @@ pub fn view(model: &Model, frame: &mut Frame<'_>) -> usize {
     applied_scroll
 }
 
-/// The leading `█` is a brand marker, not content; it picks up the
-/// TITLE color so it reads as part of the heading line.
+/// The brand marker that opens both the header and the tabs row, giving them
+/// a shared left gutter. A full block, not content, in the muted TITLE color
+/// so it reads as part of the heading line.
+fn brand_marker() -> Span<'static> {
+    Span::styled("█ ", theme::title())
+}
+
 fn render_header(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     let title = model
         .ceremony_name
@@ -102,7 +111,7 @@ fn render_header(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(version_width)]).areas(area);
 
     let left = Line::from(vec![
-        Span::styled("█ ", theme::title()),
+        brand_marker(),
         Span::styled(title, theme::title().add_modifier(Modifier::BOLD)),
     ]);
     frame.render_widget(Paragraph::new(left), left_area);
@@ -166,14 +175,10 @@ fn render_tabs_row(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: Rec
     let clock = clock_text(&model.now);
     let clock_width = u16::try_from(clock.chars().count()).unwrap_or(0);
 
-    // Mirror the clock width on the left so the tabs sit at the visual
-    // center of the full row, not just the center of the leftover space.
-    let [_, tabs_area, clock_area] = Layout::horizontal([
-        Constraint::Length(clock_width),
-        Constraint::Fill(1),
-        Constraint::Length(clock_width),
-    ])
-    .areas(area);
+    // Tabs left-aligned under the ceremony title; the clock sits on the
+    // right, mirroring the header's title/version split. Nothing centered.
+    let [tabs_area, clock_area] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(clock_width)]).areas(area);
 
     let selected = match tab {
         StepTab::Overview => 0,
@@ -181,7 +186,9 @@ fn render_tabs_row(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: Rec
         StepTab::Deviations => 2,
         StepTab::System => 3,
     };
-    let mut spans: Vec<Span<'_>> = Vec::with_capacity(TAB_LABELS.len().saturating_mul(2));
+    // Lead with the same brand marker as the header so the tabs sit under
+    // the ceremony title with a left gutter, rather than flush at column 0.
+    let mut spans: Vec<Span<'_>> = vec![brand_marker()];
     for (i, label) in TAB_LABELS.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(TAB_DIVIDER, theme::border()));
@@ -193,10 +200,7 @@ fn render_tabs_row(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: Rec
         };
         spans.push(Span::styled(*label, style));
     }
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
-        tabs_area,
-    );
+    frame.render_widget(Paragraph::new(Line::from(spans)), tabs_area);
 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(clock, theme::title()))).alignment(Alignment::Right),
@@ -258,7 +262,7 @@ fn render_abort_confirm(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(titled_block("Confirm abort")),
+            .block(plain_block()),
         area,
     );
 }
@@ -348,15 +352,25 @@ fn render_prompt(pending: &crate::model::PendingPrompt, frame: &mut Frame<'_>, a
 /// word `Prompt` reads as the heading and the rest as annotation.
 fn prompt_title(pending: &crate::model::PendingPrompt) -> Line<'_> {
     let mut spans = vec![Span::styled("Prompt", theme::title())];
-    if let Prompt::Confirm { default, .. } = &pending.prompt {
-        // The capitalized letter is the one Enter submits. With no explicit
-        // default the handler submits yes (`default.unwrap_or(true)`), so the
-        // hint capitalizes Y to match.
-        let hint = match default {
-            Some(true) | None => "Y/n",
-            Some(false) => "y/N",
-        };
-        spans.push(Span::styled(format!(" [{hint}]"), theme::footer()));
+    // The submit-key hint lives here (not the footer) so the footer stays a
+    // constant width while prompts come and go. Confirm shows the y/n keys;
+    // typed prompts show the Enter hint; Continue carries "Press Enter…" in
+    // its own body, so no title hint is needed.
+    match &pending.prompt {
+        Prompt::Confirm { default, .. } => {
+            // The capitalized letter is the one Enter submits. With no explicit
+            // default the handler submits yes (`default.unwrap_or(true)`), so
+            // the hint capitalizes Y to match.
+            let hint = match default {
+                Some(true) | None => "Y/n",
+                Some(false) => "y/N",
+            };
+            spans.push(Span::styled(format!(" [{hint}]"), theme::footer()));
+        }
+        Prompt::Text { .. } | Prompt::Literal { .. } | Prompt::Secret { .. } => {
+            spans.push(Span::styled(" [Enter: submit]", theme::footer()));
+        }
+        _ => {}
     }
     if pending.rejection.is_some() {
         spans.push(Span::styled(" (last attempt rejected)", theme::footer()));
@@ -786,9 +800,10 @@ fn render_deviations(model: &Model, frame: &mut Frame<'_>, area: Rect) {
             .iter()
             .map(|d| {
                 let time = d.at.format("%H:%M:%S").to_string();
+                let warn = icon_glyph(Icon::Warning);
                 let body = match &d.step {
-                    Some(step) => format!("⚠ ({step}) {}", d.text),
-                    None => format!("⚠ {}", d.text),
+                    Some(step) => format!("{warn} ({step}) {}", d.text),
+                    None => format!("{warn} {}", d.text),
                 };
                 Line::from(vec![
                     Span::styled(time, theme::footer()),
@@ -811,15 +826,18 @@ fn render_completed(fingerprint: Option<&str>, frame: &mut Frame<'_>, area: Rect
     let dim = theme::footer();
 
     let mut lines = vec![
+        Line::from(Span::styled("Ceremony complete", bold)),
+        Line::from(""),
         Line::from(Span::styled("Transcript fingerprint", bold)),
         Line::from(""),
     ];
 
     match fingerprint {
-        Some(fp) => lines.push(fingerprint_line(fp, bold)),
+        Some(fp) => lines.extend(fingerprint_lines(fp, bold)),
         None => lines.push(Line::from(Span::styled("computing…", dim))),
     }
 
+    lines.push(Line::from(""));
     lines.push(Line::from("Record this fingerprint on paper"));
     lines.push(Line::from(""));
     lines.push(Line::from("Press Enter after recording the fingerprint..."));
@@ -827,7 +845,7 @@ fn render_completed(fingerprint: Option<&str>, frame: &mut Frame<'_>, area: Rect
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(titled_block("Completed")),
+            .block(plain_block()),
         area,
     );
 }
@@ -837,25 +855,34 @@ fn render_completed(fingerprint: Option<&str>, frame: &mut Frame<'_>, area: Rect
 /// value to paper sees the same shape they see in the script.
 const EMPHASIZED_HEX: usize = 32;
 
-/// Render the fingerprint as space-separated hex pairs with the first
-/// [`EMPHASIZED_HEX`] characters bolded.
-fn fingerprint_line(fp: &str, bold: Style) -> Line<'_> {
+/// Render the fingerprint as space-separated hex pairs, split across two
+/// aligned lines: the emphasized first [`EMPHASIZED_HEX`] characters on top,
+/// the rest indented underneath. Two lines avoid the mid-value wrap that a
+/// single line hits at 32 spaced byte pairs plus the `sha256:` label.
+fn fingerprint_lines(fp: &str, bold: Style) -> Vec<Line<'_>> {
     let (prefix, hex) = fp.split_once(':').unwrap_or(("", fp));
     let (emph, rest) = if hex.len() >= EMPHASIZED_HEX {
         hex.split_at(EMPHASIZED_HEX)
     } else {
         (hex, "")
     };
-    let mut spans = Vec::new();
-    if !prefix.is_empty() {
-        spans.push(Span::raw(format!("{prefix}:")));
-    }
-    spans.push(Span::styled(space_hex_pairs(emph), bold));
+    let label = if prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{prefix}: ")
+    };
+    let indent = " ".repeat(label.chars().count());
+    let mut lines = vec![Line::from(vec![
+        Span::raw(label),
+        Span::styled(space_hex_pairs(emph), bold),
+    ])];
     if !rest.is_empty() {
-        spans.push(Span::raw("  "));
-        spans.push(Span::raw(space_hex_pairs(rest)));
+        lines.push(Line::from(vec![
+            Span::raw(indent),
+            Span::raw(space_hex_pairs(rest)),
+        ]));
     }
-    Line::from(spans)
+    lines
 }
 
 fn space_hex_pairs(hex: &str) -> String {
@@ -880,7 +907,7 @@ fn render_failed(reason: &str, frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(titled_block("Failed")),
+            .block(plain_block()),
         area,
     );
 }
@@ -890,15 +917,12 @@ fn render_footer(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         Screen::DeviationModal { .. } => "Enter: submit  ·  Backspace: edit  ·  Esc: cancel",
         Screen::AbortConfirm => "y: abort  ·  n / Esc: cancel",
         Screen::Completed { .. } | Screen::Failed { .. } => "Enter / Esc: exit",
-        Screen::Step { tab } => match (tab, model.pending_prompt.is_some()) {
-            (StepTab::Overview | StepTab::System, _) => "Tab: next tab  ·  Esc: abort",
-            (StepTab::Ceremony, true) => {
-                "Enter: submit  ·  ↑/↓ · PgUp/PgDn: scroll  ·  Tab: next tab  ·  Esc: abort"
-            }
-            (StepTab::Ceremony, false) => {
-                "↑/↓ · PgUp/PgDn: scroll  ·  Tab: next tab  ·  Esc: abort"
-            }
-            (StepTab::Deviations, _) => "d: log deviation  ·  Tab: next tab  ·  Esc: abort",
+        // The submit hint moved into the prompt box title, so the Ceremony
+        // footer no longer changes width as prompts come and go.
+        Screen::Step { tab } => match tab {
+            StepTab::Overview | StepTab::System => "Tab: next tab  ·  Esc: abort",
+            StepTab::Ceremony => "↑/↓ · PgUp/PgDn: scroll  ·  Tab: next tab  ·  Esc: abort",
+            StepTab::Deviations => "d: log deviation  ·  Tab: next tab  ·  Esc: abort",
         },
     };
     frame.render_widget(
@@ -921,9 +945,4 @@ fn plain_block() -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_style(theme::border())
-}
-
-/// [`plain_block`] with a `&str` title styled in the muted title color.
-fn titled_block(title: &str) -> Block<'_> {
-    plain_block().title(Line::from(Span::styled(title.to_string(), theme::title())))
 }

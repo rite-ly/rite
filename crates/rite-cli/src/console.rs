@@ -41,8 +41,12 @@ fn glyph(icon: Icon) -> &'static str {
         Icon::Spinner => "⠋",
         Icon::Checkmark => "✓",
         Icon::Cross => "✗",
-        Icon::Info => "ℹ",
-        Icon::Warning => "⚠",
+        // Info/Warning use ASCII so they align with ✓/✗ and never render as
+        // emoji. The symbol forms (ℹ U+2139, ⚠ U+26A0) draw as double-width
+        // colour emoji in some renderers (e.g. agg), and the circled/triangle
+        // alternatives sit at a different cell width and misalign the column.
+        Icon::Info => "i",
+        Icon::Warning => "!",
     }
 }
 

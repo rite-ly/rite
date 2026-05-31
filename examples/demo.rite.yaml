@@ -1,0 +1,81 @@
+version: "0.2"
+name: "Root Signing Key Ceremony"
+description: |
+  Generate an offline root signing key on an air-gapped workstation and
+  issue its self-signed certificate, witnessed and attested by two roles.
+
+backends:
+  openssl:
+    provider: openssl
+
+output:
+  root_cert:
+    type: certificate
+    description: "Self-signed root certificate"
+
+roles:
+  crypto_officer:
+    name: "Crypto Officer"
+    person: "Alice Rivera"
+  witness:
+    name: "Witness"
+    person: "Bob Tanaka"
+
+prerequisites:
+  - "Air-gapped workstation is powered on with all network interfaces disabled"
+
+sections:
+  environment:
+    name: "Environment Verification"
+    role: ${role.crypto_officer}
+    steps:
+      verify_air_gap:
+        action: confirm
+        with:
+          message: "Confirm the workstation has no active network connections"
+
+  keygen:
+    name: "Key Generation"
+    role: ${role.crypto_officer}
+    steps:
+      generate_root_key:
+        action: generate_keypair
+        backend: openssl
+        with:
+          algorithm: ECDSA-P256
+        creates: root_keypair
+        description: "Generate the root ECDSA-P256 keypair."
+      generate_root_csr:
+        action: generate_csr
+        backend: openssl
+        reads:
+          signing_key: ${artifact.root_keypair}
+        with:
+          subject: "CN=Example Root,O=Example Org"
+        creates: root_csr
+        description: "Build the certificate signing request for the root key."
+      issue_root_cert:
+        action: issue_certificate
+        backend: openssl
+        reads:
+          signing_key: ${artifact.root_keypair}
+          csr: ${artifact.root_csr}
+        with:
+          profile: root_ca
+          validity_days: 7300
+        creates: root_cert
+        description: "Issue the self-signed root certificate."
+
+  attestation:
+    name: "Witness Attestation"
+    steps:
+      witness_attest:
+        action: attest
+        role: ${role.witness}
+        with:
+          statement: "I witnessed the generation of the root signing key."
+      officer_attest:
+        action: attest
+        role: ${role.crypto_officer}
+        with:
+          statement: "The root signing key was generated and its certificate issued."

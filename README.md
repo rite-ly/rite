@@ -4,6 +4,9 @@ A DSL and runtime for describing, executing, and reviewing cryptographic key cer
 
 > **Beta** — Breaking changes between 0.x versions.
 
+<p align="center"><img src="docs/demo/demo.gif" alt="Executing a ceremony with rite run" width="700"></p>
+<p align="center"><sub>Guided execution with <code>rite run</code>, one phase of the <a href="#lifecycle">ceremony lifecycle</a>.</sub></p>
+
 ## The problem
 
 Cryptography makes forgery mathematically hard. 

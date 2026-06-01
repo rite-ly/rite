@@ -170,8 +170,16 @@ impl Action for IssueCertificateAction {
                 .map_err(|e| ActionError::Failed(format!("Invalid issuer CN: {e}")))?
         };
 
-        let serial = build_serial()
-            .map_err(|e| ActionError::Failed(format!("Failed to generate serial number: {e}")))?;
+        // Draw the serial from the ceremony entropy source rather than an
+        // unrecorded RNG, so it is auditable and re-derivable by `rite verify`.
+        // `SerialNumber` wraps an unsigned ASN.1 INTEGER, so the raw bytes need
+        // no sign fixup (no bit is spent on representation). Sixteen bytes give
+        // 128 bits, the conventional CA serial size and well above the 64-bit
+        // CA/Browser Forum floor. An all-zero draw (p = 2^-128) would yield
+        // serial 0; negligible, so it is not guarded.
+        let serial_bytes = reporter.draw("cert-serial", 16)?;
+        let serial = SerialNumber::new(&serial_bytes)
+            .map_err(|e| ActionError::Failed(format!("Failed to build serial number: {e}")))?;
 
         let validity = build_validity(validity_days)
             .map_err(|e| ActionError::Failed(format!("Failed to build validity period: {e}")))?;
@@ -532,15 +540,6 @@ fn parse_certificate(bytes: &[u8]) -> Result<Certificate, der::Error> {
     } else {
         Certificate::from_der(bytes)
     }
-}
-
-/// Build a random 8-byte positive serial number.
-fn build_serial() -> Result<SerialNumber, der::Error> {
-    let value = rand::random::<u64>() & 0x7FFF_FFFF_FFFF_FFFFu64 | 0x0000_0000_0000_0001u64;
-    let bytes = value.to_be_bytes();
-    let start = bytes.iter().position(|&b| b != 0).unwrap_or(0);
-    let serial_bytes = bytes.get(start..).unwrap_or(&bytes);
-    SerialNumber::new(serial_bytes)
 }
 
 fn build_validity(validity_days: u32) -> Result<Validity, der::Error> {

@@ -45,6 +45,10 @@ pub enum ExecutionError {
     #[error("Invalid params: {0}")]
     InvalidParams(String),
 
+    /// The host operating system failed to provide entropy for the seed.
+    #[error("Failed to gather machine entropy: {0}")]
+    EntropyError(String),
+
     /// A material could not be loaded.
     #[error("Failed to load material '{name}': {reason}")]
     MaterialLoadFailed {

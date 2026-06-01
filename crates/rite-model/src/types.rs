@@ -100,6 +100,13 @@ pub enum ActionType {
     ExportPublic,
     /// Formal attestation statement.
     Attest,
+    /// Fold human-supplied entropy into the ceremony seed.
+    ///
+    /// A participant supplies a free-form random value (for example, the
+    /// result of rolling physical dice), which is mixed into the entropy
+    /// source's ratchet. Any later drawn value reflects the contribution and
+    /// stays re-derivable by `rite verify`.
+    GatherEntropy,
     /// TPM attestation with PCR measurements and cryptographic quotes.
     ///
     /// Requires the `rite-tpm` backend.
@@ -186,6 +193,7 @@ impl ActionType {
             ActionType::OralReadback => "Read back a value aloud for verification.",
             ActionType::MachineInfo => "Record system and environment information.",
             ActionType::Attest => "Record a signed attestation from a participant.",
+            ActionType::GatherEntropy => "Fold human-supplied entropy into the ceremony seed.",
             ActionType::TpmAttest => "Record TPM platform attestation (PCR values).",
             ActionType::GenerateKeypair => "Generate an asymmetric keypair.",
             ActionType::ExportPublic => "Export the public component of a keypair.",
@@ -213,6 +221,7 @@ impl std::fmt::Display for ActionType {
             ActionType::UnwrapKey => write!(f, "unwrap_key"),
             ActionType::ExportPublic => write!(f, "export_public"),
             ActionType::Attest => write!(f, "attest"),
+            ActionType::GatherEntropy => write!(f, "gather_entropy"),
             ActionType::TpmAttest => write!(f, "tpm_attest"),
             ActionType::PivReadCertificate => write!(f, "piv_read_certificate"),
             ActionType::PivSign => write!(f, "piv_sign"),

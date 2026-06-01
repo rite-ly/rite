@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Args as ClapArgs;
-use rite_runtime::{VerifyError, verify_step_fact_transcript};
+use rite_runtime::{VerifyError, read_verified_transcript, verify_entropy};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -19,12 +19,29 @@ pub fn run(args: Args) {
         (args.file, None)
     };
 
-    match verify_step_fact_transcript(&transcript_path) {
-        Ok(verified) => {
+    match read_verified_transcript(&transcript_path) {
+        Ok(loaded) => {
+            // The hash chain is intact. Now re-derive the entropy source so
+            // every recorded random value is proven to come from the recorded
+            // seed, not cherry-picked.
+            let entropy = match verify_entropy(&loaded.facts) {
+                Ok(entropy) => entropy,
+                Err(err) => {
+                    eprintln!("Verification failed: {err}");
+                    std::process::exit(1);
+                }
+            };
+
             println!("Transcript verified.");
-            println!("  Facts:       {}", verified.fact_count);
-            println!("  Fingerprint: {}", verified.fingerprint);
-            if !verified.terminated {
+            println!("  Facts:       {}", loaded.facts.len());
+            println!("  Fingerprint: {}", loaded.fingerprint);
+            if let Some(scheme) = entropy.derivation {
+                println!(
+                    "  Entropy:     {} value(s) re-derived, {} contribution(s) folded ({scheme})",
+                    entropy.values_verified, entropy.contributions,
+                );
+            }
+            if !loaded.terminated {
                 eprintln!(
                     "  Warning:     transcript is truncated, no CeremonyCompleted or \
                      CeremonyFailed fact at the end."

@@ -25,3 +25,10 @@ A deliberately maximalist ceremony spanning four acts, four roles, physical and
 digital materials, and long structured step instructions. It generates a
 backup-wrapping key, escrows it under the bundled test key, and hands sealed media
 to a custodian. Use it to see how a dense, formal script renders across pages.
+
+### `dice.rite.yaml` — Dice Entropy Ceremony
+
+Demonstrates verifiable ceremony randomness: a participant folds a physical dice
+roll into the run seed with `gather_entropy`, then a certificate is issued whose
+serial number is drawn from that seed. `rite verify` later re-derives the seed,
+the dice contribution, and the serial from the transcript alone.

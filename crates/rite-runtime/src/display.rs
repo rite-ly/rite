@@ -57,6 +57,16 @@ pub fn fact_summary(fact: &StepFact) -> Option<(Icon, String)> {
         StepFact::CeremonyFailed { error, .. } => {
             Some((Icon::Cross, format!("Ceremony failed: {}", error.message)))
         }
+        StepFact::EntropySeeded { source, .. } => {
+            Some((Icon::Info, format!("Entropy source seeded ({source})")))
+        }
+        StepFact::EntropyContributed { epoch, .. } => Some((
+            Icon::Info,
+            format!("Entropy contribution folded (epoch {epoch})"),
+        )),
+        StepFact::EntropyDrawn { path, .. } => {
+            Some((Icon::Info, format!("Random value drawn: {path}")))
+        }
         // `StepFact` is `#[non_exhaustive]`; future variants may carry
         // payloads the live UI shouldn't blindly Debug-print. Surface a
         // typed placeholder until each new variant is given a summary.

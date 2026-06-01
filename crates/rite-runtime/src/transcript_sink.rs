@@ -292,6 +292,24 @@ pub enum VerifyError {
     /// The transcript file has zero lines.
     #[error("transcript is empty")]
     Empty,
+    /// A value was drawn (or a contribution folded) before any
+    /// `EntropySeeded` fact established the source.
+    #[error("entropy source used before it was seeded")]
+    SeedMissing,
+    /// The seed fact declares a derivation scheme the verifier does not
+    /// recognise. Never trust an unknown scheme (the JWT-`alg` lesson).
+    #[error("unknown entropy derivation scheme: {0}")]
+    UnknownDerivation(String),
+    /// A recorded hex value (the seed `m` or a drawn value) did not decode.
+    #[error("malformed entropy value: {0}")]
+    MalformedEntropy(String),
+    /// A drawn value does not match what re-derivation from the recorded
+    /// seed and path produces: the source was tampered with.
+    #[error("entropy draw at path '{path}' does not match re-derived value")]
+    DrawMismatch {
+        /// Derivation path of the mismatched draw.
+        path: String,
+    },
 }
 
 /// Verify a JSONL transcript file produced by [`JsonlFileSink`].
@@ -375,6 +393,73 @@ pub fn read_verified_transcript(jsonl_path: &Path) -> Result<LoadedTranscript, V
         fingerprint: TranscriptFingerprint(last_hash),
         terminated,
     })
+}
+
+/// Outcome of re-deriving a transcript's entropy source.
+#[derive(Debug, Clone, Default)]
+pub struct EntropyVerified {
+    /// Derivation-scheme tag declared by the seed fact, if the ceremony used
+    /// the source at all.
+    pub derivation: Option<String>,
+    /// Number of human contributions folded into the ratchet.
+    pub contributions: usize,
+    /// Number of drawn values that re-derived to their recorded value.
+    pub values_verified: usize,
+}
+
+/// Re-derive a transcript's entropy source and confirm every drawn value.
+///
+/// Replays the `rite-kdf/v1` ratchet over the recorded facts: it rebuilds
+/// `seed_0` from the recorded machine entropy, folds each human contribution
+/// in chain order, and for every [`StepFact::EntropyDrawn`] re-derives the
+/// value from the recorded path and checks it against the recorded value. A
+/// tampered seed, contribution, path, or value fails the check.
+///
+/// The caller is expected to have chain-verified the facts first (via
+/// [`read_verified_transcript`]); this function only re-derives.
+///
+/// # Errors
+///
+/// Returns a [`VerifyError`] variant describing the first inconsistency:
+/// [`VerifyError::SeedMissing`], [`VerifyError::UnknownDerivation`],
+/// [`VerifyError::MalformedEntropy`], or [`VerifyError::DrawMismatch`].
+pub fn verify_entropy(facts: &[StepFact]) -> Result<EntropyVerified, VerifyError> {
+    let mut seed: Option<[u8; 32]> = None;
+    let mut result = EntropyVerified::default();
+
+    for fact in facts {
+        match fact {
+            StepFact::EntropySeeded { m, derivation, .. } => {
+                if derivation != crate::entropy::DERIVATION_V1 {
+                    return Err(VerifyError::UnknownDerivation(derivation.clone()));
+                }
+                let m_bytes = base16ct::lower::decode_vec(m)
+                    .map_err(|e| VerifyError::MalformedEntropy(format!("seed m: {e}")))?;
+                seed = Some(crate::entropy::initial_seed(&m_bytes));
+                result.derivation = Some(derivation.clone());
+            }
+            StepFact::EntropyContributed { contribution, .. } => {
+                let current = seed.as_ref().ok_or(VerifyError::SeedMissing)?;
+                seed = Some(crate::entropy::fold_seed(current, contribution.as_bytes()));
+                result.contributions = result.contributions.saturating_add(1);
+            }
+            StepFact::EntropyDrawn { path, value, .. } => {
+                let current = seed.as_ref().ok_or(VerifyError::SeedMissing)?;
+                // The recorded value's own length fixes how many bytes to
+                // re-derive; decoding it also rejects a malformed hex record.
+                let recorded = base16ct::lower::decode_vec(value)
+                    .map_err(|e| VerifyError::MalformedEntropy(format!("draw {path}: {e}")))?;
+                let expected = crate::entropy::derive_value(current, path, recorded.len());
+                if expected != recorded {
+                    return Err(VerifyError::DrawMismatch { path: path.clone() });
+                }
+                result.values_verified = result.values_verified.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -500,5 +585,89 @@ mod tests {
         std::fs::write(&path, "").expect("write empty");
         let err = verify_transcript(&path).expect_err("empty");
         assert!(matches!(err, VerifyError::Empty));
+    }
+
+    use rite_model::StepId;
+
+    fn seeded_fact(m: &[u8]) -> StepFact {
+        StepFact::EntropySeeded {
+            m: base16ct::lower::encode_string(m),
+            source: "os".to_string(),
+            derivation: crate::entropy::DERIVATION_V1.to_string(),
+        }
+    }
+
+    fn drawn_fact(seed: &[u8; 32], step: &str, path: &str, len: usize) -> StepFact {
+        StepFact::EntropyDrawn {
+            step: StepId::new(step),
+            path: path.to_string(),
+            value: base16ct::lower::encode_string(&crate::entropy::derive_value(seed, path, len)),
+        }
+    }
+
+    #[test]
+    fn verify_entropy_re_derives_a_clean_draw() {
+        let m = b"machine entropy bytes";
+        let seed = crate::entropy::initial_seed(m);
+        let facts = vec![
+            seeded_fact(m),
+            drawn_fact(&seed, "issue", "0/issue/cert-serial", 9),
+        ];
+        let v = verify_entropy(&facts).expect("verify");
+        assert_eq!(v.values_verified, 1);
+        assert_eq!(v.contributions, 0);
+        assert_eq!(v.derivation.as_deref(), Some("rite-kdf/v1"));
+    }
+
+    #[test]
+    fn verify_entropy_follows_the_ratchet_through_a_contribution() {
+        let m = b"machine entropy bytes";
+        let seed0 = crate::entropy::initial_seed(m);
+        let seed1 = crate::entropy::fold_seed(&seed0, b"3 1 6 4 2 5");
+        let facts = vec![
+            seeded_fact(m),
+            StepFact::EntropyContributed {
+                step: StepId::new("roll"),
+                epoch: 1,
+                contribution: "3 1 6 4 2 5".to_string(),
+            },
+            // Drawn after the fold, so it must derive from the epoch-1 seed.
+            drawn_fact(&seed1, "issue", "1/issue/cert-serial", 9),
+        ];
+        let v = verify_entropy(&facts).expect("verify");
+        assert_eq!(v.contributions, 1);
+        assert_eq!(v.values_verified, 1);
+    }
+
+    #[test]
+    fn verify_entropy_detects_a_tampered_value() {
+        let m = b"machine entropy bytes";
+        let seed = crate::entropy::initial_seed(m);
+        let mut drawn = drawn_fact(&seed, "issue", "0/issue/cert-serial", 9);
+        if let StepFact::EntropyDrawn { value, .. } = &mut drawn {
+            *value = "deadbeefdeadbeefdead".to_string();
+        }
+        let facts = vec![seeded_fact(m), drawn];
+        let err = verify_entropy(&facts).expect_err("tamper");
+        assert!(matches!(err, VerifyError::DrawMismatch { .. }));
+    }
+
+    #[test]
+    fn verify_entropy_rejects_unknown_derivation() {
+        let facts = vec![StepFact::EntropySeeded {
+            m: "00".to_string(),
+            source: "os".to_string(),
+            derivation: "rite-kdf/v99".to_string(),
+        }];
+        let err = verify_entropy(&facts).expect_err("unknown scheme");
+        assert!(matches!(err, VerifyError::UnknownDerivation(_)));
+    }
+
+    #[test]
+    fn verify_entropy_rejects_draw_before_seed() {
+        let seed = crate::entropy::initial_seed(b"x");
+        let facts = vec![drawn_fact(&seed, "issue", "0/issue/cert-serial", 9)];
+        let err = verify_entropy(&facts).expect_err("unseeded");
+        assert!(matches!(err, VerifyError::SeedMissing));
     }
 }

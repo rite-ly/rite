@@ -18,7 +18,7 @@
 //! - `verification`: verification actions (requires `subtle`, `sysinfo`)
 //! - `attestation`: attestation recording
 //! - `crypto`: crypto actions (`generate_keypair`, `export_public`, `wrap_key`, `unwrap_key`)
-//! - `pki`: PKI actions (`generate_csr`, `issue_certificate`; requires `x509-cert`, `der`, `sha1`, `rsa`, `p256`, `rand`)
+//! - `pki`: PKI actions (`generate_csr`, `issue_certificate`; requires `x509-cert`, `der`, `sha1`, `rsa`, `p256`)
 //! - `default`: all features enabled
 //!
 //! # Usage
@@ -44,6 +44,7 @@ mod params;
 pub mod attestation;
 #[cfg(feature = "crypto")]
 pub mod crypto;
+pub mod entropy;
 #[cfg(feature = "pki")]
 pub mod pki;
 #[cfg(feature = "verification")]
@@ -59,6 +60,7 @@ pub use backend::{MockBackend, create_backend, default_backend_factory};
 pub use attestation::AttestAction;
 #[cfg(feature = "crypto")]
 pub use crypto::{ExportPublicAction, GenerateKeypairAction, UnwrapKeyAction, WrapKeyAction};
+pub use entropy::GatherEntropyAction;
 #[cfg(feature = "pki")]
 pub use pki::{GenerateCsrAction, IssueCertificateAction};
 #[cfg(feature = "verification")]
@@ -91,6 +93,10 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
     {
         registry.register(Arc::new(AttestAction));
     }
+
+    // Human-entropy gathering has no optional dependencies, so it is always
+    // available rather than gated behind a feature.
+    registry.register(Arc::new(GatherEntropyAction));
 
     #[cfg(feature = "crypto")]
     {

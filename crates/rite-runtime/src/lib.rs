@@ -24,6 +24,7 @@ mod actions;
 mod artifact_resolver;
 mod backend;
 mod display;
+mod entropy;
 mod executor;
 mod expressions;
 mod output_config;
@@ -63,6 +64,10 @@ pub use system_info::{
 // Shared formatter for live frontends.
 pub use display::{fact_summary, signal_summary, truncate_for_display};
 
+// Entropy source: the single auditable source of ceremony randomness, plus
+// the pure `rite-kdf/v1` derivation used by both the draw path and `rite verify`.
+pub use entropy::{CeremonyRandom, DERIVATION_V1, Draw, derive_value, fold_seed, initial_seed};
+
 // Reporter: action-facing handle for facts, signals, and prompts.
 pub use reporter::{Reporter, ReporterError};
 
@@ -71,8 +76,8 @@ pub use runner::{Action, ActionError, ActionRegistry, ExecutionSummary, Executor
 
 // Transcript sink, the durable consumer of `StepFact`s.
 pub use transcript_sink::{
-    InMemorySink, JsonlFileSink, LoadedTranscript, TranscriptFingerprint, TranscriptSink,
-    TranscriptVerified, VerifyError, read_verified_transcript,
+    EntropyVerified, InMemorySink, JsonlFileSink, LoadedTranscript, TranscriptFingerprint,
+    TranscriptSink, TranscriptVerified, VerifyError, read_verified_transcript, verify_entropy,
     verify_transcript as verify_step_fact_transcript,
 };
 

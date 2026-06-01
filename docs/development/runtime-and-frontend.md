@@ -208,9 +208,9 @@ enforces that we can never sit "in a modal over a different modal."
 Three frontends consume the same protocol:
 
 - **`rite-tui`**, interactive TEA application built on `ratatui`.
-- **`rite-cli::console`**, straight-line stdin/stdout driver. Reference
+- **`rite::console`**, straight-line stdin/stdout driver. Reference
   implementation of the protocol; the smallest viable frontend.
-- **`rite-cli::headless`**, auto-answers prompts per a defaults policy
+- **`rite::headless`**, auto-answers prompts per a defaults policy
   (yes for confirms, the expected string for literals, ack for
   continues, fail-fast for free-form text and secrets). Used for CI
   smoke tests.
@@ -222,7 +222,7 @@ default is `tui` when stdout is a TTY and the `tui` feature is built in.
 
 ```mermaid
 sequenceDiagram
-    participant CLI as rite-cli
+    participant CLI as rite
     participant RT as rite-runtime<br/>(executor thread)
     participant FE as Frontend<br/>
 

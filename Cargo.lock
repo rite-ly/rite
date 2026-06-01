@@ -1556,7 +1556,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rite-cli"
+name = "rite"
 version = "0.2.1"
 dependencies = [
  "chrono",

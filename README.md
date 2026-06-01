@@ -117,7 +117,7 @@ docker run --rm -it --init \
 Build from source:
 
 ```sh
-cargo build --release -p rite-cli
+cargo build --release -p rite
 cargo build --release -p rite-ls   # language server for editor support
 ```
 

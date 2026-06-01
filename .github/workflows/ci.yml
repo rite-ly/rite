@@ -44,7 +44,7 @@ jobs:
   msrv:
     # Verifies the MSRV floor declared on the library crates that are
     # published to crates.io. Binary-supporting crates (rite-stdlib,
-    # rite-openssl, rite-runtime, rite-script, rite-cli, rite-ls) ship as
+    # rite-openssl, rite-runtime, rite-render, rite, rite-ls) ship as
     # part of the bundled product and float with the latest stable Rust.
     # Bump both this toolchain and the crates' `rust-version` together.
     name: MSRV (1.88)
@@ -67,7 +67,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Build
         run: |
-          cargo build -p rite-cli --features openssl-vendored
+          cargo build -p rite --features openssl-vendored
           cargo build -p rite-ls
 
   docker:

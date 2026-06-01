@@ -1,5 +1,5 @@
 [package]
-name = "rite-cli"
+name = "rite"
 description = "Author, execute, and verify cryptographic key ceremonies (the `rite` CLI)"
 version.workspace = true
 edition.workspace = true
@@ -9,9 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords = ["cli", "ceremony", "rite"]
 categories = ["security", "command-line-utilities"]
-# Gated on the crates.io `rite` name.
-# At publish time, rename this package to `rite` and set `publish = true`; the binary is already named `rite`.
-publish = false
+publish = true
 
 [[bin]]
 name = "rite"

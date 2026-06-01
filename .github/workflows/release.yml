@@ -73,7 +73,7 @@ jobs:
           key: release-${{ matrix.rust_target }}
 
       - name: Build rite
-        run: cargo build --release -p rite-cli --target ${{ matrix.rust_target }} --features openssl-vendored
+        run: cargo build --release -p rite --target ${{ matrix.rust_target }} --features openssl-vendored
 
       - name: Build rite-ls
         run: cargo build --release -p rite-ls --target ${{ matrix.rust_target }}

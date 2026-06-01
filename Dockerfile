@@ -12,7 +12,7 @@
 # to QEMU emulation for the C compile steps.
 ARG TOOLCHAIN_PLATFORM=linux/amd64
 
-# Build context has no .git/, so rite-cli's build.rs records "unknown" for the
+# Build context has no .git/, so the rite crate's build.rs records "unknown" for the
 # commit unless these are injected. Defaults make local `docker build` work
 # without ceremony; CI passes the real SHA and date via bake.
 ARG RITE_BUILD_COMMIT=unknown
@@ -25,7 +25,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 # Commit ARGs declared at the RUN to keep the COPY layer cache-stable across
 # commits; only the cargo build layer invalidates (and cargo's target cache
-# mount keeps the incremental rebuild tiny, just rite-cli's final link).
+# mount keeps the incremental rebuild tiny, just the rite crate's final link).
 # Per-target cache IDs so the two builder stages can run in parallel under bake without racing.
 ARG RITE_BUILD_COMMIT
 ARG RITE_BUILD_COMMIT_DATE
@@ -33,7 +33,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-amd64 \
     --mount=type=cache,target=/src/target,id=cargo-target-amd64 \
     RITE_BUILD_COMMIT="$RITE_BUILD_COMMIT" \
     RITE_BUILD_COMMIT_DATE="$RITE_BUILD_COMMIT_DATE" \
-    cargo build --locked --release -p rite-cli $CARGO_BUILD_ARGS && \
+    cargo build --locked --release -p rite $CARGO_BUILD_ARGS && \
     cargo build --locked --release -p rite-ls && \
     install -D -m 0755 target/x86_64-unknown-linux-musl/release/rite    /out/rite && \
     install -D -m 0755 target/x86_64-unknown-linux-musl/release/rite-ls /out/rite-ls
@@ -49,7 +49,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-arm64 \
     --mount=type=cache,target=/src/target,id=cargo-target-arm64 \
     RITE_BUILD_COMMIT="$RITE_BUILD_COMMIT" \
     RITE_BUILD_COMMIT_DATE="$RITE_BUILD_COMMIT_DATE" \
-    cargo build --locked --release -p rite-cli $CARGO_BUILD_ARGS && \
+    cargo build --locked --release -p rite $CARGO_BUILD_ARGS && \
     cargo build --locked --release -p rite-ls && \
     install -D -m 0755 target/aarch64-unknown-linux-musl/release/rite    /out/rite && \
     install -D -m 0755 target/aarch64-unknown-linux-musl/release/rite-ls /out/rite-ls

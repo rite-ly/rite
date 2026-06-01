@@ -1,6 +1,6 @@
 # CLI Conventions
 
-Scope: `crates/rite-cli`.
+Scope: `crates/rite`.
 
 ## Exit codes
 

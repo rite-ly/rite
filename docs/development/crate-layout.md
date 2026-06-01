@@ -2,7 +2,7 @@
 
 ```mermaid
 flowchart TD
-    cli[rite-cli<br/>binary]
+    cli[rite<br/>binary]
     ls[rite-ls<br/>language server]
     tui[rite-tui<br/>TEA frontend]
     stdlib[rite-stdlib<br/>default action set]
@@ -38,7 +38,7 @@ flowchart TD
 | `rite-stdlib`   | Default action set (verification, attestation, crypto, PKI).                                                                                        |
 | `rite-openssl`  | OpenSSL-backed `Backend` implementation.                                                                                                            |
 | `rite-tui`      | TEA-based interactive frontend (ratatui + crossterm).                                                                                               |
-| `rite-cli`      | `rite` binary; hosts the console and headless drivers and wires every crate above together.                                                         |
+| `rite`          | `rite` binary; hosts the console and headless drivers and wires every crate above together.                                                         |
 | `rite-render`   | Document generation: ceremony scripts and post-ceremony reports (HTML/PDF).                                                                          |
 | `rite-ls`       | Language server for editor integration.                                                                                                             |
 

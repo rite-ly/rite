@@ -9,7 +9,7 @@
 #     docs/demo/record.sh
 #
 # Requires: asciinema, tmux, agg. Uses the debug binary at target/debug/rite,
-# so build it first: cargo build -p rite-cli.
+# so build it first: cargo build -p rite.
 #
 # `rite` runs directly inside asciinema in a fixed-size tmux pane (no expect
 # layer), so the recording size matches what the TUI renders. Keys are sent
@@ -32,7 +32,7 @@ PAUSE=1.2   # seconds to read each prompt before acting; kept uniform for even p
 
 if [ ! -x "$RITE" ]; then
   echo "rite binary not found at $RITE" >&2
-  echo "build it first: cargo build -p rite-cli" >&2
+  echo "build it first: cargo build -p rite" >&2
   exit 1
 fi
 

@@ -1,11 +1,12 @@
 //! Shared helpers for input assembly and pre-flight checks.
 
-use clap::Args;
+use clap::{Args, ValueEnum};
 use rite_model::{Ceremony, MaterialKind, MaterialSource};
+use rite_render::{Branding, Theme};
 use rite_resolver::CeremonyInputs;
 use std::collections::HashMap;
 use std::io::BufRead;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Input flags shared by `check` and `run`.
 #[derive(Args, Debug)]
@@ -19,6 +20,104 @@ pub struct InputArgs {
     /// Provide a material source (`NAME=@PATH` or `NAME=IDENTIFIER`)
     #[arg(long = "material", value_name = "NAME=PATH_OR_ID")]
     pub materials: Vec<String>,
+}
+
+/// Built-in document theme, shared by `script` and `report`.
+#[derive(Copy, Clone, Debug, Default, ValueEnum)]
+pub enum ThemeArg {
+    /// Formal serif "ceremony protocol" look.
+    #[default]
+    Formal,
+}
+
+impl From<ThemeArg> for Theme {
+    fn from(arg: ThemeArg) -> Self {
+        match arg {
+            ThemeArg::Formal => Theme::Formal,
+        }
+    }
+}
+
+/// Branding overrides applied on top of a built-in theme.
+#[derive(Args, Debug)]
+pub struct BrandingArgs {
+    /// Organization name shown in the document header
+    #[arg(long, value_name = "NAME")]
+    pub brand_name: Option<String>,
+    /// Logo image embedded in the document header
+    #[arg(long, value_name = "PATH")]
+    pub logo: Option<PathBuf>,
+    /// Accent color as a hex value (e.g. `#1f3a5f`)
+    #[arg(long, value_name = "COLOR")]
+    pub accent: Option<String>,
+}
+
+/// Assemble [`Branding`] from CLI flags, printing an error and exiting on failure.
+pub fn build_branding_or_exit(args: &BrandingArgs) -> Branding {
+    let logo = args.logo.as_ref().map(|path| {
+        let bytes = std::fs::read(path).unwrap_or_else(|e| {
+            eprintln!("Failed to read logo {}: {e}", path.display());
+            std::process::exit(1);
+        });
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("logo")
+            .to_string();
+        (bytes, name)
+    });
+
+    Branding::from_inputs(
+        args.brand_name.clone(),
+        logo.as_ref()
+            .map(|(bytes, name)| (bytes.as_slice(), name.as_str())),
+        args.accent.as_deref(),
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("Invalid argument: {e}");
+        std::process::exit(1);
+    })
+}
+
+/// Default output path for a generated document: the source file's stem with a
+/// new extension, written next to the source.
+///
+/// Strips the compound `.rite.yaml` / `.rite.yml` suffix (and a plain `.yaml` /
+/// `.yml`) so `pki/root_ca.rite.yaml` becomes `pki/root_ca.<extension>`.
+pub fn default_output_path(source: &Path, extension: &str) -> PathBuf {
+    let name = source
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("ceremony");
+    let name = name
+        .strip_suffix(".yaml")
+        .or_else(|| name.strip_suffix(".yml"))
+        .unwrap_or(name);
+    let stem = name.strip_suffix(".rite").unwrap_or(name);
+    source.with_file_name(format!("{stem}.{extension}"))
+}
+
+/// Write a rendered document to its destination, printing an error and exiting
+/// on failure.
+///
+/// `output` carries the `--output` flag: `None` writes to `default`, `Some("-")`
+/// writes to stdout, and any other path is written verbatim. File writes print a
+/// confirmation to stderr; stdout output is left clean so it can be piped.
+pub fn write_document(content: &str, output: Option<&Path>, default: &Path) {
+    let target = match output {
+        Some(p) if p.as_os_str() == "-" => {
+            print!("{content}");
+            return;
+        }
+        Some(p) => p,
+        None => default,
+    };
+
+    if let Err(e) = std::fs::write(target, content) {
+        eprintln!("Failed to write output to {}: {e}", target.display());
+        std::process::exit(1);
+    }
+    eprintln!("Wrote {}", target.display());
 }
 
 /// Split a KEY=VALUE string on the first `=`.
@@ -237,6 +336,34 @@ mod tests {
         let source = parse_material_value("my-identifier");
         assert!(
             matches!(source, MaterialSource::Identifier { identifier } if identifier == "my-identifier")
+        );
+    }
+
+    #[test]
+    fn default_output_path_strips_compound_rite_yaml() {
+        assert_eq!(
+            default_output_path(Path::new("pki/root_ca.rite.yaml"), "html"),
+            PathBuf::from("pki/root_ca.html")
+        );
+    }
+
+    #[test]
+    fn default_output_path_handles_plain_yaml_and_yml() {
+        assert_eq!(
+            default_output_path(Path::new("foo.yaml"), "html"),
+            PathBuf::from("foo.html")
+        );
+        assert_eq!(
+            default_output_path(Path::new("foo.rite.yml"), "typ"),
+            PathBuf::from("foo.typ")
+        );
+    }
+
+    #[test]
+    fn default_output_path_keeps_intermediate_dots() {
+        assert_eq!(
+            default_output_path(Path::new("my.config.rite.yaml"), "html"),
+            PathBuf::from("my.config.html")
         );
     }
 

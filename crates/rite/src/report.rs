@@ -1,10 +1,10 @@
 //! `rite report`: generate an HTML post-ceremony report from a transcript.
 
 use clap::Args as ClapArgs;
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use rite_render::report::{build_report_data, generate_report_html};
+use crate::common::{BrandingArgs, ThemeArg, build_branding_or_exit, write_document};
+use rite_render::report::build_report_data;
 use rite_runtime::read_verified_transcript;
 
 #[derive(ClapArgs, Debug)]
@@ -12,9 +12,15 @@ pub struct Args {
     /// Path to the transcript JSONL file or to the output directory
     /// produced by `rite run` (containing `transcript.jsonl`).
     pub transcript: PathBuf,
-    /// Write the report to this file (default: stdout).
+    /// Write to this path. Use `-` for stdout. Defaults to `report.html`
+    /// next to the transcript.
     #[arg(long, short)]
     pub output: Option<PathBuf>,
+    /// Visual theme for the generated document
+    #[arg(long, value_enum, default_value_t = ThemeArg::default())]
+    pub theme: ThemeArg,
+    #[command(flatten)]
+    pub branding: BrandingArgs,
 }
 
 pub fn run(args: &Args) {
@@ -32,17 +38,15 @@ pub fn run(args: &Args) {
     };
 
     let data = build_report_data(&loaded.facts, loaded.fingerprint.as_str());
-    let html = generate_report_html(&data);
-
-    if let Some(output) = &args.output {
-        if let Err(err) = fs::write(output, html.as_bytes()) {
-            eprintln!("rite report: failed to write {}: {err}", output.display());
+    let branding = build_branding_or_exit(&args.branding);
+    let html =
+        rite_render::render_report(&data, &branding, args.theme.into()).unwrap_or_else(|e| {
+            eprintln!("rite report: failed to render report: {e}");
             std::process::exit(2);
-        }
-        eprintln!("Report written to {}", output.display());
-    } else {
-        print!("{html}");
-    }
+        });
+
+    let default = jsonl_path.with_file_name("report.html");
+    write_document(&html, args.output.as_deref(), &default);
 }
 
 /// Accept either the JSONL file directly or the parent output directory.

@@ -41,7 +41,7 @@ fi
 WORK=$(mktemp -d)
 trap 'tmux kill-session -t "$SESSION" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/examples"
-cp "$REPO/examples/demo.rite.yaml" "$WORK/examples/demo.rite.yaml"
+cp "$REPO/examples/showcase/demo.rite.yaml" "$WORK/examples/demo.rite.yaml"
 
 # Block until the visible pane matches a regex.
 wait_for() {

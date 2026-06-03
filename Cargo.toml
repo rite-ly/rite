@@ -54,6 +54,10 @@ openssl = { version = "0.10.78" }
 tempfile = "3.27.0"
 clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = "4.6.2"
+minijinja = { version = "2.13.0", default-features = false, features = [
+    "builtins",
+    "serde",
+] }
 tokio = "1.52.1"
 tower-lsp-server = "0.23.0"
 crossbeam-channel = "0.5.15"

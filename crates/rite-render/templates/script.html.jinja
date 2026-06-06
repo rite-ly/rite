@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ script.title }}</title>
+  <style>
+{{ css | safe }}
+  </style>
+{%- if branding.accent %}
+  <style>:root { --accent: {{ branding.accent }}; }</style>
+{%- endif %}
+</head>
+<body class="theme-{{ theme }}">
+  <header class="doc-header">
+{%- if branding.logo_data_uri %}
+    <img class="brand-logo" src="{{ branding.logo_data_uri }}" alt="">
+{%- endif %}
+{%- if branding.brand_name %}
+    <p class="brand-name">{{ branding.brand_name }}</p>
+{%- endif %}
+    <p class="doc-eyebrow">Ceremony Protocol</p>
+    <h1>{{ script.title }}</h1>
+{%- if script.ceremony_date or script.parameters %}
+    <div class="metadata">
+{%- if script.ceremony_date %}
+      <p><strong>Ceremony Date:</strong> {{ script.ceremony_date }}</p>
+{%- endif %}
+{%- for p in script.parameters %}
+      <p><strong>{{ p.label }}:</strong> {{ p.value }}</p>
+{%- endfor %}
+    </div>
+{%- endif %}
+  </header>
+
+{%- if script.description %}
+  <section>
+    <h2>Overview</h2>
+    <div class="overview">{{ script.description | prose }}</div>
+  </section>
+{%- endif %}
+
+  <section>
+    <h2>Roles</h2>
+    <ul class="roles">
+{%- for r in script.roles %}
+      <li><span class="role-abbrev">{{ r.abbrev }}</span> <strong>{{ r.name }}</strong>{% if r.person %} <span class="role-person">{{ r.person }}</span>{% endif %}</li>
+{%- endfor %}
+    </ul>
+  </section>
+
+{%- if script.has_preparation %}
+  <section>
+    <h2>Preparation Checklist</h2>
+{%- if script.physical_materials %}
+    <h3>Physical Materials</h3>
+    <ul class="checklist">
+{%- for m in script.physical_materials %}
+      <li><strong>{{ m.name }}</strong>{% if m.quantity %} <span class="item-qty">&times;{{ m.quantity }}</span>{% endif %}{% if m.identifier %} <span class="item-id">{{ m.identifier }}</span>{% endif %}{% if m.description %}<span class="item-desc">{{ m.description }}</span>{% endif %}</li>
+{%- endfor %}
+    </ul>
+{%- endif %}
+{%- if script.prerequisites %}
+    <h3>Prerequisites</h3>
+    <ul class="checklist">
+{%- for p in script.prerequisites %}
+      <li>{{ p }}</li>
+{%- endfor %}
+    </ul>
+{%- endif %}
+{%- if script.digital_materials %}
+    <h3>Digital Materials</h3>
+    <p><em>Verify digital material sources before ceremony</em></p>
+    <ul class="checklist">
+{%- for m in script.digital_materials %}
+      <li><strong>{{ m.name }}</strong>{% if m.description %}<span class="item-desc">{{ m.description }}</span>{% endif %}</li>
+{%- endfor %}
+    </ul>
+{%- endif %}
+  </section>
+{%- endif %}
+
+{%- for act in script.acts %}
+  <section class="act{% if script.has_named_acts %} act-break{% if loop.last %} act-break-after{% endif %}{% endif %}">
+{%- if script.has_named_acts %}
+    <div class="act-header">Act {{ act.number }}{% if act.name %}: {{ act.name }}{% endif %}</div>
+{%- if act.description %}
+    <p class="act-preamble">{{ act.description }}</p>
+{%- endif %}
+{%- endif %}
+{%- for sec in act.sections %}
+    <h3 class="section-header">{{ sec.name }}</h3>
+{%- if sec.description %}
+    <p class="section-description">{{ sec.description }}</p>
+{%- endif %}
+{%- for step in sec.steps %}
+{%- if step.preconditions %}
+    <div class="preconditions">
+      <p><em>{{ step.precondition_label }}</em></p>
+      <ul class="checklist">
+{%- for c in step.preconditions %}
+        <li>{{ c }}</li>
+{%- endfor %}
+      </ul>
+    </div>
+{%- endif %}
+{%- endfor %}
+{%- if sec.steps %}
+    <table class="steps">
+      <thead>
+        <tr><th class="step-num">Step</th><th>Action</th><th class="role">Role</th></tr>
+      </thead>
+      <tbody>
+{%- for step in sec.steps %}
+        <tr>
+          <td class="step-num">{{ step.label }}</td>
+          <td class="step-action">{{ step.prose | prose }}</td>
+          <td class="role">{% if step.role_abbrev %}<abbr title="{{ step.role_name }}">{{ step.role_abbrev }}</abbr>{% else %}{{ step.role_name }}{% endif %}</td>
+        </tr>
+{%- endfor %}
+      </tbody>
+    </table>
+{%- endif %}
+{%- endfor %}
+  </section>
+{%- endfor %}
+
+{%- if script.outputs %}
+  <section>
+    <h2>Expected Outputs</h2>
+    <ul class="outputs">
+{%- for o in script.outputs %}
+      <li><strong>{{ o.id }}</strong> <span class="item-kind">{{ o.kind }}</span>{% if o.description %}<span class="item-desc">{{ o.description }}</span>{% endif %}</li>
+{%- endfor %}
+    </ul>
+  </section>
+{%- endif %}
+
+  <section>
+    <h2>Transcript Fingerprint</h2>
+    <p>At the end of the ceremony, the transcript fingerprint is displayed. Copy at least the first line (32 characters, shown in bold) into the field below before closing the terminal, while all participants are still present.</p>
+    <div class="fingerprint-record">
+      <p class="fp-label">sha256</p>
+      <div class="fingerprint-grid">
+        <p class="fingerprint-prefix">__ __ __ __ __ __ __ __</p>
+        <p class="fingerprint-prefix">__ __ __ __ __ __ __ __</p>
+        <p class="fingerprint-remainder">__ __ __ __ __ __ __ __</p>
+        <p class="fingerprint-remainder">__ __ __ __ __ __ __ __</p>
+      </div>
+    </div>
+  </section>
+
+{%- if script.post_ceremony %}
+  <section>
+    <h2>Post-Ceremony Duties</h2>
+    <p class="duties-intro">The following duties must be completed after the ceremony concludes.</p>
+{%- for d in script.post_ceremony %}
+    <div class="duty">
+      <h3 class="duty-heading">{{ d.heading }}{% if d.role %} ({{ d.role }}){% endif %}</h3>
+{%- if d.prose %}
+      <p class="duty-prose">{{ d.prose }}</p>
+{%- endif %}
+{%- if d.items or d.recipient or d.location %}
+      <ul class="duty-items">
+{%- for it in d.items %}
+        <li>{{ it }}</li>
+{%- endfor %}
+{%- if d.recipient %}
+        <li><strong>Recipient:</strong> {{ d.recipient }}</li>
+{%- endif %}
+{%- if d.location %}
+        <li><strong>Location:</strong> {{ d.location }}</li>
+{%- endif %}
+      </ul>
+{%- endif %}
+    </div>
+{%- endfor %}
+  </section>
+{%- endif %}
+
+  <section class="signatures-section">
+    <h2>Signatures</h2>
+    <p>By signing below, each participant attests to the accuracy and completeness of this ceremony.</p>
+    <div class="signatures">
+{%- for r in script.roles %}
+      <div class="signature-block">
+        <p class="sig-role">{{ r.name }}</p>
+        <p class="sig-name">Name:&nbsp;{% if r.person %}{{ r.person }}{% else %}<span class="sig-inline-rule"></span>{% endif %}</p>
+        <div class="sig-line">
+          <div class="sig-cell sig-cell-sign"><span class="sig-rule"></span><span class="sig-cap">Signature</span></div>
+          <div class="sig-cell sig-cell-date"><span class="sig-rule"></span><span class="sig-cap">Date</span></div>
+        </div>
+      </div>
+{%- endfor %}
+    </div>
+  </section>
+</body>
+</html>

@@ -16,7 +16,7 @@ default      = ["verification", "attestation", "crypto", "pki", "openssl"]
 verification = ["dep:subtle", "dep:sysinfo"]
 attestation  = []
 crypto       = []
-pki          = ["dep:x509-cert", "dep:der", "dep:sha1", "dep:rsa", "dep:p256", "dep:rand"]
+pki          = ["dep:x509-cert", "dep:der", "dep:sha1", "dep:rsa", "dep:p256"]
 openssl          = ["dep:rite-openssl"]
 openssl-vendored = ["openssl", "rite-openssl/vendored"]
 full             = ["verification", "attestation", "crypto", "pki", "openssl"]
@@ -34,7 +34,6 @@ sha2       = { workspace = true }
 
 subtle    = { workspace = true, optional = true }
 sysinfo   = { workspace = true, optional = true }
-rand      = { workspace = true, optional = true }
 x509-cert = { workspace = true, optional = true }
 der       = { workspace = true, optional = true }
 sha1      = { workspace = true, optional = true }

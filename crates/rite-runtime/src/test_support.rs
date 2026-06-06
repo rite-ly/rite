@@ -43,9 +43,15 @@ impl ReporterHarness {
 
     /// Build a reporter scoped to the given step. The reporter borrows
     /// the harness for its lifetime.
+    ///
+    /// The entropy source is seeded with a fixed test seed, mirroring the
+    /// runner, so actions that draw values (serials, nonces) work out of the
+    /// box. Tests that need a specific seed can call
+    /// [`Reporter::seed_entropy`] again.
     pub fn reporter(&mut self, step: StepId) -> Reporter<'_> {
         let mut reporter = Reporter::new(&self.event_tx, &self.cmd_rx, &mut self.sink);
         reporter.set_current_step(Some(step));
+        reporter.seed_entropy(b"rite-test-harness-seed");
         reporter
     }
 

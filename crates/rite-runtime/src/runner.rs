@@ -36,12 +36,15 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use crossbeam_channel::{Receiver, Sender};
+use rand::TryRng;
+use rand::rngs::SysRng;
 use rite_model::{ActId, ActionType, ArtifactId, Ceremony, MaterialId, OutputId, ParamId, RoleId};
 use rite_sdk::{Backend, BackendError};
 use thiserror::Error;
 
 use crate::actions::ActionMetadata;
 use crate::backend::BackendRegistry;
+use crate::entropy::DERIVATION_V1;
 use crate::executor::{
     ExecutionError, load_material_artifact, step_info_from, write_artifact_to_disk,
 };
@@ -54,6 +57,27 @@ use crate::step_info::StepInfo;
 use crate::system_info::StartupSnapshot;
 use crate::transcript_sink::{TranscriptFingerprint, TranscriptSink};
 use rite_model::{ErrorRecord, Prompt, StepFact, StepOutcome};
+
+/// Gather the machine entropy `m` that seeds the ceremony entropy source.
+///
+/// Sourced directly from the host OS RNG ([`SysRng`]), independent of any
+/// ceremony backend, so a device the ceremony later challenges cannot
+/// influence its own challenge nonce. A dry run instead returns a fixed,
+/// clearly-labelled sentinel so a re-derived value can never be mistaken for
+/// one produced under real entropy.
+fn gather_machine_entropy(dry_run: bool) -> Result<([u8; 32], String), ExecutionError> {
+    let mut m = [0u8; 32];
+    if dry_run {
+        for (slot, byte) in m.iter_mut().zip(b"rite-dry-run-not-real-entropy") {
+            *slot = *byte;
+        }
+        return Ok((m, "dry-run".to_string()));
+    }
+    SysRng
+        .try_fill_bytes(&mut m)
+        .map_err(|e| ExecutionError::EntropyError(e.to_string()))?;
+    Ok((m, "os".to_string()))
+}
 
 /// Errors that may surface from an [`Action`] handler.
 #[derive(Debug, Error)]
@@ -82,7 +106,9 @@ impl From<ReporterError> for ActionError {
             ReporterError::Aborted => ActionError::Aborted,
             ReporterError::Disconnected => ActionError::Disconnected,
             ReporterError::Transcript(e) => ActionError::Transcript(e),
-            ReporterError::NoCurrentStep(_) => ActionError::Failed(value.to_string()),
+            ReporterError::NoCurrentStep(_)
+            | ReporterError::DuplicateDraw { .. }
+            | ReporterError::Unseeded => ActionError::Failed(value.to_string()),
         }
     }
 }
@@ -111,6 +137,9 @@ impl From<ReporterError> for ExecutionError {
             }
             ReporterError::Transcript(e) => ExecutionError::TranscriptError(e.to_string()),
             ReporterError::NoCurrentStep(_) => ExecutionError::TranscriptError(value.to_string()),
+            ReporterError::DuplicateDraw { .. } | ReporterError::Unseeded => {
+                ExecutionError::EntropyError(value.to_string())
+            }
         }
     }
 }
@@ -340,6 +369,18 @@ impl Executor {
             started_at: Utc::now(),
         })?;
 
+        // Establish the ceremony entropy source before any step can draw from
+        // it. This machine seed is run-metadata (the runner-emitted exception
+        // to "facts come from actions"); human contributions, by contrast, are
+        // authored `gather_entropy` steps that fold into the ratchet later.
+        let (m, source) = gather_machine_entropy(dry_run)?;
+        reporter.seed_entropy(&m);
+        reporter.fact(StepFact::EntropySeeded {
+            m: base16ct::lower::encode_string(&m),
+            source,
+            derivation: DERIVATION_V1.to_string(),
+        })?;
+
         // Pre-ceremony overview: descriptive metadata for the UI's
         // Overview screen. Sent as a UI-only signal, not a transcript
         // fact, because the YAML is the source of truth for these fields
@@ -552,6 +593,7 @@ impl ExecutionError {
             ExecutionError::StepFailed { .. } => "step_failed",
             ExecutionError::UnknownAction(_) => "unknown_action",
             ExecutionError::InvalidParams(_) => "invalid_params",
+            ExecutionError::EntropyError(_) => "entropy_error",
             ExecutionError::MaterialLoadFailed { .. } => "material_load_failed",
             ExecutionError::OutputWriteFailed { .. } => "output_write_failed",
             ExecutionError::TranscriptError(_) => "transcript_error",
@@ -689,6 +731,7 @@ sections:
             kinds,
             vec![
                 "ceremony_started",
+                "entropy_seeded",
                 "step_started",
                 "step_completed",
                 "ceremony_completed",
@@ -913,6 +956,9 @@ sections:
             StepFact::StepCompleted { .. } => "step_completed",
             StepFact::CeremonyCompleted { .. } => "ceremony_completed",
             StepFact::CeremonyFailed { .. } => "ceremony_failed",
+            StepFact::EntropySeeded { .. } => "entropy_seeded",
+            StepFact::EntropyContributed { .. } => "entropy_contributed",
+            StepFact::EntropyDrawn { .. } => "entropy_drawn",
             _ => "unknown",
         }
     }

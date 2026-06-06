@@ -29,6 +29,7 @@ use rite_model::{ErrorRecord, Prompt, ResponseRecord, StepFact, StepId};
 use secrecy::ExposeSecret;
 use thiserror::Error;
 
+use crate::entropy::CeremonyRandom;
 use crate::protocol::{ExecEvent, Icon, PromptId, Response, UiCommand, UiSignal};
 use crate::transcript::sha256_hex;
 use crate::transcript_sink::TranscriptSink;
@@ -50,6 +51,21 @@ pub enum ReporterError {
     /// Reporter was asked to emit a step-scoped signal but no step is set.
     #[error("internal: no current step set for {0}")]
     NoCurrentStep(&'static str),
+    /// An action drew the same `(step, purpose)` twice. A purpose is drawn at
+    /// most once per step; a repeat would reuse the value, so it is a bug in
+    /// the action and fails the ceremony.
+    #[error("duplicate entropy draw for purpose '{purpose}' in step '{step}'")]
+    DuplicateDraw {
+        /// Step that issued the duplicate draw.
+        step: StepId,
+        /// Purpose drawn more than once.
+        purpose: String,
+    },
+    /// A value was drawn before the entropy source was seeded. The runner
+    /// installs the machine seed at ceremony start, before any step can run,
+    /// so this is an internal ordering bug, never an operator-reachable state.
+    #[error("internal: entropy source drawn before it was seeded")]
+    Unseeded,
 }
 
 impl ReporterError {
@@ -61,6 +77,8 @@ impl ReporterError {
             ReporterError::Disconnected => "frontend_disconnected",
             ReporterError::Transcript(_) => "transcript_io",
             ReporterError::NoCurrentStep(_) => "internal_no_current_step",
+            ReporterError::DuplicateDraw { .. } => "duplicate_entropy_draw",
+            ReporterError::Unseeded => "internal_entropy_unseeded",
         };
         ErrorRecord::new(kind, self.to_string())
     }
@@ -73,6 +91,11 @@ pub struct Reporter<'a> {
     transcript: &'a mut dyn TranscriptSink,
     next_prompt_id: u64,
     current_step: Option<StepId>,
+    /// The ceremony entropy source: the single auditable origin of every
+    /// random value drawn during the run. `None` until the runner seeds it at
+    /// ceremony start; a draw before then is an internal ordering bug and fails
+    /// loudly rather than deriving from a stand-in seed.
+    random: Option<CeremonyRandom>,
 }
 
 impl<'a> Reporter<'a> {
@@ -88,7 +111,18 @@ impl<'a> Reporter<'a> {
             transcript,
             next_prompt_id: 0,
             current_step: None,
+            random: None,
         }
+    }
+
+    /// Install the machine seed for the entropy source.
+    ///
+    /// Called once by the runner at ceremony start, before any step can draw.
+    /// Until this runs the source is absent and any draw fails. The caller is
+    /// responsible for recording the corresponding [`StepFact::EntropySeeded`]
+    /// so the source stays reconstructible from the transcript.
+    pub fn seed_entropy(&mut self, m: &[u8]) {
+        self.random = Some(CeremonyRandom::from_machine_seed(m));
     }
 
     /// Set the step that subsequent log lines and progress signals are
@@ -122,6 +156,68 @@ impl<'a> Reporter<'a> {
             .send(ExecEvent::Fact(fact))
             .map_err(|_| ReporterError::Disconnected)?;
         Ok(())
+    }
+
+    /// Draw `len` bytes from the ceremony entropy source for `purpose`.
+    ///
+    /// The generic primitive behind every nonce, certificate serial, and
+    /// challenge: the caller names a purpose, the source derives the value
+    /// from the current epoch seed and records an [`StepFact::EntropyDrawn`]
+    /// carrying the derivation path and value, so `rite verify` can re-derive
+    /// it. Requires a current step (the path is step-scoped).
+    ///
+    /// # Errors
+    ///
+    /// [`ReporterError::NoCurrentStep`] if called outside a step, or
+    /// [`ReporterError::Transcript`] / [`ReporterError::Disconnected`] if the
+    /// fact cannot be emitted.
+    pub fn draw(&mut self, purpose: &str, len: usize) -> Result<Vec<u8>, ReporterError> {
+        let step = self
+            .current_step
+            .clone()
+            .ok_or(ReporterError::NoCurrentStep("draw"))?;
+        let random = self.random.as_mut().ok_or(ReporterError::Unseeded)?;
+        let drawn =
+            random
+                .draw(&step, purpose, len)
+                .ok_or_else(|| ReporterError::DuplicateDraw {
+                    step: step.clone(),
+                    purpose: purpose.to_string(),
+                })?;
+        self.fact(StepFact::EntropyDrawn {
+            step,
+            path: drawn.path,
+            value: base16ct::lower::encode_string(&drawn.value),
+        })?;
+        Ok(drawn.value)
+    }
+
+    /// Fold a human entropy contribution into the seed, advancing the ratchet.
+    ///
+    /// The contribution is public, witnessed entropy (the HMAC *message* keyed
+    /// by the prior seed, never a secret), so any input is safe and only adds
+    /// unpredictability. Records an [`StepFact::EntropyContributed`] carrying
+    /// the verbatim contribution and the new epoch, so the chain re-folds
+    /// identically on verification. Requires a current step.
+    ///
+    /// # Errors
+    ///
+    /// [`ReporterError::NoCurrentStep`] if called outside a step, or
+    /// [`ReporterError::Transcript`] / [`ReporterError::Disconnected`] if the
+    /// fact cannot be emitted.
+    pub fn fold_entropy(&mut self, contribution: &str) -> Result<(), ReporterError> {
+        let step = self
+            .current_step
+            .clone()
+            .ok_or(ReporterError::NoCurrentStep("fold_entropy"))?;
+        let random = self.random.as_mut().ok_or(ReporterError::Unseeded)?;
+        random.fold(contribution.as_bytes());
+        let epoch = random.epoch();
+        self.fact(StepFact::EntropyContributed {
+            step,
+            epoch,
+            contribution: contribution.to_string(),
+        })
     }
 
     /// Emit a raw [`UiSignal`]. Never recorded to the transcript.

@@ -125,6 +125,16 @@ pub struct AttestParams {
     pub statement: Option<String>,
 }
 
+/// Params for `gather_entropy` action.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GatherEntropyParams {
+    /// Instruction shown to the participant describing how to produce the
+    /// random value. Defaults to a generic dice suggestion; override per
+    /// ceremony to mandate a specific method.
+    #[serde(default)]
+    pub instruction: Option<String>,
+}
+
 /// Params for `generate_keypair` action.
 #[cfg(feature = "crypto")]
 #[derive(Debug, Clone, Serialize, Deserialize)]

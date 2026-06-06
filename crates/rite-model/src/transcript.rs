@@ -263,6 +263,56 @@ pub enum StepFact {
         /// Wall-clock timestamp at failure.
         failed_at: DateTime<Utc>,
     },
+    /// The ceremony entropy source was seeded with machine randomness.
+    ///
+    /// Emitted once by the runner at ceremony start (run-metadata). Records
+    /// the machine contribution `m` and the frozen derivation scheme so any
+    /// value the ceremony later draws is re-derivable from the transcript
+    /// alone. Part of the [entropy source](StepFact::EntropyDrawn) family.
+    ///
+    /// Carries no timestamp of its own: it is emitted immediately after
+    /// [`CeremonyStarted`](StepFact::CeremonyStarted), whose `started_at`
+    /// stamps that instant.
+    EntropySeeded {
+        /// Lowercase hex of the gathered machine entropy `m`.
+        m: String,
+        /// Provenance of `m` (e.g. `os`). A single label today; comma-separated
+        /// if more than one source is ever mixed.
+        source: String,
+        /// Frozen derivation-scheme tag (e.g. `rite-kdf/v1`) that pins the
+        /// entire construction. A verifier rejects an unrecognised value.
+        derivation: String,
+    },
+    /// A human folded additional entropy into the seed, advancing the ratchet.
+    ///
+    /// Emitted by the authored `gather_entropy` step. The verbatim operator
+    /// contribution is recorded so the epoch chain re-folds identically; it is
+    /// public, witnessed entropy, not a secret. Timed by its enclosing step
+    /// boundaries (and by the `PromptAnswered` that captured the input).
+    EntropyContributed {
+        /// Step under which the contribution was gathered.
+        step: StepId,
+        /// Epoch index produced by this fold (1 for the first contribution).
+        epoch: u32,
+        /// Verbatim operator contribution, fed as UTF-8 into the ratchet.
+        contribution: String,
+    },
+    /// A value was drawn from the entropy source (a nonce, certificate serial,
+    /// or challenge).
+    ///
+    /// Emitted whenever an action draws bytes from the entropy source. The
+    /// derivation `path` plus the recorded seed let `rite verify` re-derive
+    /// the value and confirm the right value reached the right consumer. Like
+    /// other action-emitted evidence, it is timed by its enclosing step.
+    EntropyDrawn {
+        /// Step that drew the value.
+        step: StepId,
+        /// Derivation path `<epoch>/<step>/<purpose>`.
+        path: String,
+        /// Lowercase hex of the derived bytes. Its length fixes the byte count,
+        /// so `rite verify` re-derives exactly this many bytes from the seed.
+        value: String,
+    },
 }
 
 /// JSON-shape snapshot tests, the tripwire for accidental wire-format breaks.
@@ -636,6 +686,57 @@ mod schema_snapshot_tests {
                 "type": "ceremony_failed",
                 "error": { "kind": "aborted", "message": "ceremony aborted by operator" },
                 "failed_at": "2026-01-02T03:04:05Z",
+            }),
+        );
+    }
+
+    #[test]
+    fn entropy_seeded() {
+        assert_json(
+            &StepFact::EntropySeeded {
+                m: "00112233".to_string(),
+                source: "os".to_string(),
+                derivation: "rite-kdf/v1".to_string(),
+            },
+            &json!({
+                "type": "entropy_seeded",
+                "m": "00112233",
+                "source": "os",
+                "derivation": "rite-kdf/v1",
+            }),
+        );
+    }
+
+    #[test]
+    fn entropy_contributed() {
+        assert_json(
+            &StepFact::EntropyContributed {
+                step: StepId::new("roll_dice"),
+                epoch: 1,
+                contribution: "3 1 6 4 2 5".to_string(),
+            },
+            &json!({
+                "type": "entropy_contributed",
+                "step": "roll_dice",
+                "epoch": 1,
+                "contribution": "3 1 6 4 2 5",
+            }),
+        );
+    }
+
+    #[test]
+    fn entropy_drawn() {
+        assert_json(
+            &StepFact::EntropyDrawn {
+                step: StepId::new("issue"),
+                path: "0/issue/cert-serial".to_string(),
+                value: "aabbccddeeff00112233".to_string(),
+            },
+            &json!({
+                "type": "entropy_drawn",
+                "step": "issue",
+                "path": "0/issue/cert-serial",
+                "value": "aabbccddeeff00112233",
             }),
         );
     }

@@ -127,8 +127,15 @@ impl Model {
     /// and the model's wall-clock snapshot so the Ceremony tab can render
     /// a per-row step and timestamp column.
     pub(crate) fn push_entry(&mut self, icon: Icon, text: String) {
+        self.push_entry_at(icon, text, self.now);
+    }
+
+    /// Push a log entry stamped with an explicit event time. Used for facts so
+    /// the Ceremony tab's timestamp column shows when the event actually
+    /// happened, not when the drip queue drained it. `push_entry` (for signals,
+    /// which have no event time) delegates here with the live `now`.
+    pub(crate) fn push_entry_at(&mut self, icon: Icon, text: String, at: DateTime<Local>) {
         let step = self.current_step.as_ref().map(|s| s.label.clone());
-        let at = self.now;
         self.push_log(LogLine::Entry {
             icon,
             text,

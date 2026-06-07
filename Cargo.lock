@@ -1696,7 +1696,6 @@ dependencies = [
 name = "rite-model"
 version = "0.2.2"
 dependencies = [
- "chrono",
  "indexmap",
  "rite-sdk",
  "serde",

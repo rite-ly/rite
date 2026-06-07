@@ -9,11 +9,17 @@
 //!
 //! # On-disk format (`transcript.jsonl`)
 //!
-//! Each line is a JSON object with two fields:
+//! Each line is a JSON object with three fields:
 //!
 //! ```jsonc
-//! {"prev_hash": "sha256:…", "fact": { "type": "step_started", … }}
+//! {"prev_hash": "sha256:…", "at": "2026-06-01T20:34:51Z", "fact": { "type": "step_started", … }}
 //! ```
+//!
+//! `at` is the event's wall-clock time, supplied by the executor's clock when
+//! it emits the fact (the sink records it rather than choosing it, so the time
+//! is independent of the storage backend). It is the single uniform timestamp
+//! for every event, and part of the hashed line, so it is tamper-evident like
+//! the rest of the envelope.
 //!
 //! The chain is verified by recomputing each line's SHA-256, accumulating it
 //! as the expected `prev_hash` of the next line, starting from
@@ -29,6 +35,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -75,14 +82,18 @@ pub const GENESIS_HASH: &str =
 /// relies on this to maintain the invariant that the UI never sees a fact
 /// that has not been durably persisted.
 pub trait TranscriptSink: Send {
-    /// Record a single fact. Must persist before returning, the file-backed
-    /// implementation calls `sync_data` so a power loss after `record`
-    /// returns cannot drop the fact.
+    /// Record a single fact, stamped with the caller-supplied event time `at`.
+    /// Must persist before returning, the file-backed implementation calls
+    /// `sync_data` so a power loss after `record` returns cannot drop the fact.
+    ///
+    /// `at` is supplied by the executor (the clock owner), not read here, so the
+    /// recorded time is independent of the persistence implementation and the
+    /// sink stays a deterministic serializer.
     ///
     /// # Errors
     ///
     /// Returns the underlying I/O error if the sink cannot persist the fact.
-    fn record(&mut self, fact: &StepFact) -> io::Result<()>;
+    fn record(&mut self, at: DateTime<Utc>, fact: &StepFact) -> io::Result<()>;
 
     /// Finalize the transcript and return its fingerprint.
     ///
@@ -140,12 +151,13 @@ impl JsonlFileSink {
 }
 
 impl TranscriptSink for JsonlFileSink {
-    fn record(&mut self, fact: &StepFact) -> io::Result<()> {
+    fn record(&mut self, at: DateTime<Utc>, fact: &StepFact) -> io::Result<()> {
         if self.finalized.is_some() {
             return Err(io::Error::other("transcript already finalized"));
         }
         let line = ChainedFact {
             prev_hash: &self.current_hash,
+            at,
             fact,
         };
         let bytes = serde_json::to_vec(&line).map_err(io::Error::other)?;
@@ -215,12 +227,13 @@ impl InMemorySink {
 }
 
 impl TranscriptSink for InMemorySink {
-    fn record(&mut self, fact: &StepFact) -> io::Result<()> {
+    fn record(&mut self, at: DateTime<Utc>, fact: &StepFact) -> io::Result<()> {
         if self.finalized.is_some() {
             return Err(io::Error::other("transcript already finalized"));
         }
         let line = ChainedFact {
             prev_hash: &self.current_hash,
+            at,
             fact,
         };
         let bytes = serde_json::to_vec(&line).map_err(io::Error::other)?;
@@ -242,13 +255,26 @@ impl TranscriptSink for InMemorySink {
 #[derive(Serialize)]
 struct ChainedFact<'a> {
     prev_hash: &'a str,
+    at: DateTime<Utc>,
     fact: &'a StepFact,
 }
 
 #[derive(Deserialize)]
 struct OwnedChainedFact {
     prev_hash: String,
+    at: DateTime<Utc>,
     fact: StepFact,
+}
+
+/// A recorded fact paired with its envelope timestamp: the uniform event time,
+/// which lives on the chain envelope rather than on individual facts. Returned
+/// by [`read_verified_transcript`] so consumers read event time uniformly.
+#[derive(Debug, Clone)]
+pub struct TimedFact {
+    /// Wall-clock time the fact was recorded.
+    pub at: DateTime<Utc>,
+    /// The recorded fact.
+    pub fact: StepFact,
 }
 
 /// Outcome of verifying a transcript on disk.
@@ -334,8 +360,9 @@ pub fn verify_transcript(jsonl_path: &Path) -> Result<TranscriptVerified, Verify
 /// fingerprint and a flag for whether the run reached a terminal fact.
 #[derive(Debug, Clone)]
 pub struct LoadedTranscript {
-    /// Facts in the order they were recorded.
-    pub facts: Vec<StepFact>,
+    /// Facts in the order they were recorded, each paired with the envelope
+    /// timestamp the sink stamped when it wrote the line.
+    pub facts: Vec<TimedFact>,
     /// Final transcript fingerprint (hash of the last line).
     pub fingerprint: TranscriptFingerprint,
     /// `true` if the last fact is `CeremonyCompleted` or `CeremonyFailed`.
@@ -357,7 +384,7 @@ pub fn read_verified_transcript(jsonl_path: &Path) -> Result<LoadedTranscript, V
 
     let mut expected_prev = GENESIS_HASH.to_string();
     let mut last_hash = expected_prev.clone();
-    let mut facts: Vec<StepFact> = Vec::new();
+    let mut facts: Vec<TimedFact> = Vec::new();
 
     for (idx, line) in reader.lines().enumerate() {
         let line = line?;
@@ -376,7 +403,10 @@ pub fn read_verified_transcript(jsonl_path: &Path) -> Result<LoadedTranscript, V
         }
         last_hash = compute_fingerprint(line.as_bytes());
         expected_prev.clone_from(&last_hash);
-        facts.push(parsed.fact);
+        facts.push(TimedFact {
+            at: parsed.at,
+            fact: parsed.fact,
+        });
     }
 
     if facts.is_empty() {
@@ -384,7 +414,7 @@ pub fn read_verified_transcript(jsonl_path: &Path) -> Result<LoadedTranscript, V
     }
 
     let terminated = matches!(
-        facts.last(),
+        facts.last().map(|t| &t.fact),
         Some(StepFact::CeremonyCompleted { .. } | StepFact::CeremonyFailed { .. }),
     );
 
@@ -423,7 +453,9 @@ pub struct EntropyVerified {
 /// Returns a [`VerifyError`] variant describing the first inconsistency:
 /// [`VerifyError::SeedMissing`], [`VerifyError::UnknownDerivation`],
 /// [`VerifyError::MalformedEntropy`], or [`VerifyError::DrawMismatch`].
-pub fn verify_entropy(facts: &[StepFact]) -> Result<EntropyVerified, VerifyError> {
+pub fn verify_entropy<'a>(
+    facts: impl IntoIterator<Item = &'a StepFact>,
+) -> Result<EntropyVerified, VerifyError> {
     let mut seed: Option<[u8; 32]> = None;
     let mut result = EntropyVerified::default();
 
@@ -464,14 +496,12 @@ pub fn verify_entropy(facts: &[StepFact]) -> Result<EntropyVerified, VerifyError
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
-
     use super::*;
+    use crate::test_support::fixed_test_time as test_at;
 
     fn sample_fact() -> StepFact {
         StepFact::CeremonyStarted {
             name: "Test".to_string(),
-            started_at: Utc::now(),
         }
     }
 
@@ -479,7 +509,7 @@ mod tests {
     fn in_memory_sink_records_and_finalizes() {
         let mut sink = InMemorySink::new();
         assert!(sink.is_empty());
-        sink.record(&sample_fact()).expect("record");
+        sink.record(test_at(), &sample_fact()).expect("record");
         assert_eq!(sink.len(), 1);
         let fp = sink.finalize().expect("finalize");
         assert!(fp.as_str().starts_with("sha256:"));
@@ -488,9 +518,11 @@ mod tests {
     #[test]
     fn in_memory_sink_rejects_record_after_finalize() {
         let mut sink = InMemorySink::new();
-        sink.record(&sample_fact()).expect("record");
+        sink.record(test_at(), &sample_fact()).expect("record");
         sink.finalize().expect("finalize");
-        let err = sink.record(&sample_fact()).expect_err("should fail");
+        let err = sink
+            .record(test_at(), &sample_fact())
+            .expect_err("should fail");
         assert!(err.to_string().contains("already finalized"));
     }
 
@@ -498,19 +530,33 @@ mod tests {
     fn in_memory_sink_chain_advances() {
         let mut sink = InMemorySink::new();
         let initial = sink.current_hash.clone();
-        sink.record(&sample_fact()).expect("record");
+        sink.record(test_at(), &sample_fact()).expect("record");
         assert_ne!(sink.current_hash, initial);
         let after_first = sink.current_hash.clone();
-        sink.record(&sample_fact()).expect("record");
+        sink.record(test_at(), &sample_fact()).expect("record");
         assert_ne!(sink.current_hash, after_first);
+    }
+
+    #[test]
+    fn record_persists_the_supplied_time_and_reader_recovers_it() {
+        // The sink records the `at` it is given (it does not read a clock), and
+        // the reader recovers exactly that instant from the envelope.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut sink = JsonlFileSink::create(tmp.path()).expect("create");
+        let at = test_at();
+        sink.record(at, &sample_fact()).expect("record");
+        sink.finalize().expect("finalize");
+
+        let loaded = read_verified_transcript(sink.jsonl_path()).expect("read");
+        assert_eq!(loaded.facts.first().expect("one fact").at, at);
     }
 
     #[test]
     fn jsonl_file_sink_writes_and_chains() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut sink = JsonlFileSink::create(tmp.path()).expect("create");
-        sink.record(&sample_fact()).expect("record");
-        sink.record(&sample_fact()).expect("record");
+        sink.record(test_at(), &sample_fact()).expect("record");
+        sink.record(test_at(), &sample_fact()).expect("record");
         let fp = sink.finalize().expect("finalize");
 
         let jsonl = std::fs::read_to_string(sink.jsonl_path()).expect("read jsonl");
@@ -546,9 +592,9 @@ mod tests {
     fn verify_round_trip_succeeds_on_well_formed_transcript() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut sink = JsonlFileSink::create(tmp.path()).expect("create");
-        sink.record(&sample_fact()).expect("record");
-        sink.record(&sample_fact()).expect("record");
-        sink.record(&sample_fact()).expect("record");
+        sink.record(test_at(), &sample_fact()).expect("record");
+        sink.record(test_at(), &sample_fact()).expect("record");
+        sink.record(test_at(), &sample_fact()).expect("record");
         let written = sink.finalize().expect("finalize");
 
         let verified = verify_transcript(sink.jsonl_path()).expect("verify");
@@ -562,8 +608,8 @@ mod tests {
     fn verify_detects_chain_break() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut sink = JsonlFileSink::create(tmp.path()).expect("create");
-        sink.record(&sample_fact()).expect("record");
-        sink.record(&sample_fact()).expect("record");
+        sink.record(test_at(), &sample_fact()).expect("record");
+        sink.record(test_at(), &sample_fact()).expect("record");
         let _ = sink.finalize().expect("finalize");
 
         let path = sink.jsonl_path().to_path_buf();
@@ -609,11 +655,11 @@ mod tests {
     fn verify_entropy_re_derives_a_clean_draw() {
         let m = b"machine entropy bytes";
         let seed = crate::entropy::initial_seed(m);
-        let facts = vec![
+        let facts = [
             seeded_fact(m),
             drawn_fact(&seed, "issue", "0/issue/cert-serial", 9),
         ];
-        let v = verify_entropy(&facts).expect("verify");
+        let v = verify_entropy(facts.iter()).expect("verify");
         assert_eq!(v.values_verified, 1);
         assert_eq!(v.contributions, 0);
         assert_eq!(v.derivation.as_deref(), Some("rite-kdf/v1"));
@@ -624,7 +670,7 @@ mod tests {
         let m = b"machine entropy bytes";
         let seed0 = crate::entropy::initial_seed(m);
         let seed1 = crate::entropy::fold_seed(&seed0, b"3 1 6 4 2 5");
-        let facts = vec![
+        let facts = [
             seeded_fact(m),
             StepFact::EntropyContributed {
                 step: StepId::new("roll"),
@@ -634,7 +680,7 @@ mod tests {
             // Drawn after the fold, so it must derive from the epoch-1 seed.
             drawn_fact(&seed1, "issue", "1/issue/cert-serial", 9),
         ];
-        let v = verify_entropy(&facts).expect("verify");
+        let v = verify_entropy(facts.iter()).expect("verify");
         assert_eq!(v.contributions, 1);
         assert_eq!(v.values_verified, 1);
     }
@@ -647,27 +693,27 @@ mod tests {
         if let StepFact::EntropyDrawn { value, .. } = &mut drawn {
             *value = "deadbeefdeadbeefdead".to_string();
         }
-        let facts = vec![seeded_fact(m), drawn];
-        let err = verify_entropy(&facts).expect_err("tamper");
+        let facts = [seeded_fact(m), drawn];
+        let err = verify_entropy(facts.iter()).expect_err("tamper");
         assert!(matches!(err, VerifyError::DrawMismatch { .. }));
     }
 
     #[test]
     fn verify_entropy_rejects_unknown_derivation() {
-        let facts = vec![StepFact::EntropySeeded {
+        let facts = [StepFact::EntropySeeded {
             m: "00".to_string(),
             source: "os".to_string(),
             derivation: "rite-kdf/v99".to_string(),
         }];
-        let err = verify_entropy(&facts).expect_err("unknown scheme");
+        let err = verify_entropy(facts.iter()).expect_err("unknown scheme");
         assert!(matches!(err, VerifyError::UnknownDerivation(_)));
     }
 
     #[test]
     fn verify_entropy_rejects_draw_before_seed() {
         let seed = crate::entropy::initial_seed(b"x");
-        let facts = vec![drawn_fact(&seed, "issue", "0/issue/cert-serial", 9)];
-        let err = verify_entropy(&facts).expect_err("unseeded");
+        let facts = [drawn_fact(&seed, "issue", "0/issue/cert-serial", 9)];
+        let err = verify_entropy(facts.iter()).expect_err("unseeded");
         assert!(matches!(err, VerifyError::SeedMissing));
     }
 }

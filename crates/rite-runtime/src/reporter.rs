@@ -23,12 +23,14 @@
 //! arrive, so deviations are recorded with no lag and abort interrupts
 //! the prompt cleanly.
 
-use chrono::Utc;
+use std::sync::Arc;
+
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use rite_model::{ErrorRecord, Prompt, ResponseRecord, StepFact, StepId};
 use secrecy::ExposeSecret;
 use thiserror::Error;
 
+use crate::clock::Clock;
 use crate::entropy::CeremonyRandom;
 use crate::protocol::{ExecEvent, Icon, PromptId, Response, UiCommand, UiSignal};
 use crate::transcript::sha256_hex;
@@ -96,14 +98,18 @@ pub struct Reporter<'a> {
     /// ceremony start; a draw before then is an internal ordering bug and fails
     /// loudly rather than deriving from a stand-in seed.
     random: Option<CeremonyRandom>,
+    /// The run clock. Read once per fact in [`Reporter::fact`] to stamp the
+    /// event time onto both the transcript line and the live UI event.
+    clock: Arc<dyn Clock>,
 }
 
 impl<'a> Reporter<'a> {
-    /// Build a reporter bound to the given channels and transcript sink.
+    /// Build a reporter bound to the given channels, transcript sink, and clock.
     pub fn new(
         event_tx: &'a Sender<ExecEvent>,
         cmd_rx: &'a Receiver<UiCommand>,
         transcript: &'a mut dyn TranscriptSink,
+        clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             event_tx,
@@ -112,6 +118,7 @@ impl<'a> Reporter<'a> {
             next_prompt_id: 0,
             current_step: None,
             random: None,
+            clock,
         }
     }
 
@@ -151,9 +158,12 @@ impl<'a> Reporter<'a> {
     /// Returns [`ReporterError::Transcript`] if the sink fails to persist,
     /// or [`ReporterError::Disconnected`] if the frontend is gone.
     pub fn fact(&mut self, fact: StepFact) -> Result<(), ReporterError> {
-        self.transcript.record(&fact)?;
+        // Stamp the event time once, from the run clock, and use it for both
+        // the durable record and the live UI event so they never disagree.
+        let at = self.clock.now();
+        self.transcript.record(at, &fact)?;
         self.event_tx
-            .send(ExecEvent::Fact(fact))
+            .send(ExecEvent::Fact { at, fact })
             .map_err(|_| ReporterError::Disconnected)?;
         Ok(())
     }
@@ -362,7 +372,6 @@ impl<'a> Reporter<'a> {
                                     step: step.clone(),
                                     prompt: prompt.clone(),
                                     response: record,
-                                    at: Utc::now(),
                                 })?;
                                 return Ok(response);
                             }
@@ -397,11 +406,7 @@ impl<'a> Reporter<'a> {
     }
 
     fn emit_deviation(&mut self, step: Option<StepId>, text: String) -> Result<(), ReporterError> {
-        self.fact(StepFact::DeviationRecorded {
-            step,
-            text,
-            at: Utc::now(),
-        })
+        self.fact(StepFact::DeviationRecorded { step, text })
     }
 }
 
@@ -481,6 +486,7 @@ mod tests {
     use secrecy::SecretString;
 
     use super::*;
+    use crate::clock::SystemClock;
     use crate::transcript_sink::InMemorySink;
     use rite_model::ValidatorSpec;
 
@@ -488,25 +494,54 @@ mod tests {
         StepId::new(step)
     }
 
+    fn test_clock() -> Arc<dyn Clock> {
+        Arc::new(SystemClock)
+    }
+
+    #[test]
+    fn fact_stamps_event_from_the_injected_clock() {
+        use crate::test_support::{FixedClock, fixed_test_time};
+
+        let (event_tx, event_rx) = unbounded();
+        let (_cmd_tx, cmd_rx) = unbounded::<UiCommand>();
+        let mut sink = InMemorySink::new();
+        let fixed = fixed_test_time();
+        let mut reporter =
+            Reporter::new(&event_tx, &cmd_rx, &mut sink, Arc::new(FixedClock(fixed)));
+
+        reporter
+            .fact(StepFact::CeremonyStarted {
+                name: "T".to_string(),
+            })
+            .expect("fact");
+
+        match event_rx.recv().expect("event") {
+            ExecEvent::Fact { at, .. } => assert_eq!(at, fixed),
+            other => panic!("expected Fact, got {other:?}"),
+        }
+    }
+
     #[test]
     fn fact_writes_to_sink_and_forwards_to_ui() {
         let (event_tx, event_rx) = unbounded();
         let (_cmd_tx, cmd_rx) = unbounded::<UiCommand>();
         let mut sink = InMemorySink::new();
-        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink);
+        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
         reporter
             .fact(StepFact::DeviationRecorded {
                 step: Some(ids("s1")),
                 text: "minor".to_string(),
-                at: Utc::now(),
             })
             .expect("emit fact");
 
         assert_eq!(sink.len(), 1);
         match event_rx.try_recv().expect("ui event") {
-            ExecEvent::Fact(StepFact::DeviationRecorded { text, .. }) => {
+            ExecEvent::Fact {
+                fact: StepFact::DeviationRecorded { text, .. },
+                ..
+            } => {
                 assert_eq!(text, "minor");
             }
             other => panic!("unexpected event: {other:?}"),
@@ -518,7 +553,7 @@ mod tests {
         let (event_tx, event_rx) = unbounded();
         let (_cmd_tx, cmd_rx) = unbounded::<UiCommand>();
         let mut sink = InMemorySink::new();
-        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink);
+        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
         reporter.log(Icon::Info, "hello").expect("log");
@@ -535,7 +570,7 @@ mod tests {
         let (event_tx, _event_rx) = unbounded::<ExecEvent>();
         let (cmd_tx, cmd_rx) = unbounded();
         let mut sink = InMemorySink::new();
-        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink);
+        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
         cmd_tx.send(UiCommand::Abort).expect("send");
@@ -548,7 +583,7 @@ mod tests {
         let (event_tx, event_rx) = unbounded();
         let (cmd_tx, cmd_rx) = unbounded();
         let mut sink = InMemorySink::new();
-        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink);
+        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
         cmd_tx
@@ -560,7 +595,10 @@ mod tests {
 
         assert_eq!(sink.len(), 1);
         match event_rx.try_recv().expect("ui event") {
-            ExecEvent::Fact(StepFact::DeviationRecorded { text, .. }) => {
+            ExecEvent::Fact {
+                fact: StepFact::DeviationRecorded { text, .. },
+                ..
+            } => {
                 assert_eq!(text, "phone rang");
             }
             other => panic!("unexpected event: {other:?}"),
@@ -621,7 +659,7 @@ mod tests {
         let (event_tx, event_rx) = unbounded();
         let (cmd_tx, cmd_rx) = unbounded();
         let mut sink = InMemorySink::new();
-        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink);
+        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
         let frontend = spawn_frontend(event_rx, cmd_tx, |prompt_id, _, tx| {
@@ -654,7 +692,7 @@ mod tests {
         let (event_tx, event_rx) = unbounded();
         let (cmd_tx, cmd_rx) = unbounded();
         let mut sink = InMemorySink::new();
-        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink);
+        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
         let frontend = spawn_frontend(event_rx, cmd_tx, |prompt_id, _, tx| {
@@ -693,7 +731,7 @@ mod tests {
         let (event_tx, event_rx) = unbounded();
         let (cmd_tx, cmd_rx) = unbounded();
         let mut sink = InMemorySink::new();
-        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink);
+        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
         let frontend = spawn_frontend(event_rx, cmd_tx, |prompt_id, _, tx| {
@@ -813,7 +851,7 @@ mod tests {
         let (event_tx, event_rx) = unbounded();
         let (cmd_tx, cmd_rx) = unbounded();
         let mut sink = InMemorySink::new();
-        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink);
+        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
         // Frontend: first AwaitPrompt → reply empty (rejected by validator),

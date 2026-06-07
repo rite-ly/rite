@@ -23,6 +23,7 @@
 mod actions;
 mod artifact_resolver;
 mod backend;
+mod clock;
 mod display;
 mod entropy;
 mod executor;
@@ -46,6 +47,8 @@ pub use actions::{ActionCategory, ActionMetadata, ArtifactValue, KeyFormat};
 
 // Backend registry (traits live in `rite-sdk`, not here)
 pub use backend::{BackendFactory, BackendRegistry};
+
+pub use clock::{Clock, SystemClock};
 
 // Channel vocabulary for the runtime ↔ frontend boundary.
 // Persisted transcript types (`StepFact`, `Prompt`, `ResponseRecord`, …)

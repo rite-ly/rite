@@ -24,7 +24,7 @@ pub fn run(args: Args) {
             // The hash chain is intact. Now re-derive the entropy source so
             // every recorded random value is proven to come from the recorded
             // seed, not cherry-picked.
-            let entropy = match verify_entropy(&loaded.facts) {
+            let entropy = match verify_entropy(loaded.facts.iter().map(|t| &t.fact)) {
                 Ok(entropy) => entropy,
                 Err(err) => {
                     eprintln!("Verification failed: {err}");

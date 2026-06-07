@@ -1,6 +1,5 @@
 //! `attest` action, record a formal attestation by a named role.
 
-use chrono::Utc;
 use rite_model::{ActionType, Prompt, RoleId, StepFact};
 use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, StepInfo,
@@ -75,7 +74,6 @@ impl Action for AttestAction {
             step: step.id.clone(),
             role,
             statement: statement.clone(),
-            at: Utc::now(),
         })?;
 
         Ok(StepResult::completed(format!(

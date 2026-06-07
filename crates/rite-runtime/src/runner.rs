@@ -34,7 +34,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::Utc;
 use crossbeam_channel::{Receiver, Sender};
 use rand::TryRng;
 use rand::rngs::SysRng;
@@ -44,6 +43,7 @@ use thiserror::Error;
 
 use crate::actions::ActionMetadata;
 use crate::backend::BackendRegistry;
+use crate::clock::{Clock, SystemClock};
 use crate::entropy::DERIVATION_V1;
 use crate::executor::{
     ExecutionError, load_material_artifact, step_info_from, write_artifact_to_disk,
@@ -238,6 +238,7 @@ pub struct Executor {
     output_config: OutputConfig,
     dry_run: bool,
     startup: StartupSnapshot,
+    clock: Arc<dyn Clock>,
 }
 
 impl Executor {
@@ -262,7 +263,16 @@ impl Executor {
             output_config,
             dry_run,
             startup,
+            clock: Arc::new(SystemClock),
         }
+    }
+
+    /// Override the run clock. The default is [`SystemClock`]; tests inject a
+    /// fixed or stepping clock to make recorded event times deterministic.
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Drive the ceremony to completion.
@@ -307,7 +317,15 @@ impl Executor {
             .collect();
 
         let ceremony_name = self.ceremony.metadata.name.clone();
-        let mut reporter = Reporter::new(event_tx, cmd_rx, transcript_sink.as_mut());
+        // Keep a clock handle for the terminal facts below: `execute_inner`
+        // consumes `self`, so the reporter and the runner share this clone.
+        let clock = Arc::clone(&self.clock);
+        let mut reporter = Reporter::new(
+            event_tx,
+            cmd_rx,
+            transcript_sink.as_mut(),
+            Arc::clone(&clock),
+        );
 
         let outcome = self.execute_inner(&mut reporter, resolved_params, roles, materials_map);
 
@@ -317,13 +335,15 @@ impl Executor {
         // fingerprint to the UI.
         match outcome {
             Ok(counts) => {
-                let completed = StepFact::CeremonyCompleted {
-                    completed_at: Utc::now(),
-                };
+                let at = clock.now();
+                let completed = StepFact::CeremonyCompleted {};
                 transcript_sink
-                    .record(&completed)
+                    .record(at, &completed)
                     .map_err(|e| ExecutionError::TranscriptError(e.to_string()))?;
-                let _ = event_tx.send(ExecEvent::Fact(completed));
+                let _ = event_tx.send(ExecEvent::Fact {
+                    at,
+                    fact: completed,
+                });
                 let fingerprint = transcript_sink
                     .finalize()
                     .map_err(|e| ExecutionError::TranscriptError(e.to_string()))?;
@@ -337,13 +357,11 @@ impl Executor {
                 })
             }
             Err(err) => {
+                let at = clock.now();
                 let record = err.to_error_record();
-                let failed = StepFact::CeremonyFailed {
-                    error: record,
-                    failed_at: Utc::now(),
-                };
-                let _ = transcript_sink.record(&failed);
-                let _ = event_tx.send(ExecEvent::Fact(failed));
+                let failed = StepFact::CeremonyFailed { error: record };
+                let _ = transcript_sink.record(at, &failed);
+                let _ = event_tx.send(ExecEvent::Fact { at, fact: failed });
                 if let Ok(fingerprint) = transcript_sink.finalize() {
                     let _ = event_tx.send(ExecEvent::Finalized {
                         fingerprint: fingerprint.as_str().to_string(),
@@ -366,7 +384,6 @@ impl Executor {
 
         reporter.fact(StepFact::CeremonyStarted {
             name: self.ceremony.metadata.name.clone(),
-            started_at: Utc::now(),
         })?;
 
         // Establish the ceremony entropy source before any step can draw from
@@ -455,7 +472,6 @@ impl Executor {
             }
 
             reporter.set_current_step(Some(step.id.clone()));
-            let started_at = Utc::now();
             let role_id = step.role.clone().unwrap_or_else(|| RoleId::new(""));
             let role_name = self
                 .ceremony
@@ -467,7 +483,6 @@ impl Executor {
                 label: step.step_label.clone(),
                 role: role_id,
                 role_name,
-                started_at,
             })?;
 
             // Pacing: gate the step body on operator acknowledgement. The
@@ -521,13 +536,10 @@ impl Executor {
                     },
                 })?;
 
-            let completed_at = Utc::now();
-
             // StepCompleted
             reporter.fact(StepFact::StepCompleted {
                 id: step.id.clone(),
                 outcome: result.outcome.clone(),
-                completed_at,
             })?;
 
             if let StepOutcome::Completed { .. } = &result.outcome {
@@ -718,7 +730,7 @@ sections:
         // Drain events. With silent=true and dry_run=true, no prompts fire.
         let mut facts = Vec::new();
         while let Ok(ev) = event_rx.recv() {
-            if let ExecEvent::Fact(fact) = ev {
+            if let ExecEvent::Fact { fact, .. } = ev {
                 facts.push(fact);
             }
         }
@@ -737,6 +749,46 @@ sections:
                 "ceremony_completed",
             ],
         );
+
+        drop(cmd_tx);
+    }
+
+    #[test]
+    fn run_stamps_every_fact_from_the_injected_clock() {
+        use crate::test_support::{FixedClock, fixed_test_time};
+
+        let mut registry = ActionRegistry::new();
+        registry.register(Arc::new(PingAction));
+
+        let (cmd_tx, cmd_rx) = unbounded::<UiCommand>();
+        let (event_tx, event_rx) = unbounded::<ExecEvent>();
+        let sink: Box<dyn TranscriptSink> = Box::new(InMemorySink::new());
+
+        let fixed = fixed_test_time();
+        let executor = Executor::new(
+            minimal_ceremony(),
+            registry,
+            BackendRegistry::new(),
+            dry_run_output_config(),
+            true,
+            StartupSnapshot::placeholder(),
+        )
+        .with_clock(Arc::new(FixedClock(fixed)));
+
+        let join = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
+
+        let mut times = Vec::new();
+        while let Ok(ev) = event_rx.recv() {
+            if let ExecEvent::Fact { at, .. } = ev {
+                times.push(at);
+            }
+        }
+        join.join().expect("executor join").expect("run ok");
+
+        // Every fact carries the injected time, including the terminal
+        // `ceremony_completed`, which the runner emits outside `reporter.fact`.
+        assert!(!times.is_empty());
+        assert!(times.iter().all(|&t| t == fixed));
 
         drop(cmd_tx);
     }
@@ -804,16 +856,28 @@ sections:
                 let mut trace = Vec::new();
                 while let Ok(event) = event_rx.recv() {
                     match event {
-                        ExecEvent::Fact(StepFact::CeremonyStarted { .. }) => {
+                        ExecEvent::Fact {
+                            fact: StepFact::CeremonyStarted { .. },
+                            ..
+                        } => {
                             trace.push(PacingTrace::CeremonyStarted);
                         }
-                        ExecEvent::Fact(StepFact::StepStarted { label, .. }) => {
+                        ExecEvent::Fact {
+                            fact: StepFact::StepStarted { label, .. },
+                            ..
+                        } => {
                             trace.push(PacingTrace::StepStarted(label));
                         }
-                        ExecEvent::Fact(StepFact::StepCompleted { .. }) => {
+                        ExecEvent::Fact {
+                            fact: StepFact::StepCompleted { .. },
+                            ..
+                        } => {
                             trace.push(PacingTrace::StepCompleted);
                         }
-                        ExecEvent::Fact(StepFact::CeremonyCompleted { .. }) => {
+                        ExecEvent::Fact {
+                            fact: StepFact::CeremonyCompleted { .. },
+                            ..
+                        } => {
                             trace.push(PacingTrace::CeremonyCompleted);
                         }
                         ExecEvent::AwaitPrompt {
@@ -932,7 +996,11 @@ sections:
 
         let mut got_failed = false;
         while let Ok(ev) = event_rx.recv() {
-            if let ExecEvent::Fact(StepFact::CeremonyFailed { error, .. }) = ev {
+            if let ExecEvent::Fact {
+                fact: StepFact::CeremonyFailed { error, .. },
+                ..
+            } = ev
+            {
                 assert_eq!(error.kind, "aborted");
                 got_failed = true;
             }

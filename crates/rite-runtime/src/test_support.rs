@@ -5,9 +5,13 @@
 //! [`Reporter`] in unit and integration tests, so downstream crates can
 //! exercise their actions without dealing with channel plumbing.
 
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use rite_model::StepId;
 
+use crate::clock::{Clock, SystemClock};
 use crate::protocol::{ExecEvent, UiCommand};
 use crate::reporter::Reporter;
 use crate::transcript_sink::InMemorySink;
@@ -49,7 +53,12 @@ impl ReporterHarness {
     /// box. Tests that need a specific seed can call
     /// [`Reporter::seed_entropy`] again.
     pub fn reporter(&mut self, step: StepId) -> Reporter<'_> {
-        let mut reporter = Reporter::new(&self.event_tx, &self.cmd_rx, &mut self.sink);
+        let mut reporter = Reporter::new(
+            &self.event_tx,
+            &self.cmd_rx,
+            &mut self.sink,
+            Arc::new(SystemClock),
+        );
         reporter.set_current_step(Some(step));
         reporter.seed_entropy(b"rite-test-harness-seed");
         reporter
@@ -65,5 +74,34 @@ impl ReporterHarness {
 impl Default for ReporterHarness {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A fixed instant for tests that need a deterministic event time. Arbitrary
+/// but stable, so recorded `at` values and snapshots stay reproducible.
+#[must_use]
+pub fn fixed_test_time() -> DateTime<Utc> {
+    // `from_timestamp_nanos` is infallible, unlike the seconds-based
+    // constructor, so this needs no `expect` in non-test library code.
+    DateTime::from_timestamp_nanos(1_700_000_000_000_000_000)
+}
+
+/// Wrap a fact into an [`ExecEvent::Fact`] stamped with [`fixed_test_time`],
+/// for frontend tests that feed synthetic events into a driver.
+#[must_use]
+pub fn fact_event(fact: StepFact) -> ExecEvent {
+    ExecEvent::Fact {
+        at: fixed_test_time(),
+        fact,
+    }
+}
+
+/// A [`Clock`](crate::Clock) frozen at a caller-chosen instant, for asserting
+/// that event times come from the injected clock rather than the wall clock.
+pub struct FixedClock(pub DateTime<Utc>);
+
+impl Clock for FixedClock {
+    fn now(&self) -> DateTime<Utc> {
+        self.0
     }
 }

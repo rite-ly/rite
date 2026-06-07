@@ -37,7 +37,10 @@ pub fn run(args: &Args) {
         }
     };
 
-    let data = build_report_data(&loaded.facts, loaded.fingerprint.as_str());
+    let data = build_report_data(
+        loaded.facts.iter().map(|t| (t.at, &t.fact)),
+        loaded.fingerprint.as_str(),
+    );
     let branding = build_branding_or_exit(&args.branding);
     let html =
         rite_render::render_report(&data, &branding, args.theme.into()).unwrap_or_else(|e| {

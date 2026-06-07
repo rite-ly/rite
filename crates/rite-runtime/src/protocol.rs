@@ -13,6 +13,7 @@
 //!   converted to [`rite_model::ResponseRecord`] when persisted)
 //! - [`UiSignal`], [`Icon`], UI narration, never on disk
 
+use chrono::{DateTime, Utc};
 use rite_model::{Material, MaterialId, MaterialKind, Prompt, StepFact, StepId};
 use secrecy::SecretString;
 
@@ -239,7 +240,15 @@ pub enum UiSignal {
 pub enum ExecEvent {
     /// A transcript-worthy fact. Already persisted by the transcript sink
     /// by the time it reaches the frontend.
-    Fact(StepFact),
+    Fact {
+        /// Event time, stamped from the executor's clock when the fact was
+        /// emitted, the same `at` recorded on the transcript envelope. Frontends
+        /// display this rather than their own receipt time, so live timestamps
+        /// match the audit record.
+        at: DateTime<Utc>,
+        /// The fact itself.
+        fact: StepFact,
+    },
     /// A UI-only signal.
     Signal(UiSignal),
     /// The runtime is waiting for a user response. The frontend must reply

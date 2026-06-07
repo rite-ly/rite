@@ -108,10 +108,13 @@ pub struct ReportDeviation {
 /// `transcript_fingerprint` is expected to come from the same call to
 /// the runtime's `read_verified_transcript` that produced `facts`.
 #[must_use]
-pub fn build_report_data(facts: &[StepFact], transcript_fingerprint: &str) -> ReportData {
+pub fn build_report_data<'a>(
+    facts: impl IntoIterator<Item = (DateTime<Utc>, &'a StepFact)>,
+    transcript_fingerprint: &str,
+) -> ReportData {
     let mut builder = Builder::new(transcript_fingerprint.to_string());
-    for fact in facts {
-        builder.ingest(fact);
+    for (at, fact) in facts {
+        builder.ingest(at, fact);
     }
     builder.finish()
 }
@@ -145,19 +148,16 @@ impl Builder {
         }
     }
 
-    fn ingest(&mut self, fact: &StepFact) {
+    fn ingest(&mut self, at: DateTime<Utc>, fact: &StepFact) {
         match fact {
-            StepFact::CeremonyStarted {
-                name, started_at, ..
-            } => {
+            StepFact::CeremonyStarted { name, .. } => {
                 self.ceremony_name.clone_from(name);
-                self.started_at = Some(*started_at);
+                self.started_at = Some(at);
             }
             StepFact::StepStarted {
                 id,
                 label,
                 role_name,
-                started_at,
                 ..
             } => {
                 let step_id = id.as_str().to_string();
@@ -166,23 +166,19 @@ impl Builder {
                     step_id,
                     label: label.clone(),
                     role: role_name.clone(),
-                    started_at: *started_at,
+                    started_at: at,
                     completed_at: None,
                     outcome_status: "in_progress".to_string(),
                     outcome_message: None,
                 });
             }
-            StepFact::StepCompleted {
-                id,
-                outcome,
-                completed_at,
-            } => {
+            StepFact::StepCompleted { id, outcome } => {
                 if let Some(step) = self
                     .step_index
                     .get(id.as_str())
                     .and_then(|i| self.steps.get_mut(*i))
                 {
-                    step.completed_at = Some(*completed_at);
+                    step.completed_at = Some(at);
                     let (status, message) = describe_outcome(outcome);
                     step.outcome_status = status;
                     step.outcome_message = message;
@@ -201,23 +197,23 @@ impl Builder {
                     sha256: sha256.clone(),
                 });
             }
-            StepFact::DeviationRecorded { step, text, at } => {
+            StepFact::DeviationRecorded { step, text } => {
                 self.deviations.push(ReportDeviation {
                     step_id: step
                         .as_ref()
                         .map(|s| s.as_str().to_string())
                         .unwrap_or_default(),
                     text: text.clone(),
-                    recorded_at: *at,
+                    recorded_at: at,
                 });
             }
-            StepFact::CeremonyCompleted { completed_at, .. } => {
+            StepFact::CeremonyCompleted {} => {
                 self.status = ReportStatus::Completed;
-                self.completed_at = Some(*completed_at);
+                self.completed_at = Some(at);
             }
-            StepFact::CeremonyFailed { error, failed_at } => {
+            StepFact::CeremonyFailed { error } => {
                 self.status = ReportStatus::Failed;
-                self.completed_at = Some(*failed_at);
+                self.completed_at = Some(at);
                 self.failure = Some(ReportFailure {
                     kind: error.kind.clone(),
                     message: error.message.clone(),

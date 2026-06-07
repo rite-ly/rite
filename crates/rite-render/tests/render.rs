@@ -79,7 +79,10 @@ fn long_instructions_render_as_paragraphs_and_bullets() {
 
 #[test]
 fn report_renders() {
-    let data = rite_render::report::build_report_data(&[], "sha256:deadbeef");
+    let data = rite_render::report::build_report_data(
+        std::iter::empty::<(chrono::DateTime<chrono::Utc>, &rite_model::StepFact)>(),
+        "sha256:deadbeef",
+    );
     let html = render_report(&data, &Branding::default(), Theme::Formal).unwrap();
     assert!(html.starts_with("<!DOCTYPE html>"));
     assert!(html.contains("Ceremony Report"));

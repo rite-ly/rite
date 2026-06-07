@@ -5,6 +5,7 @@
 //! outside world is returned as a [`Cmd`] for the runtime loop to
 //! interpret.
 
+use chrono::{DateTime, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use rite_model::{Prompt, StepFact};
@@ -358,7 +359,7 @@ fn send_response(model: &mut Model, response: Response) -> Vec<Cmd> {
 
 fn handle_exec_event(model: &mut Model, event: ExecEvent) -> Vec<Cmd> {
     match event {
-        ExecEvent::Fact(fact) => handle_fact(model, &fact),
+        ExecEvent::Fact { at, fact } => handle_fact(model, at, &fact),
         ExecEvent::Signal(signal) => handle_signal(model, &signal),
         ExecEvent::AwaitPrompt {
             prompt_id,
@@ -395,7 +396,12 @@ fn install_prompt(
     });
 }
 
-fn handle_fact(model: &mut Model, fact: &StepFact) -> Vec<Cmd> {
+fn handle_fact(model: &mut Model, at: DateTime<Utc>, fact: &StepFact) -> Vec<Cmd> {
+    // Event time from the transcript envelope, rendered in the operator's local
+    // zone. Carried on the event so it survives the drip queue: the log column
+    // and deviation list show when the event happened, not when it drained.
+    let at_local = at.with_timezone(&chrono::Local);
+
     // Model-specific side-effects first (header, dividers, screen
     // transitions, deviation list). The log feed is fed afterwards from
     // the shared `fact_summary`, so the live log mirrors the console
@@ -443,11 +449,11 @@ fn handle_fact(model: &mut Model, fact: &StepFact) -> Vec<Cmd> {
         StepFact::StepCompleted { .. } => {
             model.pending_prompt = None;
         }
-        StepFact::DeviationRecorded { step, text, at } => {
+        StepFact::DeviationRecorded { step, text } => {
             model.deviations.push(DeviationView {
                 step: step.clone(),
                 text: text.clone(),
-                at: at.with_timezone(&chrono::Local),
+                at: at_local,
             });
         }
         StepFact::CeremonyCompleted { .. } => {
@@ -471,7 +477,7 @@ fn handle_fact(model: &mut Model, fact: &StepFact) -> Vec<Cmd> {
         StepFact::StepStarted { .. } | StepFact::ActStarted { .. }
     ) && let Some((icon, text)) = fact_summary(fact)
     {
-        model.push_entry(icon, text);
+        model.push_entry_at(icon, text, at_local);
     }
 
     Vec::new()
@@ -505,8 +511,8 @@ fn handle_signal(model: &mut Model, signal: &UiSignal) -> Vec<Cmd> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use rite_model::StepId;
+    use rite_runtime::test_support::fact_event;
 
     use super::*;
 
@@ -649,12 +655,11 @@ mod tests {
         let mut model = Model::new();
         let _ = apply_exec(
             &mut model,
-            ExecEvent::Fact(StepFact::StepStarted {
+            fact_event(StepFact::StepStarted {
                 id: StepId::new("s1"),
                 label: "2.1".to_string(),
                 role: rite_model::RoleId::new("crypto_officer"),
                 role_name: "Crypto Officer".to_string(),
-                started_at: Utc::now(),
             }),
         );
         assert!(matches!(model.screen, Screen::Step { .. }));
@@ -712,12 +717,11 @@ mod tests {
         let mut model = Model::new();
         let _ = apply_exec(
             &mut model,
-            ExecEvent::Fact(StepFact::StepStarted {
+            fact_event(StepFact::StepStarted {
                 id: StepId::new("s1"),
                 label: "1".to_string(),
                 role: rite_model::RoleId::new("op"),
                 role_name: "Operator".to_string(),
-                started_at: Utc::now(),
             }),
         );
         assert!(matches!(
@@ -734,12 +738,11 @@ mod tests {
         // First step transition auto-switches to Ceremony.
         let _ = apply_exec(
             &mut model,
-            ExecEvent::Fact(StepFact::StepStarted {
+            fact_event(StepFact::StepStarted {
                 id: StepId::new("s1"),
                 label: "1".to_string(),
                 role: rite_model::RoleId::new("op"),
                 role_name: "Operator".to_string(),
-                started_at: Utc::now(),
             }),
         );
         // Operator switches back to Overview to re-read the description.
@@ -755,12 +758,11 @@ mod tests {
         // Second step must not yank the operator off Overview.
         let _ = apply_exec(
             &mut model,
-            ExecEvent::Fact(StepFact::StepStarted {
+            fact_event(StepFact::StepStarted {
                 id: StepId::new("s2"),
                 label: "2".to_string(),
                 role: rite_model::RoleId::new("op"),
                 role_name: "Operator".to_string(),
-                started_at: Utc::now(),
             }),
         );
         assert!(matches!(
@@ -776,9 +778,8 @@ mod tests {
         let mut model = Model::new();
         let _ = apply_exec(
             &mut model,
-            ExecEvent::Fact(StepFact::CeremonyStarted {
+            fact_event(StepFact::CeremonyStarted {
                 name: "Root CA".to_string(),
-                started_at: Utc::now(),
             }),
         );
         assert_eq!(model.ceremony_name.as_deref(), Some("Root CA"));
@@ -829,9 +830,8 @@ mod tests {
             label: "Step One".to_string(),
             role: rite_model::RoleId::new("op"),
             role_name: "Operator".to_string(),
-            started_at: Utc::now(),
         };
-        let _ = apply_exec(&mut model, ExecEvent::Fact(fact));
+        let _ = apply_exec(&mut model, fact_event(fact));
         let s = model.current_step.expect("current step");
         assert_eq!(s.id, StepId::new("s1"));
         assert_eq!(s.label, "Step One");
@@ -900,10 +900,8 @@ mod tests {
     #[test]
     fn ceremony_completed_then_finalized_populates_fingerprint() {
         let mut model = Model::new();
-        let fact = StepFact::CeremonyCompleted {
-            completed_at: Utc::now(),
-        };
-        let _ = apply_exec(&mut model, ExecEvent::Fact(fact));
+        let fact = StepFact::CeremonyCompleted {};
+        let _ = apply_exec(&mut model, fact_event(fact));
         assert!(matches!(
             model.screen,
             Screen::Completed {
@@ -937,9 +935,7 @@ mod tests {
         // drip buffer when Quit arrives.
         let _ = update(
             &mut model,
-            Msg::Exec(ExecEvent::Fact(StepFact::CeremonyCompleted {
-                completed_at: Utc::now(),
-            })),
+            Msg::Exec(fact_event(StepFact::CeremonyCompleted {})),
         );
         let _ = update(
             &mut model,

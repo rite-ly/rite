@@ -12,7 +12,6 @@
 
 use std::path::PathBuf;
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::ir::{ActId, RoleId, StepId};
@@ -151,8 +150,6 @@ pub enum StepFact {
     CeremonyStarted {
         /// Ceremony name from the DSL.
         name: String,
-        /// Wall-clock timestamp at start.
-        started_at: DateTime<Utc>,
     },
     /// Beginning of an act (named subdivision of a ceremony).
     ActStarted {
@@ -173,8 +170,6 @@ pub enum StepFact {
         /// Carried alongside the id so transcripts stay self-contained for
         /// reports and verifiers without re-reading the ceremony YAML.
         role_name: String,
-        /// Wall-clock timestamp at start.
-        started_at: DateTime<Utc>,
     },
     /// A prompt has been answered and validated.
     PromptAnswered {
@@ -187,8 +182,6 @@ pub enum StepFact {
         prompt: Prompt,
         /// Redacted response record.
         response: ResponseRecord,
-        /// Wall-clock timestamp when the response was accepted.
-        at: DateTime<Utc>,
     },
     /// A backend operation completed and produced structured evidence.
     BackendOperation {
@@ -211,8 +204,6 @@ pub enum StepFact {
         role: RoleId,
         /// Verbatim attestation statement.
         statement: String,
-        /// Wall-clock timestamp when the attestation was recorded.
-        at: DateTime<Utc>,
     },
     /// An artifact was written to disk.
     ArtifactWritten {
@@ -234,8 +225,6 @@ pub enum StepFact {
         step: Option<StepId>,
         /// Verbatim deviation text.
         text: String,
-        /// Wall-clock timestamp when the deviation was recorded.
-        at: DateTime<Utc>,
     },
     /// Step finished executing.
     StepCompleted {
@@ -243,8 +232,6 @@ pub enum StepFact {
         id: StepId,
         /// Outcome (completed or skipped).
         outcome: StepOutcome,
-        /// Wall-clock timestamp at completion.
-        completed_at: DateTime<Utc>,
     },
     /// Ceremony finished successfully.
     ///
@@ -252,16 +239,11 @@ pub enum StepFact {
     /// for this line, recoverable by any reader, so the fact itself
     /// carries no fingerprint field. The runtime forwards the value to
     /// frontends through an out-of-band channel event.
-    CeremonyCompleted {
-        /// Wall-clock timestamp at completion.
-        completed_at: DateTime<Utc>,
-    },
+    CeremonyCompleted {},
     /// Ceremony failed or was aborted.
     CeremonyFailed {
         /// Structured error record.
         error: ErrorRecord,
-        /// Wall-clock timestamp at failure.
-        failed_at: DateTime<Utc>,
     },
     /// The ceremony entropy source was seeded with machine randomness.
     ///
@@ -270,9 +252,7 @@ pub enum StepFact {
     /// value the ceremony later draws is re-derivable from the transcript
     /// alone. Part of the [entropy source](StepFact::EntropyDrawn) family.
     ///
-    /// Carries no timestamp of its own: it is emitted immediately after
-    /// [`CeremonyStarted`](StepFact::CeremonyStarted), whose `started_at`
-    /// stamps that instant.
+    /// Like every fact, it is timed by the `at` on its chain envelope.
     EntropySeeded {
         /// Lowercase hex of the gathered machine entropy `m`.
         m: String,
@@ -329,12 +309,7 @@ pub enum StepFact {
 #[cfg(test)]
 mod schema_snapshot_tests {
     use super::*;
-    use chrono::TimeZone;
     use serde_json::json;
-
-    fn ts() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap()
-    }
 
     fn assert_json(fact: &StepFact, expected: &serde_json::Value) {
         let actual = serde_json::to_value(fact).expect("serialize StepFact");
@@ -346,12 +321,10 @@ mod schema_snapshot_tests {
         assert_json(
             &StepFact::CeremonyStarted {
                 name: "Root CA".to_string(),
-                started_at: ts(),
             },
             &json!({
                 "type": "ceremony_started",
                 "name": "Root CA",
-                "started_at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -379,7 +352,6 @@ mod schema_snapshot_tests {
                 label: "2.1".to_string(),
                 role: RoleId::new("crypto_officer"),
                 role_name: "Crypto Officer".to_string(),
-                started_at: ts(),
             },
             &json!({
                 "type": "step_started",
@@ -387,7 +359,6 @@ mod schema_snapshot_tests {
                 "label": "2.1",
                 "role": "crypto_officer",
                 "role_name": "Crypto Officer",
-                "started_at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -402,14 +373,12 @@ mod schema_snapshot_tests {
                     default: Some(true),
                 },
                 response: ResponseRecord::Bool { value: true },
-                at: ts(),
             },
             &json!({
                 "type": "prompt_answered",
                 "step": "s1",
                 "prompt": { "type": "confirm", "question": "Proceed?", "default": true },
                 "response": { "type": "bool", "value": true },
-                "at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -426,7 +395,6 @@ mod schema_snapshot_tests {
                 response: ResponseRecord::Text {
                     value: "Alice".to_string(),
                 },
-                at: ts(),
             },
             &json!({
                 "type": "prompt_answered",
@@ -437,7 +405,6 @@ mod schema_snapshot_tests {
                     "validator": { "kind": "non_empty" },
                 },
                 "response": { "type": "text", "value": "Alice" },
-                "at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -454,7 +421,6 @@ mod schema_snapshot_tests {
                 response: ResponseRecord::Text {
                     value: "AB12".to_string(),
                 },
-                at: ts(),
             },
             &json!({
                 "type": "prompt_answered",
@@ -465,7 +431,6 @@ mod schema_snapshot_tests {
                     "validator": { "kind": "regex", "value": "^[A-Z0-9]+$" },
                 },
                 "response": { "type": "text", "value": "AB12" },
-                "at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -482,7 +447,6 @@ mod schema_snapshot_tests {
                 response: ResponseRecord::Text {
                     value: "ABCD".to_string(),
                 },
-                at: ts(),
             },
             &json!({
                 "type": "prompt_answered",
@@ -493,7 +457,6 @@ mod schema_snapshot_tests {
                     "validator": { "kind": "predefined", "value": "serial_number" },
                 },
                 "response": { "type": "text", "value": "ABCD" },
-                "at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -509,7 +472,6 @@ mod schema_snapshot_tests {
                 response: ResponseRecord::SecretRedacted {
                     sha256_of_plaintext: "f".repeat(64),
                 },
-                at: ts(),
             },
             &json!({
                 "type": "prompt_answered",
@@ -519,7 +481,6 @@ mod schema_snapshot_tests {
                     "type": "secret_redacted",
                     "sha256_of_plaintext": "f".repeat(64),
                 },
-                "at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -536,14 +497,12 @@ mod schema_snapshot_tests {
                 response: ResponseRecord::Text {
                     value: "attest".to_string(),
                 },
-                at: ts(),
             },
             &json!({
                 "type": "prompt_answered",
                 "step": "s1",
                 "prompt": { "type": "literal", "label": "Type 'attest'", "expected": "attest" },
                 "response": { "type": "text", "value": "attest" },
-                "at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -557,14 +516,12 @@ mod schema_snapshot_tests {
                     hint: Some("Press Enter".to_string()),
                 },
                 response: ResponseRecord::Acknowledged,
-                at: ts(),
             },
             &json!({
                 "type": "prompt_answered",
                 "step": "s1",
                 "prompt": { "type": "continue", "hint": "Press Enter" },
                 "response": { "type": "acknowledged" },
-                "at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -597,14 +554,12 @@ mod schema_snapshot_tests {
                 step: StepId::new("s1"),
                 role: RoleId::new("crypto_officer"),
                 statement: "I confirm.".to_string(),
-                at: ts(),
             },
             &json!({
                 "type": "attestation_recorded",
                 "step": "s1",
                 "role": "crypto_officer",
                 "statement": "I confirm.",
-                "at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -634,13 +589,11 @@ mod schema_snapshot_tests {
             &StepFact::DeviationRecorded {
                 step: Some(StepId::new("s1")),
                 text: "phone rang".to_string(),
-                at: ts(),
             },
             &json!({
                 "type": "deviation_recorded",
                 "step": "s1",
                 "text": "phone rang",
-                "at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -653,13 +606,11 @@ mod schema_snapshot_tests {
                 outcome: StepOutcome::Completed {
                     message: "done".to_string(),
                 },
-                completed_at: ts(),
             },
             &json!({
                 "type": "step_completed",
                 "id": "s1",
                 "outcome": { "status": "completed", "message": "done" },
-                "completed_at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -667,10 +618,9 @@ mod schema_snapshot_tests {
     #[test]
     fn ceremony_completed() {
         assert_json(
-            &StepFact::CeremonyCompleted { completed_at: ts() },
+            &StepFact::CeremonyCompleted {},
             &json!({
                 "type": "ceremony_completed",
-                "completed_at": "2026-01-02T03:04:05Z",
             }),
         );
     }
@@ -680,12 +630,10 @@ mod schema_snapshot_tests {
         assert_json(
             &StepFact::CeremonyFailed {
                 error: ErrorRecord::new("aborted", "ceremony aborted by operator"),
-                failed_at: ts(),
             },
             &json!({
                 "type": "ceremony_failed",
                 "error": { "kind": "aborted", "message": "ceremony aborted by operator" },
-                "failed_at": "2026-01-02T03:04:05Z",
             }),
         );
     }

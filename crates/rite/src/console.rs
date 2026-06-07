@@ -66,7 +66,7 @@ pub fn run(cmd_tx: &Sender<UiCommand>, event_rx: &Receiver<ExecEvent>) -> io::Re
 
     while let Ok(event) = event_rx.recv() {
         match event {
-            ExecEvent::Fact(fact) => render_fact(&mut stdout, &fact)?,
+            ExecEvent::Fact { fact, .. } => render_fact(&mut stdout, &fact)?,
             ExecEvent::Signal(signal) => render_signal(&mut stdout, &signal)?,
             ExecEvent::Finalized { fingerprint } => {
                 writeln!(
@@ -227,12 +227,12 @@ fn read_line<R: BufRead>(stdin: &mut R) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use crossbeam_channel::unbounded;
     use rite_model::{ResponseRecord, StepId};
 
     use super::*;
     use rite_runtime::PromptId;
+    use rite_runtime::test_support::fact_event;
 
     #[test]
     fn renders_each_fact_kind_without_panicking() {
@@ -240,14 +240,12 @@ mod tests {
         let facts = vec![
             StepFact::CeremonyStarted {
                 name: "T".to_string(),
-                started_at: Utc::now(),
             },
             StepFact::StepStarted {
                 id: StepId::new("a"),
                 label: "Step A".to_string(),
                 role: rite_model::RoleId::new("op"),
                 role_name: "Operator".to_string(),
-                started_at: Utc::now(),
             },
             StepFact::PromptAnswered {
                 step: Some(StepId::new("a")),
@@ -256,18 +254,14 @@ mod tests {
                     default: None,
                 },
                 response: ResponseRecord::Bool { value: true },
-                at: Utc::now(),
             },
             StepFact::StepCompleted {
                 id: StepId::new("a"),
                 outcome: rite_model::StepOutcome::Completed {
                     message: "done".to_string(),
                 },
-                completed_at: Utc::now(),
             },
-            StepFact::CeremonyCompleted {
-                completed_at: Utc::now(),
-            },
+            StepFact::CeremonyCompleted {},
         ];
         for fact in &facts {
             render_fact(&mut buf, fact).expect("render");
@@ -325,9 +319,8 @@ mod tests {
         // Send only events the helper sees:
         let prompt_id = PromptId::new(7);
         event_tx
-            .send(ExecEvent::Fact(StepFact::CeremonyStarted {
+            .send(fact_event(StepFact::CeremonyStarted {
                 name: "T".to_string(),
-                started_at: Utc::now(),
             }))
             .expect("send fact");
         event_tx

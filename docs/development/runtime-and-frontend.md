@@ -137,8 +137,15 @@ and `fsync`s before returning, so a fact the executor has moved past
 cannot be lost to a subsequent crash or power loss. Each line:
 
 ```jsonc
-{"prev_hash": "sha256:…", "fact": { "type": "step_started", … }}
+{"prev_hash": "sha256:…", "at": "2026-06-01T20:34:51Z", "fact": { "type": "step_started", … }}
 ```
+
+`at` is the wall-clock time the sink stamped when it wrote the line, the
+single uniform timestamp for every event. Individual facts carry no
+timestamp of their own; a timestamp that is *data* rather than record time
+(a future `clock_check` observed time, an RFC 3161 token) would be a field
+on the fact. Because `at` is part of the line, it is covered by the hash
+chain like the rest of the envelope.
 
 Each line's SHA-256 is the next line's `prev_hash`. The hash of the
 final line *is* the transcript fingerprint; the JSONL is self-identifying

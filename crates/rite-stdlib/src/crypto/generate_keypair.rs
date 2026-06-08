@@ -25,7 +25,7 @@ impl Action for GenerateKeypairAction {
     fn execute(
         &self,
         step: &StepInfo,
-        ctx: &HandlerContext,
+        _ctx: &HandlerContext,
         params: &serde_json::Value,
         reporter: &mut Reporter<'_>,
         backend: Option<&mut dyn Backend>,
@@ -37,11 +37,6 @@ impl Action for GenerateKeypairAction {
             None => format!("{} keypair...", typed.algorithm),
         };
         reporter.log(Icon::Spinner, format!("Generating {display_algo}"))?;
-
-        if ctx.dry_run {
-            reporter.log(Icon::Info, "[dry run, key generation skipped]")?;
-            return Ok(StepResult::completed("Key generated (dry run)"));
-        }
 
         let backend = backend.ok_or_else(|| {
             ActionError::Failed(

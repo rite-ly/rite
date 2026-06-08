@@ -22,8 +22,19 @@ use std::io::{self, Write};
 
 use crossbeam_channel::{Receiver, Sender};
 
-use rite_model::{Prompt, StepFact};
+use secrecy::SecretString;
+
+use rite_model::{Prompt, StepFact, ValidatorSpec};
 use rite_runtime::{ExecEvent, Response, UiCommand, UiSignal};
+
+/// Placeholder answer for an unconstrained free-form prompt with no human to
+/// type it. Fixed, so non-interactive runs (and their transcripts) stay
+/// deterministic.
+const PLACEHOLDER_TEXT: &str = "placeholder";
+
+/// Placeholder stand-in for a secret prompt with no human to type it. Never a
+/// real secret.
+const PLACEHOLDER_SECRET: &str = "placeholder-secret";
 
 /// Run the headless driver against a pair of runtime channels.
 ///
@@ -69,20 +80,21 @@ fn default_response(prompt: &Prompt) -> io::Result<Response> {
         Prompt::Confirm { default, .. } => Ok(Response::Bool(default.unwrap_or(true))),
         Prompt::Continue { .. } => Ok(Response::Acknowledge),
         Prompt::Literal { expected, .. } => Ok(Response::Text(expected.clone())),
-        Prompt::Text { label, .. } => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "headless driver cannot answer free-form text prompt: '{label}'. \
-                 Use --frontend=console for an interactive run."
-            ),
-        )),
-        Prompt::Secret { label } => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "headless driver cannot answer secret prompt: '{label}'. \
-                 Use --frontend=console for an interactive run."
-            ),
-        )),
+        // Free-form text: a fixed placeholder satisfies an unconstrained
+        // (`NonEmpty`) prompt. A validated prompt (regex, named predicate) can't
+        // be answered generically, so it still fails fast until the step carries
+        // an explicit value.
+        Prompt::Text { label, validator } => match validator {
+            ValidatorSpec::NonEmpty => Ok(Response::Text(PLACEHOLDER_TEXT.to_string())),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "headless driver cannot answer the validated text prompt: '{label}'. \
+                     Use --frontend=console for an interactive run."
+                ),
+            )),
+        },
+        Prompt::Secret { .. } => Ok(Response::Secret(SecretString::from(PLACEHOLDER_SECRET))),
         _ => Err(io::Error::other(format!(
             "headless driver does not know how to handle prompt: {prompt:?}"
         ))),
@@ -160,22 +172,35 @@ mod tests {
     }
 
     #[test]
-    fn text_prompt_fails_fast() {
-        let err = default_response(&Prompt::Text {
-            label: "name".to_string(),
+    fn unconstrained_text_prompt_gets_placeholder() {
+        let resp = default_response(&Prompt::Text {
+            label: "entropy".to_string(),
             validator: rite_model::ValidatorSpec::NonEmpty,
+        })
+        .expect("response");
+        match resp {
+            Response::Text(t) => assert_eq!(t, PLACEHOLDER_TEXT),
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn validated_text_prompt_fails_fast() {
+        let err = default_response(&Prompt::Text {
+            label: "serial".to_string(),
+            validator: rite_model::ValidatorSpec::Regex("[0-9]+".to_string()),
         })
         .expect_err("should fail");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
-    fn secret_prompt_fails_fast() {
-        let err = default_response(&Prompt::Secret {
+    fn secret_prompt_gets_placeholder() {
+        let resp = default_response(&Prompt::Secret {
             label: "pin".to_string(),
         })
-        .expect_err("should fail");
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        .expect("response");
+        assert!(matches!(resp, Response::Secret(_)));
     }
 
     #[test]

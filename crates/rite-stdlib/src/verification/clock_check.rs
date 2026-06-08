@@ -29,7 +29,7 @@ impl Action for ClockCheckAction {
     fn execute(
         &self,
         _step: &StepInfo,
-        ctx: &HandlerContext,
+        _ctx: &HandlerContext,
         params: &serde_json::Value,
         reporter: &mut Reporter<'_>,
         _backend: Option<&mut dyn Backend>,
@@ -52,11 +52,6 @@ impl Action for ClockCheckAction {
             Icon::Info,
             "All ceremony timestamps will be recorded in UTC.",
         )?;
-
-        if ctx.dry_run {
-            reporter.log(Icon::Info, "[dry run, auto-confirming clock]")?;
-            return Ok(StepResult::completed("Clock verified (dry run)"));
-        }
 
         match reporter.prompt(&Prompt::Confirm {
             question: "Is the system clock correct?".to_string(),

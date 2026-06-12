@@ -62,6 +62,12 @@ const VALUE_INFO_PREFIX_V1: &str = "rite/nonce/v1/";
 /// Length in bytes of an epoch seed (the HKDF pseudo-random key).
 const SEED_LEN: usize = 32;
 
+/// Longest value a single draw can produce: the `HKDF-Expand` output limit of
+/// `255 * HashLen` bytes (RFC 5869), with SHA-256's 32-byte output. [`expand`]
+/// panics beyond this, so anything replaying a recorded draw must bound the
+/// requested length by this value first.
+pub const MAX_DRAW_LEN: usize = 255 * SEED_LEN;
+
 /// `HKDF-Extract(salt, ikm)` over SHA-256, returning the 32-byte PRK.
 ///
 /// The `salt` is a fixed domain-separation constant (RFC 5869 permits a

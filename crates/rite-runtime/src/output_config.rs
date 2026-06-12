@@ -1,6 +1,7 @@
 //! Configuration for ceremony output directory structure.
 
 use chrono::Utc;
+use rite_model::{PathSafetyError, safe_join};
 use std::path::PathBuf;
 
 /// Configuration for ceremony output directory structure.
@@ -70,8 +71,17 @@ impl OutputConfig {
     }
 
     /// Returns the path for an artifact with the given ID and extension.
-    pub fn artifact_path(&self, id: &str, extension: &str) -> PathBuf {
-        self.artifacts_dir().join(format!("{id}.{extension}"))
+    ///
+    /// The id is treated as untrusted: it becomes a filename directly inside the
+    /// artifacts directory, so this rejects any id that contains a path
+    /// separator or `..` traversal. The resolver already validates artifact ids
+    /// at load time; this is the defense-in-depth check at the filesystem
+    /// boundary so a future code path cannot reintroduce a traversal.
+    ///
+    /// # Errors
+    /// Returns [`PathSafetyError`] if `id` is not a safe single filename.
+    pub fn artifact_path(&self, id: &str, extension: &str) -> Result<PathBuf, PathSafetyError> {
+        safe_join(&self.artifacts_dir(), &format!("{id}.{extension}"))
     }
 }
 
@@ -108,9 +118,17 @@ mod tests {
             PathBuf::from("/tmp/ceremony-20251229T143022/transcript.jsonl")
         );
         assert_eq!(
-            config.artifact_path("wrapped_key", "bin"),
+            config.artifact_path("wrapped_key", "bin").unwrap(),
             PathBuf::from("/tmp/ceremony-20251229T143022/artifacts/wrapped_key.bin")
         );
+    }
+
+    #[test]
+    fn artifact_path_rejects_traversal() {
+        let config = OutputConfig::new(PathBuf::from("/tmp/ceremony"));
+        assert!(config.artifact_path("../../etc/passwd", "txt").is_err());
+        assert!(config.artifact_path("sub/dir", "txt").is_err());
+        assert!(config.artifact_path("/abs", "txt").is_err());
     }
 
     #[test]

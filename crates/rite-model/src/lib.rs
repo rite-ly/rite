@@ -9,6 +9,7 @@
 //! - [`ir`]: IR types: [`Ceremony`], [`Step`], [`Role`], etc. and typed ID newtypes
 //! - [`expression`]: Expression parsing for `${artifact.name | sha256 | hex}` syntax
 //! - [`transcript`]: Persisted transcript schema (`StepFact` + friends)
+//! - [`safe_path`]: Confine untrusted, ceremony-derived names/paths to a directory
 //! - `types` (private): Shared semantic enums: [`ActionType`], [`DutyType`], etc.
 //!
 //! # `BackendConfig`
@@ -20,12 +21,15 @@
 pub mod expression;
 pub mod ir;
 mod material;
+pub mod safe_path;
 pub mod transcript;
 mod types;
 
 pub use rite_sdk::BackendConfig;
 
 pub use material::MaterialSource;
+
+pub use safe_path::{PathSafetyError, confine, is_safe_component, safe_join, validate_component};
 
 pub use types::{
     ActionType, DutyType, Metadata, OutputType, ParameterType, derive_role_name, derive_step_name,

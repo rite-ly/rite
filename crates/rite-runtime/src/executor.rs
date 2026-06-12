@@ -8,7 +8,8 @@ use rite_model::{ActionType, ArtifactId, Material, MaterialKind, MaterialSource,
 use rite_sdk::BackendError;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::output_config::OutputConfig;
@@ -125,6 +126,25 @@ pub(crate) fn load_material_artifact(
     }
 }
 
+/// Write `bytes` to a freshly created file at `path`, failing if anything already exists there.
+///
+/// Uses `create_new` so the write cannot follow a pre-existing symlink planted at the
+/// destination (which could otherwise redirect artifact bytes outside the run directory) and
+/// cannot clobber an existing file. On Unix the file is created with `0o600` so artifact
+/// material is not world-readable.
+fn write_new_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
 /// Serialize an artifact, write it to disk, and return `(path, sha256-hex, size-bytes, mime-type)`.
 pub(crate) fn write_artifact_to_disk(
     artifact_id: &ArtifactId,
@@ -139,9 +159,14 @@ pub(crate) fn write_artifact_to_disk(
                 reason: e,
             })?;
 
-    let path = output_config.artifact_path(artifact_id.as_str(), serialized.extension);
+    let path = output_config
+        .artifact_path(artifact_id.as_str(), serialized.extension)
+        .map_err(|e| ExecutionError::OutputWriteFailed {
+            name: artifact_id.as_str().to_string(),
+            reason: e.to_string(),
+        })?;
 
-    fs::write(&path, &serialized.bytes).map_err(|e| ExecutionError::OutputWriteFailed {
+    write_new_file(&path, &serialized.bytes).map_err(|e| ExecutionError::OutputWriteFailed {
         name: artifact_id.as_str().to_string(),
         reason: e.to_string(),
     })?;

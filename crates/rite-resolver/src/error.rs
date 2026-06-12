@@ -243,6 +243,45 @@ pub enum ResolveError {
         value: String,
     },
 
+    /// An artifact id (from a step's `creates:`) is not a safe filename.
+    ///
+    /// Artifact ids become output filenames, so they must be plain names with no
+    /// path separators or `..` traversal.
+    #[error("Artifact id '{id}' is not a valid name: {reason}")]
+    UnsafeArtifactId {
+        /// The offending artifact id.
+        id: ArtifactId,
+        /// Why it was rejected.
+        reason: String,
+    },
+
+    /// An output id (an `output:` key) is not a safe filename.
+    ///
+    /// Output ids become filenames in the run directory, so they must be plain
+    /// names with no path separators or `..` traversal.
+    #[error("Output id '{id}' is not a valid name: {reason}")]
+    UnsafeOutputId {
+        /// The offending output id.
+        id: OutputId,
+        /// Why it was rejected.
+        reason: String,
+    },
+
+    /// A material's `path:` escapes the ceremony directory.
+    ///
+    /// Paths embedded in a ceremony file are confined to the directory that
+    /// contains the ceremony; absolute paths or `..` traversal are rejected.
+    /// Provide out-of-tree files via `--material name=@/path` instead.
+    #[error("Material '{material}' path '{path}' is not allowed: {reason}")]
+    UnsafeMaterialPath {
+        /// The material whose path was rejected.
+        material: MaterialId,
+        /// The offending path.
+        path: PathBuf,
+        /// Why it was rejected.
+        reason: String,
+    },
+
     /// Reference type mismatch in a field.
     #[error(
         "Reference type mismatch in '{context}' field '{field}': expected {expected}, got {actual}"

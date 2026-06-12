@@ -64,22 +64,61 @@ impl CeremonyInputs {
     }
 }
 
-/// Resolve relative `path:` values in digital materials against the ceremony file's directory.
+/// Resolve `path:` values in digital materials against the ceremony file's directory,
+/// confining them to that directory's subtree.
 ///
-/// Called after `lower_ceremony` succeeds. CLI-provided `@path` values are already resolved
-/// relative to CWD in `parse_material_value`; those are not touched here.
-fn resolve_material_paths(ceremony: &mut schema::Ceremony, ceremony_path: &Path) {
+/// Called after `lower_ceremony` succeeds. Paths embedded in the ceremony file are
+/// untrusted (the file may have been authored elsewhere), so a `path:` that is absolute
+/// or climbs out of the ceremony directory via `..` is rejected rather than read.
+/// Out-of-tree files are still reachable by passing `--material name=@/path`, which is
+/// operator-supplied and resolved relative to CWD in `parse_material_value` — those never
+/// reach this function.
+///
+/// Returns one [`ResolveError::UnsafeMaterialPath`] per rejected path; the caller surfaces
+/// them alongside resolution errors.
+fn resolve_material_paths(
+    ceremony: &mut schema::Ceremony,
+    ceremony_path: &Path,
+) -> Vec<ResolveError> {
     let dir = ceremony_path.parent().unwrap_or_else(|| Path::new("."));
-    for material in ceremony.materials.values_mut() {
+    let mut errors = Vec::new();
+    for (name, material) in &mut ceremony.materials {
         if let schema::Material::Digital {
             path: Some(ref mut p),
             ..
         } = *material
-            && p.is_relative()
         {
-            *p = dir.join(&*p);
+            match rite_model::confine(dir, p) {
+                Ok(confined) => *p = confined,
+                Err(e) => errors.push(ResolveError::UnsafeMaterialPath {
+                    material: rite_model::MaterialId::new(name.as_str()),
+                    path: std::mem::take(p),
+                    reason: e.to_string(),
+                }),
+            }
         }
     }
+    errors
+}
+
+/// Confine material `path:` values, resolve the ceremony, and fold any path
+/// errors into the result.
+///
+/// Shared by [`resolve_files`] and [`analyze`], which both own a lowered
+/// ceremony and need its embedded paths confined before resolution. A non-empty
+/// set of path errors fails the result, so `value` is cleared alongside.
+fn resolve_with_material_paths(
+    mut ceremony: schema::Ceremony,
+    ceremony_path: &Path,
+    inputs: Option<&CeremonyInputs>,
+) -> ResolveResult<rite_model::Ceremony> {
+    let path_errors = resolve_material_paths(&mut ceremony, ceremony_path);
+    let mut result = resolve::resolve_ceremony(ceremony, inputs);
+    if !path_errors.is_empty() {
+        result.value = None;
+        result.errors.extend(path_errors);
+    }
+    result
 }
 
 /// Extract the first error diagnostic as a `ResolveError`, or return a generic parse failure.
@@ -132,12 +171,11 @@ pub fn resolve_files(
 
     let (ceremony_opt, _span_map, diags) = lower::lower_ceremony(Some(ceremony_path), &yaml);
 
-    let Some(mut ceremony) = ceremony_opt else {
+    let Some(ceremony) = ceremony_opt else {
         return ResolveResult::err(first_resolve_error(diags));
     };
 
-    resolve_material_paths(&mut ceremony, ceremony_path);
-    resolve::resolve_ceremony(ceremony, inputs)
+    resolve_with_material_paths(ceremony, ceremony_path, inputs)
 }
 
 /// Parse and validate ceremony YAML from an in-memory string.
@@ -193,12 +231,11 @@ pub fn analyze(
 
     let (ceremony_opt, span_map, mut diags) = lower::lower_ceremony(Some(ceremony_path), &yaml);
 
-    let Some(mut ceremony) = ceremony_opt else {
+    let Some(ceremony) = ceremony_opt else {
         return (None, diags);
     };
 
-    resolve_material_paths(&mut ceremony, ceremony_path);
-    let result = resolve::resolve_ceremony(ceremony, inputs);
+    let result = resolve_with_material_paths(ceremony, ceremony_path, inputs);
 
     for e in &result.errors {
         diags.push(span_map.to_diagnostic(Some(ceremony_path), e));
@@ -216,6 +253,60 @@ mod tests {
     use super::*;
     use crate::test_helpers::span_text;
     use rite_model::{ParamId, RoleId};
+
+    #[test]
+    fn rejects_material_path_escaping_ceremony_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ceremony_path = dir.path().join("c.rite.yaml");
+        std::fs::write(
+            &ceremony_path,
+            r#"
+version: "0.2"
+name: "Test"
+roles: {}
+sections: {}
+materials:
+  leaked:
+    type: digital
+    path: "../../../../etc/passwd"
+"#,
+        )
+        .expect("write ceremony");
+
+        let result = resolve_files(&ceremony_path, None);
+        assert!(result.is_err());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::UnsafeMaterialPath { .. })),
+            "expected UnsafeMaterialPath, got {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn confines_relative_material_path_to_ceremony_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ceremony_path = dir.path().join("c.rite.yaml");
+        std::fs::write(
+            &ceremony_path,
+            r#"
+version: "0.2"
+name: "Test"
+roles: {}
+sections: {}
+materials:
+  local:
+    type: digital
+    path: "keys/root.pem"
+"#,
+        )
+        .expect("write ceremony");
+
+        let result = resolve_files(&ceremony_path, None);
+        assert!(result.is_ok(), "Errors: {:?}", result.errors);
+    }
 
     #[test]
     fn resolve_minimal_ceremony() {
@@ -681,6 +772,20 @@ output:
             DISPATCH_YAML,
             &span_map,
             &ResolveError::DuplicateOutput(OutputId::new("signed_cert")),
+        );
+        assert_eq!(text, "signed_cert");
+    }
+
+    #[test]
+    fn dispatch_unsafe_output_id_spans_output_declaration() {
+        let span_map = span_map_for(DISPATCH_YAML);
+        let text = dispatch_span_text(
+            DISPATCH_YAML,
+            &span_map,
+            &ResolveError::UnsafeOutputId {
+                id: OutputId::new("signed_cert"),
+                reason: "name must not contain a path separator ('/' or '\\')".to_string(),
+            },
         );
         assert_eq!(text, "signed_cert");
     }

@@ -707,6 +707,28 @@ pub fn find_expressions(s: &str) -> Vec<LocatedExpression> {
 /// assert!(matches!(expr, ExprValue::Expr(_)));
 /// ```
 pub fn parse_expr_value(json: &serde_json::Value) -> ExprValue {
+    parse_expr_value_at(json, 0)
+}
+
+/// Maximum nesting depth [`parse_expr_value`] recurses into.
+///
+/// Matches the depth cap the resolver enforces on ceremony YAML, so values
+/// that went through resolution never reach this limit.
+const MAX_VALUE_DEPTH: usize = 64;
+
+/// Depth-tracking worker for [`parse_expr_value`].
+///
+/// Values nested deeper than [`MAX_VALUE_DEPTH`] are truncated to
+/// `Literal(Null)`: the function returns a value rather than a `Result`, so
+/// truncation is the least invasive way to stay total on adversarial input
+/// without overflowing the stack. The resolver rejects ceremony files nested
+/// past the same cap before values reach this function, so the truncation is
+/// a defensive backstop, not user-visible behavior.
+fn parse_expr_value_at(json: &serde_json::Value, depth: usize) -> ExprValue {
+    if depth >= MAX_VALUE_DEPTH {
+        return ExprValue::Literal(Literal::Null);
+    }
+    let child_depth = depth.saturating_add(1);
     match json {
         serde_json::Value::String(s) => parse_string_to_expr_value(s),
         serde_json::Value::Number(n) => {
@@ -724,12 +746,15 @@ pub fn parse_expr_value(json: &serde_json::Value) -> ExprValue {
         serde_json::Value::Object(map) => {
             let mut result = std::collections::HashMap::new();
             for (k, v) in map {
-                result.insert(k.clone(), parse_expr_value(v));
+                result.insert(k.clone(), parse_expr_value_at(v, child_depth));
             }
             ExprValue::Object(result)
         }
         serde_json::Value::Array(arr) => {
-            let result: Vec<_> = arr.iter().map(parse_expr_value).collect();
+            let result: Vec<_> = arr
+                .iter()
+                .map(|v| parse_expr_value_at(v, child_depth))
+                .collect();
             ExprValue::Array(result)
         }
     }
@@ -1215,6 +1240,55 @@ mod tests {
                 }
                 _ => panic!("Expected Array, got {expr:?}"),
             }
+        }
+
+        #[test]
+        fn parse_deeply_nested_value_is_truncated_not_crashed() {
+            // 200 levels of nesting: far past the cap. The function must
+            // return (no stack overflow), truncating everything below
+            // MAX_VALUE_DEPTH to Literal(Null).
+            let mut json = serde_json::json!("leaf");
+            for _ in 0..200 {
+                json = serde_json::Value::Array(vec![json]);
+            }
+            let mut expr = parse_expr_value(&json);
+            let mut levels = 0;
+            loop {
+                match expr {
+                    ExprValue::Array(mut arr) => {
+                        assert_eq!(arr.len(), 1);
+                        expr = arr.remove(0);
+                        levels += 1;
+                    }
+                    other => {
+                        assert!(
+                            matches!(other, ExprValue::Literal(Literal::Null)),
+                            "truncated tail must be Literal(Null), got {other:?}"
+                        );
+                        break;
+                    }
+                }
+            }
+            assert_eq!(levels, MAX_VALUE_DEPTH, "recursion must stop at the cap");
+        }
+
+        #[test]
+        fn parse_moderately_nested_value_is_preserved() {
+            let mut json = serde_json::json!("leaf");
+            for _ in 0..10 {
+                json = serde_json::Value::Array(vec![json]);
+            }
+            let mut expr = parse_expr_value(&json);
+            for _ in 0..10 {
+                match expr {
+                    ExprValue::Array(mut arr) => {
+                        assert_eq!(arr.len(), 1);
+                        expr = arr.remove(0);
+                    }
+                    other => panic!("expected Array, got {other:?}"),
+                }
+            }
+            assert!(matches!(expr, ExprValue::Literal(Literal::String(s)) if s == "leaf"));
         }
 
         #[test]

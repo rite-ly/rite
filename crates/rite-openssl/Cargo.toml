@@ -19,6 +19,7 @@ vendored = ["openssl/vendored"]
 rite-sdk = { workspace = true }
 openssl = { workspace = true }
 base16ct = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

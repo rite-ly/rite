@@ -76,6 +76,7 @@ sha1 = "0.11.0"
 hkdf = "0.13.0"
 rsa = "0.9.10"
 p256 = { version = "0.13.2", features = ["ecdsa", "pkcs8"] }
+zeroize = "1.8.2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

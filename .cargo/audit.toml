@@ -1,0 +1,27 @@
+# cargo-audit configuration.
+#
+# Run via `cargo audit` (and in CI). Advisories listed under `ignore` are
+# suppressed with a documented rationale below; each entry must state why it
+# does not apply here and the condition under which it must be revisited.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — "Marvin Attack": potential key recovery through
+    # timing sidechannels in the `rsa` crate. No fixed version is available
+    # upstream.
+    #
+    # Why it does not apply here: the `rsa` crate is pulled in only for
+    # *public-key* operations — verifying the self-signature on an incoming
+    # CSR (`rsa::RsaPublicKey::verify` in
+    # `crates/rite-stdlib/src/pki/issue_certificate.rs`). The Marvin attack
+    # targets RSA *private-key* decryption/signing (PKCS#1 v1.5 unpadding),
+    # which is never performed: Rite holds no RSA private keys in this crate
+    # and never decrypts or signs with `rsa`. All private-key crypto lives in
+    # the OpenSSL backend (`rite-openssl`), not in the `rsa` crate.
+    #
+    # Revisit if any of the following becomes true:
+    #   - `rsa` gains a private-key code path here (decryption, signing, or
+    #     key import) — grep for `RsaPrivateKey`, `decrypt`, `sign`;
+    #   - a fixed release of `rsa` ships (drop this entry and upgrade).
+    "RUSTSEC-2023-0071",
+]

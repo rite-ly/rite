@@ -70,7 +70,6 @@ impl ExecutionState {
     #[must_use]
     pub fn handler_context(&self) -> HandlerContext<'_> {
         HandlerContext {
-            dry_run: self.dry_run,
             params: &self.params,
             artifacts: &self.artifacts,
             roles: &self.roles,
@@ -98,8 +97,6 @@ impl ExecutionState {
 /// return a [`StepResult`], which the executor folds into the next state.
 #[derive(Debug, Clone, Copy)]
 pub struct HandlerContext<'a> {
-    /// Whether this is a dry run.
-    pub dry_run: bool,
     /// Instance parameters.
     pub params: &'a HashMap<ParamId, serde_json::Value>,
     /// Artifacts produced so far.
@@ -207,7 +204,6 @@ mod tests {
 
         let ctx = state.handler_context();
 
-        assert!(ctx.dry_run);
         assert!(ctx.get_artifact(&ArtifactId::new("test")).is_some());
         assert!(ctx.get_artifact(&ArtifactId::new("missing")).is_none());
     }

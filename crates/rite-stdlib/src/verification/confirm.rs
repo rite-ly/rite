@@ -24,7 +24,7 @@ impl Action for ConfirmAction {
     fn execute(
         &self,
         _step: &StepInfo,
-        ctx: &HandlerContext,
+        _ctx: &HandlerContext,
         params: &serde_json::Value,
         reporter: &mut Reporter<'_>,
         _backend: Option<&mut dyn Backend>,
@@ -37,11 +37,6 @@ impl Action for ConfirmAction {
             .unwrap_or("Please confirm to proceed");
 
         reporter.log(Icon::Info, message)?;
-
-        if ctx.dry_run {
-            reporter.log(Icon::Info, "[dry run, auto-confirming]")?;
-            return Ok(StepResult::completed("Verification confirmed (dry run)"));
-        }
 
         let response = reporter.prompt(&Prompt::Confirm {
             question: "Confirm?".to_string(),

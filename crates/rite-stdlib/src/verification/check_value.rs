@@ -40,7 +40,7 @@ impl Action for CheckValueAction {
     fn execute(
         &self,
         _step: &StepInfo,
-        ctx: &HandlerContext,
+        _ctx: &HandlerContext,
         params: &serde_json::Value,
         reporter: &mut Reporter<'_>,
         _backend: Option<&mut dyn Backend>,
@@ -56,9 +56,6 @@ impl Action for CheckValueAction {
 
         if values_match {
             reporter.log(Icon::Checkmark, message)?;
-            if ctx.dry_run {
-                reporter.log(Icon::Info, "[dry run, verified]")?;
-            }
             Ok(StepResult::completed(format!("{message}: PASS")))
         } else {
             reporter.log(Icon::Cross, format!("FAIL: {message}"))?;

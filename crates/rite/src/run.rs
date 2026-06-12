@@ -92,7 +92,14 @@ pub fn run(args: Args) {
     let mut backend_registry =
         rite_runtime::BackendRegistry::with_factory(rite_stdlib::stdlib_backend_factory());
     for (name, config) in &resolved.backends {
-        backend_registry.declare(name.clone(), config.clone());
+        let mut config = config.clone();
+        if args.dry_run {
+            // Dry-run rehearsal: route every backend through the mock. It
+            // performs real (software) crypto, so the ceremony runs end to end
+            // without touching the declared provider's hardware.
+            config.provider = "mock".to_string();
+        }
+        backend_registry.declare(name.clone(), config);
     }
 
     let registry = rite_stdlib::default_registry();
@@ -107,7 +114,15 @@ pub fn run(args: Args) {
         Box::new(file_sink)
     };
 
-    let frontend = args.frontend.unwrap_or_else(default_frontend);
+    // A dry run is a non-interactive rehearsal: default it to the headless
+    // driver so prompts are auto-answered. An explicit `--frontend` still wins.
+    let frontend = args.frontend.unwrap_or_else(|| {
+        if args.dry_run {
+            Frontend::Headless
+        } else {
+            default_frontend()
+        }
+    });
 
     let (cmd_tx, cmd_rx) = unbounded::<UiCommand>();
     let (event_tx, event_rx) = unbounded::<ExecEvent>();

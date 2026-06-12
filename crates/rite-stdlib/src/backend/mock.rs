@@ -1,117 +1,78 @@
 //! Mock backend for testing and dry-run.
 //!
-//! This backend provides deterministic mock cryptographic operations for
-//! testing and dry-run scenarios. All operations are fast and reproducible
-//! based on the seed.
+//! The mock presents the full backend capability surface so it can stand in
+//! for any provider during a dry-run rehearsal. Cryptographic operations are
+//! delegated to an embedded software [`OpenSslBackend`](rite_openssl::OpenSslBackend)
+//! so the artifacts it produces (DER public keys, signatures, CSRs, wrapped
+//! keys) are structurally valid and parse and verify like the real thing.
+//! Device-semantic operations (attestation cert chains, PIV slot metadata,
+//! `YubiKey` management) are deterministic stubs: clearly synthetic, since a
+//! rehearsal cannot speak to absent hardware.
 //!
 //! ## Capabilities
 //!
-//! - **`KeyStore`**: ✓ (mock generation with deterministic IDs)
-//! - **Sign**: ✓ (deterministic mock signatures)
-//! - **`KeyTransport`**: ✓ (mock wrapped keys)
-//! - **Attest**: ✓ (mock attestation)
-//! - **`CertStore`**: ✓ (mock certificate storage)
-//! - **Random**: ✓ (deterministic random bytes)
-//! - **PIV**: ✓ (mock PIV operations)
-//! - **`YubiKey`**: ✓ (mock `YubiKey` extensions)
+//! - Crypto (`KeyStore`, `Sign`, `KeyTransport`, `Random`): delegated to OpenSSL,
+//!   available only with the `openssl` feature. Without it the mock exposes no
+//!   crypto, so a crypto step fails loudly rather than producing invalid bytes.
+//! - Device-semantic (`Attest`, `CertStore`, `PIV`, `YubiKey`): deterministic stubs.
 //!
 //! ## Use Cases
 //!
-//! - CI/CD testing (no real crypto needed)
-//! - Dry-run mode (fast ceremony simulation)
-//! - Reproducible test fixtures
-//! - Development without hardware
+//! - Dry-run rehearsal: run a ceremony end to end without real hardware.
+//! - CI smoke tests and reproducible development without a backend device.
 
 use rite_sdk::{
     Attestation, AttestationBackend, AttestationKind, Backend, BackendError, CertRef,
-    CertStoreBackend, KeyAlgorithm, KeyId, KeyMetadata, KeySpec, KeyStoreBackend,
-    KeyTransportBackend, PivBackend, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot,
-    PivSlotInfo, PivTouchPolicy, RandomBackend, SignAlgorithm, SignBackend, WrapAlgorithm,
-    WrappedKey, YubikeyBackend, YubikeySlotMetadata,
+    CertStoreBackend, KeyAlgorithm, KeyId, PivBackend, PivDeviceInfo, PivKeyOrigin, PivPinPolicy,
+    PivSlot, PivSlotInfo, PivTouchPolicy, YubikeyBackend, YubikeySlotMetadata,
 };
-use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+
+#[cfg(feature = "openssl")]
+use rite_openssl::OpenSslBackend;
+#[cfg(feature = "openssl")]
+use rite_sdk::{
+    KeyMetadata, KeySpec, KeyStoreBackend, KeyTransportBackend, RandomBackend, SignAlgorithm,
+    SignBackend, WrapAlgorithm, WrappedKey,
+};
 
 /// Mock backend for testing and dry-run.
-#[derive(Debug)]
+///
+/// Crypto is delegated to an embedded [`OpenSslBackend`](rite_openssl::OpenSslBackend);
+/// device-semantic operations are stubbed.
 pub struct MockBackend {
     name: String,
     seed: String,
-    keys: HashMap<KeyId, MockKey>,
-    key_counter: u64,
+    /// Embedded software backend that performs the real cryptographic work.
+    #[cfg(feature = "openssl")]
+    crypto: OpenSslBackend,
 }
 
-/// A mock key stored in the backend.
-#[derive(Debug, Clone)]
-struct MockKey {
-    algorithm: KeyAlgorithm,
-    label: String,
-    /// Deterministic "public key" derived from seed + label.
-    public_key: Vec<u8>,
+impl std::fmt::Debug for MockBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `OpenSslBackend` is not `Debug` (it holds private key material), so
+        // the embedded crypto backend is intentionally omitted.
+        f.debug_struct("MockBackend")
+            .field("name", &self.name)
+            .field("seed", &self.seed)
+            .finish_non_exhaustive()
+    }
 }
 
 impl MockBackend {
     /// Create a new mock backend with the given name and seed.
     ///
-    /// The seed is used to generate deterministic keys and signatures.
-    /// Same seed + same operations = same results.
+    /// The seed is retained for the backend fingerprint. Cryptographic
+    /// operations are delegated to an embedded OpenSSL backend (when the
+    /// `openssl` feature is enabled) and are therefore not seed-derived.
+    // `OpenSslBackend::try_new` is documented infallible (no hardware to open).
+    #[allow(clippy::expect_used)]
     pub fn new(name: String, seed: String) -> Self {
         Self {
+            #[cfg(feature = "openssl")]
+            crypto: OpenSslBackend::try_new(&name).expect("OpenSslBackend::try_new is infallible"),
             name,
             seed,
-            keys: HashMap::new(),
-            key_counter: 0,
         }
-    }
-
-    /// Generate a deterministic "key" from seed and label.
-    ///
-    /// This is not a real cryptographic key, just a deterministic blob
-    /// for testing purposes.
-    fn deterministic_key_material(&self, algorithm: KeyAlgorithm, label: &str) -> Vec<u8> {
-        let mut hasher = Sha256::new();
-        hasher.update(self.seed.as_bytes());
-        hasher.update(label.as_bytes());
-        hasher.update(format!("{algorithm:?}").as_bytes());
-        hasher.finalize().to_vec()
-    }
-
-    /// Generate a deterministic signature.
-    fn deterministic_signature(&self, key_id: &KeyId, message: &[u8]) -> Vec<u8> {
-        let mut hasher = Sha256::new();
-        hasher.update(self.seed.as_bytes());
-        hasher.update(key_id.as_str().as_bytes());
-        hasher.update(message);
-        hasher.update(b"SIGNATURE");
-        hasher.finalize().to_vec()
-    }
-
-    /// Store a key and return its new `KeyId`.
-    fn store_key(
-        &mut self,
-        prefix: &str,
-        algorithm: KeyAlgorithm,
-        label: String,
-        public_key: Vec<u8>,
-    ) -> KeyId {
-        self.key_counter = self.key_counter.saturating_add(1);
-        let key_id = KeyId::new(format!("{prefix}-{}", self.key_counter));
-        self.keys.insert(
-            key_id.clone(),
-            MockKey {
-                algorithm,
-                label,
-                public_key,
-            },
-        );
-        key_id
-    }
-
-    /// Find a stored key by ID.
-    fn get_key(&self, key_id: &KeyId) -> Result<&MockKey, BackendError> {
-        self.keys
-            .get(key_id)
-            .ok_or_else(|| BackendError::KeyNotFound(key_id.to_string()))
     }
 }
 
@@ -130,42 +91,29 @@ impl Backend for MockBackend {
     }
 
     rite_sdk::backend_capabilities!(
+        #[cfg(feature = "openssl")]
         as_keystore_mut: KeyStoreBackend,
+        #[cfg(feature = "openssl")]
         as_sign_mut: SignBackend,
+        #[cfg(feature = "openssl")]
         as_transport_mut: KeyTransportBackend,
+        #[cfg(feature = "openssl")]
+        as_random_mut: RandomBackend,
         as_attest_mut: AttestationBackend,
         as_certstore_mut: CertStoreBackend,
-        as_random_mut: RandomBackend,
         as_piv_mut: PivBackend,
         as_yubikey_mut: YubikeyBackend,
     );
 }
 
+// ---------------------------------------------------------------------------
+// Crypto: delegated to the embedded OpenSSL backend.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "openssl")]
 impl KeyStoreBackend for MockBackend {
     fn generate_key(&mut self, spec: KeySpec) -> Result<KeyMetadata, BackendError> {
-        let algorithm = spec.algorithm;
-        let label = spec.label;
-
-        let public_key = self.deterministic_key_material(algorithm, &label);
-        let public_key_copy = public_key.clone();
-        let key_id = self.store_key("mock-key", algorithm, label.clone(), public_key);
-
-        Ok(KeyMetadata {
-            key_id,
-            algorithm,
-            label,
-            public_key: Some(public_key_copy),
-            attestation: Some(Attestation {
-                kind: AttestationKind::HardwareCertChain,
-                certificates: vec![b"MOCK_ATTESTATION_CERT".to_vec()],
-                signature: Some(b"MOCK_ATTESTATION_SIG".to_vec()),
-                metadata: serde_json::json!({
-                    "mock": true,
-                    "backend": "MockBackend",
-                    "algorithm": format!("{:?}", algorithm),
-                }),
-            }),
-        })
+        self.crypto.generate_key(spec)
     }
 
     fn import_private_key(
@@ -173,59 +121,31 @@ impl KeyStoreBackend for MockBackend {
         spec: KeySpec,
         key_bytes: &[u8],
     ) -> Result<KeyMetadata, BackendError> {
-        let algorithm = spec.algorithm;
-        let label = spec.label;
-        let mut hasher = Sha256::new();
-        hasher.update(key_bytes);
-        let public_key = hasher.finalize().to_vec();
-        let public_key_copy = public_key.clone();
-        let key_id = self.store_key("mock-imported", algorithm, label.clone(), public_key);
-
-        Ok(KeyMetadata {
-            key_id,
-            algorithm,
-            label,
-            public_key: Some(public_key_copy),
-            attestation: None,
-        })
+        self.crypto.import_private_key(spec, key_bytes)
     }
 
     fn export_public_key(&self, key_id: &KeyId) -> Result<Vec<u8>, BackendError> {
-        let key = self.get_key(key_id)?;
-        Ok(key.public_key.clone())
+        self.crypto.export_public_key(key_id)
     }
 
     fn list_keys(&self) -> Result<Vec<KeyMetadata>, BackendError> {
-        Ok(self
-            .keys
-            .iter()
-            .map(|(key_id, mock_key)| KeyMetadata {
-                key_id: key_id.clone(),
-                algorithm: mock_key.algorithm,
-                label: mock_key.label.clone(),
-                public_key: Some(mock_key.public_key.clone()),
-                attestation: None,
-            })
-            .collect())
+        self.crypto.list_keys()
     }
 
     fn delete_key(&mut self, key_id: &KeyId) -> Result<(), BackendError> {
-        self.keys
-            .remove(key_id)
-            .ok_or_else(|| BackendError::KeyNotFound(key_id.to_string()))?;
-        Ok(())
+        self.crypto.delete_key(key_id)
     }
 }
 
+#[cfg(feature = "openssl")]
 impl SignBackend for MockBackend {
     fn sign(
         &mut self,
         key_id: &KeyId,
         message: &[u8],
-        _algorithm: SignAlgorithm,
+        algorithm: SignAlgorithm,
     ) -> Result<Vec<u8>, BackendError> {
-        let _ = self.get_key(key_id)?;
-        Ok(self.deterministic_signature(key_id, message))
+        self.crypto.sign(key_id, message, algorithm)
     }
 
     fn verify(
@@ -233,14 +153,13 @@ impl SignBackend for MockBackend {
         key_id: &KeyId,
         message: &[u8],
         signature: &[u8],
-        _algorithm: SignAlgorithm,
+        algorithm: SignAlgorithm,
     ) -> Result<bool, BackendError> {
-        let _ = self.get_key(key_id)?;
-        let expected = self.deterministic_signature(key_id, message);
-        Ok(signature == expected.as_slice())
+        self.crypto.verify(key_id, message, signature, algorithm)
     }
 }
 
+#[cfg(feature = "openssl")]
 impl KeyTransportBackend for MockBackend {
     fn wrap(
         &mut self,
@@ -248,21 +167,7 @@ impl KeyTransportBackend for MockBackend {
         wrapping_key_id: &KeyId,
         algorithm: WrapAlgorithm,
     ) -> Result<WrappedKey, BackendError> {
-        let _ = self.get_key(wrapping_key_id)?;
-        let key = self.get_key(key_id)?;
-
-        let mut hasher = Sha256::new();
-        hasher.update(self.seed.as_bytes());
-        hasher.update(wrapping_key_id.as_str().as_bytes());
-        hasher.update(key_id.as_str().as_bytes());
-        hasher.update(&key.public_key);
-        hasher.update(b"WRAPPED");
-
-        Ok(WrappedKey {
-            algorithm,
-            data: hasher.finalize().to_vec(),
-            recipient_hint: Some(wrapping_key_id.to_string()),
-        })
+        self.crypto.wrap(key_id, wrapping_key_id, algorithm)
     }
 
     fn unwrap(
@@ -271,47 +176,33 @@ impl KeyTransportBackend for MockBackend {
         unwrapping_key_id: &KeyId,
         label: &str,
     ) -> Result<KeyMetadata, BackendError> {
-        let _ = self.get_key(unwrapping_key_id)?;
+        self.crypto.unwrap(wrapped, unwrapping_key_id, label)
+    }
 
-        let mut hasher = Sha256::new();
-        hasher.update(&wrapped.data);
-        hasher.update(b"UNWRAPPED");
-        let public_key = hasher.finalize().to_vec();
-        let public_key_copy = public_key.clone();
-        let key_algorithm = KeyAlgorithm::Rsa4096;
-        let owned_label = label.to_string();
-        let key_id = self.store_key(
-            "mock-unwrapped",
-            key_algorithm,
-            owned_label.clone(),
-            public_key,
-        );
-
-        Ok(KeyMetadata {
-            key_id,
-            algorithm: key_algorithm,
-            label: owned_label,
-            public_key: Some(public_key_copy),
-            attestation: None,
-        })
+    fn wrap_to_public(
+        &mut self,
+        key_id: &KeyId,
+        recipient_pub_key: &[u8],
+        algorithm: WrapAlgorithm,
+    ) -> Result<WrappedKey, BackendError> {
+        self.crypto
+            .wrap_to_public(key_id, recipient_pub_key, algorithm)
     }
 }
 
+#[cfg(feature = "openssl")]
 impl RandomBackend for MockBackend {
     fn generate_random(&mut self, len: usize) -> Result<Vec<u8>, BackendError> {
-        let mut hasher = Sha256::new();
-        hasher.update(self.seed.as_bytes());
-        hasher.update(b"RANDOM");
-        hasher.update(len.to_le_bytes());
-        let hash = hasher.finalize();
-        Ok(hash.get(..len.min(32)).unwrap_or_default().to_vec())
+        self.crypto.generate_random(len)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Device-semantic surface: deterministic, clearly-synthetic stubs.
+// ---------------------------------------------------------------------------
 
 impl AttestationBackend for MockBackend {
     fn attest_key(&self, key_id: &KeyId) -> Result<Attestation, BackendError> {
-        let key = self.get_key(key_id)?;
-
         Ok(Attestation {
             kind: AttestationKind::HardwareCertChain,
             certificates: vec![
@@ -323,8 +214,6 @@ impl AttestationBackend for MockBackend {
                 "mock": true,
                 "backend": self.name,
                 "key_id": key_id.as_str(),
-                "algorithm": format!("{:?}", key.algorithm),
-                "label": key.label,
             }),
         })
     }
@@ -417,113 +306,19 @@ impl YubikeyBackend for MockBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rite_sdk::KeyPolicy;
 
-    fn spec(algorithm: KeyAlgorithm, label: &str) -> KeySpec {
-        KeySpec {
-            algorithm,
-            label: label.to_string(),
-            policy: KeyPolicy::default(),
-            location_hint: None,
-        }
+    #[test]
+    fn fingerprint_includes_name_and_seed() {
+        let backend = MockBackend::new("my-backend".to_string(), "my-seed".to_string());
+        let fingerprint = backend.fingerprint();
+        assert!(fingerprint.contains("my-backend"));
+        assert!(fingerprint.contains("my-seed"));
     }
 
     #[test]
-    fn test_deterministic_key_generation() {
-        let mut backend1 = MockBackend::new("test".to_string(), "seed123".to_string());
-        let mut backend2 = MockBackend::new("test".to_string(), "seed123".to_string());
-
-        let key1 = backend1
-            .generate_key(spec(KeyAlgorithm::Rsa4096, "my-key"))
-            .unwrap();
-        let key2 = backend2
-            .generate_key(spec(KeyAlgorithm::Rsa4096, "my-key"))
-            .unwrap();
-
-        assert_eq!(key1.public_key, key2.public_key);
-    }
-
-    #[test]
-    fn test_different_seeds_produce_different_keys() {
-        let mut backend1 = MockBackend::new("test".to_string(), "seed1".to_string());
-        let mut backend2 = MockBackend::new("test".to_string(), "seed2".to_string());
-
-        let key1 = backend1
-            .generate_key(spec(KeyAlgorithm::Rsa4096, "my-key"))
-            .unwrap();
-        let key2 = backend2
-            .generate_key(spec(KeyAlgorithm::Rsa4096, "my-key"))
-            .unwrap();
-
-        assert_ne!(key1.public_key, key2.public_key);
-    }
-
-    #[test]
-    fn test_sign_and_verify() {
-        let mut backend = MockBackend::new("test".to_string(), "seed".to_string());
-
-        let key = backend
-            .generate_key(spec(KeyAlgorithm::Rsa4096, "signing-key"))
-            .unwrap();
-
-        let message = b"Hello, world!";
-        let signature = backend
-            .sign(&key.key_id, message, SignAlgorithm::RsaPkcs1Sha256)
-            .unwrap();
-
-        let valid = backend
-            .verify(
-                &key.key_id,
-                message,
-                &signature,
-                SignAlgorithm::RsaPkcs1Sha256,
-            )
-            .unwrap();
-        assert!(valid);
-
-        let invalid = backend
-            .verify(
-                &key.key_id,
-                b"Different",
-                &signature,
-                SignAlgorithm::RsaPkcs1Sha256,
-            )
-            .unwrap();
-        assert!(!invalid);
-    }
-
-    #[test]
-    fn test_wrap_and_unwrap() {
-        let mut backend = MockBackend::new("test".to_string(), "seed".to_string());
-
-        let kek = backend
-            .generate_key(spec(KeyAlgorithm::Rsa4096, "wrapping-key"))
-            .unwrap();
-        let key_to_wrap = backend
-            .generate_key(spec(KeyAlgorithm::Rsa4096, "data-key"))
-            .unwrap();
-
-        let wrapped = backend
-            .wrap(&key_to_wrap.key_id, &kek.key_id, WrapAlgorithm::CmsRsaGcm)
-            .unwrap();
-
-        let unwrapped = backend
-            .unwrap(&wrapped, &kek.key_id, "unwrapped-key")
-            .unwrap();
-
-        assert_eq!(unwrapped.label, "unwrapped-key");
-    }
-
-    #[test]
-    fn test_attestation() {
-        let mut backend = MockBackend::new("test".to_string(), "seed".to_string());
-
-        let key = backend
-            .generate_key(spec(KeyAlgorithm::Rsa4096, "test-key"))
-            .unwrap();
-
-        let attestation = backend.attest_key(&key.key_id).unwrap();
-
+    fn attestation_is_synthetic_but_well_formed() {
+        let backend = MockBackend::new("test".to_string(), "seed".to_string());
+        let attestation = backend.attest_key(&KeyId::new("k-1")).unwrap();
         assert!(!attestation.certificates.is_empty());
         assert!(attestation.signature.is_some());
         assert_eq!(
@@ -532,27 +327,93 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_fingerprint_includes_seed() {
-        let backend = MockBackend::new("my-backend".to_string(), "my-seed".to_string());
-        let fingerprint = backend.fingerprint();
+    #[cfg(feature = "openssl")]
+    mod crypto {
+        use super::*;
+        use rite_sdk::KeyPolicy;
 
-        assert!(fingerprint.contains("my-backend"));
-        assert!(fingerprint.contains("my-seed"));
-    }
+        fn spec(algorithm: KeyAlgorithm, label: &str) -> KeySpec {
+            KeySpec {
+                algorithm,
+                label: label.to_string(),
+                policy: KeyPolicy::default(),
+                location_hint: None,
+            }
+        }
 
-    #[test]
-    fn test_list_keys() {
-        let mut backend = MockBackend::new("test".to_string(), "seed".to_string());
+        #[test]
+        fn generate_key_exports_a_non_empty_public_key() {
+            let mut backend = MockBackend::new("test".to_string(), "seed".to_string());
+            let key = backend
+                .generate_key(spec(KeyAlgorithm::Rsa2048, "k"))
+                .unwrap();
+            let public = key.public_key.expect("public key present");
+            assert!(!public.is_empty());
+        }
 
-        backend
-            .generate_key(spec(KeyAlgorithm::Rsa4096, "key1"))
-            .unwrap();
-        backend
-            .generate_key(spec(KeyAlgorithm::Rsa2048, "key2"))
-            .unwrap();
+        #[test]
+        fn sign_then_verify_roundtrips() {
+            let mut backend = MockBackend::new("test".to_string(), "seed".to_string());
+            let key = backend
+                .generate_key(spec(KeyAlgorithm::Rsa2048, "signing-key"))
+                .unwrap();
 
-        let keys = backend.list_keys().unwrap();
-        assert_eq!(keys.len(), 2);
+            let message = b"Hello, ceremony!";
+            let signature = backend
+                .sign(&key.key_id, message, SignAlgorithm::RsaPkcs1Sha256)
+                .unwrap();
+
+            assert!(
+                backend
+                    .verify(
+                        &key.key_id,
+                        message,
+                        &signature,
+                        SignAlgorithm::RsaPkcs1Sha256
+                    )
+                    .unwrap()
+            );
+            assert!(
+                !backend
+                    .verify(
+                        &key.key_id,
+                        b"tampered",
+                        &signature,
+                        SignAlgorithm::RsaPkcs1Sha256
+                    )
+                    .unwrap()
+            );
+        }
+
+        #[test]
+        fn wrap_then_unwrap_roundtrips() {
+            let mut backend = MockBackend::new("test".to_string(), "seed".to_string());
+            let kek = backend
+                .generate_key(spec(KeyAlgorithm::Rsa4096, "wrapping-key"))
+                .unwrap();
+            let target = backend
+                .generate_key(spec(KeyAlgorithm::Rsa4096, "data-key"))
+                .unwrap();
+
+            let wrapped = backend
+                .wrap(&target.key_id, &kek.key_id, WrapAlgorithm::CmsRsaGcm)
+                .unwrap();
+            let unwrapped = backend
+                .unwrap(&wrapped, &kek.key_id, "unwrapped-key")
+                .unwrap();
+            assert_eq!(unwrapped.label, "unwrapped-key");
+        }
+
+        #[test]
+        fn list_keys_reflects_generated_keys() {
+            let mut backend = MockBackend::new("test".to_string(), "seed".to_string());
+            backend
+                .generate_key(spec(KeyAlgorithm::Rsa2048, "key1"))
+                .unwrap();
+            backend
+                .generate_key(spec(KeyAlgorithm::EcdsaP256, "key2"))
+                .unwrap();
+            assert_eq!(backend.list_keys().unwrap().len(), 2);
+        }
     }
 }

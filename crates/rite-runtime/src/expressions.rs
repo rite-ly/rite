@@ -458,7 +458,6 @@ mod tests {
         static EMPTY_MATERIALS: std::sync::LazyLock<HashMap<MaterialId, String>> =
             std::sync::LazyLock::new(HashMap::new);
         HandlerContext {
-            dry_run: false,
             params: &EMPTY_PARAMS,
             artifacts: &EMPTY_ARTIFACTS,
             roles: &EMPTY_ROLES,
@@ -479,7 +478,6 @@ mod tests {
         let params_box = Box::leak(Box::new(params));
         let artifacts_box = Box::leak(Box::new(artifacts));
         HandlerContext {
-            dry_run: false,
             params: params_box,
             artifacts: artifacts_box,
             roles: &EMPTY_ROLES,

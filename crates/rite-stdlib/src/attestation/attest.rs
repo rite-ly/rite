@@ -54,18 +54,14 @@ impl Action for AttestAction {
 
         reporter.log(Icon::Info, format!("Statement: \"{statement}\""))?;
 
-        if ctx.dry_run {
-            reporter.log(Icon::Info, "[dry run, auto-attesting]")?;
-        } else {
-            reporter.log(
-                Icon::Info,
-                "By typing 'attest', you confirm the above statement.",
-            )?;
-            reporter.prompt(&Prompt::Literal {
-                label: "Type 'attest' to confirm".to_string(),
-                expected: "attest".to_string(),
-            })?;
-        }
+        reporter.log(
+            Icon::Info,
+            "By typing 'attest', you confirm the above statement.",
+        )?;
+        reporter.prompt(&Prompt::Literal {
+            label: "Type 'attest' to confirm".to_string(),
+            expected: "attest".to_string(),
+        })?;
 
         let role = step
             .role_str()

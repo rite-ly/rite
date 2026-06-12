@@ -94,7 +94,7 @@ impl Action for OralReadbackAction {
     fn execute(
         &self,
         _step: &StepInfo,
-        ctx: &HandlerContext,
+        _ctx: &HandlerContext,
         params: &serde_json::Value,
         reporter: &mut Reporter<'_>,
         _backend: Option<&mut dyn Backend>,
@@ -121,11 +121,6 @@ impl Action for OralReadbackAction {
         reporter.log(Icon::Info, "READER: Please read aloud the following value:")?;
         reporter.log(Icon::Info, format!("    Raw value: {display_value}"))?;
         reporter.log(Icon::Info, format!("    {}: {formatted}", format.label()))?;
-
-        if ctx.dry_run {
-            reporter.log(Icon::Info, "[dry run, auto-confirming]")?;
-            return Ok(StepResult::completed("Oral readback completed (dry run)"));
-        }
 
         reporter.log(
             Icon::Info,

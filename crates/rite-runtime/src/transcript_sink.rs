@@ -31,6 +31,7 @@
 //! - [`JsonlFileSink`], writes to disk, flushes after every line.
 //! - [`InMemorySink`], collects facts in a `Vec` for tests and tooling.
 
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -322,6 +323,12 @@ pub enum VerifyError {
     /// `EntropySeeded` fact established the source.
     #[error("entropy source used before it was seeded")]
     SeedMissing,
+    /// A second `EntropySeeded` fact appeared. The source is seeded exactly
+    /// once at ceremony start; accepting a re-seed would let a crafted
+    /// transcript swap the seed mid-stream and have later draws "verify"
+    /// against a seed of the forger's choosing.
+    #[error("entropy source seeded more than once")]
+    DuplicateSeed,
     /// The seed fact declares a derivation scheme the verifier does not
     /// recognise. Never trust an unknown scheme (the JWT-`alg` lesson).
     #[error("unknown entropy derivation scheme: {0}")]
@@ -334,6 +341,50 @@ pub enum VerifyError {
     #[error("entropy draw at path '{path}' does not match re-derived value")]
     DrawMismatch {
         /// Derivation path of the mismatched draw.
+        path: String,
+    },
+    /// A recorded draw is longer than `HKDF-Expand` can produce
+    /// ([`MAX_DRAW_LEN`](crate::entropy::MAX_DRAW_LEN) bytes), so it cannot
+    /// have come from the real source. Rejected up front: attempting the
+    /// re-derivation would abort the verifier instead of failing the check.
+    #[error(
+        "entropy draw at path '{path}' records {len} bytes, beyond the {max}-byte HKDF-Expand limit"
+    )]
+    DrawTooLong {
+        /// Derivation path of the oversized draw.
+        path: String,
+        /// Recorded value length in bytes.
+        len: usize,
+        /// The `HKDF-Expand` output limit.
+        max: usize,
+    },
+    /// A draw's recorded path does not start with the
+    /// `<epoch>/<step>/` prefix the verifier rebuilds from its own fold
+    /// count and the step named on the fact, so the draw is attributed to
+    /// the wrong epoch or step.
+    #[error("entropy draw path '{path}' does not match expected '{expected_prefix}<purpose>'")]
+    PathMismatch {
+        /// Recorded derivation path.
+        path: String,
+        /// The `<epoch>/<step>/` prefix the verifier expected.
+        expected_prefix: String,
+    },
+    /// A contribution's recorded epoch does not match its position in the
+    /// fold sequence (first contribution is epoch 1, and so on).
+    #[error("entropy contribution at step '{step}' records epoch {recorded}, expected {expected}")]
+    EpochMismatch {
+        /// Step that recorded the contribution.
+        step: String,
+        /// Epoch index recorded on the fact.
+        recorded: u32,
+        /// Epoch index implied by the fold count.
+        expected: u32,
+    },
+    /// The same derivation path was drawn twice. The runtime never reuses a
+    /// path, so a duplicate means the record was edited or replayed.
+    #[error("entropy draw path '{path}' recorded more than once")]
+    DuplicateDrawPath {
+        /// The repeated derivation path.
         path: String,
     },
 }
@@ -431,6 +482,11 @@ pub struct EntropyVerified {
     /// Derivation-scheme tag declared by the seed fact, if the ceremony used
     /// the source at all.
     pub derivation: Option<String>,
+    /// Provenance of the machine seed as recorded by the seed fact (e.g.
+    /// `os`, or the `dry-run` sentinel). Consumers surface this so a
+    /// dry-run transcript, which re-derives just as cleanly as a real one,
+    /// is never presented as real evidence.
+    pub source: Option<String>,
     /// Number of human contributions folded into the ratchet.
     pub contributions: usize,
     /// Number of drawn values that re-derived to their recorded value.
@@ -445,23 +501,50 @@ pub struct EntropyVerified {
 /// value from the recorded path and checks it against the recorded value. A
 /// tampered seed, contribution, path, or value fails the check.
 ///
+/// Beyond the value re-derivation, the replay enforces the source's own
+/// invariants, so a transcript cannot record a fact stream the runtime could
+/// never have produced:
+///
+/// - the source is seeded exactly once;
+/// - each contribution's recorded `epoch` matches its position in the fold
+///   sequence;
+/// - each draw's recorded path carries the `<epoch>/<step>/` prefix rebuilt
+///   from the verifier's own fold count and the step named on the fact;
+/// - no derivation path is drawn twice;
+/// - no recorded value exceeds what `HKDF-Expand` can produce
+///   ([`MAX_DRAW_LEN`](crate::entropy::MAX_DRAW_LEN) bytes), which would
+///   otherwise abort the verifier instead of failing the check.
+///
 /// The caller is expected to have chain-verified the facts first (via
 /// [`read_verified_transcript`]); this function only re-derives.
 ///
 /// # Errors
 ///
 /// Returns a [`VerifyError`] variant describing the first inconsistency:
-/// [`VerifyError::SeedMissing`], [`VerifyError::UnknownDerivation`],
-/// [`VerifyError::MalformedEntropy`], or [`VerifyError::DrawMismatch`].
+/// [`VerifyError::SeedMissing`], [`VerifyError::DuplicateSeed`],
+/// [`VerifyError::UnknownDerivation`], [`VerifyError::MalformedEntropy`],
+/// [`VerifyError::EpochMismatch`], [`VerifyError::PathMismatch`],
+/// [`VerifyError::DuplicateDrawPath`], [`VerifyError::DrawTooLong`], or
+/// [`VerifyError::DrawMismatch`].
 pub fn verify_entropy<'a>(
     facts: impl IntoIterator<Item = &'a StepFact>,
 ) -> Result<EntropyVerified, VerifyError> {
     let mut seed: Option<[u8; 32]> = None;
+    let mut epoch: u32 = 0;
+    let mut drawn_paths: HashSet<String> = HashSet::new();
     let mut result = EntropyVerified::default();
 
     for fact in facts {
         match fact {
-            StepFact::EntropySeeded { m, derivation, .. } => {
+            StepFact::EntropySeeded {
+                m,
+                source,
+                derivation,
+                ..
+            } => {
+                if seed.is_some() {
+                    return Err(VerifyError::DuplicateSeed);
+                }
                 if derivation != crate::entropy::DERIVATION_V1 {
                     return Err(VerifyError::UnknownDerivation(derivation.clone()));
                 }
@@ -469,18 +552,56 @@ pub fn verify_entropy<'a>(
                     .map_err(|e| VerifyError::MalformedEntropy(format!("seed m: {e}")))?;
                 seed = Some(crate::entropy::initial_seed(&m_bytes));
                 result.derivation = Some(derivation.clone());
+                result.source = Some(source.clone());
             }
-            StepFact::EntropyContributed { contribution, .. } => {
+            StepFact::EntropyContributed {
+                step,
+                epoch: recorded_epoch,
+                contribution,
+                ..
+            } => {
                 let current = seed.as_ref().ok_or(VerifyError::SeedMissing)?;
+                let expected = epoch.saturating_add(1);
+                if *recorded_epoch != expected {
+                    return Err(VerifyError::EpochMismatch {
+                        step: step.as_str().to_string(),
+                        recorded: *recorded_epoch,
+                        expected,
+                    });
+                }
                 seed = Some(crate::entropy::fold_seed(current, contribution.as_bytes()));
+                epoch = expected;
                 result.contributions = result.contributions.saturating_add(1);
             }
-            StepFact::EntropyDrawn { path, value, .. } => {
+            StepFact::EntropyDrawn {
+                step, path, value, ..
+            } => {
                 let current = seed.as_ref().ok_or(VerifyError::SeedMissing)?;
+                // Rebuild the path prefix from the verifier's own fold count
+                // and the step named on the fact; only the purpose segment is
+                // taken from the record. A draw attributed to the wrong epoch
+                // or step fails here even if its value re-derives.
+                let expected_prefix = crate::entropy::build_path(epoch, step, "");
+                if !path.starts_with(&expected_prefix) || path.len() == expected_prefix.len() {
+                    return Err(VerifyError::PathMismatch {
+                        path: path.clone(),
+                        expected_prefix,
+                    });
+                }
+                if !drawn_paths.insert(path.clone()) {
+                    return Err(VerifyError::DuplicateDrawPath { path: path.clone() });
+                }
                 // The recorded value's own length fixes how many bytes to
                 // re-derive; decoding it also rejects a malformed hex record.
                 let recorded = base16ct::lower::decode_vec(value)
                     .map_err(|e| VerifyError::MalformedEntropy(format!("draw {path}: {e}")))?;
+                if recorded.len() > crate::entropy::MAX_DRAW_LEN {
+                    return Err(VerifyError::DrawTooLong {
+                        path: path.clone(),
+                        len: recorded.len(),
+                        max: crate::entropy::MAX_DRAW_LEN,
+                    });
+                }
                 let expected = crate::entropy::derive_value(current, path, recorded.len());
                 if expected != recorded {
                     return Err(VerifyError::DrawMismatch { path: path.clone() });
@@ -715,5 +836,114 @@ mod tests {
         let facts = [drawn_fact(&seed, "issue", "0/issue/cert-serial", 9)];
         let err = verify_entropy(facts.iter()).expect_err("unseeded");
         assert!(matches!(err, VerifyError::SeedMissing));
+    }
+
+    #[test]
+    fn verify_entropy_surfaces_the_seed_source() {
+        let m = b"machine entropy bytes";
+        let v = verify_entropy([seeded_fact(m)].iter()).expect("verify");
+        assert_eq!(v.source.as_deref(), Some("os"));
+    }
+
+    #[test]
+    fn verify_entropy_rejects_a_second_seed() {
+        // A mid-stream re-seed would let a forged transcript swap the seed
+        // under later draws; the replay refuses rather than resetting.
+        let facts = [seeded_fact(b"first"), seeded_fact(b"second")];
+        let err = verify_entropy(facts.iter()).expect_err("re-seed");
+        assert!(matches!(err, VerifyError::DuplicateSeed));
+    }
+
+    #[test]
+    fn verify_entropy_rejects_an_oversized_draw_without_panicking() {
+        // 8161 bytes is one past the HKDF-Expand limit (255 * 32). Re-deriving
+        // it would panic inside `expand`; the verifier must reject it as a
+        // malformed record instead of aborting.
+        let m = b"machine entropy bytes";
+        let oversized = "ab".repeat(crate::entropy::MAX_DRAW_LEN.saturating_add(1));
+        let facts = [
+            seeded_fact(m),
+            StepFact::EntropyDrawn {
+                step: StepId::new("issue"),
+                path: "0/issue/cert-serial".to_string(),
+                value: oversized,
+            },
+        ];
+        let err = verify_entropy(facts.iter()).expect_err("oversized draw");
+        assert!(matches!(err, VerifyError::DrawTooLong { len, .. } if len == 8161));
+    }
+
+    #[test]
+    fn verify_entropy_rejects_a_draw_path_with_the_wrong_epoch() {
+        // No contribution was folded, so the draw must come from epoch 0; a
+        // recorded epoch-1 path is a stream the runtime could not produce.
+        let m = b"machine entropy bytes";
+        let seed = crate::entropy::initial_seed(m);
+        let facts = [
+            seeded_fact(m),
+            drawn_fact(&seed, "issue", "1/issue/cert-serial", 9),
+        ];
+        let err = verify_entropy(facts.iter()).expect_err("wrong epoch");
+        assert!(matches!(err, VerifyError::PathMismatch { .. }));
+    }
+
+    #[test]
+    fn verify_entropy_rejects_a_draw_path_with_the_wrong_step() {
+        let m = b"machine entropy bytes";
+        let seed = crate::entropy::initial_seed(m);
+        let facts = [
+            seeded_fact(m),
+            // Path names step `other` but the fact was recorded under `issue`.
+            drawn_fact(&seed, "issue", "0/other/cert-serial", 9),
+        ];
+        let err = verify_entropy(facts.iter()).expect_err("wrong step");
+        assert!(matches!(err, VerifyError::PathMismatch { .. }));
+    }
+
+    #[test]
+    fn verify_entropy_rejects_an_empty_purpose() {
+        let m = b"machine entropy bytes";
+        let seed = crate::entropy::initial_seed(m);
+        let facts = [seeded_fact(m), drawn_fact(&seed, "issue", "0/issue/", 9)];
+        let err = verify_entropy(facts.iter()).expect_err("empty purpose");
+        assert!(matches!(err, VerifyError::PathMismatch { .. }));
+    }
+
+    #[test]
+    fn verify_entropy_rejects_a_contribution_epoch_out_of_sequence() {
+        let m = b"machine entropy bytes";
+        let facts = [
+            seeded_fact(m),
+            StepFact::EntropyContributed {
+                step: StepId::new("roll"),
+                // First fold must record epoch 1.
+                epoch: 2,
+                contribution: "3 1 6 4 2 5".to_string(),
+            },
+        ];
+        let err = verify_entropy(facts.iter()).expect_err("epoch skip");
+        assert!(matches!(
+            err,
+            VerifyError::EpochMismatch {
+                recorded: 2,
+                expected: 1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_entropy_rejects_a_duplicate_draw_path() {
+        // The runtime never reuses a path; a repeat means the record was
+        // edited or replayed.
+        let m = b"machine entropy bytes";
+        let seed = crate::entropy::initial_seed(m);
+        let facts = [
+            seeded_fact(m),
+            drawn_fact(&seed, "issue", "0/issue/cert-serial", 9),
+            drawn_fact(&seed, "issue", "0/issue/cert-serial", 9),
+        ];
+        let err = verify_entropy(facts.iter()).expect_err("duplicate path");
+        assert!(matches!(err, VerifyError::DuplicateDrawPath { .. }));
     }
 }

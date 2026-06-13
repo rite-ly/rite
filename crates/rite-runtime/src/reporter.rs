@@ -68,6 +68,18 @@ pub enum ReporterError {
     /// so this is an internal ordering bug, never an operator-reachable state.
     #[error("internal: entropy source drawn before it was seeded")]
     Unseeded,
+    /// An action requested more bytes than a single `HKDF-Expand` can produce
+    /// ([`MAX_DRAW_LEN`](crate::entropy::MAX_DRAW_LEN) bytes). The draw side
+    /// rejects it here so the derivation fails cleanly instead of panicking
+    /// inside `expand`. Every value a ceremony draws (nonces, serials,
+    /// challenges) is far below this, so a request beyond it is an action bug.
+    #[error("entropy draw of {len} bytes exceeds the {max}-byte HKDF-Expand limit")]
+    DrawTooLong {
+        /// Requested draw length in bytes.
+        len: usize,
+        /// The `HKDF-Expand` output limit.
+        max: usize,
+    },
 }
 
 impl ReporterError {
@@ -81,6 +93,7 @@ impl ReporterError {
             ReporterError::NoCurrentStep(_) => "internal_no_current_step",
             ReporterError::DuplicateDraw { .. } => "duplicate_entropy_draw",
             ReporterError::Unseeded => "internal_entropy_unseeded",
+            ReporterError::DrawTooLong { .. } => "entropy_draw_too_long",
         };
         ErrorRecord::new(kind, self.to_string())
     }
@@ -182,6 +195,12 @@ impl<'a> Reporter<'a> {
     /// [`ReporterError::Transcript`] / [`ReporterError::Disconnected`] if the
     /// fact cannot be emitted.
     pub fn draw(&mut self, purpose: &str, len: usize) -> Result<Vec<u8>, ReporterError> {
+        if len > crate::entropy::MAX_DRAW_LEN {
+            return Err(ReporterError::DrawTooLong {
+                len,
+                max: crate::entropy::MAX_DRAW_LEN,
+            });
+        }
         let step = self
             .current_step
             .clone()
@@ -546,6 +565,24 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    #[test]
+    fn draw_rejects_a_length_past_the_hkdf_expand_limit() {
+        // A draw beyond MAX_DRAW_LEN would panic inside `expand`; the boundary
+        // rejects it as a recoverable error first. The length check precedes
+        // the step/seed checks, so no seeding is needed to exercise it.
+        let (event_tx, _event_rx) = unbounded();
+        let (_cmd_tx, cmd_rx) = unbounded::<UiCommand>();
+        let mut sink = InMemorySink::new();
+        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
+        reporter.set_current_step(Some(ids("s1")));
+
+        let err = reporter
+            .draw("oversized", crate::entropy::MAX_DRAW_LEN.saturating_add(1))
+            .expect_err("oversized draw");
+        assert!(matches!(err, ReporterError::DrawTooLong { len, .. }
+            if len == crate::entropy::MAX_DRAW_LEN + 1));
     }
 
     #[test]

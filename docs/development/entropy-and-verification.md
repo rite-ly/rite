@@ -86,18 +86,23 @@ where bytes appear:
 
 `rite verify` first checks the SHA-256 hash chain, then re-derives the source:
 
-1. Read `entropy_seeded`; reject an unknown `derivation`; rebuild `seed_0` from
-   the recorded `m`.
+1. Read `entropy_seeded`; reject an unknown `derivation` and a second seed
+   fact; rebuild `seed_0` from the recorded `m`.
 2. Walk the facts in chain order, folding each `entropy_contributed` into the
-   running seed.
-3. For each `entropy_drawn`, recompute `HKDF-Expand(seed_epoch, info, len)` from
-   the recorded path, taking `len` from the recorded value's byte length, and
-   confirm it equals the recorded value.
+   running seed and checking its recorded `epoch` against the fold count.
+3. For each `entropy_drawn`, rebuild the `<epoch>/<step>/` path prefix from
+   the verifier's own fold count and the step named on the fact and require
+   the recorded path to match; reject a path drawn twice and a value longer
+   than `HKDF-Expand` can produce (`255 * 32` bytes); then recompute
+   `HKDF-Expand(seed_epoch, info, len)` from the recorded path, taking `len`
+   from the recorded value's byte length, and confirm it equals the recorded
+   value.
 
-A tampered seed, contribution, path, or value fails the check. Because the
-transcript is hash-chained, a naive byte edit is caught by the chain first; the
-re-derivation additionally defeats a fully re-chained forgery whose values are
-not genuinely seed-derived.
+A tampered seed, contribution, path, or value fails the check, as does a fact
+stream the runtime could never have produced (a re-seed, an epoch skip, a
+reused path). Because the transcript is hash-chained, a naive byte edit is
+caught by the chain first; the re-derivation additionally defeats a fully
+re-chained forgery whose values are not genuinely seed-derived.
 
 ## Dry runs
 

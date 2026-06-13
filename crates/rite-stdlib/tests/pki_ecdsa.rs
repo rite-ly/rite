@@ -174,7 +174,7 @@ fn test_ecdsa_p256_pki_flow() {
         .next()
         .expect("certificate must have CN");
     assert_eq!(
-        cn.data().as_utf8().unwrap().to_string(),
+        cn.data().to_string().unwrap(),
         "Test Root CA ECDSA",
         "certificate CN must match CSR subject"
     );

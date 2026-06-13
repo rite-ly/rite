@@ -100,6 +100,7 @@ jobs:
       contents: read
       packages: write
       id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -139,6 +140,7 @@ jobs:
           bake-target: image
 
       - name: Bake binaries + image
+        id: bake
         uses: docker/bake-action@6614cfa25eff9a0b2b2697efb0b6159e7680d584 # v7.2.0
         env:
           RITE_BUILD_COMMIT: ${{ needs.validate.outputs.commit_sha }}
@@ -152,6 +154,27 @@ jobs:
             image.output=type=registry,push=true
             *.cache-from=type=gha,scope=release-docker
             *.cache-to=type=gha,mode=max,scope=release-docker
+
+      # Pull the pushed multi-arch index digest out of the bake metadata for the
+      # `image` target. Done in a dedicated step (rather than an inline fromJSON
+      # expression) so the resolved digest is visible in the logs.
+      - name: Resolve image digest
+        id: image
+        env:
+          BAKE_METADATA: ${{ steps.bake.outputs.metadata }}
+        run: |
+          digest=$(jq -r '.image["containerimage.digest"]' <<<"$BAKE_METADATA")
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      # Sigstore-signed provenance for the pushed image, bound to the multi-arch
+      # index digest and stored as an OCI referrer alongside it (verifiable with
+      # `gh attestation verify oci://...`). Same mechanism as the binaries below.
+      - name: Attest image provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-name: ghcr.io/rite-ly/rite
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
 
       - name: Stage Linux binaries for upload
         run: |
@@ -195,6 +218,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     env:
       VERSION: ${{ needs.validate.outputs.version }}
     steps:
@@ -232,6 +257,15 @@ jobs:
           cp "$ARTS/rite-ls-windows-amd64/rite-ls.exe" "$RELEASE_DIR/rite-ls-${VERSION}-windows-amd64.exe"
 
           sha256sum "$RELEASE_DIR"/* > "$RELEASE_DIR/SHA256SUMS"
+
+      # Provenance over the exact files shipped on the release: the rite tarballs/zip,
+      # the flat rite-ls binaries, and SHA256SUMS. Attesting the packaged files (not the
+      # raw build outputs) means each subject digest matches what a user downloads, so
+      # `gh attestation verify <file> --repo rite-ly/rite` succeeds on the artefact itself.
+      - name: Attest release artifacts
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: release/*
 
       - name: Create GitHub Release (draft)
         env:

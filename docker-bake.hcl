@@ -56,10 +56,9 @@ target "binaries-arm64" {
 target "image" {
   target    = "release"
   platforms = ["linux/amd64", "linux/arm64"]
-  attest = [
-    "type=sbom",
-    "type=provenance,mode=max,version=v1",
-  ]
+  # Provenance is attested in the release workflow via Sigstore (actions/attest),
+  # the same mechanism used for the binaries, so no BuildKit in-registry
+  # attestations are emitted here.
   args = {
     RITE_BUILD_COMMIT      = RITE_BUILD_COMMIT
     RITE_BUILD_COMMIT_DATE = RITE_BUILD_COMMIT_DATE

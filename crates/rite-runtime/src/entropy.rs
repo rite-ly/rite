@@ -85,8 +85,10 @@ fn extract(salt: &[u8], ikm: &[u8]) -> [u8; SEED_LEN] {
 ///
 /// Never in practice. `from_prk` only rejects a PRK shorter than the hash
 /// output, but every seed here is exactly 32 bytes; `expand` only fails when
-/// `len` exceeds `255 * 32` bytes, far beyond any nonce or serial a ceremony
-/// draws. Both `expect`s therefore guard true invariants and are allowed.
+/// `len` exceeds [`MAX_DRAW_LEN`], which both untrusted entry points bound
+/// before reaching here (`Reporter::draw` on the draw side, `verify_entropy`
+/// on the replay side). Both `expect`s therefore guard true invariants and
+/// are allowed.
 #[allow(clippy::expect_used)]
 fn expand(prk: &[u8], info: &[u8], len: usize) -> Vec<u8> {
     let hk = Hkdf::<Sha256>::from_prk(prk).expect("seed is a valid HKDF PRK length");

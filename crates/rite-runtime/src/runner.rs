@@ -108,7 +108,8 @@ impl From<ReporterError> for ActionError {
             ReporterError::Transcript(e) => ActionError::Transcript(e),
             ReporterError::NoCurrentStep(_)
             | ReporterError::DuplicateDraw { .. }
-            | ReporterError::Unseeded => ActionError::Failed(value.to_string()),
+            | ReporterError::Unseeded
+            | ReporterError::DrawTooLong { .. } => ActionError::Failed(value.to_string()),
         }
     }
 }
@@ -137,9 +138,9 @@ impl From<ReporterError> for ExecutionError {
             }
             ReporterError::Transcript(e) => ExecutionError::TranscriptError(e.to_string()),
             ReporterError::NoCurrentStep(_) => ExecutionError::TranscriptError(value.to_string()),
-            ReporterError::DuplicateDraw { .. } | ReporterError::Unseeded => {
-                ExecutionError::EntropyError(value.to_string())
-            }
+            ReporterError::DuplicateDraw { .. }
+            | ReporterError::Unseeded
+            | ReporterError::DrawTooLong { .. } => ExecutionError::EntropyError(value.to_string()),
         }
     }
 }

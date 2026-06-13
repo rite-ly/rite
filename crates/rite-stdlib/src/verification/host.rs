@@ -122,36 +122,60 @@ fn get_machine_id() -> Option<String> {
     None
 }
 
+/// Run `dmesg` from a fixed absolute path and return its output.
+///
+/// The binary is resolved at `/usr/bin/dmesg` (falling back to `/bin/dmesg`),
+/// never through the inherited `PATH`: the output feeds recorded
+/// security-posture evidence, and a `PATH` shim must not be able to forge it.
+/// Returns `None` when the binary is missing or the probe fails (spawn error
+/// or non-zero exit, e.g. an unprivileged read of a restricted kernel
+/// buffer), so callers can record "probe failed" distinctly from "feature
+/// inactive".
+#[cfg(target_os = "linux")]
+fn read_dmesg() -> Option<String> {
+    let path = ["/usr/bin/dmesg", "/bin/dmesg"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())?;
+    let output = std::process::Command::new(path).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 #[cfg(target_os = "linux")]
 fn collect_security_features() -> Hardening {
-    let dmesg_out = std::process::Command::new("dmesg")
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
-
-    let ram_encryption = if dmesg_out.contains("AMD Memory Encryption Features active: SME") {
-        FeatureCheck::with_detail(FeatureStatus::Active, "AMD SME")
-    } else if dmesg_out.contains("x86/tme: enabled by BIOS")
-        || dmesg_out.contains("x86/mktme: enabled by BIOS")
-    {
-        FeatureCheck::with_detail(FeatureStatus::Active, "Intel TME")
-    } else {
-        let vendor = std::fs::read_to_string("/proc/cpuinfo")
-            .unwrap_or_default()
-            .lines()
-            .find(|l| l.starts_with("vendor_id"))
-            .and_then(|l| l.split(':').nth(1))
-            .map_or_else(|| "unknown".to_string(), |v| v.trim().to_string());
-        match vendor.as_str() {
-            "AuthenticAMD" => FeatureCheck::with_detail(
-                FeatureStatus::Inactive,
-                "AMD CPU; SME not supported or disabled in BIOS",
-            ),
-            "GenuineIntel" => FeatureCheck::with_detail(
-                FeatureStatus::Inactive,
-                "Intel CPU; enable TME in BIOS/UEFI Security settings",
-            ),
-            other => FeatureCheck::with_detail(FeatureStatus::Inactive, other.to_string()),
+    let ram_encryption = match read_dmesg() {
+        None => FeatureCheck::with_detail(
+            FeatureStatus::Unknown,
+            "dmesg probe failed or unavailable; RAM encryption state could not be determined",
+        ),
+        Some(dmesg_out) => {
+            if dmesg_out.contains("AMD Memory Encryption Features active: SME") {
+                FeatureCheck::with_detail(FeatureStatus::Active, "AMD SME")
+            } else if dmesg_out.contains("x86/tme: enabled by BIOS")
+                || dmesg_out.contains("x86/mktme: enabled by BIOS")
+            {
+                FeatureCheck::with_detail(FeatureStatus::Active, "Intel TME")
+            } else {
+                let vendor = std::fs::read_to_string("/proc/cpuinfo")
+                    .unwrap_or_default()
+                    .lines()
+                    .find(|l| l.starts_with("vendor_id"))
+                    .and_then(|l| l.split(':').nth(1))
+                    .map_or_else(|| "unknown".to_string(), |v| v.trim().to_string());
+                match vendor.as_str() {
+                    "AuthenticAMD" => FeatureCheck::with_detail(
+                        FeatureStatus::Inactive,
+                        "AMD CPU; SME not supported or disabled in BIOS",
+                    ),
+                    "GenuineIntel" => FeatureCheck::with_detail(
+                        FeatureStatus::Inactive,
+                        "Intel CPU; enable TME in BIOS/UEFI Security settings",
+                    ),
+                    other => FeatureCheck::with_detail(FeatureStatus::Inactive, other.to_string()),
+                }
+            }
         }
     };
 

@@ -1710,6 +1710,7 @@ dependencies = [
  "openssl",
  "rite-sdk",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]

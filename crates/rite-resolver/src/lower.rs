@@ -10,6 +10,14 @@ use marked_yaml::types::MarkedScalarNode;
 use rite_model::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};
 use std::path::Path;
 
+/// Maximum nesting depth accepted in ceremony YAML.
+///
+/// Real ceremony files nest a handful of levels; 64 is far beyond any
+/// legitimate document while keeping every recursive walk over the tree
+/// (deserialization, scalar coercion, expression parsing) bounded to a
+/// stack depth that cannot overflow.
+const MAX_YAML_DEPTH: usize = 64;
+
 /// Parse ceremony YAML, build a `SpanMap`, and return structured diagnostics.
 ///
 /// Always returns whatever spans could be collected even if deserialization fails.
@@ -27,6 +35,29 @@ pub(crate) fn lower_ceremony(
             return (None, SpanMap::default(), diags);
         }
     };
+
+    // Reject pathological nesting before any recursive walk over the tree.
+    // `from_node` (Step C), `coerce_yaml_scalars`, and the expression parsing
+    // downstream all recurse over this structure; a crafted file with hundreds
+    // of nested sequences/mappings would otherwise overflow the stack and
+    // abort the process — fatal for `rite-ls`, which re-parses on every
+    // keystroke. The check itself recurses, but stops descending at the cap,
+    // so its own depth is bounded.
+    //
+    // Residual limit: `marked_yaml::parse_yaml` above also recurses while
+    // building the node tree. Flow-style nesting is stopped by the scanner's
+    // own recursion limit (~255 levels, reported as a normal `ScanError`),
+    // but block-style nesting only overflows around ~600 levels on a 2 MiB
+    // thread stack — an upstream limit this guard runs too late to prevent.
+    if exceeds_max_depth(&node, 0) {
+        diags.push(Diagnostic {
+            path: path.map(Path::to_owned),
+            span: None,
+            severity: Severity::Error,
+            message: format!("YAML nesting exceeds the maximum depth of {MAX_YAML_DEPTH} levels"),
+        });
+        return (None, SpanMap::default(), diags);
+    }
 
     // Step B: walk spans; always runs, even if Step C fails.
     let (span_map, structural_diags) = Lowerer::new(path, yaml).walk(&node);
@@ -438,6 +469,24 @@ fn mapping_has_key(map: &marked_yaml::types::MarkedMappingNode, key: &str) -> bo
     map.iter().any(|(k, _)| k.as_str() == key)
 }
 
+/// Check whether the node tree nests deeper than [`MAX_YAML_DEPTH`].
+///
+/// Returns as soon as the cap is hit, so the recursion here is bounded to
+/// `MAX_YAML_DEPTH` frames regardless of input.
+fn exceeds_max_depth(node: &Node, depth: usize) -> bool {
+    if depth >= MAX_YAML_DEPTH {
+        return true;
+    }
+    let child_depth = depth.saturating_add(1);
+    if let Some(map) = node.as_mapping() {
+        map.iter().any(|(_, v)| exceeds_max_depth(v, child_depth))
+    } else if let Some(seq) = node.as_sequence() {
+        seq.iter().any(|v| exceeds_max_depth(v, child_depth))
+    } else {
+        false
+    }
+}
+
 /// Extract a plain role ID from either `"${role.id}"` expression syntax or a bare ID.
 fn extract_role_id(raw: &str) -> &str {
     raw.strip_prefix("${role.")
@@ -512,6 +561,19 @@ fn coerce_ceremony_json_scalars(ceremony: &mut Ceremony) {
 
 /// Recursively coerce string scalars in a `serde_json::Value` to their proper types.
 fn coerce_yaml_scalars(value: &mut serde_json::Value) {
+    coerce_yaml_scalars_at(value, 0);
+}
+
+/// Depth-tracking worker for [`coerce_yaml_scalars`].
+///
+/// The depth guard in `lower_ceremony` already rejects trees nested past
+/// [`MAX_YAML_DEPTH`], so the cap here is a defensive backstop: values deeper
+/// than the cap are left uncoerced rather than recursed into.
+fn coerce_yaml_scalars_at(value: &mut serde_json::Value, depth: usize) {
+    if depth >= MAX_YAML_DEPTH {
+        return;
+    }
+    let child_depth = depth.saturating_add(1);
     match value {
         serde_json::Value::String(s) => {
             if let Some(coerced) = coerce_scalar(s) {
@@ -520,12 +582,12 @@ fn coerce_yaml_scalars(value: &mut serde_json::Value) {
         }
         serde_json::Value::Array(arr) => {
             for v in arr {
-                coerce_yaml_scalars(v);
+                coerce_yaml_scalars_at(v, child_depth);
             }
         }
         serde_json::Value::Object(map) => {
             for v in map.values_mut() {
-                coerce_yaml_scalars(v);
+                coerce_yaml_scalars_at(v, child_depth);
             }
         }
         _ => {}
@@ -1040,6 +1102,76 @@ sections:
             .get(&step_id)
             .expect("step_one should be in span map");
         assert!(span.line > 0, "span line should be set");
+    }
+
+    /// Ceremony YAML with a flow sequence nested `depth` levels under `with:`.
+    fn ceremony_with_nested_payload(depth: usize) -> String {
+        let nested = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
+        format!(
+            "version: \"0.2\"\n\
+             name: \"Test\"\n\
+             roles: {{}}\n\
+             sections:\n\
+            \x20 main:\n\
+            \x20   steps:\n\
+            \x20     s1:\n\
+            \x20       action: confirm\n\
+            \x20       with:\n\
+            \x20         payload: {nested}\n"
+        )
+    }
+
+    #[test]
+    fn deeply_nested_flow_yaml_is_rejected_with_diagnostic() {
+        // 150 levels: beyond our cap (64) but within the marked-yaml scanner's
+        // own flow recursion limit (~255), so parsing succeeds and our depth
+        // guard must reject the tree instead of letting the recursive walks
+        // overflow the stack.
+        let yaml = ceremony_with_nested_payload(150);
+        let (ceremony, _, diags) = lower_ceremony(None, &yaml);
+        assert!(ceremony.is_none(), "deeply nested ceremony must not parse");
+        let error = diags
+            .iter()
+            .find(|d| d.severity == Severity::Error)
+            .expect("should have an error diagnostic");
+        assert!(
+            error.message.contains("nesting exceeds"),
+            "diagnostic should mention the depth limit: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn deeply_nested_block_yaml_is_rejected_with_diagnostic() {
+        // Block-style mappings nested 150 levels; the scanner's flow recursion
+        // limit does not apply to block style, so the depth guard is the only
+        // thing standing between this input and the recursive walks.
+        let mut yaml = String::from(
+            "version: \"0.2\"\nname: \"Test\"\nroles: {}\nsections:\n  main:\n    steps:\n      s1:\n        action: confirm\n        with:\n",
+        );
+        for i in 0..150 {
+            yaml.push_str(&" ".repeat(10 + i));
+            yaml.push_str("k:\n");
+        }
+        yaml.push_str(&" ".repeat(160));
+        yaml.push_str("leaf: 0\n");
+
+        let (ceremony, _, diags) = lower_ceremony(None, &yaml);
+        assert!(ceremony.is_none(), "deeply nested ceremony must not parse");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.severity == Severity::Error && d.message.contains("nesting exceeds")),
+            "should have a depth-limit error diagnostic"
+        );
+    }
+
+    #[test]
+    fn moderate_nesting_is_accepted() {
+        let yaml = ceremony_with_nested_payload(10);
+        let (ceremony, _, diags) = lower_ceremony(None, &yaml);
+        assert!(ceremony.is_some(), "10 levels of nesting must parse");
+        assert!(diags.iter().all(|d| d.severity != Severity::Error));
     }
 
     #[test]

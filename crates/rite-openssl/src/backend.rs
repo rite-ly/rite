@@ -1,8 +1,10 @@
 //! OpenSSL backend implementation.
 //!
 //! Uses the `openssl` crate for all cryptographic operations. Keys are stored
-//! as OpenSSL `PKey<Private>` objects; OpenSSL manages key memory and frees
-//! it on drop (no `secrecy` crate needed).
+//! as OpenSSL `PKey<Private>` objects; OpenSSL manages that key memory and
+//! frees it on drop. Key material serialized *out* of OpenSSL (DER buffers
+//! for wrapping/unwrapping) lives in ordinary Rust allocations and is wiped
+//! explicitly with `Zeroizing` before release.
 
 use openssl::asn1::Asn1Time;
 use openssl::bn::BigNum;
@@ -20,12 +22,14 @@ use rite_sdk::{
     KeyTransportBackend, RandomBackend, SignAlgorithm, SignBackend, WrapAlgorithm, WrappedKey,
 };
 use std::collections::HashMap;
+use zeroize::Zeroizing;
 
 /// OpenSSL-based cryptographic backend.
 ///
-/// Stores keys in memory as OpenSSL `PKey<Private>` objects. The private key
-/// material is managed by OpenSSL and freed on drop; no explicit zeroization
-/// is needed since OpenSSL handles this internally.
+/// Stores keys in memory as OpenSSL `PKey<Private>` objects. That private key
+/// material is managed by OpenSSL and wiped on drop. Plaintext private-key
+/// DER produced during wrap/unwrap, however, lives in Rust-side buffers and
+/// is zeroized explicitly when dropped.
 pub struct OpenSslBackend {
     name: String,
     keys: HashMap<KeyId, StoredKey>,
@@ -516,10 +520,14 @@ impl KeyTransportBackend for OpenSslBackend {
         // A self-signed cert built from the KEK lets OpenSSL select the right
         // encapsulation: RSA KEK → RSAES-PKCS1-v1.5, EC P-256 KEK → RFC 5753 ECDH.
         let cert = self_signed_cert(&kek.pkey)?;
-        let key_material = target
-            .pkey
-            .private_key_to_der()
-            .map_err(|e| ossl_err("Export key material for wrapping", &e))?;
+        // Zeroizing: this buffer holds the plaintext private key in DER form;
+        // wipe it on drop rather than leaving it in freed heap memory.
+        let key_material = Zeroizing::new(
+            target
+                .pkey
+                .private_key_to_der()
+                .map_err(|e| ossl_err("Export key material for wrapping", &e))?,
+        );
 
         let data = cms_encrypt(cert, &key_material, algorithm)?;
         Ok(WrappedKey {
@@ -536,7 +544,9 @@ impl KeyTransportBackend for OpenSslBackend {
         label: &str,
     ) -> Result<KeyMetadata, BackendError> {
         // Scope the immutable borrow of `kek` so it ends before `store_key` needs `&mut self`.
-        let key_material = {
+        // Zeroizing: the decrypted output is the plaintext private key in DER
+        // form; wipe it on drop rather than leaving it in freed heap memory.
+        let key_material = Zeroizing::new({
             let kek = self.get_key(unwrapping_key_id)?;
             // Re-create the ephemeral cert from the same key; CMS decrypt needs it
             // to find the matching recipient.
@@ -545,7 +555,7 @@ impl KeyTransportBackend for OpenSslBackend {
                 .map_err(|e| ossl_err("Parse CMS DER", &e))?;
             cms.decrypt(&kek.pkey, &cert)
                 .map_err(|e| ossl_err("CMS decrypt", &e))?
-        };
+        });
 
         let pkey = parse_private_key_der(&key_material)?;
 
@@ -565,10 +575,14 @@ impl KeyTransportBackend for OpenSslBackend {
         // validates the cert's self-signature — the throwaway RSA signing key inside
         // cert_for_public_key works regardless of whether the recipient key is RSA or EC.
         let cert = cert_for_public_key(recipient_pub_key)?;
-        let key_material = target
-            .pkey
-            .private_key_to_der()
-            .map_err(|e| ossl_err("Export key material for wrapping", &e))?;
+        // Zeroizing: this buffer holds the plaintext private key in DER form;
+        // wipe it on drop rather than leaving it in freed heap memory.
+        let key_material = Zeroizing::new(
+            target
+                .pkey
+                .private_key_to_der()
+                .map_err(|e| ossl_err("Export key material for wrapping", &e))?,
+        );
 
         let data = cms_encrypt(cert, &key_material, algorithm)?;
         Ok(WrappedKey {

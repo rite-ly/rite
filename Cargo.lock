@@ -1734,6 +1734,7 @@ dependencies = [
  "rite-model",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
 ]
 

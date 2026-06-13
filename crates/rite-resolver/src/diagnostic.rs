@@ -291,14 +291,18 @@ impl SpanMap {
             ResolveError::Io { .. }
             | ResolveError::UnsupportedVersion { .. }
             | ResolveError::DutyUnknownRole { .. }
-            | ResolveError::CustomDutyMissingDescription { .. } => None,
+            | ResolveError::CustomDutyMissingDescription { .. }
+            | ResolveError::UnsafeArtifactId { .. }
+            | ResolveError::UnsafeMaterialPath { .. } => None,
             ResolveError::DuplicateRole(id) => self.roles.get(id).copied(),
             ResolveError::DuplicateStep(id) => self.steps.get(id).copied(),
             ResolveError::DuplicateSection(id) => self.sections.get(id).copied(),
             ResolveError::DuplicateAct(id) => self.acts.get(id).copied(),
             ResolveError::DuplicateParam(id) => self.params.get(id).copied(),
             ResolveError::DuplicateMaterial(id) => self.materials.get(id).copied(),
-            ResolveError::DuplicateOutput(id) => self.outputs.get(id).copied(),
+            ResolveError::DuplicateOutput(id) | ResolveError::UnsafeOutputId { id, .. } => {
+                self.outputs.get(id).copied()
+            }
             ResolveError::UnknownSection { step, .. }
             | ResolveError::UnknownArtifact { step, .. }
             | ResolveError::MissingRequiredBackend { step, .. }

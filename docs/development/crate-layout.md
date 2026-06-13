@@ -52,5 +52,29 @@ flowchart TD
   (`ExecEvent`, `UiCommand`) and on `rite-model` for the persisted types
   they render. They never reach into `rite-stdlib` or backend crates.
 
+## Path safety
+
+A ceremony file is untrusted input: it may be downloaded and run by an
+operator who never read it. Any string that originates in a ceremony and
+reaches the filesystem — an artifact id that becomes an output filename, a
+material's `path:` value — must be confined so it cannot escape the directory
+it belongs in (`../../…` traversal, an absolute path, or a symlink planted at
+the destination).
+
+Do not hand-roll these checks. Route every ceremony-derived path through
+[`rite_model::safe_path`](../../crates/rite-model/src/safe_path.rs):
+
+- `validate_component` / `safe_join` for a value that must be a single
+  filename (artifact and output ids). The resolver validates these at load
+  time; `OutputConfig::artifact_path` re-checks at the filesystem boundary so
+  a new code path cannot reintroduce a traversal.
+- `confine` for a value that may legitimately be a relative subpath but must
+  stay within a known root (material `path:` under the ceremony directory).
+
+These helpers are purely lexical. When *creating* a file at a confined path,
+also open it with `create_new` (see `executor::write_new_file`) so a
+pre-planted symlink cannot redirect the write and an existing file is never
+clobbered.
+
 For the contract between the runtime and a frontend, see
 [`runtime-and-frontend.md`](./runtime-and-frontend.md).

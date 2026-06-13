@@ -265,6 +265,13 @@ impl ResolveContext {
     fn register_outputs(&mut self, outputs: &HashMap<String, schema::OutputDeclaration>) {
         for (name, output) in outputs {
             let id = OutputId::new(name);
+            if let Err(e) = rite_model::validate_component(name) {
+                self.add_error(ResolveError::UnsafeOutputId {
+                    id: id.clone(),
+                    reason: e.to_string(),
+                });
+                continue;
+            }
             let resolved = Output {
                 id: id.clone(),
                 kind: output.artifact_type,
@@ -491,11 +498,18 @@ impl ResolveContext {
 
                 let (reads, reads_resolved) = self.resolve_inputs(step.reads.as_ref(), &id);
 
-                let creates = step.creates.as_ref().map(|p| {
+                let creates = step.creates.as_ref().and_then(|p| {
                     let artifact_id = ArtifactId::new(extract_name(p));
+                    if let Err(e) = rite_model::validate_component(artifact_id.as_str()) {
+                        self.add_error(ResolveError::UnsafeArtifactId {
+                            id: artifact_id.clone(),
+                            reason: e.to_string(),
+                        });
+                        return None;
+                    }
                     self.produced_artifacts
                         .insert(artifact_id.clone(), id.clone());
-                    artifact_id
+                    Some(artifact_id)
                 });
 
                 let with_json = step
@@ -891,6 +905,53 @@ mod tests {
         let ceremony = minimal_ceremony();
         let result = resolve_ceremony(ceremony, None);
         assert!(result.is_ok(), "Errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn rejects_creates_with_path_traversal() {
+        let mut ceremony = minimal_ceremony();
+        let mut step = make_step_body();
+        step.creates = Some("../../../etc/cron.d/x".to_string());
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("gen".to_string(), step);
+
+        let result = resolve_ceremony(ceremony, None);
+        assert!(result.is_err());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::UnsafeArtifactId { .. })),
+            "expected UnsafeArtifactId, got {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn rejects_output_id_with_separator() {
+        let mut ceremony = minimal_ceremony();
+        ceremony.output.insert(
+            "../escape".to_string(),
+            schema::OutputDeclaration {
+                artifact_type: rite_model::OutputType::PublicKey,
+                description: None,
+            },
+        );
+
+        let result = resolve_ceremony(ceremony, None);
+        assert!(result.is_err());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::UnsafeOutputId { .. })),
+            "expected UnsafeOutputId, got {:?}",
+            result.errors
+        );
     }
 
     #[test]

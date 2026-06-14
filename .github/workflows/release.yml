@@ -146,6 +146,10 @@ jobs:
           RITE_BUILD_COMMIT: ${{ needs.validate.outputs.commit_sha }}
           RITE_BUILD_COMMIT_DATE: ${{ needs.validate.outputs.commit_date }}
         with:
+          # Provenance is attested via Sigstore (actions/attest, below); disable the
+          # BuildKit in-registry provenance that bake-action injects by default so the
+          # image carries a single, signed attestation rather than two mechanisms.
+          provenance: false
           files: |
             ./docker-bake.hcl
             cwd://${{ steps.meta.outputs.bake-file }}

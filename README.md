@@ -114,11 +114,10 @@ docker run --rm -it --init \
   ghcr.io/rite-ly/rite check ceremony.rite.yaml
 ```
 
-Build from source:
+Install from crates.io:
 
 ```sh
-cargo build --release -p rite
-cargo build --release -p rite-ls   # language server for editor support
+cargo install rite
 ```
 
 ### Editor support
@@ -146,12 +145,12 @@ Both bundle the `rite-ls` language server. For other LSP-aware editors, run `rit
   - [ ] Plugin system for out-of-process backends
 - [x] **Evidence and verification**
   - [x] Transcript generation and `rite verify`
-  - [ ] Verifiable randomness (#75)
+  - [x] Verifiable randomness
   - [ ] Hardware-attested execution (TPM PCR measurements and signed quotes)
   - [ ] RFC3161 trusted timestamps
 - [x] **Output formats**
   - [x] Script and report generation (`rite script`, `rite report`)
-  - [ ] Themeable output via template engine (#21)
+  - [x] Themeable output via template engine (not yet user-configurable)
 - [x] **IDE support** — VS Code, IntelliJ
   - [x] Language server: diagnostics, completion, hover, go-to-definition, references, symbols
   - [x] Semantic-token highlighting (initial: expressions and reference categories)

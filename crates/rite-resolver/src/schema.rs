@@ -126,6 +126,88 @@ pub(crate) struct StepBody {
     /// Skip the default pause after step completion.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) silent: bool,
+    /// How a transient failure of this step is treated. Absent means the
+    /// default (prompt the operator to retry or abort).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) retry: Option<RetrySpec>,
+}
+
+/// DSL `retry:` value: either the bare keyword `never` or a `{ attempts: N }`
+/// map. Both YAML shapes parse under one key.
+///
+/// Deserialized with a hand-written visitor rather than `#[serde(untagged)]`
+/// because `serde_yaml` cannot deserialize untagged struct variants (it fails
+/// the map form). The visitor dispatches on the YAML node kind: a scalar is the
+/// keyword form, a mapping is the `attempts` form.
+#[derive(Debug, Clone)]
+pub(crate) enum RetrySpec {
+    /// `retry: never`
+    Never,
+    /// `retry: { attempts: N }`
+    Attempts {
+        /// Hard cap on total attempts.
+        attempts: u32,
+    },
+}
+
+impl Serialize for RetrySpec {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            RetrySpec::Never => serializer.serialize_str("never"),
+            RetrySpec::Attempts { attempts } => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("attempts", attempts)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RetrySpec {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct RetryVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for RetryVisitor {
+            type Value = RetrySpec;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("\"never\" or a mapping with an `attempts` field")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<RetrySpec, E> {
+                match value {
+                    "never" => Ok(RetrySpec::Never),
+                    other => Err(E::custom(format!(
+                        "unknown retry keyword '{other}', expected 'never' or {{ attempts: N }}"
+                    ))),
+                }
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<RetrySpec, A::Error> {
+                let mut attempts: Option<u32> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "attempts" => {
+                            if attempts.is_some() {
+                                return Err(serde::de::Error::duplicate_field("attempts"));
+                            }
+                            attempts = Some(map.next_value()?);
+                        }
+                        other => return Err(serde::de::Error::unknown_field(other, &["attempts"])),
+                    }
+                }
+                let attempts =
+                    attempts.ok_or_else(|| serde::de::Error::missing_field("attempts"))?;
+                Ok(RetrySpec::Attempts { attempts })
+            }
+        }
+
+        deserializer.deserialize_any(RetryVisitor)
+    }
 }
 
 /// A parameter that can be provided when instantiating a ceremony.

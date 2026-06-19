@@ -4,7 +4,7 @@
 //! HTML renderer and, in the future, by template engines.
 
 use chrono::{DateTime, Duration, Utc};
-use rite_model::{StepFact, StepOutcome};
+use rite_model::{ErrorClass, StepFact, StepOutcome};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -52,10 +52,28 @@ pub enum ReportStatus {
 /// Failure summary, extracted from `CeremonyFailed`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ReportFailure {
+    /// Audit classification of the failure.
+    pub class: ErrorClass,
     /// Stable error kind label.
     pub kind: String,
     /// Human-readable message.
     pub message: String,
+}
+
+/// A failed attempt of a step, recorded from `StepAttemptFailed`. Present when
+/// a step was retried (or failed terminally after exhausting its retries).
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportAttempt {
+    /// 1-based attempt number within the step.
+    pub attempt: u32,
+    /// Audit classification of the attempt's error.
+    pub class: ErrorClass,
+    /// Stable error kind label.
+    pub kind: String,
+    /// Human-readable message.
+    pub message: String,
+    /// UTC timestamp when the attempt failed.
+    pub failed_at: DateTime<Utc>,
 }
 
 /// Execution record for a single ceremony step.
@@ -76,6 +94,8 @@ pub struct ReportStep {
     pub outcome_status: String,
     /// Message attached to the outcome, if any.
     pub outcome_message: Option<String>,
+    /// Failed attempts before this step succeeded or was given up on.
+    pub attempts: Vec<ReportAttempt>,
 }
 
 /// An artifact produced during the ceremony.
@@ -170,7 +190,27 @@ impl Builder {
                     completed_at: None,
                     outcome_status: "in_progress".to_string(),
                     outcome_message: None,
+                    attempts: Vec::new(),
                 });
+            }
+            StepFact::StepAttemptFailed {
+                step,
+                attempt,
+                error,
+            } => {
+                if let Some(report_step) = self
+                    .step_index
+                    .get(step.as_str())
+                    .and_then(|i| self.steps.get_mut(*i))
+                {
+                    report_step.attempts.push(ReportAttempt {
+                        attempt: *attempt,
+                        class: error.class,
+                        kind: error.kind.clone(),
+                        message: error.message.clone(),
+                        failed_at: at,
+                    });
+                }
             }
             StepFact::StepCompleted { id, outcome } => {
                 if let Some(step) = self
@@ -215,6 +255,7 @@ impl Builder {
                 self.status = ReportStatus::Failed;
                 self.completed_at = Some(at);
                 self.failure = Some(ReportFailure {
+                    class: error.class,
                     kind: error.kind.clone(),
                     message: error.message.clone(),
                 });

@@ -553,6 +553,8 @@ pub struct ReportView {
     pub transcript_fingerprint: String,
     /// Failure summary, when the ceremony failed.
     pub failure: Option<FailureView>,
+    /// Failed step attempts (retries), across all steps.
+    pub attempts: Vec<AttemptView>,
     /// Recorded deviations.
     pub deviations: Vec<DeviationView>,
     /// Produced artifacts.
@@ -566,10 +568,29 @@ pub struct ReportView {
 /// A failure summary in a report.
 #[derive(Debug, Clone, Serialize)]
 pub struct FailureView {
+    /// Audit classification (environmental / procedural / integrity / abort).
+    pub class: String,
     /// Stable error kind label.
     pub kind: String,
     /// Human-readable message.
     pub message: String,
+}
+
+/// A failed step attempt (a retry) in a report.
+#[derive(Debug, Clone, Serialize)]
+pub struct AttemptView {
+    /// Step that failed.
+    pub step_id: String,
+    /// 1-based attempt number within the step.
+    pub attempt: u32,
+    /// Audit classification of the attempt's error.
+    pub class: String,
+    /// Stable error kind label.
+    pub kind: String,
+    /// Human-readable message.
+    pub message: String,
+    /// Formatted timestamp.
+    pub recorded: String,
 }
 
 /// A recorded deviation in a report.
@@ -638,6 +659,20 @@ impl ReportView {
                 sha256: a.sha256.clone(),
             })
             .collect();
+        let attempts = data
+            .steps
+            .iter()
+            .flat_map(|s| {
+                s.attempts.iter().map(move |a| AttemptView {
+                    step_id: s.step_id.clone(),
+                    attempt: a.attempt,
+                    class: error_class_label(a.class).to_string(),
+                    kind: a.kind.clone(),
+                    message: a.message.clone(),
+                    recorded: format_datetime(&a.failed_at),
+                })
+            })
+            .collect();
         let steps = data
             .steps
             .iter()
@@ -668,9 +703,11 @@ impl ReportView {
                 .map(|secs| crate::report::data::format_duration(Duration::seconds(secs))),
             transcript_fingerprint: data.transcript_fingerprint.clone(),
             failure: data.failure.as_ref().map(|f| FailureView {
+                class: error_class_label(f.class).to_string(),
                 kind: f.kind.clone(),
                 message: f.message.clone(),
             }),
+            attempts,
             deviations,
             artifacts,
             steps,
@@ -685,6 +722,19 @@ fn status_slug(status: crate::report::ReportStatus) -> &'static str {
         ReportStatus::Completed => "completed",
         ReportStatus::Failed => "failed",
         ReportStatus::InProgress => "in_progress",
+    }
+}
+
+fn error_class_label(class: rite_model::ErrorClass) -> &'static str {
+    use rite_model::ErrorClass;
+    match class {
+        ErrorClass::Environmental => "environmental",
+        ErrorClass::Procedural => "procedural",
+        ErrorClass::Integrity => "integrity",
+        ErrorClass::Abort => "abort",
+        // `ErrorClass` is `#[non_exhaustive]`; a new variant renders generically
+        // until it is given a label here.
+        _ => "unknown",
     }
 }
 

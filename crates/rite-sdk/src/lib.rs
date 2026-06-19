@@ -29,8 +29,8 @@ mod types;
 
 pub use backend::{
     AttestationBackend, Backend, BackendError, CertStoreBackend, KeyStoreBackend,
-    KeyTransportBackend, PivBackend, Pkcs11AdminBackend, Pkcs11Backend, RandomBackend, SignBackend,
-    TpmBackend, YubikeyBackend,
+    KeyTransportBackend, PivBackend, Pkcs11AdminBackend, Pkcs11Backend, RandomBackend,
+    Retriability, SignBackend, TpmBackend, YubikeyBackend,
 };
 
 pub use types::{

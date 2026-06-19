@@ -37,8 +37,10 @@ use std::sync::Arc;
 use crossbeam_channel::{Receiver, Sender};
 use rand::TryRng;
 use rand::rngs::SysRng;
-use rite_model::{ActId, ActionType, ArtifactId, Ceremony, MaterialId, OutputId, ParamId, RoleId};
-use rite_sdk::{Backend, BackendError};
+use rite_model::{
+    ActId, ActionType, ArtifactId, Ceremony, MaterialId, OutputId, ParamId, RoleId, Step,
+};
+use rite_sdk::{Backend, BackendError, Retriability};
 use thiserror::Error;
 
 use crate::actions::ActionMetadata;
@@ -50,13 +52,13 @@ use crate::executor::{
 };
 use crate::expressions;
 use crate::output_config::OutputConfig;
-use crate::protocol::{ExecEvent, Icon, MaterialOverview, UiCommand, UiSignal};
+use crate::protocol::{ExecEvent, Icon, MaterialOverview, Response, UiCommand, UiSignal};
 use crate::reporter::{Reporter, ReporterError};
 use crate::state::{ExecutionState, HandlerContext, StepResult};
 use crate::step_info::StepInfo;
 use crate::system_info::StartupSnapshot;
 use crate::transcript_sink::{TranscriptFingerprint, TranscriptSink};
-use rite_model::{ErrorRecord, Prompt, StepFact, StepOutcome};
+use rite_model::{ErrorClass, ErrorRecord, Prompt, RetryPolicy, StepFact, StepOutcome};
 
 /// Gather the machine entropy `m` that seeds the ceremony entropy source.
 ///
@@ -110,6 +112,28 @@ impl From<ReporterError> for ActionError {
             | ReporterError::DuplicateDraw { .. }
             | ReporterError::Unseeded
             | ReporterError::DrawTooLong { .. } => ActionError::Failed(value.to_string()),
+        }
+    }
+}
+
+impl ActionError {
+    /// Classify whether the step that failed with this error may be retried.
+    ///
+    /// Delegates to [`BackendError::retriability`] for [`ActionError::Backend`];
+    /// every other handler-level error is [`Retriability::Fatal`]. `Failed`
+    /// covers procedural failures (a `check_value` mismatch must never be
+    /// re-run, that would be tampering) as well as integrity and configuration
+    /// errors, all of which are non-retriable. `Aborted` is an operator decision
+    /// handled on the abort path and is never auto-retried, so it is classified
+    /// fatal here as a safe default.
+    #[must_use]
+    pub fn retriability(&self) -> Retriability {
+        match self {
+            ActionError::Backend(e) => e.retriability(),
+            ActionError::Aborted
+            | ActionError::Disconnected
+            | ActionError::Transcript(_)
+            | ActionError::Failed(_) => Retriability::Fatal,
         }
     }
 }
@@ -510,32 +534,15 @@ impl Executor {
             let mut params = expressions::evaluate_expr_value(&step.with, &ctx)?;
             handler.apply_defaults(&mut params, &step_info);
 
-            let backend = if let Some(name) = &step_info.backend {
-                Some(self.backend_registry.get_mut(name).map_err(|e| {
-                    ExecutionError::StepFailed {
-                        step: step_info.id.clone(),
-                        reason: e.to_string(),
-                    }
-                })?)
-            } else {
-                None
-            };
-
-            let result = handler
-                .execute(&step_info, &ctx, &params, reporter, backend)
-                .map_err(|err| match err {
-                    ActionError::Aborted => ExecutionError::StepAborted(step.id.clone()),
-                    ActionError::Disconnected => ExecutionError::StepFailed {
-                        step: step.id.clone(),
-                        reason: "frontend channel disconnected".to_string(),
-                    },
-                    ActionError::Transcript(e) => ExecutionError::TranscriptError(e.to_string()),
-                    ActionError::Backend(e) => ExecutionError::BackendError(e),
-                    ActionError::Failed(reason) => ExecutionError::StepFailed {
-                        step: step.id.clone(),
-                        reason,
-                    },
-                })?;
+            let result = execute_step_with_retry(
+                handler.as_ref(),
+                step,
+                &step_info,
+                &ctx,
+                &params,
+                reporter,
+                &mut self.backend_registry,
+            )?;
 
             // StepCompleted
             reporter.fact(StepFact::StepCompleted {
@@ -596,23 +603,133 @@ struct StepCounts {
     completed: usize,
 }
 
+/// Run one step, retrying transient failures under operator control.
+///
+/// Each attempt re-acquires the backend handle (it is moved into the handler)
+/// and snapshots the fact count beforehand: a transient error is retriable only
+/// if the attempt produced no evidence yet (the conservative re-executability
+/// gate). A retriable error within the step's [`RetryPolicy`] prompts the
+/// operator; any other failure terminates the run.
+fn execute_step_with_retry(
+    handler: &dyn Action,
+    step: &Step,
+    step_info: &StepInfo,
+    ctx: &HandlerContext,
+    params: &serde_json::Value,
+    reporter: &mut Reporter<'_>,
+    backend_registry: &mut BackendRegistry,
+) -> Result<StepResult, ExecutionError> {
+    let mut attempt: u32 = 1;
+    loop {
+        let facts_before = reporter.facts_emitted();
+
+        let backend = if let Some(name) = &step_info.backend {
+            Some(
+                backend_registry
+                    .get_mut(name)
+                    .map_err(|e| ExecutionError::StepFailed {
+                        step: step_info.id.clone(),
+                        reason: e.to_string(),
+                    })?,
+            )
+        } else {
+            None
+        };
+
+        let action_err = match handler.execute(step_info, ctx, params, reporter, backend) {
+            Ok(result) => return Ok(result),
+            // Abort is an operator decision, not an attempt failure: no
+            // StepAttemptFailed is recorded, the run terminates here.
+            Err(ActionError::Aborted) => return Err(ExecutionError::StepAborted(step.id.clone())),
+            Err(action_err) => action_err,
+        };
+
+        // Conservative re-executability gate: a step that already emitted a fact
+        // this attempt is not safely re-runnable.
+        let no_new_facts = reporter.facts_emitted() == facts_before;
+        let retriable = action_err.retriability().is_retriable() && no_new_facts;
+        let exec_err = action_error_to_execution(action_err, &step.id);
+        reporter.fact(StepFact::StepAttemptFailed {
+            step: step.id.clone(),
+            attempt,
+            error: exec_err.to_error_record(),
+        })?;
+
+        let policy_allows = match step.retry {
+            RetryPolicy::Never => false,
+            RetryPolicy::MaxAttempts(max) => attempt < max,
+            RetryPolicy::Prompt => true,
+        };
+
+        if retriable && policy_allows {
+            // Default `false`: the headless/dry-run driver answers the default,
+            // so non-interactive runs abort rather than loop on a deterministic
+            // error.
+            let answer = reporter.prompt(&Prompt::Confirm {
+                question: format!("Step {} failed: {exec_err}. Retry?", step.step_label),
+                default: Some(false),
+            })?;
+            if matches!(answer, Response::Bool(true)) {
+                attempt = attempt.saturating_add(1);
+                continue;
+            }
+        }
+        return Err(exec_err);
+    }
+}
+
+/// Map a handler-level [`ActionError`] to the execution-level error the run
+/// terminates with. `Aborted` is included for completeness; the executor
+/// special-cases it before calling this so it never records a step-attempt
+/// failure for an abort.
+fn action_error_to_execution(err: ActionError, step_id: &rite_model::StepId) -> ExecutionError {
+    match err {
+        ActionError::Aborted => ExecutionError::StepAborted(step_id.clone()),
+        ActionError::Disconnected => ExecutionError::StepFailed {
+            step: step_id.clone(),
+            reason: "frontend channel disconnected".to_string(),
+        },
+        ActionError::Transcript(e) => ExecutionError::TranscriptError(e.to_string()),
+        ActionError::Backend(e) => ExecutionError::BackendError(e),
+        ActionError::Failed(reason) => ExecutionError::StepFailed {
+            step: step_id.clone(),
+            reason,
+        },
+    }
+}
+
 impl ExecutionError {
     /// Convert this execution error into a transcript-friendly record.
+    ///
+    /// The audit `class` derives from the error's nature; for a backend error
+    /// it reuses the same retriability judgment the runtime uses for retry
+    /// (a retriable backend error is environmental).
     fn to_error_record(&self) -> ErrorRecord {
-        let kind = match self {
-            ExecutionError::ValidationFailed(_) => "validation_failed",
-            ExecutionError::StepAborted(_) => "aborted",
-            ExecutionError::Io(_) => "io",
-            ExecutionError::StepFailed { .. } => "step_failed",
-            ExecutionError::UnknownAction(_) => "unknown_action",
-            ExecutionError::InvalidParams(_) => "invalid_params",
-            ExecutionError::EntropyError(_) => "entropy_error",
-            ExecutionError::MaterialLoadFailed { .. } => "material_load_failed",
-            ExecutionError::OutputWriteFailed { .. } => "output_write_failed",
-            ExecutionError::TranscriptError(_) => "transcript_error",
-            ExecutionError::BackendError(_) => "backend_error",
+        let (class, kind) = match self {
+            ExecutionError::ValidationFailed(_) => (ErrorClass::Integrity, "validation_failed"),
+            ExecutionError::StepAborted(_) => (ErrorClass::Abort, "aborted"),
+            ExecutionError::Io(_) => (ErrorClass::Integrity, "io"),
+            ExecutionError::StepFailed { .. } => (ErrorClass::Procedural, "step_failed"),
+            ExecutionError::UnknownAction(_) => (ErrorClass::Integrity, "unknown_action"),
+            ExecutionError::InvalidParams(_) => (ErrorClass::Integrity, "invalid_params"),
+            ExecutionError::EntropyError(_) => (ErrorClass::Integrity, "entropy_error"),
+            ExecutionError::MaterialLoadFailed { .. } => {
+                (ErrorClass::Integrity, "material_load_failed")
+            }
+            ExecutionError::OutputWriteFailed { .. } => {
+                (ErrorClass::Integrity, "output_write_failed")
+            }
+            ExecutionError::TranscriptError(_) => (ErrorClass::Integrity, "transcript_error"),
+            ExecutionError::BackendError(e) => {
+                let class = if e.retriability().is_retriable() {
+                    ErrorClass::Environmental
+                } else {
+                    ErrorClass::Integrity
+                };
+                (class, "backend_error")
+            }
         };
-        ErrorRecord::new(kind, self.to_string())
+        ErrorRecord::new(class, kind, self.to_string())
     }
 }
 
@@ -656,6 +773,31 @@ mod tests {
     use super::*;
     use crate::actions::ActionCategory;
     use crate::transcript_sink::InMemorySink;
+
+    #[test]
+    fn action_error_retriability_delegates_to_backend() {
+        assert_eq!(
+            ActionError::Backend(BackendError::TokenNotPresent).retriability(),
+            Retriability::Transient,
+        );
+        assert_eq!(
+            ActionError::Backend(BackendError::PinBlocked).retriability(),
+            Retriability::Fatal,
+        );
+    }
+
+    #[test]
+    fn handler_level_errors_are_fatal() {
+        assert_eq!(ActionError::Aborted.retriability(), Retriability::Fatal);
+        assert_eq!(
+            ActionError::Disconnected.retriability(),
+            Retriability::Fatal
+        );
+        assert_eq!(
+            ActionError::Failed("check_value mismatch".into()).retriability(),
+            Retriability::Fatal,
+        );
+    }
 
     struct PingAction;
 
@@ -1012,6 +1154,227 @@ sections:
         assert!(matches!(result, Err(ExecutionError::StepAborted(_))));
     }
 
+    // ---- Retry loop tests ----
+
+    /// Test action whose first `fails_remaining` executions fail with
+    /// `error()`, then it succeeds. Optionally emits a transcript fact before
+    /// failing, to exercise the re-executability gate.
+    struct FlakyAction {
+        fails_remaining: std::sync::Mutex<u32>,
+        error: fn() -> ActionError,
+        emit_fact_before_fail: bool,
+    }
+
+    impl FlakyAction {
+        fn new(fails: u32, error: fn() -> ActionError, emit_fact_before_fail: bool) -> Arc<Self> {
+            Arc::new(Self {
+                fails_remaining: std::sync::Mutex::new(fails),
+                error,
+                emit_fact_before_fail,
+            })
+        }
+    }
+
+    impl Action for FlakyAction {
+        fn metadata(&self) -> ActionMetadata {
+            ActionMetadata {
+                action_type: ActionType::Attest,
+                description: "flaky test action",
+                category: ActionCategory::Verification,
+            }
+        }
+
+        fn execute(
+            &self,
+            _step: &StepInfo,
+            _ctx: &HandlerContext,
+            _params: &serde_json::Value,
+            reporter: &mut Reporter<'_>,
+            _backend: Option<&mut dyn Backend>,
+        ) -> Result<StepResult, ActionError> {
+            let mut remaining = self.fails_remaining.lock().expect("lock");
+            if *remaining == 0 {
+                return Ok(StepResult::completed("done".to_string()));
+            }
+            *remaining = remaining.saturating_sub(1);
+            if self.emit_fact_before_fail {
+                reporter.fact(StepFact::DeviationRecorded {
+                    step: None,
+                    text: "side effect".to_string(),
+                })?;
+            }
+            Err((self.error)())
+        }
+    }
+
+    fn transient() -> ActionError {
+        ActionError::Backend(BackendError::TokenNotPresent)
+    }
+
+    fn ceremony_with_retry(retry_clause: &str) -> Ceremony {
+        let yaml = format!(
+            r#"
+version: "0.2"
+name: "Retry"
+roles:
+  participant:
+    person: "Alice"
+sections:
+  main:
+    role: ${{role.participant}}
+    steps:
+      work:
+        action: attest
+        silent: true
+        {retry_clause}
+        with:
+          statement: "x"
+"#
+        );
+        rite_resolver::resolve(&yaml, None)
+            .into_result()
+            .expect("resolve")
+    }
+
+    /// Run `ceremony` with `action`, answering every retry `Confirm` with
+    /// `confirm_answer`. Returns the run result, the emitted facts, and the
+    /// number of retry prompts seen.
+    fn drive(
+        ceremony: Ceremony,
+        action: Arc<dyn Action>,
+        confirm_answer: bool,
+    ) -> (
+        Result<ExecutionSummary, ExecutionError>,
+        Vec<StepFact>,
+        usize,
+    ) {
+        let mut registry = ActionRegistry::new();
+        registry.register(action);
+
+        let (cmd_tx, cmd_rx) = unbounded::<UiCommand>();
+        let (event_tx, event_rx) = unbounded::<ExecEvent>();
+        let sink: Box<dyn TranscriptSink> = Box::new(InMemorySink::new());
+
+        let executor = Executor::new(
+            ceremony,
+            registry,
+            BackendRegistry::new(),
+            dry_run_output_config(),
+            true, // dry_run: skips pacing/start prompts, leaving only the retry Confirm
+            StartupSnapshot::placeholder(),
+        );
+        let join = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
+
+        let mut facts = Vec::new();
+        let mut confirms = 0usize;
+        while let Ok(ev) = event_rx.recv() {
+            match ev {
+                ExecEvent::Fact { fact, .. } => facts.push(fact),
+                ExecEvent::AwaitPrompt {
+                    prompt_id,
+                    prompt: Prompt::Confirm { .. },
+                    ..
+                } => {
+                    confirms = confirms.saturating_add(1);
+                    cmd_tx
+                        .send(UiCommand::PromptResponse {
+                            prompt_id,
+                            response: Response::Bool(confirm_answer),
+                        })
+                        .expect("send confirm");
+                }
+                _ => {}
+            }
+        }
+        let result = join.join().expect("executor join");
+        (result, facts, confirms)
+    }
+
+    fn attempt_numbers(facts: &[StepFact]) -> Vec<u32> {
+        facts
+            .iter()
+            .filter_map(|f| match f {
+                StepFact::StepAttemptFailed { attempt, .. } => Some(*attempt),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn transient_failure_is_retried_then_succeeds() {
+        let action = FlakyAction::new(1, transient, false);
+        let (result, facts, confirms) = drive(ceremony_with_retry(""), action, true);
+
+        let summary = result.expect("run ok");
+        assert_eq!(summary.steps_completed, 1);
+        assert_eq!(confirms, 1, "one retry prompt");
+        assert_eq!(attempt_numbers(&facts), vec![1]);
+        // The recorded attempt is classified environmental (a transient backend error).
+        let StepFact::StepAttemptFailed { error, .. } = facts
+            .iter()
+            .find(|f| matches!(f, StepFact::StepAttemptFailed { .. }))
+            .expect("attempt fact")
+        else {
+            unreachable!()
+        };
+        assert_eq!(error.class, ErrorClass::Environmental);
+        assert!(
+            facts
+                .iter()
+                .any(|f| matches!(f, StepFact::StepCompleted { .. }))
+        );
+    }
+
+    #[test]
+    fn retry_is_blocked_once_a_fact_was_emitted() {
+        // Transient error, but the attempt already wrote a fact: the
+        // conservative gate refuses to retry, so no prompt fires.
+        let action = FlakyAction::new(u32::MAX, transient, true);
+        let (result, facts, confirms) = drive(ceremony_with_retry(""), action, true);
+
+        assert!(result.is_err(), "run fails");
+        assert_eq!(confirms, 0, "gate blocks the retry prompt");
+        assert_eq!(attempt_numbers(&facts), vec![1]);
+        assert!(
+            facts
+                .iter()
+                .any(|f| matches!(f, StepFact::CeremonyFailed { .. }))
+        );
+    }
+
+    #[test]
+    fn retry_never_fails_immediately() {
+        let action = FlakyAction::new(u32::MAX, transient, false);
+        let (result, facts, confirms) = drive(ceremony_with_retry("retry: never"), action, true);
+
+        assert!(result.is_err());
+        assert_eq!(confirms, 0, "retry: never never prompts");
+        assert_eq!(attempt_numbers(&facts), vec![1]);
+    }
+
+    #[test]
+    fn retry_attempts_caps_total_tries() {
+        let action = FlakyAction::new(u32::MAX, transient, false);
+        let (result, facts, confirms) =
+            drive(ceremony_with_retry("retry: {attempts: 2}"), action, true);
+
+        assert!(result.is_err());
+        // Attempt 1 fails and prompts; attempt 2 fails and the cap forbids a
+        // further prompt.
+        assert_eq!(confirms, 1);
+        assert_eq!(attempt_numbers(&facts), vec![1, 2]);
+    }
+
+    #[test]
+    fn declining_the_retry_prompt_terminates() {
+        let action = FlakyAction::new(u32::MAX, transient, false);
+        let (result, facts, confirms) = drive(ceremony_with_retry(""), action, false);
+
+        assert!(result.is_err());
+        assert_eq!(confirms, 1, "prompted once, operator declined");
+        assert_eq!(attempt_numbers(&facts), vec![1]);
+    }
+
     fn fact_kind(fact: &StepFact) -> &'static str {
         match fact {
             StepFact::CeremonyStarted { .. } => "ceremony_started",
@@ -1022,6 +1385,7 @@ sections:
             StepFact::AttestationRecorded { .. } => "attestation_recorded",
             StepFact::ArtifactWritten { .. } => "artifact_written",
             StepFact::DeviationRecorded { .. } => "deviation_recorded",
+            StepFact::StepAttemptFailed { .. } => "step_attempt_failed",
             StepFact::StepCompleted { .. } => "step_completed",
             StepFact::CeremonyCompleted { .. } => "ceremony_completed",
             StepFact::CeremonyFailed { .. } => "ceremony_failed",

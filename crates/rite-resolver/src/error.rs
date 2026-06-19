@@ -194,6 +194,16 @@ pub enum ResolveError {
         field: &'static str,
     },
 
+    /// Step `retry: { attempts: N }` has a zero attempt budget, which can never
+    /// run the step. Use `retry: never` to forbid retries instead.
+    #[error(
+        "Step '{step}': retry attempts must be at least 1 (use 'retry: never' to forbid retries)"
+    )]
+    InvalidRetryAttempts {
+        /// The step ID.
+        step: StepId,
+    },
+
     /// Duty references an unknown role.
     #[error("Duty '{duty_id}' references unknown role '{role}'")]
     DutyUnknownRole {

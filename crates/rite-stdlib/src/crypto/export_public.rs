@@ -62,9 +62,7 @@ impl Action for ExportPublicAction {
                     "Backend '{backend_name}' does not support key export"
                 ))
             })?;
-            keystore
-                .export_public_key(key_id)
-                .map_err(|e| ActionError::Failed(format!("Failed to export public key: {e}")))?
+            keystore.export_public_key(key_id)?
         };
 
         let fingerprint = compute_fingerprint(&public_key_bytes);

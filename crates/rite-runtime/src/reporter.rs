@@ -26,7 +26,7 @@
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
-use rite_model::{ErrorRecord, Prompt, ResponseRecord, StepFact, StepId};
+use rite_model::{ErrorClass, ErrorRecord, Prompt, ResponseRecord, StepFact, StepId};
 use secrecy::ExposeSecret;
 use thiserror::Error;
 
@@ -86,16 +86,18 @@ impl ReporterError {
     /// Convert this error into an [`ErrorRecord`] suitable for the transcript.
     #[must_use]
     pub fn to_error_record(&self) -> ErrorRecord {
-        let kind = match self {
-            ReporterError::Aborted => "aborted",
-            ReporterError::Disconnected => "frontend_disconnected",
-            ReporterError::Transcript(_) => "transcript_io",
-            ReporterError::NoCurrentStep(_) => "internal_no_current_step",
-            ReporterError::DuplicateDraw { .. } => "duplicate_entropy_draw",
-            ReporterError::Unseeded => "internal_entropy_unseeded",
-            ReporterError::DrawTooLong { .. } => "entropy_draw_too_long",
+        let (class, kind) = match self {
+            ReporterError::Aborted => (ErrorClass::Abort, "aborted"),
+            ReporterError::Disconnected => (ErrorClass::Integrity, "frontend_disconnected"),
+            ReporterError::Transcript(_) => (ErrorClass::Integrity, "transcript_io"),
+            ReporterError::NoCurrentStep(_) => (ErrorClass::Integrity, "internal_no_current_step"),
+            ReporterError::DuplicateDraw { .. } => {
+                (ErrorClass::Integrity, "duplicate_entropy_draw")
+            }
+            ReporterError::Unseeded => (ErrorClass::Integrity, "internal_entropy_unseeded"),
+            ReporterError::DrawTooLong { .. } => (ErrorClass::Integrity, "entropy_draw_too_long"),
         };
-        ErrorRecord::new(kind, self.to_string())
+        ErrorRecord::new(class, kind, self.to_string())
     }
 }
 
@@ -114,6 +116,11 @@ pub struct Reporter<'a> {
     /// The run clock. Read once per fact in [`Reporter::fact`] to stamp the
     /// event time onto both the transcript line and the live UI event.
     clock: Arc<dyn Clock>,
+    /// Count of facts emitted over the whole run. The executor snapshots this
+    /// before a step attempt and compares afterwards: if the attempt emitted
+    /// any fact (a backend operation, an artifact, an entropy draw) it is no
+    /// longer safely re-executable, so a transient error is not retried.
+    facts_emitted: u64,
 }
 
 impl<'a> Reporter<'a> {
@@ -132,7 +139,15 @@ impl<'a> Reporter<'a> {
             current_step: None,
             random: None,
             clock,
+            facts_emitted: 0,
         }
+    }
+
+    /// Number of facts emitted so far in this run. Used by the executor to
+    /// detect whether a step attempt produced any evidence before failing.
+    #[must_use]
+    pub fn facts_emitted(&self) -> u64 {
+        self.facts_emitted
     }
 
     /// Install the machine seed for the entropy source.
@@ -175,6 +190,7 @@ impl<'a> Reporter<'a> {
         // the durable record and the live UI event so they never disagree.
         let at = self.clock.now();
         self.transcript.record(at, &fact)?;
+        self.facts_emitted = self.facts_emitted.saturating_add(1);
         self.event_tx
             .send(ExecEvent::Fact { at, fact })
             .map_err(|_| ReporterError::Disconnected)?;

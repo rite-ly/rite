@@ -64,9 +64,7 @@ impl Action for GenerateKeypairAction {
             policy: KeyPolicy::default(),
             location_hint: typed.slot.clone(),
         };
-        let metadata = keystore
-            .generate_key(spec)
-            .map_err(|e| ActionError::Failed(format!("Backend key generation failed: {e}")))?;
+        let metadata = keystore.generate_key(spec)?;
 
         let public_key_fingerprint = metadata.public_key.as_deref().map(compute_fingerprint);
 

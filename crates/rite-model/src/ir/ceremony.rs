@@ -156,6 +156,30 @@ pub struct Step {
     ///
     /// When `true`, the executor auto-advances without waiting for user acknowledgment.
     pub silent: bool,
+
+    /// How the runtime treats a *transient* failure of this step.
+    ///
+    /// The DSL constrains the retry-by-default; see [`RetryPolicy`]. Absent in
+    /// the DSL means [`RetryPolicy::Prompt`].
+    pub retry: RetryPolicy,
+}
+
+/// How the runtime treats a transient (retriable) failure of a step.
+///
+/// Rite ceremonies always have a human at the console, so the default is to
+/// pause and let the operator decide, rather than burn a fixed retry budget.
+/// The DSL field constrains that default rather than enabling it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RetryPolicy {
+    /// Pause on a transient error and prompt the operator (Retry / Abort),
+    /// unlimited times. The default when the DSL omits `retry:`.
+    #[default]
+    Prompt,
+    /// Never retry: a transient error fails the step immediately. For steps
+    /// where repeated attempts are themselves security-relevant.
+    Never,
+    /// Retry up to this many total attempts, then fail. A hard cap.
+    MaxAttempts(u32),
 }
 
 /// A resolved parameter with its value.

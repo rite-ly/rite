@@ -54,6 +54,10 @@ pub fn fact_summary(fact: &StepFact) -> Option<(Icon, String)> {
             }
             _ => Some((Icon::Checkmark, "Step completed".to_string())),
         },
+        StepFact::StepAttemptFailed { attempt, error, .. } => Some((
+            Icon::Cross,
+            format!("Attempt {attempt} failed: {}", error.message),
+        )),
         StepFact::CeremonyFailed { error, .. } => {
             Some((Icon::Cross, format!("Ceremony failed: {}", error.message)))
         }

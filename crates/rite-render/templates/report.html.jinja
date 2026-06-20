@@ -32,9 +32,21 @@
 {%- endif %}
     <p><strong>Transcript fingerprint:</strong> <code>{{ report.transcript_fingerprint }}</code></p>
 {%- if report.failure %}
-    <p><strong>Failure:</strong> {{ report.failure.message }} ({{ report.failure.kind }})</p>
+    <p><strong>Failure:</strong> {{ report.failure.message }} ({{ report.failure.kind }}, {{ report.failure.class }})</p>
 {%- endif %}
   </div>
+
+{%- if report.attempts %}
+  <h2>Failed Attempts</h2>
+  <table class="attempts">
+    <thead><tr><th>Recorded</th><th>Step</th><th>Attempt</th><th>Class</th><th>Error</th></tr></thead>
+    <tbody>
+{%- for a in report.attempts %}
+      <tr><td>{{ a.recorded }}</td><td><code>{{ a.step_id }}</code></td><td>{{ a.attempt }}</td><td>{{ a.class }}</td><td>{{ a.message }} ({{ a.kind }})</td></tr>
+{%- endfor %}
+    </tbody>
+  </table>
+{%- endif %}
 
 {%- if report.deviations %}
   <h2>Deviations</h2>

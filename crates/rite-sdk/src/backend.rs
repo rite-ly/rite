@@ -432,6 +432,32 @@ pub trait YubikeyBackend: PivBackend {
     fn block_puk(&mut self) -> Result<(), BackendError>;
 }
 
+/// Whether an error may be re-executed by retrying the step.
+///
+/// A `Transient` error means the world wasn't ready and the step's work did not
+/// happen, so re-running it is meaningful (token reinserted, cable reseated). A
+/// `Fatal` error means re-execution is either meaningless or unsafe: a procedural
+/// result, a broken definition, or a terminal device state.
+///
+/// The classification lives on the error type, not in the ceremony definition: a
+/// ceremony author must not be able to mark, say, a signature mismatch retriable.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retriability {
+    /// Environmental and recoverable; retrying the step may succeed.
+    Transient,
+    /// Not retriable; the run must stop or escalate.
+    Fatal,
+}
+
+impl Retriability {
+    /// Convenience predicate for callers that only need a yes/no answer.
+    #[must_use]
+    pub const fn is_retriable(self) -> bool {
+        matches!(self, Retriability::Transient)
+    }
+}
+
 /// Backend-specific errors.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -519,4 +545,111 @@ pub enum BackendError {
     /// Generic backend error.
     #[error("Backend error: {0}")]
     Other(String),
+}
+
+impl BackendError {
+    /// Classify whether a step that failed with this error may be retried.
+    ///
+    /// The match is exhaustive with no wildcard arm on purpose: adding a new
+    /// `BackendError` variant fails to compile until it is deliberately
+    /// classified here.
+    #[must_use]
+    pub fn retriability(&self) -> Retriability {
+        match self {
+            // Environmental: the world wasn't ready, the work didn't happen.
+            // The operator can fix the precondition (log in, enter a PIN,
+            // insert the right token, initialize the device) and retry.
+            BackendError::AuthRequired
+            | BackendError::PinRequired
+            | BackendError::PinFailed(_)
+            | BackendError::ManagementKeyRequired
+            | BackendError::UserPinNotInitialized
+            | BackendError::KeyNotFound(_)
+            | BackendError::ObjectNotFound(_)
+            | BackendError::SlotEmpty(_)
+            | BackendError::TokenNotPresent
+            | BackendError::HardwareFailure(_)
+            | BackendError::Configuration(_) => Retriability::Transient,
+
+            // Fatal: re-execution is meaningless or unsafe. A terminal device
+            // state (PIN budget exhausted, capacity full), a definition that
+            // asks for something the backend cannot do, or malformed/unknown
+            // input that retrying cannot resolve.
+            BackendError::PinBlocked
+            | BackendError::CapacityExceeded
+            | BackendError::OperationNotPermitted(_)
+            | BackendError::AttributeReadOnly(_)
+            | BackendError::UnsupportedAlgorithm(_)
+            | BackendError::UnsupportedOperation(_)
+            | BackendError::InvalidKeyFormat(_)
+            | BackendError::InvalidData(_)
+            | BackendError::NotFound(_)
+            | BackendError::Other(_) => Retriability::Fatal,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retriability_is_retriable_predicate() {
+        assert!(Retriability::Transient.is_retriable());
+        assert!(!Retriability::Fatal.is_retriable());
+    }
+
+    #[test]
+    fn environmental_errors_are_transient() {
+        let transient = [
+            BackendError::AuthRequired,
+            BackendError::PinRequired,
+            BackendError::PinFailed(2),
+            BackendError::ManagementKeyRequired,
+            BackendError::UserPinNotInitialized,
+            BackendError::KeyNotFound("k".into()),
+            BackendError::ObjectNotFound("o".into()),
+            BackendError::SlotEmpty("9a".into()),
+            BackendError::TokenNotPresent,
+            BackendError::HardwareFailure("cable".into()),
+            BackendError::Configuration("missing".into()),
+        ];
+        for err in transient {
+            assert_eq!(
+                err.retriability(),
+                Retriability::Transient,
+                "expected transient: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fatal_errors_are_not_retriable() {
+        let fatal = [
+            BackendError::PinBlocked,
+            BackendError::CapacityExceeded,
+            BackendError::OperationNotPermitted("usage".into()),
+            BackendError::AttributeReadOnly("attr".into()),
+            BackendError::UnsupportedAlgorithm("rsa1".into()),
+            BackendError::UnsupportedOperation("wrap".into()),
+            BackendError::InvalidKeyFormat("pem".into()),
+            BackendError::InvalidData("bytes".into()),
+            BackendError::NotFound("backend".into()),
+            BackendError::Other("boom".into()),
+        ];
+        for err in fatal {
+            assert_eq!(
+                err.retriability(),
+                Retriability::Fatal,
+                "expected fatal: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pin_failed_retriable_but_pin_blocked_terminal() {
+        // The hardware budget: a wrong PIN can be retried; an exhausted one cannot.
+        assert!(BackendError::PinFailed(1).retriability().is_retriable());
+        assert!(!BackendError::PinBlocked.retriability().is_retriable());
+    }
 }

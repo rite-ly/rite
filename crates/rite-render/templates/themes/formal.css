@@ -423,10 +423,12 @@ ul.duty-items li {
 .summary-box p {
   margin: 4px 0;
 }
-.deviations {
+.deviations,
+.attempts {
   border-left: 3px solid #9a1f1f;
 }
-.deviations thead th {
+.deviations thead th,
+.attempts thead th {
   border-bottom-color: #9a1f1f;
 }
 code, .hash {

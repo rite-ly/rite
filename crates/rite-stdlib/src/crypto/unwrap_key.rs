@@ -111,9 +111,7 @@ impl Action for UnwrapKeyAction {
             data: wrapped_data,
             recipient_hint: None,
         };
-        let key_metadata = unwrap_backend
-            .unwrap(&wrapped, unwrapping_key_keyid, &label)
-            .map_err(|e| ActionError::Failed(format!("Backend key unwrapping failed: {e}")))?;
+        let key_metadata = unwrap_backend.unwrap(&wrapped, unwrapping_key_keyid, &label)?;
 
         reporter.fact(StepFact::BackendOperation {
             step: step.id.clone(),

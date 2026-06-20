@@ -135,9 +135,7 @@ impl Action for GenerateCsrAction {
             ActionError::Failed(format!("Backend '{backend_name}' does not support signing"))
         })?;
 
-        let signature_bytes = sign_backend
-            .sign(&key_id, &info_der, sign_algorithm)
-            .map_err(|e| ActionError::Failed(format!("Signing failed: {e}")))?;
+        let signature_bytes = sign_backend.sign(&key_id, &info_der, sign_algorithm)?;
 
         let csr = CertReq {
             info,

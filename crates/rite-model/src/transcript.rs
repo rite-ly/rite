@@ -101,10 +101,38 @@ pub enum ResponseRecord {
     Acknowledged,
 }
 
+/// Audit classification of a bad outcome, recorded so an auditor can tell the
+/// nature of a failure apart without parsing the free-form `message`.
+///
+/// This is the *audit* taxonomy (what an auditor sees), distinct from the
+/// runtime's `Retriability` (whether a step may re-run). For a backend error
+/// the two align: a retriable error is `Environmental`. They are kept separate
+/// because some classes never map cleanly onto retriability (an `Abort` is a
+/// decision, not an error).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorClass {
+    /// The world wasn't ready; the step's work did not happen (token absent,
+    /// loose cable, PIN required).
+    Environmental,
+    /// The ceremony's own logic concluded badly (a verification mismatch, a
+    /// refused attestation). A result, not a recoverable condition.
+    Procedural,
+    /// The run itself is compromised or the definition is broken (transcript
+    /// write failed, channel lost, unknown action, invalid params).
+    Integrity,
+    /// The operator chose to stop. Not an error at all, but recorded on the
+    /// terminal fact so abort is distinguishable from failure.
+    Abort,
+}
+
 /// Structured error record for transcript serialization.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorRecord {
+    /// Audit classification of this error.
+    pub class: ErrorClass,
     /// Stable kind label (e.g. `aborted`, `step_failed`, `material_load_failed`).
     pub kind: String,
     /// Human-readable message.
@@ -113,8 +141,9 @@ pub struct ErrorRecord {
 
 impl ErrorRecord {
     /// Construct an error record.
-    pub fn new(kind: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(class: ErrorClass, kind: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
+            class,
             kind: kind.into(),
             message: message.into(),
         }
@@ -225,6 +254,18 @@ pub enum StepFact {
         step: Option<StepId>,
         /// Verbatim deviation text.
         text: String,
+    },
+    /// A step attempt failed. Recorded per attempt, so a retried step shows
+    /// `StepAttemptFailed{attempt: 1}` followed by the operator's retry
+    /// decision and, on success, `StepCompleted`. The final attempt of a step
+    /// that the run gives up on is followed by the terminal `CeremonyFailed`.
+    StepAttemptFailed {
+        /// Step whose attempt failed.
+        step: StepId,
+        /// 1-based attempt number within this step.
+        attempt: u32,
+        /// Structured error record for the failed attempt.
+        error: ErrorRecord,
     },
     /// Step finished executing.
     StepCompleted {
@@ -629,11 +670,44 @@ mod schema_snapshot_tests {
     fn ceremony_failed() {
         assert_json(
             &StepFact::CeremonyFailed {
-                error: ErrorRecord::new("aborted", "ceremony aborted by operator"),
+                error: ErrorRecord::new(
+                    ErrorClass::Abort,
+                    "aborted",
+                    "ceremony aborted by operator",
+                ),
             },
             &json!({
                 "type": "ceremony_failed",
-                "error": { "kind": "aborted", "message": "ceremony aborted by operator" },
+                "error": {
+                    "class": "abort",
+                    "kind": "aborted",
+                    "message": "ceremony aborted by operator",
+                },
+            }),
+        );
+    }
+
+    #[test]
+    fn step_attempt_failed() {
+        assert_json(
+            &StepFact::StepAttemptFailed {
+                step: StepId::new("import_key"),
+                attempt: 1,
+                error: ErrorRecord::new(
+                    ErrorClass::Environmental,
+                    "backend_error",
+                    "Token not present",
+                ),
+            },
+            &json!({
+                "type": "step_attempt_failed",
+                "step": "import_key",
+                "attempt": 1,
+                "error": {
+                    "class": "environmental",
+                    "kind": "backend_error",
+                    "message": "Token not present",
+                },
             }),
         );
     }

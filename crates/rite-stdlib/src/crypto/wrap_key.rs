@@ -77,9 +77,7 @@ impl Action for WrapKeyAction {
             }
             let (transport, backend_fp) = require_transport_backend(backend, key_backend)?;
             reporter.log(Icon::Spinner, "Wrapping key using backend...")?;
-            let wk = transport
-                .wrap(key_id, wrap_key_id, wrap_alg)
-                .map_err(|e| ActionError::Failed(format!("Backend key wrapping failed: {e}")))?;
+            let wk = transport.wrap(key_id, wrap_key_id, wrap_alg)?;
             (wk, backend_fp)
         } else {
             let pub_key_bytes = resolve_artifact_bytes(
@@ -98,9 +96,7 @@ impl Action for WrapKeyAction {
                 Icon::Spinner,
                 "Wrapping key to external recipient public key...",
             )?;
-            let wk = transport
-                .wrap_to_public(key_id, &pub_key_bytes, wrap_alg)
-                .map_err(|e| ActionError::Failed(format!("Key wrapping failed: {e}")))?;
+            let wk = transport.wrap_to_public(key_id, &pub_key_bytes, wrap_alg)?;
             (wk, backend_fp)
         };
 

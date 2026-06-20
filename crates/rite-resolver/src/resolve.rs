@@ -12,8 +12,8 @@ use rite_model::expression::RefType;
 use rite_model::expression::{Expression, Reference, parse_expr_value, parse_expression};
 use rite_model::{
     Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind,
-    MaterialSource, Metadata, Output, OutputId, ParamId, Parameter, PostCeremonyDuty, Role, RoleId,
-    Section, SectionId, Step, StepId, StepInputs, SymbolTable,
+    MaterialSource, Metadata, Output, OutputId, ParamId, Parameter, PostCeremonyDuty, RetryPolicy,
+    Role, RoleId, Section, SectionId, Step, StepId, StepInputs, SymbolTable,
 };
 use rite_model::{DutyType, ParameterType};
 use std::collections::{HashMap, HashSet};
@@ -523,6 +523,8 @@ impl ResolveContext {
                     .as_ref()
                     .map(|desc| parse_expr_value(&serde_json::Value::String(desc.clone())));
 
+                let retry = self.resolve_retry(&id, step);
+
                 let resolved = Step {
                     id: id.clone(),
                     step_label,
@@ -537,6 +539,7 @@ impl ResolveContext {
                     creates,
                     description,
                     silent: step.silent,
+                    retry,
                 };
 
                 self.validate_step_backend(&id, step, ceremony);
@@ -572,6 +575,23 @@ impl ResolveContext {
                 step: id.clone(),
                 action: step.action,
             });
+        }
+    }
+
+    /// Lower the DSL `retry:` value to a [`RetryPolicy`]. A zero attempt
+    /// budget is rejected with a diagnostic and treated as `Never`.
+    fn resolve_retry(&mut self, id: &StepId, step: &schema::StepBody) -> RetryPolicy {
+        match &step.retry {
+            None => RetryPolicy::Prompt,
+            Some(schema::RetrySpec::Never) => RetryPolicy::Never,
+            Some(schema::RetrySpec::Attempts { attempts }) => {
+                if *attempts == 0 {
+                    self.add_error(ResolveError::InvalidRetryAttempts { step: id.clone() });
+                    RetryPolicy::Never
+                } else {
+                    RetryPolicy::MaxAttempts(*attempts)
+                }
+            }
         }
     }
 
@@ -897,7 +917,122 @@ mod tests {
             reads: None,
             description: None,
             silent: false,
+            retry: None,
         }
+    }
+
+    fn resolve_step_with_retry(retry: Option<schema::RetrySpec>) -> ResolveResult<Ceremony> {
+        let mut ceremony = minimal_ceremony();
+        let mut step = make_step_body();
+        step.action = ActionType::Attest;
+        step.with = Some(serde_json::json!({ "statement": "x" }));
+        step.retry = retry;
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("work".to_string(), step);
+        resolve_ceremony(ceremony, None)
+    }
+
+    fn resolved_retry(retry: Option<schema::RetrySpec>) -> RetryPolicy {
+        let resolved = resolve_step_with_retry(retry)
+            .into_result()
+            .expect("ceremony resolves");
+        resolved
+            .execution_plan
+            .iter()
+            .find(|s| s.id.as_str() == "work")
+            .expect("work step")
+            .retry
+    }
+
+    #[test]
+    fn retry_absent_defaults_to_prompt() {
+        assert_eq!(resolved_retry(None), RetryPolicy::Prompt);
+    }
+
+    #[test]
+    fn retry_never_lowers_to_never() {
+        assert_eq!(
+            resolved_retry(Some(schema::RetrySpec::Never)),
+            RetryPolicy::Never
+        );
+    }
+
+    #[test]
+    fn retry_attempts_lowers_to_max_attempts() {
+        let spec = schema::RetrySpec::Attempts { attempts: 3 };
+        assert_eq!(resolved_retry(Some(spec)), RetryPolicy::MaxAttempts(3));
+    }
+
+    #[test]
+    fn retry_attempts_zero_is_rejected() {
+        let result = resolve_step_with_retry(Some(schema::RetrySpec::Attempts { attempts: 0 }));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::InvalidRetryAttempts { step } if step.as_str() == "work")),
+            "expected InvalidRetryAttempts: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn retry_never_parses_from_yaml() {
+        // The untagged `RetrySpec` accepts the bare keyword form.
+        let yaml = r#"
+version: "0.2"
+name: "T"
+roles:
+  p:
+    person: "A"
+sections:
+  main:
+    role: ${role.p}
+    steps:
+      work:
+        action: attest
+        retry: never
+        with:
+          statement: "x"
+"#;
+        let resolved = crate::resolve(yaml, None).into_result().expect("resolves");
+        let step = resolved
+            .execution_plan
+            .iter()
+            .find(|s| s.id.as_str() == "work")
+            .expect("work step");
+        assert_eq!(step.retry, RetryPolicy::Never);
+    }
+
+    #[test]
+    fn retry_attempts_parses_from_yaml_flow_map() {
+        let yaml = r#"
+version: "0.2"
+name: "T"
+roles:
+  p:
+    person: "A"
+sections:
+  main:
+    role: ${role.p}
+    steps:
+      work:
+        action: attest
+        retry: {attempts: 4}
+        with:
+          statement: "x"
+"#;
+        let resolved = crate::resolve(yaml, None).into_result().expect("resolves");
+        let step = resolved
+            .execution_plan
+            .iter()
+            .find(|s| s.id.as_str() == "work")
+            .expect("work step");
+        assert_eq!(step.retry, RetryPolicy::MaxAttempts(4));
     }
 
     #[test]

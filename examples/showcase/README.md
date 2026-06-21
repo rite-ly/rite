@@ -26,6 +26,15 @@ digital materials, and long structured step instructions. It generates a
 backup-wrapping key, escrows it under the bundled test key, and hands sealed media
 to a custodian. Use it to see how a dense, formal script renders across pages.
 
+### `retry_guards.rite.yaml` — Signing Key Ceremony with Retry Guards
+
+A compact signing-key ceremony that demonstrates the `retry:` field. The device
+steps carry a per-step retry policy: `generate_keypair` caps retries with
+`retry: { attempts: 3 }`, certificate issuance forbids them with `retry: never`,
+and the CSR step omits the field to show the prompt-on-transient-failure default.
+It runs end to end on OpenSSL but reads as a template you could retarget to a
+hardware backend. See `docs/error-handling.md` for the retry model.
+
 ### `dice.rite.yaml` — Dice Entropy Ceremony
 
 Demonstrates verifiable ceremony randomness: a participant folds a physical dice

@@ -7,6 +7,26 @@ CLI behavior conventions are documented in `docs/development/cli-conventions.md`
 Runtime and frontend architecture is documented in `docs/development/runtime-and-frontend.md`,
 crate layout in `docs/development/crate-layout.md`.
 
+## AI-assisted contributions
+
+Contributions assisted by AI tools, including LLMs and coding agents, are not forbidden and are
+not held to a different bar than any other contribution. The same rule applies either way: it
+must follow every guideline in this document and in `docs/development/`, and a human must
+carefully read, understand, and stand behind the change before opening an issue or PR.
+
+Mentioning that AI tooling helped in the PR or issue description is welcome, as an additional
+datapoint for any contribution, not as a compliance step.
+
+## Development setup
+
+Requires Rust 1.88+ and `libssl-dev` (OpenSSL headers).
+
+```sh
+cargo build -p rite --features openssl-vendored
+cargo run -p rite -- check examples/showcase/demo.rite.yaml
+cargo run -p rite -- run examples/showcase/demo.rite.yaml
+```
+
 ## Local checks
 
 Run these before pushing.

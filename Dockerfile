@@ -65,7 +65,7 @@ FROM scratch AS binaries-arm64
 COPY --from=builder-arm64 /out/rite    /rite
 COPY --from=builder-arm64 /out/rite-ls /rite-ls
 
-FROM debian:trixie-slim@sha256:f3da28155e2e26086464eba22cd235b22200b7143e8f3e1811bf359e3114bf96 AS runtime-base
+FROM debian:trixie-slim@sha256:28de0877c2189802884ccd20f15ee41c203573bd87bb6b883f5f46362d24c5c2 AS runtime-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

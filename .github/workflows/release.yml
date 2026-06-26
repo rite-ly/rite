@@ -73,7 +73,10 @@ jobs:
           key: release-${{ matrix.rust_target }}
 
       - name: Build rite
-        run: cargo build --release -p rite --target ${{ matrix.rust_target }} --features openssl-vendored
+        # PC/SC is a system framework on macOS (PCSC.framework) and Windows
+        # (WinSCard), so the native release binaries carry the piv/yubikey
+        # backends. Only the static musl Linux tarballs stay software-only.
+        run: cargo build --release -p rite --target ${{ matrix.rust_target }} --features openssl-vendored,piv,yubikey
 
       - name: Build rite-ls
         run: cargo build --release -p rite-ls --target ${{ matrix.rust_target }}
@@ -103,6 +106,13 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # The glibc `image` target compiles the arm64 binary under emulation, so
+      # register QEMU binfmt explicitly rather than relying on the runner's
+      # preinstalled handlers. The musl `binaries-*` targets cross-compile and
+      # do not need it.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0

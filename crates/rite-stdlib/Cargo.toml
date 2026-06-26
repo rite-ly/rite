@@ -19,6 +19,11 @@ crypto       = []
 pki          = ["dep:x509-cert", "dep:der", "dep:sha1", "dep:rsa", "dep:p256"]
 openssl          = ["dep:rite-openssl"]
 openssl-vendored = ["openssl", "rite-openssl/vendored"]
+# Hardware smart-card backends. Opt-in: they pull in the `yubikey` crate, which
+# links the PC/SC system library and so is excluded from the default build and
+# the static musl artifacts. `yubikey` implies `piv` (it extends it).
+piv              = ["dep:rite-piv", "dep:secrecy"]
+yubikey          = ["dep:rite-yubikey", "piv"]
 full             = ["verification", "attestation", "crypto", "pki", "openssl"]
 
 [dependencies]
@@ -26,6 +31,8 @@ rite-sdk     = { workspace = true }
 rite-model   = { workspace = true }
 rite-runtime = { workspace = true }
 rite-openssl = { workspace = true, optional = true }
+rite-piv     = { workspace = true, optional = true }
+rite-yubikey = { workspace = true, optional = true }
 
 serde      = { workspace = true }
 serde_json = { workspace = true }
@@ -39,6 +46,7 @@ der       = { workspace = true, optional = true }
 sha1      = { workspace = true, optional = true }
 rsa       = { workspace = true, optional = true }
 p256      = { workspace = true, optional = true }
+secrecy   = { workspace = true, optional = true }
 
 [dev-dependencies]
 rite-openssl = { workspace = true }

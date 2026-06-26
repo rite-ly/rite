@@ -31,7 +31,7 @@ fn bare_step(id: &str) -> StepInfo {
 #[test]
 fn confirm_completes_on_yes() {
     let mut harness = ReporterHarness::new();
-    harness.respond(0, Response::Bool(true));
+    harness.enqueue_response(Response::Bool(true));
     let state = make_state();
     let step = bare_step("confirm");
 
@@ -47,7 +47,7 @@ fn confirm_completes_on_yes() {
 #[test]
 fn clock_check_completes_when_clock_confirmed() {
     let mut harness = ReporterHarness::new();
-    harness.respond(0, Response::Bool(true));
+    harness.enqueue_response(Response::Bool(true));
     let state = make_state();
     let step = bare_step("clock");
 
@@ -63,7 +63,7 @@ fn clock_check_completes_when_clock_confirmed() {
 #[test]
 fn attest_records_an_attestation_fact() {
     let mut harness = ReporterHarness::new();
-    harness.respond(0, Response::Text("attest".to_string()));
+    harness.enqueue_response(Response::Text("attest".to_string()));
     let state = make_state();
     let step = bare_step("officer_attest");
 
@@ -86,7 +86,7 @@ fn attest_records_an_attestation_fact() {
 #[test]
 fn gather_entropy_completes_with_a_contribution() {
     let mut harness = ReporterHarness::new();
-    harness.respond(0, Response::Text("3 1 4 1 5 9 2 6".to_string()));
+    harness.enqueue_response(Response::Text("3 1 4 1 5 9 2 6".to_string()));
     let state = make_state();
     let step = bare_step("entropy");
 
@@ -102,7 +102,7 @@ fn gather_entropy_completes_with_a_contribution() {
 #[test]
 fn oral_readback_completes_on_confirmation() {
     let mut harness = ReporterHarness::new();
-    harness.respond(0, Response::Bool(true));
+    harness.enqueue_response(Response::Bool(true));
     let state = make_state();
     let step = bare_step("readback");
 

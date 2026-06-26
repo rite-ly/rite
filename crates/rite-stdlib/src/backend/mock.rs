@@ -31,8 +31,8 @@ use rite_sdk::{
 use rite_openssl::OpenSslBackend;
 #[cfg(feature = "openssl")]
 use rite_sdk::{
-    KeyMetadata, KeySpec, KeyStoreBackend, KeyTransportBackend, RandomBackend, SignAlgorithm,
-    SignBackend, WrapAlgorithm, WrappedKey,
+    KeyMetadata, KeyPolicy, KeySpec, KeyStoreBackend, KeyTransportBackend, RandomBackend,
+    SignAlgorithm, SignBackend, WrapAlgorithm, WrappedKey,
 };
 
 /// Mock backend for testing and dry-run.
@@ -45,6 +45,14 @@ pub struct MockBackend {
     /// Embedded software backend that performs the real cryptographic work.
     #[cfg(feature = "openssl")]
     crypto: OpenSslBackend,
+    /// Synthetic stand-in keys, keyed by the reference a ceremony signs with.
+    ///
+    /// A real card has keys provisioned before the ceremony (slot `9c`, say).
+    /// A rehearsal never generated them, so the first signature against an
+    /// unknown reference lazily mints a stand-in key of the matching algorithm
+    /// here, letting the whole ceremony be walked without hardware.
+    #[cfg(feature = "openssl")]
+    stand_in_keys: std::collections::BTreeMap<String, KeyId>,
 }
 
 impl std::fmt::Debug for MockBackend {
@@ -70,9 +78,38 @@ impl MockBackend {
         Self {
             #[cfg(feature = "openssl")]
             crypto: OpenSslBackend::try_new(&name).expect("OpenSslBackend::try_new is infallible"),
+            #[cfg(feature = "openssl")]
+            stand_in_keys: std::collections::BTreeMap::new(),
             name,
             seed,
         }
+    }
+
+    /// Return the backing key for `key_id`, minting a synthetic stand-in of the
+    /// algorithm implied by `algorithm` the first time it is seen.
+    ///
+    /// Used by [`SignBackend::sign`] so a rehearsal can sign with a reference
+    /// (a PIV slot, say) whose key was provisioned outside the ceremony.
+    #[cfg(feature = "openssl")]
+    fn stand_in_key(
+        &mut self,
+        key_id: &KeyId,
+        algorithm: SignAlgorithm,
+    ) -> Result<KeyId, BackendError> {
+        if let Some(backing) = self.stand_in_keys.get(key_id.as_str()) {
+            return Ok(backing.clone());
+        }
+        // The signature -> key algorithm pairing is owned by the SDK so the
+        // stand-in cannot drift from what real backends select.
+        let meta = self.crypto.generate_key(KeySpec {
+            algorithm: algorithm.key_algorithm(),
+            label: format!("mock-stand-in:{key_id}"),
+            policy: KeyPolicy::default(),
+            location_hint: None,
+        })?;
+        self.stand_in_keys
+            .insert(key_id.as_str().to_string(), meta.key_id.clone());
+        Ok(meta.key_id)
     }
 }
 
@@ -145,7 +182,16 @@ impl SignBackend for MockBackend {
         message: &[u8],
         algorithm: SignAlgorithm,
     ) -> Result<Vec<u8>, BackendError> {
-        self.crypto.sign(key_id, message, algorithm)
+        match self.crypto.sign(key_id, message, algorithm) {
+            // The reference points at a key the rehearsal never generated, such
+            // as a pre-provisioned hardware slot. Stand in a synthetic key so
+            // the signing step can still be walked end to end.
+            Err(BackendError::KeyNotFound(_)) => {
+                let backing = self.stand_in_key(key_id, algorithm)?;
+                self.crypto.sign(&backing, message, algorithm)
+            }
+            result => result,
+        }
     }
 
     fn verify(
@@ -402,6 +448,26 @@ mod tests {
                 .unwrap(&wrapped, &kek.key_id, "unwrapped-key")
                 .unwrap();
             assert_eq!(unwrapped.label, "unwrapped-key");
+        }
+
+        #[test]
+        fn sign_lazily_provisions_a_stand_in_for_unknown_references() {
+            // A slot-addressed reference (piv:9c) was never generated in the
+            // rehearsal; signing must still succeed via a synthetic stand-in.
+            let mut backend = MockBackend::new("token".to_string(), "seed".to_string());
+            let slot = KeyId::new("piv:9c");
+
+            let sig = backend
+                .sign(&slot, b"release manifest", SignAlgorithm::EcdsaSha256)
+                .expect("stand-in signing succeeds");
+            assert!(!sig.is_empty());
+
+            // A second signature reuses the same stand-in key.
+            let again = backend
+                .sign(&slot, b"another payload", SignAlgorithm::EcdsaSha256)
+                .expect("stand-in is reused");
+            assert!(!again.is_empty());
+            assert_eq!(backend.stand_in_keys.len(), 1);
         }
 
         #[test]

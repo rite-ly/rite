@@ -1,0 +1,9 @@
+rite release manifest
+======================
+
+artifact: rite-cli
+version: 0.3.0
+sha256:  0000000000000000000000000000000000000000000000000000000000000000
+
+This file stands in for the real artifact a ceremony would sign. The bytes
+here are what `piv_sign` reads and signs with the on-device PIV key.

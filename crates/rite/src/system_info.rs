@@ -76,6 +76,10 @@ fn backends() -> Vec<rite_runtime::BackendVersion> {
             source: Some(openssl_source().to_string()),
         });
     }
+    // Only backends that expose a meaningful runtime library version are listed
+    // here (openssl reports the linked libcrypto version). The piv/yubikey
+    // backends reach hardware over PC/SC and have no such runtime version to
+    // report; their presence is already conveyed by the build feature list.
     backends
 }
 

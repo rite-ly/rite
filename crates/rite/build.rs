@@ -42,9 +42,11 @@ fn features() -> String {
         ("CARGO_FEATURE_CRYPTO", "crypto"),
         ("CARGO_FEATURE_OPENSSL", "openssl"),
         ("CARGO_FEATURE_OPENSSL_VENDORED", "openssl-vendored"),
+        ("CARGO_FEATURE_PIV", "piv"),
         ("CARGO_FEATURE_PKI", "pki"),
         ("CARGO_FEATURE_RENDER", "render"),
         ("CARGO_FEATURE_VERIFICATION", "verification"),
+        ("CARGO_FEATURE_YUBIKEY", "yubikey"),
     ];
     let mut enabled: Vec<&str> = known
         .iter()

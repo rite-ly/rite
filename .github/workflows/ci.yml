@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: Install system libraries
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libpcsclite-dev
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: rustfmt, clippy
@@ -28,6 +28,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # The default workspace build leaves the hardware-backend features off, so
+      # lint the piv/yubikey code paths and their tests explicitly.
+      - name: Clippy (hardware backends)
+        run: cargo clippy -p rite-stdlib --features piv,yubikey --all-targets -- -D warnings
 
   test:
     name: Test
@@ -35,11 +39,15 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: Install system libraries
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libpcsclite-dev
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Test
         run: cargo test --workspace
+      # piv/yubikey are off by default; run their action and backend tests,
+      # plus the example smoke tests so the PIV example ceremony is exercised.
+      - name: Test (hardware backends)
+        run: cargo test -p rite-stdlib -p rite --features piv,yubikey
 
   msrv:
     # Verifies the MSRV floor declared on the library crates that are

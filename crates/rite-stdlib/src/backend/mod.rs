@@ -13,7 +13,9 @@ use rite_sdk::{BackendConfig, BackendError};
 
 /// Create a backend by provider name and config.
 ///
-/// Supports: `"mock"`, `"openssl"` (requires the `openssl` feature).
+/// Supports: `"mock"`, `"openssl"` (requires the `openssl` feature), `"piv"`
+/// (requires the `piv` feature), and `"yubikey"` (requires the `yubikey`
+/// feature).
 pub fn create_backend(
     name: String,
     config: &BackendConfig,
@@ -38,6 +40,32 @@ pub fn create_backend(
             {
                 Err(BackendError::Configuration(
                     "Backend 'openssl' requires the 'openssl' feature".to_string(),
+                ))
+            }
+        }
+        "piv" => {
+            #[cfg(feature = "piv")]
+            {
+                rite_piv::PivCardBackend::try_new(name, config)
+                    .map(|b| Box::new(b) as Box<dyn rite_sdk::Backend>)
+            }
+            #[cfg(not(feature = "piv"))]
+            {
+                Err(BackendError::Configuration(
+                    "Backend 'piv' requires the 'piv' feature".to_string(),
+                ))
+            }
+        }
+        "yubikey" => {
+            #[cfg(feature = "yubikey")]
+            {
+                rite_yubikey::YubikeyDevice::try_new(name, config)
+                    .map(|b| Box::new(b) as Box<dyn rite_sdk::Backend>)
+            }
+            #[cfg(not(feature = "yubikey"))]
+            {
+                Err(BackendError::Configuration(
+                    "Backend 'yubikey' requires the 'yubikey' feature".to_string(),
                 ))
             }
         }

@@ -4,6 +4,7 @@
 //! - `action:` field value completions (ActionType variants)
 //! - `${...}` expression completions (roles, params, materials from SpanMap)
 //! - `section:`, `role:`, `act:`, `backend:` field value completions from declarations
+//! - `retry:` field value completions (the `never` keyword and the `{ attempts: N }` form)
 
 use crate::actions;
 use rite_model::Ceremony;
@@ -35,6 +36,9 @@ pub enum CompletionContext {
     ActRef { typed: String },
     /// Cursor is after `backend:`; offer declared backend names.
     BackendRef { typed: String },
+    /// Cursor is after `retry:`; offer the `never` keyword and the
+    /// `{ attempts: N }` form.
+    RetryRef { typed: String },
 }
 
 /// Detect what completion context applies on the given line.
@@ -81,6 +85,11 @@ pub fn detect_context(line: &str, col: usize, cursor_line: u32) -> Option<Comple
             typed: rest.to_string(),
         });
     }
+    if let Some(rest) = trimmed.strip_prefix("retry: ") {
+        return Some(CompletionContext::RetryRef {
+            typed: rest.to_string(),
+        });
+    }
 
     None
 }
@@ -115,7 +124,26 @@ pub fn completions_for(
                 declaration_completions(span_map.backends.keys().map(|s| s.as_str()), &typed)
             }
         }
+        CompletionContext::RetryRef { typed } => retry_completions(&typed),
     }
+}
+
+/// The two valid `retry:` values: the bare `never` keyword and the inline
+/// `{ attempts: N }` mapping. Static, since the set is fixed by the schema.
+fn retry_completions(typed: &str) -> Vec<CompletionItem> {
+    [
+        ("never", "Forbid retries on this step"),
+        ("{ attempts: 3 }", "Cap retries at N total attempts"),
+    ]
+    .into_iter()
+    .filter(|(value, _)| value.starts_with(typed))
+    .map(|(value, detail)| CompletionItem {
+        label: value.to_string(),
+        detail: Some(detail.to_string()),
+        kind: Some(CompletionItemKind::VALUE),
+        ..Default::default()
+    })
+    .collect()
 }
 
 fn declaration_completions<'a>(
@@ -290,6 +318,36 @@ mod tests {
     #[test]
     fn detect_none_for_plain_value() {
         assert!(detect_context("  name: foo", 11, 0).is_none());
+    }
+
+    #[test]
+    fn detect_retry_context() {
+        match detect_context("    retry: ", 11, 0) {
+            Some(CompletionContext::RetryRef { typed }) => assert_eq!(typed, ""),
+            _ => panic!("expected RetryRef context"),
+        }
+    }
+
+    #[test]
+    fn retry_offers_both_forms_when_empty() {
+        let items = completions_for(
+            CompletionContext::RetryRef {
+                typed: String::new(),
+            },
+            &SpanMap::default(),
+            None,
+        );
+        assert_eq!(sorted_labels(&items), ["never", "{ attempts: 3 }"]);
+    }
+
+    #[test]
+    fn retry_filters_by_typed_prefix() {
+        let items = completions_for(
+            CompletionContext::RetryRef { typed: "ne".into() },
+            &SpanMap::default(),
+            None,
+        );
+        assert_eq!(sorted_labels(&items), ["never"]);
     }
 
     #[test]

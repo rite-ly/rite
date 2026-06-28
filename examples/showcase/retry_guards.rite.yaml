@@ -1,0 +1,62 @@
+version: "0.2"
+name: "Signing Key Ceremony with Retry Guards"
+description: |
+  Generate an offline signing key and issue its self-signed certificate, with a
+  per-step retry policy on the device-touching steps.
+
+  Demonstrates the retry: field.
+
+backends:
+  openssl:
+    provider: openssl
+
+roles:
+  crypto_officer:
+    person: "Alice Rivera"
+
+sections:
+  keygen:
+    name: "Key Generation and Certification"
+    role: ${role.crypto_officer}
+    steps:
+      generate_signing_key:
+        action: generate_keypair
+        backend: openssl
+        retry:
+          attempts: 3
+        with:
+          algorithm: ECDSA-P256
+        creates: signing_keypair
+        description: |
+          Generate the signing keypair. On a hardware backend this can fail
+          transiently (device busy, loose cable, token not seated).
+          retry: { attempts: 3 } lets the operator fix the condition and retry up
+          to three attempts; exhausting the cap fails the ceremony.
+      generate_signing_csr:
+        action: generate_csr
+        backend: openssl
+        reads:
+          signing_key: ${artifact.signing_keypair}
+        with:
+          subject: "CN=Example Signing Key,O=Example Org"
+        creates: signing_csr
+        description: |
+          Build the certificate signing request. No retry: field, so the default
+          applies: a transient failure prompts the operator to retry or abort,
+          with no limit.
+      issue_signing_cert:
+        action: issue_certificate
+        backend: openssl
+        retry: never
+        reads:
+          signing_key: ${artifact.signing_keypair}
+          csr: ${artifact.signing_csr}
+        with:
+          profile: root_ca
+          validity_days: 1825
+        creates: signing_cert
+        description: |
+          Issue the self-signed certificate. Using the signing key is the
+          decisive act, and on a hardware backend each key use is
+          security-relevant. retry: never halts the ceremony for human judgment
+          instead of re-using the key automatically.

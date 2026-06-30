@@ -1,0 +1,726 @@
+---
+source: crates/rite-render/tests/render.rs
+expression: html
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Root CA Key Generation</title>
+  <style>
+/* Formal theme: a serif "ceremony protocol" look.
+   Shared by ceremony scripts and post-ceremony reports.
+   Restraint by design: gravitas comes from typography, spacing,
+   and a single ink accent, not from heavy rules or fills.
+   Tuned for density so more fits per printed page. */
+
+:root {
+  --accent: #1f3a5f;     /* ink: deep navy */
+  --ink: #1c1c1c;
+  --muted: #5b5b5b;
+  --hair: #d9d9d9;
+  --paper: #ffffff;
+  --tint: #f7f6f2;       /* warm off-white for soft blocks */
+}
+
+/* === Base typography === */
+body {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino,
+    "Book Antiqua", Georgia, "Times New Roman", serif;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 36px 44px;
+  line-height: 1.42;
+  color: var(--ink);
+  background: var(--paper);
+  font-size: 14.5px;
+}
+
+p { margin: 0.45em 0; }
+
+/* === Header / title block === */
+.doc-header {
+  text-align: center;
+  margin-bottom: 26px;
+}
+.doc-header .brand-logo {
+  display: block;
+  max-height: 52px;
+  margin: 0 auto 10px auto;
+}
+.doc-header .brand-name {
+  margin: 0 0 12px 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 0.72rem;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.doc-eyebrow {
+  margin: 0 0 5px 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 0.64rem;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+h1 {
+  font-weight: 400;
+  font-size: 1.85rem;
+  letter-spacing: 0.015em;
+  margin: 0 auto;
+  padding: 12px 0;
+  max-width: 94%;
+  border-top: 3px double var(--accent);
+  border-bottom: 3px double var(--accent);
+  color: var(--accent);
+}
+.metadata {
+  margin: 14px auto 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+.metadata p {
+  margin: 2px 0;
+}
+.metadata strong {
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  color: var(--ink);
+}
+
+/* === Section headings === */
+h2 {
+  font-weight: 400;
+  font-size: 1.18rem;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+  margin: 26px 0 10px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--accent);
+}
+h3 {
+  font-weight: 700;
+  font-size: 0.98rem;
+  margin: 18px 0 8px;
+  color: var(--ink);
+}
+
+/* === Overview === */
+.overview {
+  color: #333;
+  margin: 12px 0 16px;
+}
+.overview p {
+  margin: 0.35em 0;
+}
+.overview p:first-child {
+  margin-top: 0;
+}
+.overview p:last-child {
+  margin-bottom: 0;
+}
+.overview ul.prose-list {
+  font-style: normal;
+}
+
+/* === Roles === */
+ul.roles, ul.outputs {
+  list-style: none;
+  padding-left: 0;
+  margin: 10px 0;
+}
+ul.roles li, ul.outputs li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--hair);
+}
+ul.roles li:last-child, ul.outputs li:last-child {
+  border-bottom: none;
+}
+.role-abbrev {
+  display: inline-block;
+  min-width: 2.3em;
+  text-align: center;
+  font-family: Georgia, serif;
+  font-weight: 700;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  padding: 1px 5px;
+  margin-right: 9px;
+  vertical-align: 1px;
+}
+.role-person {
+  color: var(--muted);
+}
+.role-person::before {
+  content: "\2002(";
+}
+.role-person::after {
+  content: ")";
+}
+
+/* === Acts & sections === */
+.act-header {
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.95rem;
+  color: var(--accent);
+  margin: 32px 0 6px;
+  padding: 8px 0;
+  border-top: 1px solid var(--accent);
+  border-bottom: 1px solid var(--accent);
+  page-break-after: avoid;
+}
+.act-preamble {
+  font-style: italic;
+  color: var(--muted);
+  margin: 0 0 16px;
+}
+.section-header {
+  font-weight: 700;
+  font-size: 1.0rem;
+  color: var(--ink);
+  margin: 20px 0 5px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--hair);
+  page-break-after: avoid;
+}
+.section-description {
+  font-style: italic;
+  color: var(--muted);
+  margin: 3px 0 10px;
+}
+
+/* === Tables: hairline rules only, no grid === */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0 18px;
+  font-size: 0.88rem;
+}
+thead th {
+  text-align: left;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.66rem;
+  color: var(--muted);
+  padding: 5px 9px;
+  border-bottom: 2px solid var(--accent);
+}
+tbody td {
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--hair);
+  vertical-align: top;
+}
+.step-num {
+  width: 48px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.role {
+  width: 66px;
+}
+td.role abbr {
+  text-decoration: none;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  cursor: help;
+}
+
+/* === Rich step instructions (paragraphs + bullet lists) === */
+.step-action p {
+  margin: 0 0 0.45em;
+}
+.step-action p:last-child {
+  margin-bottom: 0;
+}
+ul.prose-list {
+  list-style: disc;
+  margin: 0.35em 0 0;
+  padding-left: 1.2em;
+}
+ul.prose-list li {
+  padding: 1px 0;
+  border: none;
+}
+
+/* === Checklist & preconditions === */
+ul.checklist {
+  list-style: none;
+  padding-left: 0;
+  margin: 6px 0;
+}
+ul.checklist li {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--hair);
+}
+ul.checklist li:last-child {
+  border-bottom: none;
+}
+ul.checklist li::before {
+  content: "\2610";
+  color: var(--accent);
+  margin-right: 0.55em;
+}
+
+/* === Inline item metadata (materials, outputs) === */
+.item-qty {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.item-id {
+  font-family: "SF Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  font-size: 0.78em;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+.item-kind {
+  color: var(--muted);
+  font-style: italic;
+}
+.item-desc {
+  display: block;
+  color: var(--muted);
+  font-size: 0.92em;
+  margin-top: 1px;
+}
+/* The checkbox marker sits on the first line; keep the description aligned with the name. */
+ul.checklist li .item-desc {
+  margin-left: 1.6em;
+}
+.preconditions {
+  background: var(--tint);
+  border-left: 3px solid var(--accent);
+  padding: 8px 14px;
+  margin: 10px 0;
+}
+.preconditions p {
+  margin: 0 0 3px 0;
+  color: var(--muted);
+}
+
+/* === Duties === */
+.duties-intro {
+  color: var(--muted);
+  font-style: italic;
+  margin-bottom: 12px;
+}
+.duty {
+  border: 1px solid var(--hair);
+  border-left: 3px solid var(--accent);
+  padding: 12px 15px;
+  margin: 12px 0;
+  page-break-inside: avoid;
+}
+.duty-heading {
+  margin: 0 0 6px 0;
+  font-size: 0.95rem;
+  color: var(--accent);
+}
+.duty-prose {
+  margin: 3px 0 8px 0;
+}
+ul.duty-items {
+  margin: 5px 0 0;
+  padding-left: 18px;
+}
+ul.duty-items li {
+  padding: 2px 0;
+}
+
+/* === Fingerprint record === */
+.fingerprint-record {
+  border: 1px solid var(--hair);
+  border-left: 3px solid var(--accent);
+  background: var(--tint);
+  padding: 13px 18px;
+  margin: 12px 0;
+  page-break-inside: avoid;
+}
+.fp-label {
+  margin: 0 0 10px 0;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.fingerprint-grid p {
+  margin: 5px 0;
+  font-family: "SF Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+.fingerprint-prefix {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  color: var(--accent);
+}
+.fingerprint-remainder {
+  font-size: 0.92rem;
+  color: var(--muted);
+  letter-spacing: 0.28em;
+}
+
+/* === Signatures === */
+.signatures {
+  margin-top: 14px;
+}
+.signature-block {
+  margin: 20px 0;
+  padding: 14px 16px 18px;
+  border: 1px solid var(--hair);
+  page-break-inside: avoid;
+}
+.sig-role {
+  margin: 0 0 6px 0;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+.sig-name {
+  margin: 0;
+}
+.sig-inline-rule {
+  display: inline-block;
+  width: 60%;
+  border-bottom: 1px solid var(--ink);
+}
+.sig-line {
+  display: flex;
+  gap: 36px;
+  margin-top: 30px;
+}
+.sig-cell {
+  display: flex;
+  flex-direction: column;
+}
+.sig-cell-sign {
+  flex: 1 1 auto;
+}
+.sig-cell-date {
+  flex: 0 0 150px;
+}
+.sig-rule {
+  border-bottom: 1px solid var(--ink);
+  height: 1.5em;
+}
+.sig-cap {
+  margin-top: 5px;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* === Report-specific === */
+.summary-box {
+  background: var(--tint);
+  padding: 13px 17px;
+  margin: 16px 0;
+  border-left: 3px solid var(--accent);
+}
+.summary-box p {
+  margin: 4px 0;
+}
+.deviations,
+.attempts {
+  border-left: 3px solid #9a1f1f;
+}
+.deviations thead th,
+.attempts thead th {
+  border-bottom-color: #9a1f1f;
+}
+code, .hash {
+  font-family: "SF Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+.hash {
+  word-break: break-all;
+}
+.status-completed {
+  color: #1f6b2e;
+  font-weight: 700;
+}
+.status-failed {
+  color: #9a1f1f;
+  font-weight: 700;
+}
+.status-in_progress {
+  color: var(--muted);
+  font-style: italic;
+}
+.report-footer {
+  margin-top: 36px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-align: center;
+  letter-spacing: 0.06em;
+}
+
+/* === Print === */
+@page {
+  margin: 14mm 14mm 16mm;
+  /* Page numbers via @page margin boxes. Rendered by WeasyPrint/Prince;
+     Chromium ignores these, where page numbers come from the browser's
+     own print headers/footers instead. */
+  @bottom-right {
+    content: counter(page) " / " counter(pages);
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 9pt;
+    color: #5b5b5b;
+  }
+}
+@media print {
+  body {
+    padding: 0;
+    font-size: 10.5pt;
+  }
+  .act-break {
+    break-before: page;
+  }
+  .act-break-after {
+    break-after: page;
+  }
+  h1, h2, .act-header, .step-num, td.role abbr, .role-abbrev,
+  .fingerprint-prefix, .duty-heading, .summary-box, .preconditions,
+  .fingerprint-record {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .signature-block, .duty, .fingerprint-record {
+    border-color: #000 !important;
+  }
+  /* Pagination control */
+  thead {
+    display: table-header-group; /* repeat column headers on each page */
+  }
+  tr,
+  .duty,
+  .signature-block,
+  .fingerprint-record,
+  .preconditions {
+    break-inside: avoid;
+  }
+  /* Keep a section heading, and the intro line beneath it, with the first
+     block that follows, so a title (Signatures, Post-Ceremony Duties, etc.)
+     never sits orphaned at the foot of a page. */
+  h2, h3, .section-header, .act-header,
+  h2 + p {
+    break-after: avoid;
+  }
+}
+
+  </style>
+</head>
+<body class="theme-formal">
+  <header class="doc-header">
+    <p class="doc-eyebrow">Ceremony Protocol</p>
+    <h1>Root CA Key Generation</h1>
+    <div class="metadata">
+      <p><strong>Ceremony Date:</strong> 2026-03-28</p>
+    </div>
+  </header>
+  <section>
+    <h2>Overview</h2>
+    <div class="overview"><p>Generate the offline root CA keypair on an air-gapped machine. The private key is wrapped with a transport public key and stored as an encrypted backup.</p></div>
+  </section>
+
+  <section>
+    <h2>Roles</h2>
+    <ul class="roles">
+      <li><span class="role-abbrev">CO</span> <strong>Crypto Officer</strong> <span class="role-person">Alice Smith</span></li>
+      <li><span class="role-abbrev">W1</span> <strong>Witness 1</strong> <span class="role-person">Bob Jones</span></li>
+      <li><span class="role-abbrev">W2</span> <strong>Witness 2</strong> <span class="role-person">Carol White</span></li>
+    </ul>
+  </section>
+  <section>
+    <h2>Preparation Checklist</h2>
+    <h3>Prerequisites</h3>
+    <ul class="checklist">
+      <li>Air-gapped workstation is powered on with all network interfaces disabled</li>
+    </ul>
+    <h3>Digital Materials</h3>
+    <p><em>Verify digital material sources before ceremony</em></p>
+    <ul class="checklist">
+      <li><strong>transport_pubkey</strong><span class="item-desc">Crypto officer&#x27;s transport RSA-4096 public key.
+</span></li>
+    </ul>
+  </section>
+  <section class="act act-break">
+    <div class="act-header">Act 1: Opening</div>
+    <p class="act-preamble">Verify participants and environment before proceeding.</p>
+    <h3 class="section-header">Environment Verification</h3>
+    <table class="steps">
+      <thead>
+        <tr><th class="step-num">Step</th><th>Action</th><th class="role">Role</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="step-num">1.1</td>
+          <td class="step-action"><p>Verify system clock before recording timestamps</p></td>
+          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
+        </tr>
+        <tr>
+          <td class="step-num">1.2</td>
+          <td class="step-action"><p>Record system and environment information.</p></td>
+          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
+        </tr>
+        <tr>
+          <td class="step-num">1.3</td>
+          <td class="step-action"><p>Confirm the workstation has no active network connections</p></td>
+          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="act act-break">
+    <div class="act-header">Act 2: Root CA Key Generation</div>
+    <p class="act-preamble">Generate and protect the root CA keypair.</p>
+    <h3 class="section-header">Key Generation</h3>
+    <table class="steps">
+      <thead>
+        <tr><th class="step-num">Step</th><th>Action</th><th class="role">Role</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="step-num">2.1</td>
+          <td class="step-action"><p>Generate RSA-4096 root CA keypair.</p></td>
+          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
+        </tr>
+        <tr>
+          <td class="step-num">2.2</td>
+          <td class="step-action"><p>Generate a certificate signing request for the root CA key.</p></td>
+          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
+        </tr>
+        <tr>
+          <td class="step-num">2.3</td>
+          <td class="step-action"><p>Issue the self-signed root CA certificate.</p></td>
+          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
+        </tr>
+      </tbody>
+    </table>
+    <h3 class="section-header">Key Protection</h3>
+    <table class="steps">
+      <thead>
+        <tr><th class="step-num">Step</th><th>Action</th><th class="role">Role</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="step-num">2.4</td>
+          <td class="step-action"><p>Encrypt the root CA private key with the transport public key.</p></td>
+          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="act act-break act-break-after">
+    <div class="act-header">Act 3: Closing</div>
+    <h3 class="section-header">Witness Attestation</h3>
+    <table class="steps">
+      <thead>
+        <tr><th class="step-num">Step</th><th>Action</th><th class="role">Role</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="step-num">3.1</td>
+          <td class="step-action"><p>Attest: &quot;I witnessed the root CA key generation and private key wrapping.&quot;</p></td>
+          <td class="role"><abbr title="Witness 1">W1</abbr></td>
+        </tr>
+        <tr>
+          <td class="step-num">3.2</td>
+          <td class="step-action"><p>Attest: &quot;I witnessed the root CA key generation and private key wrapping.&quot;</p></td>
+          <td class="role"><abbr title="Witness 2">W2</abbr></td>
+        </tr>
+        <tr>
+          <td class="step-num">3.3</td>
+          <td class="step-action"><p>Attest: &quot;Root CA keypair generated.&quot;</p></td>
+          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+  <section>
+    <h2>Expected Outputs</h2>
+    <ul class="outputs">
+      <li><strong>root_ca_cert</strong> <span class="item-kind">certificate</span><span class="item-desc">Self-signed root CA certificate</span></li>
+      <li><strong>wrapped_root_ca_key</strong> <span class="item-kind">wrapped_key</span><span class="item-desc">Root CA private key wrapped with transport key</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Transcript Fingerprint</h2>
+    <p>At the end of the ceremony, the transcript fingerprint is displayed. Copy at least the first line (32 characters, shown in bold) into the field below before closing the terminal, while all participants are still present.</p>
+    <div class="fingerprint-record">
+      <p class="fp-label">sha256</p>
+      <div class="fingerprint-grid">
+        <p class="fingerprint-prefix">__ __ __ __ __ __ __ __</p>
+        <p class="fingerprint-prefix">__ __ __ __ __ __ __ __</p>
+        <p class="fingerprint-remainder">__ __ __ __ __ __ __ __</p>
+        <p class="fingerprint-remainder">__ __ __ __ __ __ __ __</p>
+      </div>
+    </div>
+  </section>
+  <section>
+    <h2>Post-Ceremony Duties</h2>
+    <p class="duties-intro">The following duties must be completed after the ceremony concludes.</p>
+    <div class="duty">
+      <h3 class="duty-heading">Archive Materials (Crypto Officer)</h3>
+      <p class="duty-prose">Archive ceremony materials at designated storage locations</p>
+      <ul class="duty-items">
+        <li>Ceremony transcript</li>
+        <li>Root CA certificate (root_ca_cert.pem)</li>
+        <li>Wrapped root CA key backup (wrapped_root_ca_key.bin)</li>
+        <li><strong>Location:</strong> Secure document archive</li>
+      </ul>
+    </div>
+    <div class="duty">
+      <h3 class="duty-heading">Notify Stakeholders</h3>
+      <p class="duty-prose">Distribute root_ca_cert.pem to PKI team and update trust anchor documentation</p>
+    </div>
+  </section>
+
+  <section class="signatures-section">
+    <h2>Signatures</h2>
+    <p>By signing below, each participant attests to the accuracy and completeness of this ceremony.</p>
+    <div class="signatures">
+      <div class="signature-block">
+        <p class="sig-role">Crypto Officer</p>
+        <p class="sig-name">Name:&nbsp;Alice Smith</p>
+        <div class="sig-line">
+          <div class="sig-cell sig-cell-sign"><span class="sig-rule"></span><span class="sig-cap">Signature</span></div>
+          <div class="sig-cell sig-cell-date"><span class="sig-rule"></span><span class="sig-cap">Date</span></div>
+        </div>
+      </div>
+      <div class="signature-block">
+        <p class="sig-role">Witness 1</p>
+        <p class="sig-name">Name:&nbsp;Bob Jones</p>
+        <div class="sig-line">
+          <div class="sig-cell sig-cell-sign"><span class="sig-rule"></span><span class="sig-cap">Signature</span></div>
+          <div class="sig-cell sig-cell-date"><span class="sig-rule"></span><span class="sig-cap">Date</span></div>
+        </div>
+      </div>
+      <div class="signature-block">
+        <p class="sig-role">Witness 2</p>
+        <p class="sig-name">Name:&nbsp;Carol White</p>
+        <div class="sig-line">
+          <div class="sig-cell sig-cell-sign"><span class="sig-rule"></span><span class="sig-cap">Signature</span></div>
+          <div class="sig-cell sig-cell-date"><span class="sig-rule"></span><span class="sig-cap">Date</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</body>
+</html>

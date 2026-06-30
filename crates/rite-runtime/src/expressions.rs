@@ -20,10 +20,10 @@ use sha2::{Digest, Sha256, Sha384, Sha512};
 ///
 /// # Examples
 ///
-/// ```ignore
-/// let expr = rite_model::expression::parse_expression("${artifact.ksr | sha256 | hex}").unwrap();
+/// ```text
+/// let expr = parse_expression("${artifact.ksr | sha256 | hex}")?;
 /// let result = evaluate(&expr, &context)?;
-/// assert!(matches!(result, Value::String(_)));
+/// // result is Value::String("<hex digest>")
 /// ```
 pub fn evaluate(expr: &Expression, ctx: &HandlerContext) -> Result<Value, ExecutionError> {
     match expr {
@@ -327,7 +327,7 @@ fn apply_concat(args: &[Expression], ctx: &HandlerContext) -> Result<Value, Exec
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// let expr_value = parse_expr_value(&json!({"message": "${param.name}"}));
 /// let result = evaluate_expr_value(&expr_value, &ctx)?;
 /// // result is a serde_json::Value with expressions evaluated

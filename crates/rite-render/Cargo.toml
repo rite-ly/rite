@@ -21,6 +21,7 @@ base64ct = { workspace = true }
 
 [dev-dependencies]
 rite-resolver = { workspace = true }
+insta = { workspace = true }
 
 [lints]
 workspace = true

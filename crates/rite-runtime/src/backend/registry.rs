@@ -67,10 +67,15 @@ impl BackendRegistry {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// let registry = BackendRegistry::with_factory(
-    ///     Box::new(|name, config| rite_stdlib::backend::create_backend(name, config))
-    /// );
+    /// ```
+    /// use rite_runtime::BackendRegistry;
+    /// use rite_sdk::BackendError;
+    ///
+    /// // A factory resolves a declared backend name + config into a live
+    /// // backend. This one has none, so every lookup reports NotFound.
+    /// let registry = BackendRegistry::with_factory(Box::new(|name, _config| {
+    ///     Err(BackendError::NotFound(name))
+    /// }));
     /// ```
     pub fn with_factory(factory: BackendFactory) -> Self {
         Self {

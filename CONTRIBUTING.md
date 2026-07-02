@@ -5,7 +5,8 @@ Pull requests are welcome, but opening an issue to discuss the change first is s
 
 CLI behavior conventions are documented in `docs/development/cli-conventions.md`.
 Runtime and frontend architecture is documented in `docs/development/runtime-and-frontend.md`,
-crate layout in `docs/development/crate-layout.md`.
+crate layout in `docs/development/crate-layout.md`, and the testing strategy in
+`docs/development/testing.md`.
 
 ## AI-assisted contributions
 
@@ -55,3 +56,13 @@ cargo test --workspace
 ```sh
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 ```
+
+## Testing
+
+A test earns its place by proving a property we care about, not by mirroring the shape of the
+code or the fixtures. A test that only restates what the compiler already guarantees, or that
+breaks on every benign edit, is a liability. This reflects the project itself: evidence over
+execution.
+
+What to test, at which level, and where it goes in the tree is set out in
+`docs/development/testing.md`. Follow it when adding tests; reviewers hold PRs to it.

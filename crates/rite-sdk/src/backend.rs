@@ -40,19 +40,40 @@ use crate::types::{
 ///
 /// # Usage
 ///
-/// ```ignore
-/// use rite_sdk::{Backend, KeyStoreBackend, SignBackend};
+/// ```
+/// use rite_sdk::{
+///     backend_capabilities, Backend, BackendError, KeyId, RandomBackend, SignAlgorithm,
+///     SignBackend,
+/// };
+///
+/// struct MyBackend {
+///     name: String,
+/// }
 ///
 /// impl Backend for MyBackend {
 ///     fn name(&self) -> &str { &self.name }
 ///     fn provider(&self) -> &str { "software" }
-///     fn fingerprint(&self) -> String { "...".to_string() }
+///     fn fingerprint(&self) -> String { "sha256:...".to_string() }
 ///
 ///     backend_capabilities!(
-///         /// Supports RSA-2048 through RSA-8192 key generation and storage.
-///         as_keystore_mut: KeyStoreBackend,
+///         /// Signs with software-held RSA and ECDSA keys.
 ///         as_sign_mut: SignBackend,
+///         /// Draws ceremony randomness from the OS CSPRNG.
+///         as_random_mut: RandomBackend,
 ///     );
+/// }
+///
+/// impl SignBackend for MyBackend {
+///     fn sign(&mut self, _key: &KeyId, _msg: &[u8], _alg: SignAlgorithm)
+///         -> Result<Vec<u8>, BackendError> { Ok(Vec::new()) }
+///     fn verify(&self, _key: &KeyId, _msg: &[u8], _sig: &[u8], _alg: SignAlgorithm)
+///         -> Result<bool, BackendError> { Ok(true) }
+/// }
+///
+/// impl RandomBackend for MyBackend {
+///     fn generate_random(&mut self, len: usize) -> Result<Vec<u8>, BackendError> {
+///         Ok(vec![0u8; len])
+///     }
 /// }
 /// ```
 ///

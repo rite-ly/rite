@@ -23,7 +23,7 @@
 //!
 //! # Usage
 //!
-//! ```ignore
+//! ```
 //! use rite_stdlib::default_registry;
 //!
 //! let registry = default_registry();

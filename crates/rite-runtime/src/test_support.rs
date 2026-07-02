@@ -12,7 +12,7 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use rite_model::StepId;
 
 use crate::clock::{Clock, SystemClock};
-use crate::protocol::{ExecEvent, UiCommand};
+use crate::protocol::{ExecEvent, PromptId, Response, UiCommand};
 use crate::reporter::Reporter;
 use crate::transcript_sink::InMemorySink;
 use rite_model::StepFact;
@@ -26,7 +26,7 @@ pub struct ReporterHarness {
     sink: InMemorySink,
     event_tx: Sender<ExecEvent>,
     _event_rx: Receiver<ExecEvent>,
-    _cmd_tx: Sender<UiCommand>,
+    cmd_tx: Sender<UiCommand>,
     cmd_rx: Receiver<UiCommand>,
 }
 
@@ -40,9 +40,24 @@ impl ReporterHarness {
             sink: InMemorySink::new(),
             event_tx,
             _event_rx: event_rx,
-            _cmd_tx: cmd_tx,
+            cmd_tx,
             cmd_rx,
         }
+    }
+
+    /// Pre-stage an operator response to a prompt the action under test will
+    /// issue. A reporter allocates prompt ids from zero in order, so the first
+    /// prompt an action issues has id `0`. The response sits in the command
+    /// channel until the reporter receives it, so call this before running the
+    /// action.
+    pub fn respond(&self, prompt_id: u64, response: Response) {
+        // The receiver lives in this harness, so the send cannot fail; ignore
+        // the result rather than unwrap (this module is compiled as library
+        // code, where `unwrap`/`expect` are linted).
+        let _ = self.cmd_tx.send(UiCommand::PromptResponse {
+            prompt_id: PromptId::new(prompt_id),
+            response,
+        });
     }
 
     /// Build a reporter scoped to the given step. The reporter borrows

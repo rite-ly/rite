@@ -31,8 +31,10 @@ fn check_minimal_ceremony_resolves_cleanly() {
     assert!(!has_errors, "unexpected errors: {diags:?}");
     let resolved = resolved.expect("ceremony resolves");
     assert_eq!(resolved.metadata.name, "Minimal Ceremony");
-    assert_eq!(resolved.roles.len(), 1);
-    assert_eq!(resolved.execution_plan.len(), 1);
+    assert!(
+        !resolved.execution_plan.is_empty(),
+        "minimal ceremony must lower to at least one step"
+    );
 }
 
 #[test]
@@ -75,11 +77,7 @@ fn check_root_ca_software_resolves_cleanly() {
 
     let resolved = resolved.expect("ceremony resolves");
     assert_eq!(resolved.metadata.name, "Test Root CA");
-    assert_eq!(resolved.roles.len(), 3, "expected 3 roles");
-    assert_eq!(resolved.execution_plan.len(), 8, "expected 8 steps");
-    assert_eq!(resolved.materials.len(), 1, "expected 1 material");
-    assert_eq!(resolved.outputs.len(), 3, "expected 3 outputs");
-    assert_eq!(resolved.parameters.len(), 1, "expected 1 parameter");
+    assert_declared_outputs(&resolved);
 }
 
 #[test]
@@ -95,11 +93,23 @@ fn check_root_ca_ecdsa_software_resolves_cleanly() {
 
     let resolved = resolved.expect("ceremony resolves");
     assert_eq!(resolved.metadata.name, "Test Root CA (ECDSA)");
-    assert_eq!(resolved.roles.len(), 3, "expected 3 roles");
-    assert_eq!(resolved.execution_plan.len(), 8, "expected 8 steps");
-    assert_eq!(resolved.materials.len(), 1, "expected 1 material");
-    assert_eq!(resolved.outputs.len(), 3, "expected 3 outputs");
-    assert_eq!(resolved.parameters.len(), 1, "expected 1 parameter");
+    assert_declared_outputs(&resolved);
+}
+
+/// Both root-CA fixtures declare the same three outputs. Asserting they are
+/// present by name proves lowering kept the output declarations, without
+/// pinning brittle element counts that mirror the fixture (see the testing
+/// strategy: prefer property assertions over fixture-count mirroring).
+fn assert_declared_outputs(resolved: &rite_model::Ceremony) {
+    for id in ["root_ca_public_key", "root_ca_cert", "wrapped_root_ca_key"] {
+        assert!(
+            resolved
+                .outputs
+                .get(&rite_model::OutputId::new(id))
+                .is_some(),
+            "output `{id}` must be present after resolution"
+        );
+    }
 }
 
 #[test]

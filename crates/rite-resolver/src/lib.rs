@@ -6,16 +6,23 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! use rite_resolver::{resolve, resolve_files, analyze, CeremonyInputs};
-//!
-//! // From a string (no external inputs)
-//! let result = resolve(ceremony_yaml, None);
-//!
-//! // From a file with rich diagnostics
-//! let (resolved, diags) = analyze(Path::new("sub_ca.rite.yaml"), None);
-//! for d in &diags { eprintln!("{d}"); }
 //! ```
+//! use rite_resolver::resolve;
+//!
+//! let ceremony_yaml = r#"
+//! version: "0.2"
+//! name: "Example Ceremony"
+//! roles: {}
+//! sections: {}
+//! "#;
+//!
+//! // Resolve from a string (no execution-time inputs).
+//! let result = resolve(ceremony_yaml, None);
+//! assert!(result.is_ok(), "ceremony should resolve: {:?}", result.errors);
+//! ```
+//!
+//! For a file with rich, span-anchored diagnostics, use [`analyze`]; for a
+//! ceremony plus its included files, use [`resolve_files`].
 
 #![warn(missing_docs)]
 

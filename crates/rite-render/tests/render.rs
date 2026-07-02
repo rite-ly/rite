@@ -11,32 +11,35 @@ fn resolve(rel: &str) -> rite_model::Ceremony {
     ceremony.unwrap_or_else(|| panic!("failed to resolve {rel}: {diags:?}"))
 }
 
-#[test]
-fn script_renders_expected_structure() {
-    let ceremony = resolve("examples/showcase/demo.rite.yaml");
-    let html = render_script(&ceremony, &Branding::default(), Theme::Formal).unwrap();
-    assert!(html.starts_with("<!DOCTYPE html>"), "missing doctype");
-    assert!(html.contains("Root Signing Key Ceremony"));
-    assert!(html.contains("Crypto Officer"));
-    // Role abbreviation badge.
-    assert!(html.contains("role-abbrev"));
-    // Hand-recorded fingerprint and signature blocks.
-    assert!(html.contains("fingerprint-record"));
-    assert!(html.contains("signature-block"));
-    // Every step label is present.
-    for label in ["1", "2", "3", "4", "5", "6"] {
-        assert!(html.contains(&format!(">{label}</td>")));
-    }
+/// Snapshot a rendered document with the wall-clock timestamp normalized, so a
+/// diff only ever means a real rendering change, not a different run time. Only
+/// the report's `started_at` fallback (`Utc::now()` when there are no facts) is
+/// nondeterministic; fixture-supplied dates render literally so the snapshot
+/// still guards how they are formatted.
+fn assert_html_snapshot(name: &str, html: &str) {
+    insta::with_settings!({filters => vec![
+        (r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC", "[DATETIME]"),
+    ]}, {
+        insta::assert_snapshot!(name, html);
+    });
 }
 
 #[test]
-fn named_acts_render_act_headers() {
+fn script_demo_snapshot() {
+    // The full script is the contract participants follow by hand: structure,
+    // step numbering, role badges, and the fingerprint/signature blocks.
+    let ceremony = resolve("examples/showcase/demo.rite.yaml");
+    let html = render_script(&ceremony, &Branding::default(), Theme::Formal).unwrap();
+    assert_html_snapshot("script_demo", &html);
+}
+
+#[test]
+fn script_named_acts_snapshot() {
+    // root_ca uses named acts, which render as act headers; the snapshot guards
+    // the whole structure, not just their presence.
     let ceremony = resolve("examples/pki/root_ca_software.rite.yaml");
     let html = render_script(&ceremony, &Branding::default(), Theme::Formal).unwrap();
-    assert!(
-        html.contains("act-header"),
-        "named acts should emit act headers"
-    );
+    assert_html_snapshot("script_named_acts", &html);
 }
 
 #[test]
@@ -78,14 +81,11 @@ fn long_instructions_render_as_paragraphs_and_bullets() {
 }
 
 #[test]
-fn report_renders() {
+fn report_snapshot() {
     let data = rite_render::report::build_report_data(
         std::iter::empty::<(chrono::DateTime<chrono::Utc>, &rite_model::StepFact)>(),
         "sha256:deadbeef",
     );
     let html = render_report(&data, &Branding::default(), Theme::Formal).unwrap();
-    assert!(html.starts_with("<!DOCTYPE html>"));
-    assert!(html.contains("Ceremony Report"));
-    assert!(html.contains("report-footer"));
-    assert!(html.contains("Transcript fingerprint"));
+    assert_html_snapshot("report_empty", &html);
 }

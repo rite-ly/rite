@@ -116,11 +116,14 @@ pub struct Reporter<'a> {
     /// The run clock. Read once per fact in [`Reporter::fact`] to stamp the
     /// event time onto both the transcript line and the live UI event.
     clock: Arc<dyn Clock>,
-    /// Count of facts emitted over the whole run. The executor snapshots this
-    /// before a step attempt and compares afterwards: if the attempt emitted
-    /// any fact (a backend operation, an artifact, an entropy draw) it is no
-    /// longer safely re-executable, so a transient error is not retried.
-    facts_emitted: u64,
+    /// Count of side-effect facts ([`StepFact::is_side_effect`]) emitted over
+    /// the whole run. The executor snapshots this before a step attempt and
+    /// compares afterwards: if the attempt performed work on the world (a
+    /// backend operation, an artifact, an entropy draw) it is no longer
+    /// safely re-executable, so a transient error is not retried. Interaction
+    /// records like an answered prompt do not count: re-running the attempt
+    /// just prompts again.
+    side_effects_emitted: u64,
 }
 
 impl<'a> Reporter<'a> {
@@ -139,15 +142,16 @@ impl<'a> Reporter<'a> {
             current_step: None,
             random: None,
             clock,
-            facts_emitted: 0,
+            side_effects_emitted: 0,
         }
     }
 
-    /// Number of facts emitted so far in this run. Used by the executor to
-    /// detect whether a step attempt produced any evidence before failing.
+    /// Number of side-effect facts emitted so far in this run. Used by the
+    /// executor to detect whether a step attempt performed work on the world
+    /// before failing, which makes it unsafe to re-execute.
     #[must_use]
-    pub fn facts_emitted(&self) -> u64 {
-        self.facts_emitted
+    pub fn side_effects_emitted(&self) -> u64 {
+        self.side_effects_emitted
     }
 
     /// Install the machine seed for the entropy source.
@@ -190,7 +194,9 @@ impl<'a> Reporter<'a> {
         // the durable record and the live UI event so they never disagree.
         let at = self.clock.now();
         self.transcript.record(at, &fact)?;
-        self.facts_emitted = self.facts_emitted.saturating_add(1);
+        if fact.is_side_effect() {
+            self.side_effects_emitted = self.side_effects_emitted.saturating_add(1);
+        }
         self.event_tx
             .send(ExecEvent::Fact { at, fact })
             .map_err(|_| ReporterError::Disconnected)?;

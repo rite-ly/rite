@@ -625,20 +625,18 @@ fn execute_step_with_retry(
     loop {
         let side_effects_before = reporter.side_effects_emitted();
 
-        let backend = if let Some(name) = &step_info.backend {
-            Some(
-                backend_registry
-                    .get_mut(name)
-                    .map_err(|e| ExecutionError::StepFailed {
-                        step: step_info.id.clone(),
-                        reason: e.to_string(),
-                    })?,
-            )
-        } else {
-            None
+        // Backend acquisition is part of the attempt: a failed lazy
+        // initialization (device unplugged, daemon down) carries the same
+        // retriability semantics as a backend error inside the handler.
+        let attempt_result = match &step_info.backend {
+            Some(name) => match backend_registry.get_mut(name) {
+                Ok(backend) => handler.execute(step_info, ctx, params, reporter, Some(backend)),
+                Err(e) => Err(ActionError::Backend(e)),
+            },
+            None => handler.execute(step_info, ctx, params, reporter, None),
         };
 
-        let action_err = match handler.execute(step_info, ctx, params, reporter, backend) {
+        let action_err = match attempt_result {
             Ok(result) => return Ok(result),
             // Abort is an operator decision, not an attempt failure: no
             // StepAttemptFailed is recorded, the run terminates here.
@@ -1281,6 +1279,21 @@ sections:
         Vec<StepFact>,
         usize,
     ) {
+        drive_with_backends(ceremony, action, confirm_answer, BackendRegistry::new())
+    }
+
+    /// Like [`drive`], with a caller-provided backend registry for steps
+    /// that name a backend.
+    fn drive_with_backends(
+        ceremony: Ceremony,
+        action: Arc<dyn Action>,
+        confirm_answer: bool,
+        backend_registry: BackendRegistry,
+    ) -> (
+        Result<ExecutionSummary, ExecutionError>,
+        Vec<StepFact>,
+        usize,
+    ) {
         let mut registry = ActionRegistry::new();
         registry.register(action);
 
@@ -1291,7 +1304,7 @@ sections:
         let executor = Executor::new(
             ceremony,
             registry,
-            BackendRegistry::new(),
+            backend_registry,
             dry_run_output_config(),
             true, // dry_run: skips pacing/start prompts, leaving only the retry Confirm
             StartupSnapshot::placeholder(),
@@ -1423,6 +1436,90 @@ sections:
         let summary = result.expect("run ok");
         assert_eq!(summary.steps_completed, 1);
         assert_eq!(confirms, 1, "the retry prompt fired");
+    }
+
+    #[test]
+    fn backend_acquisition_failure_is_retriable() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        // Lazy backend initialization fails on the first probe (device
+        // unplugged) and succeeds on the second: the operator must get the
+        // same retry offer as for a transient error inside the handler.
+        struct NullBackend {
+            name: String,
+        }
+        impl Backend for NullBackend {
+            fn name(&self) -> &str {
+                &self.name
+            }
+            fn provider(&self) -> &'static str {
+                "mock"
+            }
+            fn fingerprint(&self) -> String {
+                format!("mock={}", self.name)
+            }
+        }
+
+        let probes = Arc::new(AtomicU32::new(0));
+        let probes_in_factory = Arc::clone(&probes);
+        let mut backends =
+            crate::backend::BackendRegistry::with_factory(Box::new(move |_name, _config| {
+                if probes_in_factory.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(BackendError::HardwareFailure("no device".to_string()))
+                } else {
+                    Ok(Box::new(NullBackend {
+                        name: "token".to_string(),
+                    }) as Box<dyn Backend>)
+                }
+            }));
+        backends.declare(
+            "token".to_string(),
+            rite_sdk::BackendConfig {
+                provider: "mock".to_string(),
+                extra: serde_json::json!({}),
+            },
+        );
+
+        let yaml = r#"
+version: "0.2"
+name: "Retry"
+backends:
+  token:
+    provider: mock
+roles:
+  participant:
+    person: "Alice"
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      work:
+        action: attest
+        backend: token
+        silent: true
+        with:
+          statement: "x"
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("resolve");
+
+        let action = FlakyAction::new(0, transient, BeforeFail::Nothing);
+        let (result, facts, confirms) = drive_with_backends(ceremony, action, true, backends);
+
+        let summary = result.expect("run ok after the operator retried");
+        assert_eq!(summary.steps_completed, 1);
+        assert_eq!(confirms, 1, "the retry prompt fired");
+        assert_eq!(attempt_numbers(&facts), vec![1]);
+        let StepFact::StepAttemptFailed { error, .. } = facts
+            .iter()
+            .find(|f| matches!(f, StepFact::StepAttemptFailed { .. }))
+            .expect("attempt fact")
+        else {
+            unreachable!()
+        };
+        assert_eq!(error.class, ErrorClass::Environmental);
+        assert_eq!(probes.load(Ordering::SeqCst), 2, "hardware probed again");
     }
 
     #[test]

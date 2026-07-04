@@ -12,7 +12,9 @@
 //!   any hardware is touched.
 //! - A missing or unplugged device fails at the step that uses it, not at
 //!   ceremony startup.
-//! - Failed initialization is cached: the hardware is never probed twice.
+//! - Failed initialization is not cached: the next access probes the
+//!   hardware again, so an operator can plug in the missing device and
+//!   retry the step.
 //!
 //! ## Design Notes
 //!
@@ -37,12 +39,11 @@ pub type BackendFactory =
     Box<dyn Fn(String, &BackendConfig) -> Result<Box<dyn Backend>, BackendError> + Send + Sync>;
 
 enum BackendState {
-    /// Declared but not yet initialized; hardware not yet touched.
+    /// Declared but not successfully initialized; the next access probes the
+    /// hardware (again).
     Uninitialized(BackendConfig),
     /// Successfully initialized; ready to use.
     Ready(Box<dyn Backend>),
-    /// Initialization failed; error cached, hardware will not be retried.
-    Failed(String),
 }
 
 /// Backend registry that owns all backend lifecycle state.
@@ -129,7 +130,8 @@ impl BackendRegistry {
     /// Get backend by name (mutable), initializing it lazily if needed.
     ///
     /// Returns the backend on success, `Err(NotFound)` if the backend was
-    /// never declared, or `Err(HardwareFailure)` if initialization failed.
+    /// never declared, or the factory's error if initialization failed (in
+    /// which case a later call probes the hardware again).
     pub fn get_mut(&mut self, name: &str) -> Result<&mut dyn Backend, BackendError> {
         self.get_ready(name)
     }
@@ -234,15 +236,17 @@ impl BackendRegistry {
         self.try_initialize(name)?;
         match self.backends.get_mut(name) {
             Some(BackendState::Ready(b)) => Ok(b.as_mut()),
-            Some(BackendState::Failed(msg)) => Err(BackendError::HardwareFailure(msg.clone())),
             None => Err(BackendError::NotFound(name.to_string())),
             Some(BackendState::Uninitialized(_)) => {
-                unreachable!("backend should be Ready or Failed after try_initialize")
+                unreachable!("backend should be Ready after try_initialize")
             }
         }
     }
 
-    /// Initialize a declared backend, caching success or failure.
+    /// Initialize a declared backend, caching success.
+    ///
+    /// On failure the entry stays [`BackendState::Uninitialized`] and the
+    /// factory error propagates, so a later access probes the hardware again.
     ///
     /// Uses a two-pass approach to satisfy the borrow checker:
     /// 1. Clone the config (releases the immutable borrow on `self.backends`).
@@ -253,29 +257,16 @@ impl BackendRegistry {
         let config = match self.backends.get(name) {
             Some(BackendState::Uninitialized(config)) => config.clone(),
             Some(BackendState::Ready(_)) => return Ok(()),
-            Some(BackendState::Failed(msg)) => {
-                return Err(BackendError::HardwareFailure(msg.clone()));
-            }
             None => return Err(BackendError::NotFound(name.to_string())),
         };
 
         // Second pass: call factory and update in place (key already exists).
-        match (self.factory)(name.to_string(), &config) {
-            Ok(backend) => {
-                // Key is guaranteed to exist; we checked above.
-                if let Some(state) = self.backends.get_mut(name) {
-                    *state = BackendState::Ready(backend);
-                }
-                Ok(())
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                if let Some(state) = self.backends.get_mut(name) {
-                    *state = BackendState::Failed(msg);
-                }
-                Err(e)
-            }
+        let backend = (self.factory)(name.to_string(), &config)?;
+        // Key is guaranteed to exist; we checked above.
+        if let Some(state) = self.backends.get_mut(name) {
+            *state = BackendState::Ready(backend);
         }
+        Ok(())
     }
 }
 
@@ -412,6 +403,38 @@ mod tests {
     }
 
     #[test]
+    fn failed_initialization_is_probed_again() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        // Factory fails on the first probe (device unplugged), succeeds on
+        // the second (operator plugged it in and retried the step).
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_in_factory = Arc::clone(&calls);
+        let mut registry = BackendRegistry::with_factory(Box::new(move |name, _config| {
+            if calls_in_factory.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(BackendError::HardwareFailure("no device".to_string()))
+            } else {
+                Ok(Box::new(MinimalMock { name }) as Box<dyn Backend>)
+            }
+        }));
+        registry.declare(
+            "token".to_string(),
+            BackendConfig {
+                provider: "mock".to_string(),
+                extra: serde_json::json!({}),
+            },
+        );
+
+        let first = registry.get_mut("token");
+        assert!(matches!(first, Err(BackendError::HardwareFailure(_))));
+
+        let second = registry.get_mut("token");
+        assert!(second.is_ok(), "second access probes the hardware again");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
     fn unsupported_trait_returns_error() {
         // MinimalMock only implements KeyStoreBackend, not SignBackend.
         let mut registry = BackendRegistry::new();
@@ -441,40 +464,6 @@ mod tests {
             BackendError::NotFound(name) => assert_eq!(name, "nonexistent"),
             e => panic!("Expected NotFound, got: {e}"),
         }
-    }
-
-    #[test]
-    fn factory_failure_cached_no_retry() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let call_count_clone = Arc::clone(&call_count);
-
-        let mut registry = BackendRegistry::with_factory(Box::new(move |_name, _config| {
-            call_count_clone.fetch_add(1, Ordering::SeqCst);
-            Err(BackendError::HardwareFailure(
-                "device not found".to_string(),
-            ))
-        }));
-
-        let config = BackendConfig {
-            provider: "mock".to_string(),
-            extra: serde_json::json!({}),
-        };
-        registry.declare("failing".to_string(), config);
-
-        // First call triggers factory
-        let _ = registry.get_keystore("failing");
-        assert_eq!(call_count.load(Ordering::SeqCst), 1);
-
-        // Second call must NOT call factory again (error cached)
-        let _ = registry.get_keystore("failing");
-        assert_eq!(
-            call_count.load(Ordering::SeqCst),
-            1,
-            "Factory called more than once"
-        );
     }
 
     #[test]

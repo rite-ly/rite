@@ -16,10 +16,10 @@ docker run --rm -it --init -v "$PWD:/workspace" rite check ceremony.rite.yaml
 The image and the downloadable Linux release tarballs are built differently and
 serve different needs:
 
-| Artifact | Toolchain | OpenSSL | Hardware backends |
-|---|---|---|---|
-| Release tarballs (`rite-*-linux-*.tar.gz`) | musl, fully static | vendored | no (`piv`/`yubikey` cannot static-link PC/SC) |
-| Docker image (`ghcr.io/rite-ly/rite`) | glibc | system (`libssl3`) | yes (`piv`, `yubikey`) |
+| Artifact                                   | Toolchain          | OpenSSL            | Hardware backends                             |
+|--------------------------------------------|--------------------|--------------------|-----------------------------------------------|
+| Release tarballs (`rite-*-linux-*.tar.gz`) | musl, fully static | vendored           | no (`piv`/`yubikey` cannot static-link PC/SC) |
+| Docker image (`ghcr.io/rite-ly/rite`)      | glibc              | system (`libssl3`) | yes (`piv`, `yubikey`)                        |
 
 The tarballs stay static for portability across distros (Alpine, older glibc,
 Remote SSH targets). The image runs on a known Debian base, so it links
@@ -50,11 +50,11 @@ docker buildx bake image             # multi-arch runtime image (cache only loca
 
 ## Build targets
 
-| Bake target | Dockerfile stage | Output |
-|---|---|---|
-| `binaries-amd64` | `binaries-amd64` | `dist/amd64/{rite, rite-ls}` (musl static) |
-| `binaries-arm64` | `binaries-arm64` | `dist/arm64/{rite, rite-ls}` (musl static) |
-| `image` | `release` | multi-arch runtime image (`linux/amd64,linux/arm64`), glibc + hardware backends, with SBOM + provenance attestations |
+| Bake target      | Dockerfile stage | Output                                                                                                               |
+|------------------|------------------|----------------------------------------------------------------------------------------------------------------------|
+| `binaries-amd64` | `binaries-amd64` | `dist/amd64/{rite, rite-ls}` (musl static)                                                                           |
+| `binaries-arm64` | `binaries-arm64` | `dist/arm64/{rite, rite-ls}` (musl static)                                                                           |
+| `image`          | `release`        | multi-arch runtime image (`linux/amd64,linux/arm64`), glibc + hardware backends, with SBOM + provenance attestations |
 
 ## Build stages and toolchains
 

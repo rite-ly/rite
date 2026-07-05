@@ -7,49 +7,49 @@ flowchart TD
     tui[rite-tui<br/>TEA frontend]
     stdlib[rite-stdlib<br/>default action set]
     openssl[rite-openssl<br/>backend impl]
-    piv[rite-piv<br/>PIV backend impl]
-    yubikey[rite-yubikey<br/>YubiKey backend impl]
+    piv[rite-piv<br/>backend impl]
+    yubikey[rite-yubikey<br/>backend impl]
     runtime[rite-runtime<br/>protocol, executor, transcript]
     resolver[rite-resolver<br/>YAML → IR, diagnostics]
     render[rite-render<br/>document generation]
     model[rite-model<br/>IR + transcript schema]
     sdk[rite-sdk<br/>backend traits, key types]
 
+    cli --> openssl
+    cli --> stdlib
     cli --> tui
     cli --> runtime
-    cli --> stdlib
-    cli --> openssl
     cli --> render
     cli --> resolver
     tui --> runtime
     ls --> resolver
-    stdlib --> runtime
     stdlib -.piv feature.-> piv
     stdlib -.yubikey feature.-> yubikey
+    stdlib --> runtime
     openssl --> sdk
     piv --> sdk
-    yubikey --> sdk
     yubikey --> piv
+    yubikey --> sdk
     runtime --> sdk
     runtime --> model
     render --> model
     resolver --> model
 ```
 
-| Crate           | Purpose                                                                                                                                             |
-|-----------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `rite-sdk`      | Backend traits and key-material types. The boundary any external backend implements against.                                                        |
-| `rite-model`    | DSL IR (`Ceremony`, `Step`, `Prompt`, …) and the durable transcript schema (`StepFact`, `ResponseRecord`, …). Carries no executor or channel types. |
-| `rite-resolver` | YAML resolution and lowering, diagnostics, parameter checks.                                                                                        |
-| `rite-runtime`  | Channel protocol, executor, reporter, transcript sink, action trait and registry.                                                                   |
+| Crate           | Purpose                                                                                                                                              |
+|-----------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `rite-sdk`      | Backend traits and key-material types. The boundary any external backend implements against.                                                         |
+| `rite-model`    | DSL IR (`Ceremony`, `Step`, `Prompt`, …) and the durable transcript schema (`StepFact`, `ResponseRecord`, …). Carries no executor or channel types.  |
+| `rite-resolver` | YAML resolution and lowering, diagnostics, parameter checks.                                                                                         |
+| `rite-runtime`  | Channel protocol, executor, reporter, transcript sink, action trait and registry.                                                                    |
 | `rite-stdlib`   | All built-in actions: generic ones (verification, attestation, crypto, PKI) plus backend-specific ones behind features (`piv`/`yubikey`).            |
-| `rite-openssl`  | OpenSSL-backed `Backend` implementation.                                                                                                            |
-| `rite-piv`      | PIV smart-card `Backend` implementation (`yubikey` crate over PC/SC). Opt-in via the `piv` feature; the `piv_*` actions live in `rite-stdlib`.        |
+| `rite-openssl`  | OpenSSL-backed `Backend` implementation.                                                                                                             |
+| `rite-piv`      | PIV smart-card `Backend` implementation (`yubikey` crate over PC/SC). Opt-in via the `piv` feature; the `piv_*` actions live in `rite-stdlib`.       |
 | `rite-yubikey`  | `YubiKey` backend: PIV plus Yubico on-device attestation. Opt-in via the `yubikey` feature; the `yubikey_attest_slot` action lives in `rite-stdlib`. |
-| `rite-tui`      | TEA-based interactive frontend (ratatui + crossterm).                                                                                               |
-| `rite`          | `rite` binary; hosts the console and headless drivers and wires every crate above together.                                                         |
+| `rite-tui`      | TEA-based interactive frontend (ratatui + crossterm).                                                                                                |
+| `rite`          | `rite` binary; hosts the console and headless drivers and wires every crate above together.                                                          |
 | `rite-render`   | Document generation: ceremony scripts and post-ceremony reports (HTML/PDF).                                                                          |
-| `rite-ls`       | Language server for editor integration.                                                                                                             |
+| `rite-ls`       | Language server for editor integration.                                                                                                              |
 
 ## Boundary rules
 

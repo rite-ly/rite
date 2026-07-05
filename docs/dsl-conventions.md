@@ -6,11 +6,11 @@ Scope: `.rite.yaml` ceremony files.
 
 Strings fall into three categories with three styles:
 
-| Content | Style | Example |
-|---|---|---|
-| Pure expression `${...}` | unquoted | `role: ${role.crypto_officer}` |
-| Identifier-like literal | unquoted | `action: confirm`, `backend: openssl`, `algorithm: RSA-4096` |
-| Human prose | quoted (or `\|` block for multi-line) | `name: "Crypto Officer"` |
+| Content                  | Style                                 | Example                                                      |
+|--------------------------|---------------------------------------|--------------------------------------------------------------|
+| Pure expression `${...}` | unquoted                              | `role: ${role.crypto_officer}`                               |
+| Identifier-like literal  | unquoted                              | `action: confirm`, `backend: openssl`, `algorithm: RSA-4096` |
+| Human prose              | quoted (or `\|` block for multi-line) | `name: "Crypto Officer"`                                     |
 
 Read as: **quotes mean words, no quotes mean references.**
 

@@ -91,12 +91,15 @@ pub enum ResponseRecord {
         /// The answer.
         value: String,
     },
-    /// Secret answer, replaced by a deterministic hash of the plaintext so
-    /// verifiers can confirm a specific secret was provided without seeing it.
-    SecretRedacted {
-        /// Lowercase hex of `sha256(plaintext)`.
-        sha256_of_plaintext: String,
-    },
+    /// Secret answer. The plaintext is never stored, and no digest of it is
+    /// kept either: a hash of a low-entropy secret (such as a 6-8 digit PIV
+    /// PIN) is brute-forceable from a shared transcript. The position of the
+    /// enclosing `PromptAnswered` fact in the chain already records that a
+    /// secret was entered at this point.
+    // Note: a salted, per-run HMAC could later attest that two prompts received
+    // the same secret without reintroducing the low-entropy guessing oracle.
+    // Deferred until a concrete use case needs it.
+    SecretRedacted {},
     /// Acknowledgement of a [`Prompt::Continue`].
     Acknowledged,
 }
@@ -541,18 +544,13 @@ mod schema_snapshot_tests {
                 prompt: Prompt::Secret {
                     label: "PIN".to_string(),
                 },
-                response: ResponseRecord::SecretRedacted {
-                    sha256_of_plaintext: "f".repeat(64),
-                },
+                response: ResponseRecord::SecretRedacted {},
             },
             &json!({
                 "type": "prompt_answered",
                 "step": "s1",
                 "prompt": { "type": "secret", "label": "PIN" },
-                "response": {
-                    "type": "secret_redacted",
-                    "sha256_of_plaintext": "f".repeat(64),
-                },
+                "response": { "type": "secret_redacted" },
             }),
         );
     }

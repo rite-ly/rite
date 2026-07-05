@@ -27,13 +27,11 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use rite_model::{ErrorClass, ErrorRecord, Prompt, ResponseRecord, StepFact, StepId};
-use secrecy::ExposeSecret;
 use thiserror::Error;
 
 use crate::clock::Clock;
 use crate::entropy::CeremonyRandom;
 use crate::protocol::{ExecEvent, Icon, PromptId, Response, UiCommand, UiSignal};
-use crate::transcript::sha256_hex;
 use crate::transcript_sink::TranscriptSink;
 
 /// Errors that can arise while emitting events or awaiting a response.
@@ -453,16 +451,14 @@ impl<'a> Reporter<'a> {
 
 /// Convert an in-flight [`Response`] into its redacted, serializable form.
 ///
-/// The boundary where plaintext secrets become a deterministic hash. Lives
-/// here (next to `Response`) rather than on `ResponseRecord` so that
-/// `secrecy` stays a runtime-only dependency.
+/// The boundary where a plaintext secret is dropped. Lives here (next to
+/// `Response`) rather than on `ResponseRecord` so that `secrecy` stays a
+/// runtime-only dependency.
 fn response_to_record(response: &Response) -> ResponseRecord {
     match response {
         Response::Bool(b) => ResponseRecord::Bool { value: *b },
         Response::Text(t) => ResponseRecord::Text { value: t.clone() },
-        Response::Secret(s) => ResponseRecord::SecretRedacted {
-            sha256_of_plaintext: sha256_hex(s.expose_secret().as_bytes()),
-        },
+        Response::Secret(_) => ResponseRecord::SecretRedacted {},
         Response::Acknowledge => ResponseRecord::Acknowledged,
     }
 }
@@ -770,12 +766,7 @@ mod tests {
 
         match sink.facts().first().expect("fact") {
             StepFact::PromptAnswered { response, .. } => match response {
-                ResponseRecord::SecretRedacted {
-                    sha256_of_plaintext,
-                } => {
-                    assert!(!sha256_of_plaintext.contains("hunter"));
-                    assert_eq!(sha256_of_plaintext.len(), 64);
-                }
+                ResponseRecord::SecretRedacted {} => {}
                 other => panic!("expected redacted secret, got {other:?}"),
             },
             other => panic!("unexpected fact: {other:?}"),

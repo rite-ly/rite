@@ -7,6 +7,8 @@ members = [
     "crates/rite-runtime",
     "crates/rite-stdlib",
     "crates/rite-openssl",
+    "crates/rite-piv",
+    "crates/rite-yubikey",
     "crates/rite-render",
     "crates/rite",
     "crates/rite-ls",
@@ -31,6 +33,8 @@ rite-model = { path = "crates/rite-model", version = "0.3" }
 rite-resolver = { path = "crates/rite-resolver", version = "0.3" }
 rite-runtime = { path = "crates/rite-runtime", version = "0.3" }
 rite-openssl = { path = "crates/rite-openssl", version = "0.3" }
+rite-piv = { path = "crates/rite-piv", version = "0.3" }
+rite-yubikey = { path = "crates/rite-yubikey", version = "0.3" }
 # Sole consumer (the `rite` CLI) builds it without default features.
 rite-stdlib = { path = "crates/rite-stdlib", version = "0.3", default-features = false }
 rite-render = { path = "crates/rite-render", version = "0.3" }
@@ -52,6 +56,7 @@ base32ct = { version = "0.3.1", features = ["alloc"] }
 base64ct = { version = "1.8.3", features = ["alloc"] }
 rand = "0.10.1"
 openssl = { version = "0.10.78" }
+yubikey = "0.8"
 tempfile = "3.27.0"
 clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = "4.6.2"

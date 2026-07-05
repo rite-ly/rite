@@ -336,6 +336,37 @@ pub enum StepFact {
     },
 }
 
+impl StepFact {
+    /// Whether this fact evidences work performed on the world: a backend
+    /// operation, a written artifact, a captured attestation, or consumed
+    /// entropy. Interaction records (an answered prompt, an operator
+    /// deviation note) and lifecycle markers are not side effects: repeating
+    /// the interaction is safe and simply produces a fresh record.
+    ///
+    /// The runtime's retry gate refuses to re-execute a step attempt that
+    /// already emitted a side-effect fact.
+    #[must_use]
+    pub fn is_side_effect(&self) -> bool {
+        match self {
+            StepFact::BackendOperation { .. }
+            | StepFact::AttestationRecorded { .. }
+            | StepFact::ArtifactWritten { .. }
+            | StepFact::EntropyContributed { .. }
+            | StepFact::EntropyDrawn { .. } => true,
+            StepFact::CeremonyStarted { .. }
+            | StepFact::ActStarted { .. }
+            | StepFact::StepStarted { .. }
+            | StepFact::PromptAnswered { .. }
+            | StepFact::DeviationRecorded { .. }
+            | StepFact::StepAttemptFailed { .. }
+            | StepFact::StepCompleted { .. }
+            | StepFact::CeremonyCompleted {}
+            | StepFact::CeremonyFailed { .. }
+            | StepFact::EntropySeeded { .. } => false,
+        }
+    }
+}
+
 /// JSON-shape snapshot tests, the tripwire for accidental wire-format breaks.
 ///
 /// Every variant of [`StepFact`], [`Prompt`], [`ResponseRecord`], [`StepOutcome`],

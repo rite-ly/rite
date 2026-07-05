@@ -1,0 +1,127 @@
+version: "0.2"
+name: "Release Signing with YubiKey PIV"
+description: |
+  Sign a release manifest with an on-device YubiKey PIV key (slot 9C).
+  The private key never leaves the device: the ceremony reads the signing
+  certificate from the slot, attests that the key was generated on-device
+  using the YubiKey F9 attestation key, and produces a detached signature
+  over the manifest.
+
+backends:
+  token:
+    provider: yubikey
+
+materials:
+  manifest:
+    type: digital
+    path: "test_data/release_manifest.txt"
+    description: "Release manifest to be signed."
+
+output:
+  signing_cert:
+    type: certificate
+    description: "Signing key certificate read from PIV slot 9C"
+  attestation_cert:
+    type: certificate
+    description: "YubiKey attestation certificate for slot 9C"
+  manifest_signature:
+    type: document
+    description: "Detached ECDSA signature over the release manifest"
+
+roles:
+  signer:
+    name: "Release Signer"
+    person: "Alice Smith"
+  witness:
+    person: "Bob Jones"
+
+acts:
+  - id: opening
+    name: "Opening"
+    description: "Verify the operator and the inserted token before signing."
+  - id: signing
+    name: "Signing"
+    description: "Read the certificate, attest the key, and sign the manifest."
+  - id: closing
+    name: "Closing"
+
+prerequisites:
+  - "A YubiKey is inserted and slot 9C holds the release signing key and its certificate"
+
+sections:
+  environment:
+    act: opening
+    name: "Environment Verification"
+    role: ${role.signer}
+    steps:
+      verify_time:
+        action: clock_check
+        with:
+          message: "Verify the system clock before recording timestamps"
+      confirm_token:
+        action: confirm
+        with:
+          message: "Confirm the correct YubiKey is inserted"
+
+  read_and_attest:
+    act: signing
+    name: "Read Certificate and Attest Key"
+    role: ${role.signer}
+    steps:
+      read_signing_cert:
+        action: piv_read_certificate
+        backend: token
+        with:
+          slot: "9c"
+          message: "Read the signing certificate from slot 9C"
+        creates: signing_cert
+        description: "Read the X.509 certificate stored alongside the signing key."
+      attest_signing_key:
+        action: yubikey_attest_slot
+        backend: token
+        with:
+          slot: "9c"
+        creates: attestation_cert
+        description: "Prove the slot 9C key was generated on-device, never imported."
+
+  sign:
+    act: signing
+    name: "Sign the Manifest"
+    role: ${role.signer}
+    steps:
+      sign_manifest:
+        action: piv_sign
+        backend: token
+        reads: "${artifact.manifest}"
+        with:
+          slot: "9c"
+          algorithm: ecdsa_sha256
+          message: "Enter the PIV PIN to sign the release manifest"
+        creates: manifest_signature
+        description: "Produce a detached ECDSA-P256 signature over the manifest."
+
+  attestation:
+    act: closing
+    name: "Witness Attestation"
+    steps:
+      witness_attest:
+        action: attest
+        role: ${role.witness}
+        with:
+          statement: "I witnessed the release manifest being signed with the YubiKey."
+      signer_attest:
+        action: attest
+        role: ${role.signer}
+        with:
+          statement: "Release manifest signed with the on-device PIV key in slot 9C."
+
+after:
+  archive:
+    type: archive_materials
+    role: signer
+    items:
+      - "Ceremony transcript"
+      - "Signing certificate (signing_cert.pem)"
+      - "Attestation certificate (attestation_cert.pem)"
+      - "Manifest signature (manifest_signature.bin)"
+    location: "Secure document archive"

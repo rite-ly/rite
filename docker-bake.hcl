@@ -59,9 +59,14 @@ target "image" {
   # Provenance is attested in the release workflow via Sigstore (actions/attest),
   # the same mechanism used for the binaries, so no BuildKit in-registry
   # attestations are emitted here.
+  #
+  # The image uses the glibc `builder-image` stage (not the musl cross stages
+  # the binaries targets use) so the binary can dynamically link libpcsclite and
+  # carry the hardware backends. CARGO_BUILD_ARGS is overridable to drop them.
   args = {
     RITE_BUILD_COMMIT      = RITE_BUILD_COMMIT
     RITE_BUILD_COMMIT_DATE = RITE_BUILD_COMMIT_DATE
+    CARGO_BUILD_ARGS       = "--features piv,yubikey"
   }
   # output / tags injected by CI: `--set image.output=type=registry,push=true`,
   # tags via the bake file produced by docker/metadata-action.

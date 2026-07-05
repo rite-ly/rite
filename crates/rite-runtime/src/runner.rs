@@ -606,9 +606,11 @@ struct StepCounts {
 /// Run one step, retrying transient failures under operator control.
 ///
 /// Each attempt re-acquires the backend handle (it is moved into the handler)
-/// and snapshots the fact count beforehand: a transient error is retriable only
-/// if the attempt produced no evidence yet (the conservative re-executability
-/// gate). A retriable error within the step's [`RetryPolicy`] prompts the
+/// and snapshots the side-effect count beforehand: a transient error is
+/// retriable only if the attempt performed no work on the world yet (the
+/// conservative re-executability gate). Interaction records such as an
+/// answered prompt do not close the gate: a retried attempt simply prompts
+/// again. A retriable error within the step's [`RetryPolicy`] prompts the
 /// operator; any other failure terminates the run.
 fn execute_step_with_retry(
     handler: &dyn Action,
@@ -621,22 +623,20 @@ fn execute_step_with_retry(
 ) -> Result<StepResult, ExecutionError> {
     let mut attempt: u32 = 1;
     loop {
-        let facts_before = reporter.facts_emitted();
+        let side_effects_before = reporter.side_effects_emitted();
 
-        let backend = if let Some(name) = &step_info.backend {
-            Some(
-                backend_registry
-                    .get_mut(name)
-                    .map_err(|e| ExecutionError::StepFailed {
-                        step: step_info.id.clone(),
-                        reason: e.to_string(),
-                    })?,
-            )
-        } else {
-            None
+        // Backend acquisition is part of the attempt: a failed lazy
+        // initialization (device unplugged, daemon down) carries the same
+        // retriability semantics as a backend error inside the handler.
+        let attempt_result = match &step_info.backend {
+            Some(name) => match backend_registry.get_mut(name) {
+                Ok(backend) => handler.execute(step_info, ctx, params, reporter, Some(backend)),
+                Err(e) => Err(ActionError::Backend(e)),
+            },
+            None => handler.execute(step_info, ctx, params, reporter, None),
         };
 
-        let action_err = match handler.execute(step_info, ctx, params, reporter, backend) {
+        let action_err = match attempt_result {
             Ok(result) => return Ok(result),
             // Abort is an operator decision, not an attempt failure: no
             // StepAttemptFailed is recorded, the run terminates here.
@@ -644,10 +644,10 @@ fn execute_step_with_retry(
             Err(action_err) => action_err,
         };
 
-        // Conservative re-executability gate: a step that already emitted a fact
-        // this attempt is not safely re-runnable.
-        let no_new_facts = reporter.facts_emitted() == facts_before;
-        let retriable = action_err.retriability().is_retriable() && no_new_facts;
+        // Conservative re-executability gate: a step that already performed
+        // work on the world this attempt is not safely re-runnable.
+        let no_new_side_effects = reporter.side_effects_emitted() == side_effects_before;
+        let retriable = action_err.retriability().is_retriable() && no_new_side_effects;
         let exec_err = action_error_to_execution(action_err, &step.id);
         reporter.fact(StepFact::StepAttemptFailed {
             step: step.id.clone(),
@@ -1156,21 +1156,35 @@ sections:
 
     // ---- Retry loop tests ----
 
+    /// What [`FlakyAction`] does at the start of every attempt (failing or
+    /// not, mirroring an action that always prompts before its backend call),
+    /// to exercise the re-executability gate.
+    enum BeforeFail {
+        Nothing,
+        /// Emit a side-effect fact (a backend operation): closes the gate.
+        SideEffect,
+        /// Issue a secret prompt (like a PIN entry): the answered prompt is
+        /// recorded but must not close the gate.
+        Prompt,
+        /// Record an operator deviation note: recorded but must not close
+        /// the gate.
+        Deviation,
+    }
+
     /// Test action whose first `fails_remaining` executions fail with
-    /// `error()`, then it succeeds. Optionally emits a transcript fact before
-    /// failing, to exercise the re-executability gate.
+    /// `error()`, then it succeeds.
     struct FlakyAction {
         fails_remaining: std::sync::Mutex<u32>,
         error: fn() -> ActionError,
-        emit_fact_before_fail: bool,
+        before_fail: BeforeFail,
     }
 
     impl FlakyAction {
-        fn new(fails: u32, error: fn() -> ActionError, emit_fact_before_fail: bool) -> Arc<Self> {
+        fn new(fails: u32, error: fn() -> ActionError, before_fail: BeforeFail) -> Arc<Self> {
             Arc::new(Self {
                 fails_remaining: std::sync::Mutex::new(fails),
                 error,
-                emit_fact_before_fail,
+                before_fail,
             })
         }
     }
@@ -1186,23 +1200,40 @@ sections:
 
         fn execute(
             &self,
-            _step: &StepInfo,
+            step: &StepInfo,
             _ctx: &HandlerContext,
             _params: &serde_json::Value,
             reporter: &mut Reporter<'_>,
             _backend: Option<&mut dyn Backend>,
         ) -> Result<StepResult, ActionError> {
             let mut remaining = self.fails_remaining.lock().expect("lock");
+            match self.before_fail {
+                BeforeFail::Nothing => {}
+                BeforeFail::SideEffect => {
+                    reporter.fact(StepFact::BackendOperation {
+                        step: step.id.clone(),
+                        kind: "test_op".to_string(),
+                        inputs: serde_json::Value::Null,
+                        outputs: serde_json::Value::Null,
+                        fingerprint: None,
+                    })?;
+                }
+                BeforeFail::Prompt => {
+                    reporter.prompt(&Prompt::Secret {
+                        label: "Enter PIN".to_string(),
+                    })?;
+                }
+                BeforeFail::Deviation => {
+                    reporter.fact(StepFact::DeviationRecorded {
+                        step: None,
+                        text: "operator note".to_string(),
+                    })?;
+                }
+            }
             if *remaining == 0 {
                 return Ok(StepResult::completed("done".to_string()));
             }
             *remaining = remaining.saturating_sub(1);
-            if self.emit_fact_before_fail {
-                reporter.fact(StepFact::DeviationRecorded {
-                    step: None,
-                    text: "side effect".to_string(),
-                })?;
-            }
             Err((self.error)())
         }
     }
@@ -1248,6 +1279,21 @@ sections:
         Vec<StepFact>,
         usize,
     ) {
+        drive_with_backends(ceremony, action, confirm_answer, BackendRegistry::new())
+    }
+
+    /// Like [`drive`], with a caller-provided backend registry for steps
+    /// that name a backend.
+    fn drive_with_backends(
+        ceremony: Ceremony,
+        action: Arc<dyn Action>,
+        confirm_answer: bool,
+        backend_registry: BackendRegistry,
+    ) -> (
+        Result<ExecutionSummary, ExecutionError>,
+        Vec<StepFact>,
+        usize,
+    ) {
         let mut registry = ActionRegistry::new();
         registry.register(action);
 
@@ -1258,7 +1304,7 @@ sections:
         let executor = Executor::new(
             ceremony,
             registry,
-            BackendRegistry::new(),
+            backend_registry,
             dry_run_output_config(),
             true, // dry_run: skips pacing/start prompts, leaving only the retry Confirm
             StartupSnapshot::placeholder(),
@@ -1283,6 +1329,18 @@ sections:
                         })
                         .expect("send confirm");
                 }
+                ExecEvent::AwaitPrompt {
+                    prompt_id,
+                    prompt: Prompt::Secret { .. },
+                    ..
+                } => {
+                    cmd_tx
+                        .send(UiCommand::PromptResponse {
+                            prompt_id,
+                            response: Response::Secret("123456".to_string().into()),
+                        })
+                        .expect("send secret");
+                }
                 _ => {}
             }
         }
@@ -1302,7 +1360,7 @@ sections:
 
     #[test]
     fn transient_failure_is_retried_then_succeeds() {
-        let action = FlakyAction::new(1, transient, false);
+        let action = FlakyAction::new(1, transient, BeforeFail::Nothing);
         let (result, facts, confirms) = drive(ceremony_with_retry(""), action, true);
 
         let summary = result.expect("run ok");
@@ -1326,10 +1384,11 @@ sections:
     }
 
     #[test]
-    fn retry_is_blocked_once_a_fact_was_emitted() {
-        // Transient error, but the attempt already wrote a fact: the
-        // conservative gate refuses to retry, so no prompt fires.
-        let action = FlakyAction::new(u32::MAX, transient, true);
+    fn retry_is_blocked_once_a_side_effect_was_emitted() {
+        // Transient error, but the attempt already performed a backend
+        // operation: the conservative gate refuses to retry, so no prompt
+        // fires.
+        let action = FlakyAction::new(u32::MAX, transient, BeforeFail::SideEffect);
         let (result, facts, confirms) = drive(ceremony_with_retry(""), action, true);
 
         assert!(result.is_err(), "run fails");
@@ -1343,8 +1402,129 @@ sections:
     }
 
     #[test]
+    fn prompting_before_a_transient_failure_stays_retriable() {
+        // A PIN-style secret prompt answered before the failure records a
+        // PromptAnswered fact, but answering a prompt is not a side effect:
+        // the retry must still be offered, and the second attempt re-prompts.
+        let action = FlakyAction::new(1, transient, BeforeFail::Prompt);
+        let (result, facts, confirms) = drive(ceremony_with_retry(""), action, true);
+
+        let summary = result.expect("run ok");
+        assert_eq!(summary.steps_completed, 1);
+        assert_eq!(confirms, 1, "the retry prompt fired");
+        assert_eq!(attempt_numbers(&facts), vec![1]);
+        let secret_answers = facts
+            .iter()
+            .filter(|f| {
+                matches!(
+                    f,
+                    StepFact::PromptAnswered {
+                        prompt: Prompt::Secret { .. },
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(secret_answers, 2, "each attempt records its own answer");
+    }
+
+    #[test]
+    fn a_deviation_note_does_not_block_retry() {
+        let action = FlakyAction::new(1, transient, BeforeFail::Deviation);
+        let (result, _facts, confirms) = drive(ceremony_with_retry(""), action, true);
+
+        let summary = result.expect("run ok");
+        assert_eq!(summary.steps_completed, 1);
+        assert_eq!(confirms, 1, "the retry prompt fired");
+    }
+
+    #[test]
+    fn backend_acquisition_failure_is_retriable() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        // Lazy backend initialization fails on the first probe (device
+        // unplugged) and succeeds on the second: the operator must get the
+        // same retry offer as for a transient error inside the handler.
+        struct NullBackend {
+            name: String,
+        }
+        impl Backend for NullBackend {
+            fn name(&self) -> &str {
+                &self.name
+            }
+            fn provider(&self) -> &'static str {
+                "mock"
+            }
+            fn fingerprint(&self) -> String {
+                format!("mock={}", self.name)
+            }
+        }
+
+        let probes = Arc::new(AtomicU32::new(0));
+        let probes_in_factory = Arc::clone(&probes);
+        let mut backends =
+            crate::backend::BackendRegistry::with_factory(Box::new(move |_name, _config| {
+                if probes_in_factory.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(BackendError::HardwareFailure("no device".to_string()))
+                } else {
+                    Ok(Box::new(NullBackend {
+                        name: "token".to_string(),
+                    }) as Box<dyn Backend>)
+                }
+            }));
+        backends.declare(
+            "token".to_string(),
+            rite_sdk::BackendConfig {
+                provider: "mock".to_string(),
+                extra: serde_json::json!({}),
+            },
+        );
+
+        let yaml = r#"
+version: "0.2"
+name: "Retry"
+backends:
+  token:
+    provider: mock
+roles:
+  participant:
+    person: "Alice"
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      work:
+        action: attest
+        backend: token
+        silent: true
+        with:
+          statement: "x"
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("resolve");
+
+        let action = FlakyAction::new(0, transient, BeforeFail::Nothing);
+        let (result, facts, confirms) = drive_with_backends(ceremony, action, true, backends);
+
+        let summary = result.expect("run ok after the operator retried");
+        assert_eq!(summary.steps_completed, 1);
+        assert_eq!(confirms, 1, "the retry prompt fired");
+        assert_eq!(attempt_numbers(&facts), vec![1]);
+        let StepFact::StepAttemptFailed { error, .. } = facts
+            .iter()
+            .find(|f| matches!(f, StepFact::StepAttemptFailed { .. }))
+            .expect("attempt fact")
+        else {
+            unreachable!()
+        };
+        assert_eq!(error.class, ErrorClass::Environmental);
+        assert_eq!(probes.load(Ordering::SeqCst), 2, "hardware probed again");
+    }
+
+    #[test]
     fn retry_never_fails_immediately() {
-        let action = FlakyAction::new(u32::MAX, transient, false);
+        let action = FlakyAction::new(u32::MAX, transient, BeforeFail::Nothing);
         let (result, facts, confirms) = drive(ceremony_with_retry("retry: never"), action, true);
 
         assert!(result.is_err());
@@ -1354,7 +1534,7 @@ sections:
 
     #[test]
     fn retry_attempts_caps_total_tries() {
-        let action = FlakyAction::new(u32::MAX, transient, false);
+        let action = FlakyAction::new(u32::MAX, transient, BeforeFail::Nothing);
         let (result, facts, confirms) =
             drive(ceremony_with_retry("retry: {attempts: 2}"), action, true);
 
@@ -1367,7 +1547,7 @@ sections:
 
     #[test]
     fn declining_the_retry_prompt_terminates() {
-        let action = FlakyAction::new(u32::MAX, transient, false);
+        let action = FlakyAction::new(u32::MAX, transient, BeforeFail::Nothing);
         let (result, facts, confirms) = drive(ceremony_with_retry(""), action, false);
 
         assert!(result.is_err());

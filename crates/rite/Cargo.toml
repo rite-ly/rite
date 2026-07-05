@@ -24,6 +24,10 @@ attestation = ["rite-stdlib/attestation"]
 crypto = ["rite-stdlib/crypto"]
 pki = ["rite-stdlib/pki"]
 openssl-vendored = ["rite-stdlib/openssl-vendored", "openssl"]
+# Hardware smart-card backends. Opt-in only (PC/SC system dependency); kept out
+# of `default` and the static musl release artifacts.
+piv = ["rite-stdlib/piv"]
+yubikey = ["rite-stdlib/yubikey"]
 tui = ["dep:rite-tui"]
 
 [dependencies]

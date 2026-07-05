@@ -54,9 +54,6 @@ RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-arm64 \
     install -D -m 0755 target/aarch64-unknown-linux-musl/release/rite    /out/rite && \
     install -D -m 0755 target/aarch64-unknown-linux-musl/release/rite-ls /out/rite-ls
 
-ARG TARGETARCH
-FROM builder-${TARGETARCH} AS builder
-
 FROM scratch AS binaries-amd64
 COPY --from=builder-amd64 /out/rite    /rite
 COPY --from=builder-amd64 /out/rite-ls /rite-ls
@@ -65,11 +62,48 @@ FROM scratch AS binaries-arm64
 COPY --from=builder-arm64 /out/rite    /rite
 COPY --from=builder-arm64 /out/rite-ls /rite-ls
 
+# glibc builder for the published image. Unlike the musl cross stages above
+# (which feed the static, software-only release tarballs and pin `--platform` to
+# the toolchain arch), this stage sets no `--platform`, so buildx builds it once
+# per target arch under the `image` target: amd64 natively, arm64 emulated via
+# QEMU. It dynamically links libpcsclite and
+# system OpenSSL, so the image binary can carry the piv/yubikey smart-card
+# backends the static musl build cannot. It builds only `rite`; `rite-ls` is a
+# release-tarball artifact, not part of the image.
+FROM rust:1-trixie@sha256:6df234c1eb92b0545468fab8c18fc5f9adfb994e7d4f67d81d45fe2fcabf5657 AS builder-image
+WORKDIR /src
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpcsclite-dev \
+    libssl-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+# Default feature set (which includes system OpenSSL) plus the hardware backends.
+ARG CARGO_BUILD_ARGS="--features piv,yubikey"
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+# TARGETARCH keeps the cache mounts per-arch so the two platform builds never
+# share a target dir. Commit ARGs at the RUN to keep the COPY layer cache-stable.
+ARG TARGETARCH
+ARG RITE_BUILD_COMMIT
+ARG RITE_BUILD_COMMIT_DATE
+RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-image-${TARGETARCH} \
+    --mount=type=cache,target=/src/target,id=cargo-target-image-${TARGETARCH} \
+    RITE_BUILD_COMMIT="$RITE_BUILD_COMMIT" \
+    RITE_BUILD_COMMIT_DATE="$RITE_BUILD_COMMIT_DATE" \
+    cargo build --locked --release -p rite $CARGO_BUILD_ARGS && \
+    install -D -m 0755 target/release/rite /out/rite
+
 FROM debian:trixie-slim@sha256:28de0877c2189802884ccd20f15ee41c203573bd87bb6b883f5f46362d24c5c2 AS runtime-base
 
+# libssl3 and libpcsclite1 are the shared libraries the glibc image binary links
+# (system OpenSSL + PC/SC). The pcscd daemon and CCID driver are not installed:
+# they are only needed to open a real card, which the container does by mounting
+# the host's PC/SC socket. See docs/docker.md.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     jq \
+    libssl3 \
+    libpcsclite1 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system --gid 1001 rite \
@@ -84,5 +118,5 @@ ENTRYPOINT ["rite"]
 CMD ["--help"]
 
 FROM runtime-base AS release
-COPY --from=builder /out/rite /usr/local/bin/rite
+COPY --from=builder-image /out/rite /usr/local/bin/rite
 USER rite

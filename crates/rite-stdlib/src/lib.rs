@@ -19,7 +19,9 @@
 //! - `attestation`: attestation recording
 //! - `crypto`: crypto actions (`generate_keypair`, `export_public`, `wrap_key`, `unwrap_key`)
 //! - `pki`: PKI actions (`generate_csr`, `issue_certificate`; requires `x509-cert`, `der`, `sha1`, `rsa`, `p256`)
-//! - `default`: all features enabled
+//! - `piv`: PIV smart-card actions (`piv_read_certificate`, `piv_sign`; requires PC/SC)
+//! - `yubikey`: `YubiKey` actions (`yubikey_attest_slot`; implies `piv`; requires PC/SC)
+//! - `default`: all features enabled except the hardware backends (`piv`, `yubikey`)
 //!
 //! # Usage
 //!
@@ -45,6 +47,8 @@ pub mod attestation;
 #[cfg(feature = "crypto")]
 pub mod crypto;
 pub mod entropy;
+#[cfg(feature = "piv")]
+pub mod piv;
 #[cfg(feature = "pki")]
 pub mod pki;
 #[cfg(feature = "verification")]
@@ -61,6 +65,10 @@ pub use attestation::AttestAction;
 #[cfg(feature = "crypto")]
 pub use crypto::{ExportPublicAction, GenerateKeypairAction, UnwrapKeyAction, WrapKeyAction};
 pub use entropy::GatherEntropyAction;
+#[cfg(feature = "yubikey")]
+pub use piv::YubikeyAttestSlotAction;
+#[cfg(feature = "piv")]
+pub use piv::{PivReadCertificateAction, PivSignAction};
 #[cfg(feature = "pki")]
 pub use pki::{GenerateCsrAction, IssueCertificateAction};
 #[cfg(feature = "verification")]
@@ -110,6 +118,17 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
     {
         registry.register(Arc::new(GenerateCsrAction));
         registry.register(Arc::new(IssueCertificateAction));
+    }
+
+    #[cfg(feature = "piv")]
+    {
+        registry.register(Arc::new(PivReadCertificateAction));
+        registry.register(Arc::new(PivSignAction));
+    }
+
+    #[cfg(feature = "yubikey")]
+    {
+        registry.register(Arc::new(YubikeyAttestSlotAction));
     }
 }
 

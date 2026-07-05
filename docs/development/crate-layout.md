@@ -7,6 +7,8 @@ flowchart TD
     tui[rite-tui<br/>TEA frontend]
     stdlib[rite-stdlib<br/>default action set]
     openssl[rite-openssl<br/>backend impl]
+    piv[rite-piv<br/>PIV backend impl]
+    yubikey[rite-yubikey<br/>YubiKey backend impl]
     runtime[rite-runtime<br/>protocol, executor, transcript]
     resolver[rite-resolver<br/>YAML → IR, diagnostics]
     render[rite-render<br/>document generation]
@@ -22,7 +24,12 @@ flowchart TD
     tui --> runtime
     ls --> resolver
     stdlib --> runtime
+    stdlib -.piv feature.-> piv
+    stdlib -.yubikey feature.-> yubikey
     openssl --> sdk
+    piv --> sdk
+    yubikey --> sdk
+    yubikey --> piv
     runtime --> sdk
     runtime --> model
     render --> model
@@ -35,8 +42,10 @@ flowchart TD
 | `rite-model`    | DSL IR (`Ceremony`, `Step`, `Prompt`, …) and the durable transcript schema (`StepFact`, `ResponseRecord`, …). Carries no executor or channel types. |
 | `rite-resolver` | YAML resolution and lowering, diagnostics, parameter checks.                                                                                        |
 | `rite-runtime`  | Channel protocol, executor, reporter, transcript sink, action trait and registry.                                                                   |
-| `rite-stdlib`   | Default action set (verification, attestation, crypto, PKI).                                                                                        |
+| `rite-stdlib`   | All built-in actions: generic ones (verification, attestation, crypto, PKI) plus backend-specific ones behind features (`piv`/`yubikey`).            |
 | `rite-openssl`  | OpenSSL-backed `Backend` implementation.                                                                                                            |
+| `rite-piv`      | PIV smart-card `Backend` implementation (`yubikey` crate over PC/SC). Opt-in via the `piv` feature; the `piv_*` actions live in `rite-stdlib`.        |
+| `rite-yubikey`  | `YubiKey` backend: PIV plus Yubico on-device attestation. Opt-in via the `yubikey` feature; the `yubikey_attest_slot` action lives in `rite-stdlib`. |
 | `rite-tui`      | TEA-based interactive frontend (ratatui + crossterm).                                                                                               |
 | `rite`          | `rite` binary; hosts the console and headless drivers and wires every crate above together.                                                         |
 | `rite-render`   | Document generation: ceremony scripts and post-ceremony reports (HTML/PDF).                                                                          |
@@ -46,8 +55,18 @@ flowchart TD
 
 - A third-party verifier only needs `rite-model` to parse a transcript;
   the executor and channel types stay in `rite-runtime` for that reason.
-- `rite-sdk` is the only crate a new backend has to depend on. Adding a
-  backend must not pull in the executor or any frontend crate.
+- `rite-sdk` is the backend boundary. A backend crate (`rite-openssl`,
+  `rite-piv`, `rite-yubikey`) depends only on `rite-sdk`, not the executor or
+  any frontend. This keeps a first-party in-process backend a faithful mirror
+  of a future out-of-process plugin, which will implement the same `rite-sdk`
+  traits over JSON-RPC. The constraint is about the **backend**, not its
+  actions: a backend crate carries no `Action` implementations.
+- Actions live in `rite-stdlib`, never in a backend crate. Generic actions
+  dispatch through the `rite-sdk` capability traits and work with any backend;
+  backend-specific actions (`piv_sign`, `yubikey_attest_slot`) are feature-gated
+  there too. `rite-stdlib` is the integration layer and may depend on backend
+  crates (optionally, per feature) to register their actions and build them in
+  the factory. Plugin backends are a goal; pluggable actions are not.
 - Frontends depend on `rite-runtime` for the protocol vocabulary
   (`ExecEvent`, `UiCommand`) and on `rite-model` for the persisted types
   they render. They never reach into `rite-stdlib` or backend crates.

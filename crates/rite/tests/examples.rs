@@ -28,9 +28,20 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Whether an example needs a Cargo feature this test binary was built
+/// without. Feature unification builds the `rite` binary under test with the
+/// same features as the test itself, so `cfg!` reflects what that binary
+/// supports.
+fn needs_missing_feature(path: &Path) -> bool {
+    // examples/piv uses the hardware-backend actions (`piv_sign`,
+    // `yubikey_attest_slot`), which are off in the default feature set.
+    !cfg!(feature = "yubikey") && path.starts_with(examples_dir().join("piv"))
+}
+
 fn ceremonies() -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect(&examples_dir(), &mut out);
+    out.retain(|p| !needs_missing_feature(p));
     out.sort();
     assert!(
         !out.is_empty(),

@@ -28,6 +28,7 @@ pub struct ReporterHarness {
     _event_rx: Receiver<ExecEvent>,
     cmd_tx: Sender<UiCommand>,
     cmd_rx: Receiver<UiCommand>,
+    next_response_id: u64,
 }
 
 impl ReporterHarness {
@@ -42,20 +43,27 @@ impl ReporterHarness {
             _event_rx: event_rx,
             cmd_tx,
             cmd_rx,
+            next_response_id: 0,
         }
     }
 
-    /// Pre-stage an operator response to a prompt the action under test will
-    /// issue. A reporter allocates prompt ids from zero in order, so the first
-    /// prompt an action issues has id `0`. The response sits in the command
-    /// channel until the reporter receives it, so call this before running the
-    /// action.
-    pub fn respond(&self, prompt_id: u64, response: Response) {
-        // The receiver lives in this harness, so the send cannot fail; ignore
-        // the result rather than unwrap (this module is compiled as library
-        // code, where `unwrap`/`expect` are linted).
+    /// Pre-queue a response to the next prompt the action under test will issue.
+    ///
+    /// Prompt ids start at 0 and increase by one per prompt, so queued
+    /// responses are matched in issue order: the first call answers the first
+    /// prompt, the second answers the second, and so on. The reporter reads
+    /// commands from an unbounded channel, so queuing before `execute` is
+    /// enough and no second thread is needed.
+    ///
+    /// Assumes a single reporter built from this harness (the id sequence is
+    /// not reset by [`Self::reporter`]); that matches every current test.
+    pub fn enqueue_response(&mut self, response: Response) {
+        let prompt_id = PromptId::new(self.next_response_id);
+        self.next_response_id = self.next_response_id.wrapping_add(1);
+        // The receiver is held by the harness for its lifetime, so this send
+        // cannot disconnect.
         let _ = self.cmd_tx.send(UiCommand::PromptResponse {
-            prompt_id: PromptId::new(prompt_id),
+            prompt_id,
             response,
         });
     }

@@ -117,8 +117,7 @@ pub struct Hardening {
 }
 
 /// A single security-feature determination: a machine-comparable status plus
-/// optional human context. Replaces the free-form status strings the
-/// `machine_info` action used to emit.
+/// optional human context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureCheck {
     /// Whether the feature is active.

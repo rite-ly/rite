@@ -265,6 +265,23 @@ pub enum SignAlgorithm {
     Ed25519,
 }
 
+impl SignAlgorithm {
+    /// The key algorithm this signature algorithm is used with.
+    ///
+    /// This pairing is the shared source of truth for backends that select a
+    /// device algorithm from a signature request and for test doubles that
+    /// mint stand-in keys, so the two cannot drift apart.
+    #[must_use]
+    pub fn key_algorithm(self) -> KeyAlgorithm {
+        match self {
+            SignAlgorithm::RsaPkcs1Sha256 | SignAlgorithm::RsaPssSha256 => KeyAlgorithm::Rsa2048,
+            SignAlgorithm::EcdsaSha256 => KeyAlgorithm::EcdsaP256,
+            SignAlgorithm::EcdsaSha384 => KeyAlgorithm::EcdsaP384,
+            SignAlgorithm::Ed25519 => KeyAlgorithm::Ed25519,
+        }
+    }
+}
+
 /// Wrapping algorithm. Determines both the cryptographic method and the output format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]

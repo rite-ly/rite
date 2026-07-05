@@ -2020,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "rite"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -2043,7 +2043,7 @@ dependencies = [
 
 [[package]]
 name = "rite-ls"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "dashmap",
  "rite-model",
@@ -2054,7 +2054,7 @@ dependencies = [
 
 [[package]]
 name = "rite-model"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "indexmap",
  "rite-sdk",
@@ -2064,7 +2064,7 @@ dependencies = [
 
 [[package]]
 name = "rite-openssl"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base16ct 1.0.0",
  "openssl",
@@ -2075,7 +2075,7 @@ dependencies = [
 
 [[package]]
 name = "rite-piv"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "der 0.7.10",
  "rite-sdk",
@@ -2086,7 +2086,7 @@ dependencies = [
 
 [[package]]
 name = "rite-render"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64ct",
  "chrono",
@@ -2100,7 +2100,7 @@ dependencies = [
 
 [[package]]
 name = "rite-resolver"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "indexmap",
  "marked-yaml",
@@ -2113,7 +2113,7 @@ dependencies = [
 
 [[package]]
 name = "rite-runtime"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base16ct 1.0.0",
  "base32ct",
@@ -2135,7 +2135,7 @@ dependencies = [
 
 [[package]]
 name = "rite-sdk"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bitflags",
  "serde",
@@ -2145,7 +2145,7 @@ dependencies = [
 
 [[package]]
 name = "rite-stdlib"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "der 0.7.10",
@@ -2170,7 +2170,7 @@ dependencies = [
 
 [[package]]
 name = "rite-tui"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -2183,7 +2183,7 @@ dependencies = [
 
 [[package]]
 name = "rite-yubikey"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "rite-piv",
  "rite-sdk",

@@ -16,25 +16,25 @@ of compatibility are in play and must not be conflated:
   ceremony written against the documented DSL must keep parsing, unless we deliberately bump the
   `version:` field. Format changes are intentional and reviewed, never incidental.
 
-| Tier | Crates | Promise at 0.x | Emphasis |
-|---|---|---|---|
-| **A (Contract)** | `rite-sdk`, `rite-model` | API breakable; **wire strings and transcript/DSL format change only on purpose** | Contract tests + golden snapshots, mandatory |
-| **B (Core)** | `rite-resolver`, `rite-runtime`, `rite-stdlib`, `rite-openssl` | No API promise; refactor freely | Unit + integration on behavior, not structure |
-| **C (Edges)** | `rite-tui`, `rite-render`, `rite-ls`, `rite` | No promise | Snapshots + smoke + manual |
+| Tier             | Crates                                                         | Promise at 0.x                                                                   | Emphasis                                      |
+|------------------|----------------------------------------------------------------|----------------------------------------------------------------------------------|-----------------------------------------------|
+| **A (Contract)** | `rite-sdk`, `rite-model`                                       | API breakable; **wire strings and transcript/DSL format change only on purpose** | Contract tests + golden snapshots, mandatory  |
+| **B (Core)**     | `rite-resolver`, `rite-runtime`, `rite-stdlib`, `rite-openssl` | No API promise; refactor freely                                                  | Unit + integration on behavior, not structure |
+| **C (Edges)**    | `rite-tui`, `rite-render`, `rite-ls`, `rite`                   | No promise                                                                       | Snapshots + smoke + manual                    |
 
 The MSRV CI job already pins only the published library floor (`rite-sdk`, `rite-model`,
 `rite-resolver`); binaries float with stable Rust. Keep the two consistent.
 
 ## Levels and where they go
 
-| Level | In this project | Rust location |
-|---|---|---|
-| Unit | Resolver lowering, expression eval, entropy ratchet, path safety, action input parsing | Inline `#[cfg(test)] mod tests`. The only level that may touch private items |
-| Integration | A crate through its public API (a stdlib action + the real OpenSSL backend producing parseable DER; `analyze()` over a fixture) | `crates/<c>/tests/`. Public API only |
-| End-to-end | A whole ceremony from YAML to transcript via the headless driver; the CLI as a subprocess; the example smoke tests | `tests/` in `rite`; `assert_cmd` for subprocess |
-| Contract / golden | Wire strings (enum `serde`/`Display`) and transcript / diagnostic / rendered-doc snapshots | Table tests + `insta` |
-| Property | Round-trips, path confinement never escaping its root, resolver never panicking | `proptest`, selectively |
-| Manual | YubiKey/TPM device flows, the TUI, operator ergonomics | `#[ignore]`d tests + `docs/` checklists |
+| Level             | In this project                                                                                                                 | Rust location                                                                |
+|-------------------|---------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| Unit              | Resolver lowering, expression eval, entropy ratchet, path safety, action input parsing                                          | Inline `#[cfg(test)] mod tests`. The only level that may touch private items |
+| Integration       | A crate through its public API (a stdlib action + the real OpenSSL backend producing parseable DER; `analyze()` over a fixture) | `crates/<c>/tests/`. Public API only                                         |
+| End-to-end        | A whole ceremony from YAML to transcript via the headless driver; the CLI as a subprocess; the example smoke tests              | `tests/` in `rite`; `assert_cmd` for subprocess                              |
+| Contract / golden | Wire strings (enum `serde`/`Display`) and transcript / diagnostic / rendered-doc snapshots                                      | Table tests + `insta`                                                        |
+| Property          | Round-trips, path confinement never escaping its root, resolver never panicking                                                 | `proptest`, selectively                                                      |
+| Manual            | YubiKey/TPM device flows, the TUI, operator ergonomics                                                                          | `#[ignore]`d tests + `docs/` checklists                                      |
 
 Notes that are easy to get wrong:
 

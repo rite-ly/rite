@@ -134,12 +134,15 @@ Both bundle the `rite-ls` language server. For other LSP-aware editors, run `rit
 - [x] **Ceremony DSL** — roles, steps, materials, outputs
 - [x] **Guided execution** — `rite run`
   - [x] Interactive TUI
-  - [ ] Error handling
+  - [x] Error handling (taxonomy, operator-driven retry)
+    - [ ] Ceremony resumption after interruption
+    - [ ] Teardown act on abort or failure
 - [x] **Cryptographic backends**
   - [x] OpenSSL: RSA, ECDSA-P256, signing, wrapping, PKI
     - [ ] Post-quantum: ML-KEM key encapsulation
-  - [ ] Hardware backends
-    - [ ] YubiKey PIV
+  - [x] Hardware backends
+    - [x] YubiKey PIV: key generation, signing, certificate read, on-device attestation
+      - [ ] Write operations (key import, PIN/PUK and management-key changes)
     - [ ] TPM 2.0
     - [ ] PKCS#11
   - [ ] Plugin system for out-of-process backends

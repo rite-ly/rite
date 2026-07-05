@@ -95,100 +95,33 @@ jobs:
           path: target/${{ matrix.rust_target }}/release/rite-ls${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
 
-  build-linux-and-image:
-    name: Build Linux binaries and push image
+  # Static, software-only Linux tarballs. The rust-musl-cross toolchain images
+  # are linux/amd64 (pinned via --platform in the Dockerfile), so both the amd64
+  # and arm64 musl targets cross-compile on an amd64 host with no QEMU. The
+  # hardware backends ship in the native binaries and the glibc image, not here.
+  build-linux-musl:
+    name: Build Linux musl binaries
     needs: [validate]
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      # The glibc `image` target compiles the arm64 binary under emulation, so
-      # register QEMU binfmt explicitly rather than relying on the runner's
-      # preinstalled handlers. The musl `binaries-*` targets cross-compile and
-      # do not need it.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Log in to ghcr.io
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        # Annotate the index (manifest list) as well as the per-platform manifests.
-        env:
-          DOCKER_METADATA_ANNOTATIONS_LEVELS: index,manifest
-        with:
-          images: ghcr.io/rite-ly/rite
-          # latest=auto applies the `latest` tag only when the ref is a stable semver.
-          flavor: latest=auto
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-          # Static OCI labels listed explicitly so all metadata lives in one place.
-          # metadata-action also auto-fills `created`, `revision`, and `version` at build time.
-          labels: |
-            org.opencontainers.image.title=rite
-            org.opencontainers.image.description=DSL and runtime for cryptographic key ceremonies
-            org.opencontainers.image.source=https://github.com/rite-ly/rite
-            org.opencontainers.image.url=https://ritely.io
-            org.opencontainers.image.documentation=https://ritely.io/docs
-            org.opencontainers.image.vendor=Rite-ly
-            org.opencontainers.image.licenses=GPL-3.0-only
-          bake-target: image
-
-      - name: Bake binaries + image
-        id: bake
+      - name: Bake musl binaries
         uses: docker/bake-action@d3418bd7d0e9324001bca92fa8ba175ea7e6dc9b # v7.3.0
         env:
           RITE_BUILD_COMMIT: ${{ needs.validate.outputs.commit_sha }}
           RITE_BUILD_COMMIT_DATE: ${{ needs.validate.outputs.commit_date }}
         with:
-          # Provenance is attested via Sigstore (actions/attest, below); disable the
-          # BuildKit in-registry provenance that bake-action injects by default so the
-          # image carries a single, signed attestation rather than two mechanisms.
-          provenance: false
-          files: |
-            ./docker-bake.hcl
-            cwd://${{ steps.meta.outputs.bake-file }}
-          targets: default
+          files: ./docker-bake.hcl
+          targets: binaries
           set: |
-            image.output=type=registry,push=true
-            *.cache-from=type=gha,scope=release-docker
-            *.cache-to=type=gha,mode=max,scope=release-docker
-
-      # Pull the pushed multi-arch index digest out of the bake metadata for the
-      # `image` target. Done in a dedicated step (rather than an inline fromJSON
-      # expression) so the resolved digest is visible in the logs.
-      - name: Resolve image digest
-        id: image
-        env:
-          BAKE_METADATA: ${{ steps.bake.outputs.metadata }}
-        run: |
-          digest=$(jq -r '.image["containerimage.digest"]' <<<"$BAKE_METADATA")
-          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
-
-      # Sigstore-signed provenance for the pushed image, bound to the multi-arch
-      # index digest and stored as an OCI referrer alongside it (verifiable with
-      # `gh attestation verify oci://...`). Same mechanism as the binaries below.
-      - name: Attest image provenance
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
-        with:
-          subject-name: ghcr.io/rite-ly/rite
-          subject-digest: ${{ steps.image.outputs.digest }}
-          push-to-registry: true
+            *.cache-from=type=gha,scope=release-musl
+            *.cache-to=type=gha,mode=max,scope=release-musl
 
       - name: Stage Linux binaries for upload
         run: |
@@ -226,9 +159,185 @@ jobs:
           path: target/aarch64-unknown-linux-musl/release/rite-ls
           if-no-files-found: error
 
+  # Glibc runtime image, built one arch per runner so each compiles natively:
+  # amd64 on ubuntu-latest, arm64 on ubuntu-24.04-arm (no QEMU). Each build is
+  # pushed to ghcr.io by digest only; the merge job below assembles the tagged
+  # multi-arch manifest list. The glibc build dynamically links libpcsclite and
+  # system OpenSSL, so the image carries the piv/yubikey backends.
+  build-image:
+    name: Build image (${{ matrix.arch }})
+    needs: [validate]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # OCI labels + annotations for this single-platform manifest. The index
+      # tags and index-level annotations are applied in the merge job.
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/rite-ly/rite
+          labels: |
+            org.opencontainers.image.title=rite
+            org.opencontainers.image.description=DSL and runtime for cryptographic key ceremonies
+            org.opencontainers.image.source=https://github.com/rite-ly/rite
+            org.opencontainers.image.url=https://ritely.io
+            org.opencontainers.image.documentation=https://ritely.io/docs
+            org.opencontainers.image.vendor=Rite-ly
+            org.opencontainers.image.licenses=GPL-3.0-only
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: release
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          build-args: |
+            CARGO_BUILD_ARGS=--features piv,yubikey
+            RITE_BUILD_COMMIT=${{ needs.validate.outputs.commit_sha }}
+            RITE_BUILD_COMMIT_DATE=${{ needs.validate.outputs.commit_date }}
+          # Provenance is attested via Sigstore (actions/attest, in the merge
+          # job); disable BuildKit's in-registry provenance so the index carries
+          # a single signed attestation.
+          provenance: false
+          outputs: type=image,name=ghcr.io/rite-ly/rite,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=release-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=release-image-${{ matrix.arch }}
+
+      # Export the per-arch digest as a filename-only marker; the merge job
+      # collects both and feeds them to `imagetools create`.
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Assemble the per-arch digests into the tagged multi-arch manifest list and
+  # attest the resulting index.
+  merge-image:
+    name: Merge and push image manifest
+    needs: [validate, build-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: image-digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tags + index-level annotations for the manifest list. latest=auto applies
+      # the `latest` tag only on a stable semver ref; annotations are derived from
+      # the same OCI labels and attached to the index by imagetools.
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+        with:
+          images: ghcr.io/rite-ly/rite
+          flavor: latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=rite
+            org.opencontainers.image.description=DSL and runtime for cryptographic key ceremonies
+            org.opencontainers.image.source=https://github.com/rite-ly/rite
+            org.opencontainers.image.url=https://ritely.io
+            org.opencontainers.image.documentation=https://ritely.io/docs
+            org.opencontainers.image.vendor=Rite-ly
+            org.opencontainers.image.licenses=GPL-3.0-only
+
+      # Bash arrays (not word-split command substitution) so tag and annotation
+      # values containing spaces survive intact.
+      - name: Create manifest list and push
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          METADATA: ${{ steps.meta.outputs.json }}
+        run: |
+          args=()
+          while IFS= read -r tag; do args+=(--tag "$tag"); done \
+            < <(jq -r '.tags[]' <<<"$METADATA")
+          while IFS= read -r ann; do args+=(--annotation "$ann"); done \
+            < <(jq -r '.annotations[]' <<<"$METADATA")
+          for digest in *; do
+            args+=("ghcr.io/rite-ly/rite@sha256:${digest}")
+          done
+          docker buildx imagetools create "${args[@]}"
+
+      # Resolve the pushed index digest to bind the attestation to it.
+      - name: Resolve image digest
+        id: image
+        run: |
+          digest=$(docker buildx imagetools inspect \
+            "ghcr.io/rite-ly/rite:${{ steps.meta.outputs.version }}" \
+            --format '{{json .Manifest}}' | jq -r '.digest')
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      # Sigstore-signed provenance for the pushed image, bound to the multi-arch
+      # index digest and stored as an OCI referrer alongside it (verifiable with
+      # `gh attestation verify oci://...`). Same mechanism as the binaries.
+      - name: Attest image provenance
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-name: ghcr.io/rite-ly/rite
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
   release:
     name: Create Release
-    needs: [validate, build-native, build-linux-and-image]
+    needs: [validate, build-native, build-linux-musl, merge-image]
     runs-on: ubuntu-latest
     permissions:
       contents: write

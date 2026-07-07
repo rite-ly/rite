@@ -640,14 +640,14 @@ mod schema_snapshot_tests {
             &StepFact::ArtifactWritten {
                 step: StepId::new("s1"),
                 name: "root.crt".to_string(),
-                path: "/out/root.crt".into(),
+                path: "artifacts/root.crt".into(),
                 sha256: "a".repeat(64),
             },
             &json!({
                 "type": "artifact_written",
                 "step": "s1",
                 "name": "root.crt",
-                "path": "/out/root.crt",
+                "path": "artifacts/root.crt",
                 "sha256": "a".repeat(64),
             }),
         );

@@ -581,10 +581,19 @@ impl Executor {
                     let (path, hash, _size, _mime_type) =
                         write_artifact_to_disk(artifact_id, artifact_value, &self.output_config)?;
 
+                    // Record the location relative to the run directory so the
+                    // transcript stays portable and never embeds the operator's
+                    // filesystem layout. `verify` re-anchors artifacts under the
+                    // transcript's own `artifacts/` directory regardless.
+                    let recorded_path = match path.strip_prefix(self.output_config.base_dir()) {
+                        Ok(relative) => relative.to_path_buf(),
+                        Err(_) => path.clone(),
+                    };
+
                     reporter.fact(StepFact::ArtifactWritten {
                         step: step.id.clone(),
                         name: artifact_id.as_str().to_string(),
-                        path: path.clone(),
+                        path: recorded_path,
                         sha256: hash,
                     })?;
                 }

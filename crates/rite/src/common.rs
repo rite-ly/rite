@@ -33,6 +33,8 @@ Environment variables:
   RITE_ROLE_<ROLE_ID>   Assign a person to a role (like --role)
   RITE_MATERIAL_<NAME>  Provide a material source (like --material)
 
+The name after the prefix is case-insensitive (RITE_ROLE_CRYPTO_OFFICER and
+RITE_ROLE_crypto_officer are equivalent).
 A command-line flag takes precedence over the matching variable.";
 
 /// Built-in document theme, shared by `script` and `report`.

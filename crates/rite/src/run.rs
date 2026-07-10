@@ -31,20 +31,22 @@ pub struct Args {
     pub file: PathBuf,
     #[command(flatten)]
     pub input: InputArgs,
-    /// Disable interactive parameter prompting
+    /// Do not prompt for missing parameters
     #[arg(long)]
     pub no_prompt: bool,
-    /// Dry run: simulate without actual operations
+    /// Simulate without performing real operations
     #[arg(long)]
     pub dry_run: bool,
     /// Output directory (default: current directory)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
-    /// Disable transcript generation
+    /// Do not write a transcript
     #[arg(long)]
     pub no_transcript: bool,
-    /// Frontend driver. Auto-detected when omitted: `tui` if stdout is a
-    /// TTY and the `tui` feature is built in, else `console`.
+    /// Frontend driver (auto-detected when omitted)
+    ///
+    /// When omitted, `tui` is used if stdout is a TTY and the `tui` feature is
+    /// built in, otherwise `console`.
     #[arg(long, value_enum)]
     pub frontend: Option<Frontend>,
 }

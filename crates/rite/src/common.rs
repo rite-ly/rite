@@ -8,16 +8,19 @@ use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
-/// Input flags shared by `check` and `run`.
+/// Input flags shared by `check`, `run`, and `script`.
 #[derive(Args, Debug)]
 pub struct InputArgs {
-    /// Set a parameter value (`NAME=VALUE`)
+    /// Set a ceremony parameter
     #[arg(long = "param", value_name = "NAME=VALUE")]
     pub params: Vec<String>,
-    /// Assign a person to a role (`ROLE_ID=PERSON`)
+    /// Assign a person to a role
     #[arg(long = "role", value_name = "ROLE_ID=PERSON")]
     pub roles: Vec<String>,
-    /// Provide a material source (`NAME=@PATH` or `NAME=IDENTIFIER`)
+    /// Provide a material source
+    ///
+    /// Use `NAME=@PATH` for a file on disk, or `NAME=IDENTIFIER` for a
+    /// pre-provisioned material.
     #[arg(long = "material", value_name = "NAME=PATH_OR_ID")]
     pub materials: Vec<String>,
 }
@@ -41,13 +44,13 @@ impl From<ThemeArg> for Theme {
 /// Branding overrides applied on top of a built-in theme.
 #[derive(Args, Debug)]
 pub struct BrandingArgs {
-    /// Organization name shown in the document header
+    /// Organization name in the header
     #[arg(long, value_name = "NAME")]
     pub brand_name: Option<String>,
-    /// Logo image embedded in the document header
+    /// Logo image for the header
     #[arg(long, value_name = "PATH")]
     pub logo: Option<PathBuf>,
-    /// Accent color as a hex value (e.g. `#1f3a5f`)
+    /// Accent color (hex, e.g. `#1f3a5f`)
     #[arg(long, value_name = "COLOR")]
     pub accent: Option<String>,
 }

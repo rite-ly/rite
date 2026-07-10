@@ -26,6 +26,11 @@ Lifecycle:
   rite run    ceremony.rite.yaml  # execute with transcript
   rite verify <output-dir>        # verify integrity
   rite report <output-dir>        # generate audit report
+
+Exit codes:
+  0  Success
+  1  A negative result or bad input (invalid ceremony, failed verification)
+  2  A usage error, or an unexpected internal fault
 ";
 
 #[cfg(not(feature = "render"))]
@@ -34,6 +39,11 @@ Lifecycle:
   rite check  ceremony.rite.yaml  # validate
   rite run    ceremony.rite.yaml  # execute with transcript
   rite verify <output-dir>        # verify integrity
+
+Exit codes:
+  0  Success
+  1  A negative result or bad input (invalid ceremony, failed verification)
+  2  A usage error, or an unexpected internal fault
 ";
 
 #[derive(Parser)]

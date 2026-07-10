@@ -36,7 +36,7 @@ pub fn run(args: &Args) {
                 "rite report: could not read transcript at {}: {err}",
                 jsonl_path.display(),
             );
-            std::process::exit(2);
+            std::process::exit(1);
         }
     };
 

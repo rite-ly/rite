@@ -25,6 +25,16 @@ pub struct InputArgs {
     pub materials: Vec<String>,
 }
 
+/// Long-help footer listing the input environment variables. Shown on the
+/// `--help` of every command that loads a ceremony (`check`, `run`, `script`).
+pub const INPUT_ENV_HELP: &str = "\
+Environment variables:
+  RITE_PARAM_<NAME>     Set a ceremony parameter (like --param)
+  RITE_ROLE_<ROLE_ID>   Assign a person to a role (like --role)
+  RITE_MATERIAL_<NAME>  Provide a material source (like --material)
+
+A command-line flag takes precedence over the matching variable.";
+
 /// Built-in document theme, shared by `script` and `report`.
 #[derive(Copy, Clone, Debug, Default, ValueEnum)]
 pub enum ThemeArg {

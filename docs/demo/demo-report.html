@@ -1,12 +1,8 @@
----
-source: crates/rite-render/tests/render.rs
-expression: html
----
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Root Signing Key Ceremony</title>
+  <title>Root Signing Key Ceremony &middot; Ceremony Report</title>
   <style>
 /* Formal theme: a serif "ceremony protocol" look.
    Shared by ceremony scripts and post-ceremony reports.
@@ -525,135 +521,40 @@ code, .hash {
 
   </style>
 </head>
-<body class="theme-formal">
+<body class="theme-formal report">
   <header class="doc-header">
-    <p class="doc-eyebrow">Ceremony Protocol</p>
-    <h1>Root Signing Key Ceremony</h1>
+    <h1>Root Signing Key Ceremony &middot; Ceremony Report</h1>
   </header>
-  <section>
-    <h2>Overview</h2>
-    <div class="overview"><p>Generate an offline root signing key on an air-gapped workstation, issue its self-signed certificate, and export the public half for distribution. Two roles perform and witness the ceremony, and each attests to what they saw.</p></div>
-  </section>
 
-  <section>
-    <h2>Roles</h2>
-    <ul class="roles">
-      <li><span class="role-abbrev">CO</span> <strong>Crypto Officer</strong> <span class="role-person">Alice Rivera</span></li>
-      <li><span class="role-abbrev">Wi</span> <strong>Witness</strong> <span class="role-person">Bob Tanaka</span></li>
-    </ul>
-  </section>
-  <section>
-    <h2>Preparation Checklist</h2>
-    <h3>Prerequisites</h3>
-    <ul class="checklist">
-      <li>Air-gapped workstation is powered on with all network interfaces physically disconnected.</li>
-      <li>Both participants have verified each other&#x27;s identity against photo ID.</li>
-    </ul>
-  </section>
-  <section class="act">
-    <h3 class="section-header">Environment Verification</h3>
-    <table class="steps">
-      <thead>
-        <tr><th class="step-num">Step</th><th>Action</th><th class="role">Role</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td class="step-num">1</td>
-          <td class="step-action"><p>Confirm and witness the air-gap before any key material exists.</p></td>
-          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
-        </tr>
-      </tbody>
-    </table>
-    <h3 class="section-header">Key Generation</h3>
-    <table class="steps">
-      <thead>
-        <tr><th class="step-num">Step</th><th>Action</th><th class="role">Role</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td class="step-num">2</td>
-          <td class="step-action"><p>Generate the root RSA-4096 keypair inside the air-gapped workstation.</p></td>
-          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
-        </tr>
-        <tr>
-          <td class="step-num">3</td>
-          <td class="step-action"><p>Build the certificate signing request for the root key.</p></td>
-          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
-        </tr>
-        <tr>
-          <td class="step-num">4</td>
-          <td class="step-action"><p>Issue the self-signed root certificate, valid for 20 years.</p></td>
-          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
-        </tr>
-        <tr>
-          <td class="step-num">5</td>
-          <td class="step-action"><p>Export the public key for distribution as a trust anchor.</p></td>
-          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
-        </tr>
-      </tbody>
-    </table>
-    <h3 class="section-header">Witness Attestation</h3>
-    <table class="steps">
-      <thead>
-        <tr><th class="step-num">Step</th><th>Action</th><th class="role">Role</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td class="step-num">6</td>
-          <td class="step-action"><p>Attest: &quot;I witnessed the generation of the root signing key and the issuance of its certificate.&quot;</p></td>
-          <td class="role"><abbr title="Witness">Wi</abbr></td>
-        </tr>
-        <tr>
-          <td class="step-num">7</td>
-          <td class="step-action"><p>Attest: &quot;I generated the root signing key, issued its self-signed certificate, and exported the public key.&quot;</p></td>
-          <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
-        </tr>
-      </tbody>
-    </table>
-  </section>
-  <section>
-    <h2>Expected Outputs</h2>
-    <ul class="outputs">
-      <li><strong>root_cert</strong> <span class="item-kind">certificate</span><span class="item-desc">Self-signed root certificate.</span></li>
-      <li><strong>root_public_key</strong> <span class="item-kind">public_key</span><span class="item-desc">Public half of the root key, safe to distribute as a trust anchor.</span></li>
-    </ul>
-  </section>
+  <div class="summary-box">
+    <p><strong>Status:</strong> <span class="status-completed">Completed</span></p>
+    <p><strong>Started:</strong> 2026-07-07 19:23:18 UTC</p>
+    <p><strong>Completed:</strong> 2026-07-07 19:23:18 UTC</p>
+    <p><strong>Duration:</strong> 0s</p>
+    <p><strong>Transcript fingerprint:</strong> <code>sha256:14847d519a3aeaff043c753e2085174875a6b0d2ea8e135c0cc361efa778f636</code></p>
+  </div>
+  <h2>Artifacts</h2>
+  <table class="artifacts">
+    <thead><tr><th>Name</th><th>Step</th><th>Path</th><th>SHA-256</th></tr></thead>
+    <tbody>
+      <tr><td>root_cert</td><td><code>issue_root_cert</code></td><td><code>artifacts&#x2f;root_cert.pem</code></td><td><code class="hash">sha256:18748c897380c803a6647cb02d678a0b1459ae29c3a295264cdce9835be5882e</code></td></tr>
+      <tr><td>root_public_key</td><td><code>export_public_key</code></td><td><code>artifacts&#x2f;root_public_key.pem</code></td><td><code class="hash">sha256:ecd78f448fe482966f74c350a8c852c7f7a63e69b1c6c9685e8aed0f0958e7f9</code></td></tr>
+    </tbody>
+  </table>
+  <h2>Execution Log</h2>
+  <table class="execution-log">
+    <thead><tr><th>Step</th><th>Label</th><th>Role</th><th>Started</th><th>Completed</th><th>Outcome</th></tr></thead>
+    <tbody>
+      <tr><td><code>verify_air_gap</code></td><td>1</td><td><code>Crypto Officer</code></td><td>2026-07-07 19:23:18 UTC</td><td>2026-07-07 19:23:18 UTC</td><td>completed, Verification confirmed</td></tr>
+      <tr><td><code>generate_root_key</code></td><td>2</td><td><code>Crypto Officer</code></td><td>2026-07-07 19:23:18 UTC</td><td>2026-07-07 19:23:18 UTC</td><td>completed, RSA-4096 keypair generated</td></tr>
+      <tr><td><code>generate_root_csr</code></td><td>3</td><td><code>Crypto Officer</code></td><td>2026-07-07 19:23:18 UTC</td><td>2026-07-07 19:23:18 UTC</td><td>completed, PKCS#10 CSR generated</td></tr>
+      <tr><td><code>issue_root_cert</code></td><td>4</td><td><code>Crypto Officer</code></td><td>2026-07-07 19:23:18 UTC</td><td>2026-07-07 19:23:18 UTC</td><td>completed, X.509 certificate issued from CSR</td></tr>
+      <tr><td><code>export_public_key</code></td><td>5</td><td><code>Crypto Officer</code></td><td>2026-07-07 19:23:18 UTC</td><td>2026-07-07 19:23:18 UTC</td><td>completed, Public key exported</td></tr>
+      <tr><td><code>witness_attest</code></td><td>6</td><td><code>Witness</code></td><td>2026-07-07 19:23:18 UTC</td><td>2026-07-07 19:23:18 UTC</td><td>completed, Attestation recorded for Witness</td></tr>
+      <tr><td><code>officer_attest</code></td><td>7</td><td><code>Crypto Officer</code></td><td>2026-07-07 19:23:18 UTC</td><td>2026-07-07 19:23:18 UTC</td><td>completed, Attestation recorded for Crypto Officer</td></tr>
+    </tbody>
+  </table>
 
-  <section>
-    <h2>Transcript Fingerprint</h2>
-    <p>At the end of the ceremony, the transcript fingerprint is displayed. Copy at least the first line (32 characters, shown in bold) into the field below before closing the terminal, while all participants are still present.</p>
-    <div class="fingerprint-record">
-      <p class="fp-label">sha256</p>
-      <div class="fingerprint-grid">
-        <p class="fingerprint-prefix">__ __ __ __ __ __ __ __</p>
-        <p class="fingerprint-prefix">__ __ __ __ __ __ __ __</p>
-        <p class="fingerprint-remainder">__ __ __ __ __ __ __ __</p>
-        <p class="fingerprint-remainder">__ __ __ __ __ __ __ __</p>
-      </div>
-    </div>
-  </section>
-
-  <section class="signatures-section">
-    <h2>Signatures</h2>
-    <p>By signing below, each participant attests to the accuracy and completeness of this ceremony.</p>
-    <div class="signatures">
-      <div class="signature-block">
-        <p class="sig-role">Crypto Officer</p>
-        <p class="sig-name">Name:&nbsp;Alice Rivera</p>
-        <div class="sig-line">
-          <div class="sig-cell sig-cell-sign"><span class="sig-rule"></span><span class="sig-cap">Signature</span></div>
-          <div class="sig-cell sig-cell-date"><span class="sig-rule"></span><span class="sig-cap">Date</span></div>
-        </div>
-      </div>
-      <div class="signature-block">
-        <p class="sig-role">Witness</p>
-        <p class="sig-name">Name:&nbsp;Bob Tanaka</p>
-        <div class="sig-line">
-          <div class="sig-cell sig-cell-sign"><span class="sig-rule"></span><span class="sig-cap">Signature</span></div>
-          <div class="sig-cell sig-cell-date"><span class="sig-rule"></span><span class="sig-cap">Date</span></div>
-        </div>
-      </div>
-    </div>
-  </section>
+  <div class="report-footer">Generated by Rite v0.4.1</div>
 </body>
 </html>

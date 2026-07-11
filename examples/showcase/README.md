@@ -15,9 +15,9 @@ All ceremonies in this directory are runnable with no external setup.
 
 ### `demo.rite.yaml` — Root Signing Key Ceremony
 
-A compact, single-page ceremony: environment check, ECDSA-P256 keypair generation,
-self-signed certificate issuance, and witness attestation. This is the ceremony used
-in the project demo recording.
+A compact, single-page ceremony: environment check, RSA-4096 keypair generation,
+self-signed certificate issuance, public-key export, and witness attestation. This
+is the ceremony used in the project demo recording.
 
 ### `offline_backup.rite.yaml` — Offline Backup Key Ceremony
 

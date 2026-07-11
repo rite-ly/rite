@@ -75,19 +75,20 @@ wait_for "steps in this ceremony"; sleep "$PAUSE"; key Tab
 wait_for "start the ceremony";     sleep "$PAUSE"; key Enter
 
 # Step 1 - verify_air_gap
-wait_for "start step 1";           sleep "$PAUSE"; key Enter
-wait_for "network connections";    sleep "$PAUSE"; key "y"
+wait_for "start step 1";                sleep "$PAUSE"; key Enter
+wait_for "isolated from all networks";  sleep "$PAUSE"; key "y"
 
-# Steps 2-4 - keypair / CSR / certificate (run automatically)
-wait_for "start step 2";           sleep "$PAUSE"; key Enter
-wait_for "start step 3";           sleep "$PAUSE"; key Enter
-wait_for "start step 4";           sleep "$PAUSE"; key Enter
+# Steps 2-5 - keypair / CSR / certificate / public-key export (run automatically)
+wait_for "start step 2";                sleep "$PAUSE"; key Enter
+wait_for "start step 3";                sleep "$PAUSE"; key Enter
+wait_for "start step 4";                sleep "$PAUSE"; key Enter
+wait_for "start step 5";                sleep "$PAUSE"; key Enter
 
-# Step 5 - witness_attest: start, read the statement, type, pause, confirm.
-wait_for "start step 5";           sleep "$PAUSE"; key Enter; sleep "$PAUSE"; key "attest"; sleep "$PAUSE"; key Enter
+# Step 6 - witness_attest: start, read the statement, type, pause, confirm.
+wait_for "start step 6";                sleep "$PAUSE"; key Enter; sleep "$PAUSE"; key "attest"; sleep "$PAUSE"; key Enter
 
-# Step 6 - officer_attest
-wait_for "start step 6";           sleep "$PAUSE"; key Enter; sleep "$PAUSE"; key "attest"; sleep "$PAUSE"; key Enter
+# Step 7 - officer_attest
+wait_for "start step 7";                sleep "$PAUSE"; key Enter; sleep "$PAUSE"; key "attest"; sleep "$PAUSE"; key Enter
 
 # Completion screen.
 wait_for "fingerprint";            sleep "$PAUSE"; key Enter

@@ -1,8 +1,9 @@
 version: "0.2"
 name: "Root Signing Key Ceremony"
 description: |
-  Generate an offline root signing key on an air-gapped workstation and
-  issue its self-signed certificate, witnessed and attested by two roles.
+  Generate an offline root signing key on an air-gapped workstation, issue its
+  self-signed certificate, and export the public half for distribution. Two
+  roles perform and witness the ceremony, and each attests to what they saw.
 
 backends:
   openssl:
@@ -11,7 +12,10 @@ backends:
 output:
   root_cert:
     type: certificate
-    description: "Self-signed root certificate"
+    description: "Self-signed root certificate."
+  root_public_key:
+    type: public_key
+    description: "Public half of the root key, safe to distribute as a trust anchor."
 
 roles:
   crypto_officer:
@@ -22,7 +26,8 @@ roles:
     person: "Bob Tanaka"
 
 prerequisites:
-  - "Air-gapped workstation is powered on with all network interfaces disabled"
+  - "Air-gapped workstation is powered on with all network interfaces physically disconnected."
+  - "Both participants have verified each other's identity against photo ID."
 
 sections:
   environment:
@@ -32,7 +37,13 @@ sections:
       verify_air_gap:
         action: confirm
         with:
-          message: "Confirm the workstation has no active network connections"
+          message: >
+            Confirm the workstation is isolated from all networks before any
+            key material exists: all wired interfaces are physically
+            disconnected, Wi-Fi and Bluetooth radios are disabled, and no
+            storage is attached except the ceremony media. Verify each item
+            aloud and have the witness confirm.
+        description: "Confirm and witness the air-gap before any key material exists."
 
   keygen:
     name: "Key Generation"
@@ -42,16 +53,16 @@ sections:
         action: generate_keypair
         backend: openssl
         with:
-          algorithm: ECDSA-P256
+          algorithm: RSA-4096
         creates: root_keypair
-        description: "Generate the root ECDSA-P256 keypair."
+        description: "Generate the root RSA-4096 keypair inside the air-gapped workstation."
       generate_root_csr:
         action: generate_csr
         backend: openssl
         reads:
           signing_key: ${artifact.root_keypair}
         with:
-          subject: "CN=Example Root,O=Example Org"
+          subject: "CN=Example Root CA,O=Example Org"
         creates: root_csr
         description: "Build the certificate signing request for the root key."
       issue_root_cert:
@@ -64,7 +75,13 @@ sections:
           profile: root_ca
           validity_days: 7300
         creates: root_cert
-        description: "Issue the self-signed root certificate."
+        description: "Issue the self-signed root certificate, valid for 20 years."
+      export_public_key:
+        action: export_public
+        backend: openssl
+        reads: ${artifact.root_keypair}
+        creates: root_public_key
+        description: "Export the public key for distribution as a trust anchor."
 
   attestation:
     name: "Witness Attestation"
@@ -73,9 +90,9 @@ sections:
         action: attest
         role: ${role.witness}
         with:
-          statement: "I witnessed the generation of the root signing key."
+          statement: "I witnessed the generation of the root signing key and the issuance of its certificate."
       officer_attest:
         action: attest
         role: ${role.crypto_officer}
         with:
-          statement: "The root signing key was generated and its certificate issued."
+          statement: "I generated the root signing key, issued its self-signed certificate, and exported the public key."

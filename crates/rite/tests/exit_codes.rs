@@ -2,6 +2,7 @@
 //!
 //! `0` success, `1` a negative result or bad input, `2` a usage error or an
 //! unexpected internal fault.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::process::{Command, Stdio};
 

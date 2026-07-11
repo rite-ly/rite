@@ -1,0 +1,58 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "docker:pinDigests",
+    "helpers:pinGitHubActionDigests",
+    ":configMigration",
+    "abandonments:recommended",
+    ":maintainLockFilesWeekly"
+  ],
+  osvVulnerabilityAlerts: true,
+  vulnerabilityAlerts: {
+    labels: [
+      "dependencies",
+      "security"
+    ],
+    minimumReleaseAge: null,
+  },
+  labels: [
+    "dependencies"
+  ],
+  packageRules: [
+    {
+      description: "Pin MSRV",
+      matchManagers: [
+        "github-actions"
+      ],
+      matchDepNames: [
+        "rust"
+      ],
+      enabled: false
+    },
+    {
+      description: "Group CI action bumps",
+      matchManagers: [
+        "github-actions"
+      ],
+      groupName: "github actions",
+      schedule: [
+        "before 10am on Monday"
+      ],
+    },
+    {
+      description: "Group musl builder images",
+      matchPackageNames: [
+        "ghcr.io/rust-cross/rust-musl-cross"
+      ],
+      groupName: "rust-musl-cross base images"
+    },
+    {
+      description: "Delay cargo updates",
+      matchManagers: [
+        "cargo"
+      ],
+      minimumReleaseAge: "3 days",
+    },
+  ],
+}

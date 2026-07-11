@@ -4,7 +4,7 @@ use crate::system_info::gather_system;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
-    /// Print detailed build and environment diagnostics
+    /// Print build and environment details
     #[arg(long)]
     pub verbose: bool,
 }

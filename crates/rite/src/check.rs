@@ -5,6 +5,7 @@ use clap::Args as ClapArgs;
 use std::path::PathBuf;
 
 #[derive(ClapArgs, Debug)]
+#[command(after_long_help = crate::common::INPUT_ENV_HELP)]
 pub struct Args {
     /// Path to the ceremony YAML file
     pub file: PathBuf,

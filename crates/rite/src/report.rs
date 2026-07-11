@@ -9,14 +9,17 @@ use rite_runtime::read_verified_transcript;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
-    /// Path to the transcript JSONL file or to the output directory
-    /// produced by `rite run` (containing `transcript.jsonl`).
+    /// Transcript file or run output directory
+    ///
+    /// Accepts a `transcript.jsonl` file or the output directory produced by
+    /// `rite run` (which contains `transcript.jsonl`).
     pub transcript: PathBuf,
-    /// Write to this path. Use `-` for stdout. Defaults to `report.html`
-    /// next to the transcript.
+    /// Output path (`-` for stdout)
+    ///
+    /// Defaults to `report.html` next to the transcript.
     #[arg(long, short)]
     pub output: Option<PathBuf>,
-    /// Visual theme for the generated document
+    /// Document theme
     #[arg(long, value_enum, default_value_t = ThemeArg::default())]
     pub theme: ThemeArg,
     #[command(flatten)]
@@ -33,7 +36,7 @@ pub fn run(args: &Args) {
                 "rite report: could not read transcript at {}: {err}",
                 jsonl_path.display(),
             );
-            std::process::exit(2);
+            std::process::exit(1);
         }
     };
 

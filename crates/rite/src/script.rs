@@ -8,14 +8,17 @@ use clap::Args as ClapArgs;
 use std::path::PathBuf;
 
 #[derive(ClapArgs, Debug)]
+#[command(after_long_help = crate::common::INPUT_ENV_HELP)]
 pub struct Args {
     /// Path to the ceremony YAML file
     pub file: PathBuf,
-    /// Write to this path. Use `-` for stdout. Defaults to the ceremony file
-    /// name with the document extension, next to the source.
+    /// Output path (`-` for stdout)
+    ///
+    /// Defaults to the ceremony file name with the document extension, next to
+    /// the source.
     #[arg(long, short)]
     pub output: Option<PathBuf>,
-    /// Visual theme for the generated document
+    /// Document theme
     #[arg(long, value_enum, default_value_t = ThemeArg::default())]
     pub theme: ThemeArg,
     #[command(flatten)]

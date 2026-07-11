@@ -15,11 +15,13 @@ const DRY_RUN_SOURCE: &str = "dry-run";
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
-    /// Path to the transcript JSONL file or output folder
+    /// Transcript file or run output directory
     pub file: PathBuf,
-    /// Accept a transcript that ends without a terminal fact. By default a
-    /// truncated transcript fails verification, because cutting a transcript
-    /// at a line boundary leaves the hash chain intact.
+    /// Accept a transcript with no terminal fact (an interrupted run)
+    ///
+    /// By default a truncated transcript fails verification: cutting it at a
+    /// line boundary leaves the hash chain intact, so truncation must be opted
+    /// into.
     #[arg(long)]
     pub allow_truncated: bool,
 }

@@ -26,6 +26,11 @@ Lifecycle:
   rite run    ceremony.rite.yaml  # execute with transcript
   rite verify <output-dir>        # verify integrity
   rite report <output-dir>        # generate audit report
+
+Exit codes:
+  0  Success
+  1  A negative result or bad input (invalid ceremony, failed verification)
+  2  A usage error, or an unexpected internal fault
 ";
 
 #[cfg(not(feature = "render"))]
@@ -34,6 +39,11 @@ Lifecycle:
   rite check  ceremony.rite.yaml  # validate
   rite run    ceremony.rite.yaml  # execute with transcript
   rite verify <output-dir>        # verify integrity
+
+Exit codes:
+  0  Success
+  1  A negative result or bad input (invalid ceremony, failed verification)
+  2  A usage error, or an unexpected internal fault
 ";
 
 #[derive(Parser)]
@@ -48,21 +58,39 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Validate a ceremony definition file
+    /// Validate a ceremony definition without running it
+    ///
+    /// Resolves the ceremony and reports diagnostics (missing references,
+    /// undefined roles, schema errors, actions unsupported by this build), or a
+    /// summary of what it contains.
     Check(check::Args),
-    /// Execute a ceremony interactively
+    /// Run a ceremony and record its transcript
+    ///
+    /// Walks the operator and witnesses through each step, performs the
+    /// machine-verifiable actions, and writes a timestamped output directory
+    /// with the artifacts and an append-only transcript.
     Run(run::Args),
     /// Verify a ceremony transcript's integrity
+    ///
+    /// Re-checks the append-only hash chain, re-derives the recorded entropy,
+    /// and, for a run directory, re-hashes the artifacts against their recorded
+    /// digests.
     Verify(verify::Args),
-    /// Generate a printable HTML ceremony script
+    /// Render a ceremony as a printable protocol
+    ///
+    /// Produces a self-contained HTML document that participants follow and
+    /// complete by hand during the ceremony.
     #[cfg(feature = "render")]
     Script(script::Args),
-    /// Generate an HTML post-ceremony report from a transcript
+    /// Render a post-ceremony report from a transcript
+    ///
+    /// Produces a self-contained HTML report of a completed run, for
+    /// stakeholders and auditors.
     #[cfg(feature = "render")]
     Report(report::Args),
-    /// Print version information
+    /// Print version and build information
     Version(version::Args),
-    /// Generate shell completion scripts
+    /// Print a shell completion script
     #[command(hide = true)]
     Completions {
         /// Shell to generate completions for

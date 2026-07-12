@@ -203,9 +203,9 @@ fn test_ecdsa_p256_pki_flow() {
     drop(harness);
 }
 
-/// A SubjectAltName requested in the CSR must survive the round trip into a
-/// tls_server certificate: generate_csr encodes it as a PKCS#9
-/// extensionRequest attribute, issue_certificate extracts and copies it.
+/// A `SubjectAltName` requested in the CSR must survive the round trip into a
+/// `tls_server` certificate: `generate_csr` encodes it as a PKCS#9
+/// extensionRequest attribute, `issue_certificate` extracts and copies it.
 #[test]
 fn test_csr_san_roundtrip() {
     let mut backend = OpenSslBackend::try_new("test").unwrap();

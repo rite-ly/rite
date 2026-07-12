@@ -210,7 +210,9 @@ pub struct IssueCertificateParams {
     /// Certificate validity period in days (default: 3650 = ~10 years).
     #[serde(default)]
     pub validity_days: Option<u32>,
-    /// Fallback issuer Common Name when no `issuer_cert` input is provided.
+    /// Issuer Common Name override (as `CN=<value>`) when no `issuer_cert`
+    /// input is provided. Defaults to the CSR subject, producing a
+    /// self-issued certificate.
     #[serde(default)]
     pub issuer_cn: Option<String>,
     /// `pathLenConstraint` for `sub_ca` profile (default: 0).

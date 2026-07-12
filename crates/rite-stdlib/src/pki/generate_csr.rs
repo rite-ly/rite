@@ -6,10 +6,6 @@
 //! leaves the backend, so the CSR must be generated in-ceremony with
 //! the same backend before [`crate::pki::issue_certificate`] can consume it.
 
-use der::{
-    Decode, Encode,
-    asn1::{BitString, Ia5String, OctetString, SetOfVec},
-};
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
@@ -18,17 +14,22 @@ use rite_runtime::{
 use rite_sdk::Backend;
 use serde_json::json;
 use x509_cert::attr::Attribute;
+use x509_cert::der::{
+    Decode, Encode,
+    asn1::{BitString, Ia5String, OctetString, SetOfVec},
+    oid::AssociatedOid,
+};
 use x509_cert::ext::pkix::name::GeneralName;
 use x509_cert::{
     ext::pkix::SubjectAltName,
     name::Name,
-    request::{CertReq, CertReqInfo, Version},
+    request::{CertReq, CertReqInfo, ExtensionReq, Version},
     spki::SubjectPublicKeyInfoOwned,
 };
 
 use crate::params::GenerateCsrParams;
 
-use super::oids::{EXTENSION_REQUEST_OID, ID_CE_SUBJECT_ALT_NAME, sig_profile_for_algorithm};
+use super::oids::sig_profile_for_algorithm;
 
 /// Generate a PKCS#10 CSR using a backend-managed signing key.
 pub struct GenerateCsrAction;
@@ -191,14 +192,12 @@ fn build_san_attribute(san_strings: &[String]) -> Result<Attribute, ActionError>
                 .map_err(|e| ActionError::Failed(format!("Invalid DNS SAN '{value}': {e}")))?;
             names.push(GeneralName::DnsName(ia5));
         } else if let Some(value) = s.strip_prefix("IP:") {
-            let ip_bytes = parse_ip_address(value).ok_or_else(|| {
+            let ip: std::net::IpAddr = value.parse().map_err(|_| {
                 ActionError::Failed(format!(
                     "Invalid IP SAN '{value}': must be a valid IPv4 or IPv6 address"
                 ))
             })?;
-            let octet = OctetString::new(ip_bytes)
-                .map_err(|e| ActionError::Failed(format!("Failed to encode IP SAN: {e}")))?;
-            names.push(GeneralName::IpAddress(octet));
+            names.push(GeneralName::from(ip));
         } else if let Some(value) = s.strip_prefix("email:") {
             let ia5 = Ia5String::new(value)
                 .map_err(|e| ActionError::Failed(format!("Invalid email SAN '{value}': {e}")))?;
@@ -216,36 +215,14 @@ fn build_san_attribute(san_strings: &[String]) -> Result<Attribute, ActionError>
         .map_err(|e| ActionError::Failed(format!("Failed to encode SubjectAltName: {e}")))?;
 
     let ext = x509_cert::ext::Extension {
-        extn_id: ID_CE_SUBJECT_ALT_NAME,
+        extn_id: SubjectAltName::OID,
         critical: false,
         extn_value: OctetString::new(san_der).map_err(|e| {
             ActionError::Failed(format!("Failed to build SAN extension value: {e}"))
         })?,
     };
 
-    let extensions: x509_cert::ext::Extensions = vec![ext];
-    let extensions_der = extensions
-        .to_der()
-        .map_err(|e| ActionError::Failed(format!("Failed to encode Extensions: {e}")))?;
-
-    let exts_any = der::Any::from_der(&extensions_der)
-        .map_err(|e| ActionError::Failed(format!("Failed to wrap extensions as Any: {e}")))?;
-
-    let mut attr_values: SetOfVec<der::Any> = SetOfVec::new();
-    attr_values
-        .insert(exts_any)
-        .map_err(|e| ActionError::Failed(format!("Failed to build attribute values: {e}")))?;
-
-    Ok(Attribute {
-        oid: EXTENSION_REQUEST_OID,
-        values: attr_values,
+    Attribute::try_from(ExtensionReq(vec![ext])).map_err(|e| {
+        ActionError::Failed(format!("Failed to build extensionRequest attribute: {e}"))
     })
-}
-
-/// Parse an IP address string into raw bytes (4 bytes for IPv4, 16 for IPv6).
-fn parse_ip_address(s: &str) -> Option<Vec<u8>> {
-    match s.parse::<std::net::IpAddr>().ok()? {
-        std::net::IpAddr::V4(a) => Some(a.octets().to_vec()),
-        std::net::IpAddr::V6(a) => Some(a.octets().to_vec()),
-    }
 }

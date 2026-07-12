@@ -15,7 +15,10 @@ publish    = true
 rite-sdk = { workspace = true }
 
 yubikey    = { workspace = true }
-der        = { workspace = true }
+# Tracks the `yubikey` crate's der version (0.7), not the workspace der (0.8):
+# this crate only uses der to re-encode certificate/SPKI values returned by
+# yubikey, so its der must match yubikey's or those types lose their der traits.
+der        = "0.7"
 sha2       = { workspace = true }
 serde_json = { workspace = true }
 

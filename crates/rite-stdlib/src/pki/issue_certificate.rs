@@ -6,16 +6,14 @@
 //!
 //! # Design
 //!
-//! Certificate construction (`TbsCertificate` assembly, DER encoding)
-//! lives entirely in this action. The backend only provides raw
-//! signature bytes via `SignBackend::sign`. This means the action works
-//! with any backend implementing `SignBackend` (software, PKCS#11,
-//! `YubiKey`) without per-backend cert-building code.
+//! Certificate construction goes through `x509_cert`'s `CertificateBuilder`,
+//! using its external-signature path (`finalize` to obtain the TBS bytes,
+//! `assemble` to attach the signature). The backend only provides raw
+//! signature bytes via `SignBackend::sign`; no private key material enters
+//! this process. This means the action works with any backend implementing
+//! `SignBackend` (software, PKCS#11, `YubiKey`) without per-backend
+//! cert-building code.
 
-use der::{
-    Decode, DecodePem, Encode,
-    asn1::{BitString, ObjectIdentifier, OctetString},
-};
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
@@ -23,39 +21,32 @@ use rite_runtime::{
 };
 use rite_sdk::Backend;
 use serde_json::json;
+use signature::Keypair;
+use x509_cert::der::{
+    self, Decode, DecodePem, Document, Encode,
+    asn1::{BitString, ObjectIdentifier, OctetString},
+    oid::AssociatedOid,
+};
 use x509_cert::{
-    Certificate, TbsCertificate, Version,
+    Certificate, TbsCertificate,
+    builder::{Builder, CertificateBuilder, profile::BuilderProfile},
     ext::pkix::{
-        AuthorityKeyIdentifier, BasicConstraints, KeyUsage, KeyUsages, SubjectKeyIdentifier,
+        AuthorityKeyIdentifier, BasicConstraints, ExtendedKeyUsage, KeyUsage, KeyUsages,
+        SubjectAltName, SubjectKeyIdentifier,
     },
     name::Name,
-    request::CertReq,
+    request::{CertReq, ExtensionReq},
     serial_number::SerialNumber,
-    spki::SubjectPublicKeyInfoOwned,
-    time::{Time, Validity},
+    spki::{
+        AlgorithmIdentifierOwned, DynSignatureAlgorithmIdentifier, EncodePublicKey,
+        SubjectPublicKeyInfoOwned, SubjectPublicKeyInfoRef,
+    },
+    time::Validity,
 };
 
 use crate::params::IssueCertificateParams;
 
-use super::oids::{
-    ECDSA_WITH_SHA256, EXTENSION_REQUEST_OID, ID_CE_SUBJECT_ALT_NAME, SHA256_WITH_RSA_ENCRYPTION,
-    sig_profile_for_algorithm,
-};
-
-/// id-ce-basicConstraints OID (2.5.29.19)
-const ID_CE_BASIC_CONSTRAINTS: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.19");
-
-/// id-ce-keyUsage OID (2.5.29.15)
-const ID_CE_KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.15");
-
-/// id-ce-extKeyUsage OID (2.5.29.37)
-const ID_CE_EXT_KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.37");
-
-/// id-ce-subjectKeyIdentifier OID (2.5.29.14)
-const ID_CE_SUBJECT_KEY_IDENTIFIER: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.14");
-
-/// id-ce-authorityKeyIdentifier OID (2.5.29.35)
-const ID_CE_AUTHORITY_KEY_IDENTIFIER: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.35");
+use super::oids::{ECDSA_WITH_SHA256, SHA256_WITH_RSA_ENCRYPTION, sig_profile_for_algorithm};
 
 /// id-kp-serverAuth OID (1.3.6.1.5.5.7.3.1)
 const ID_KP_SERVER_AUTH: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.1");
@@ -81,6 +72,78 @@ impl CertProfile {
             CertProfile::CodeSigning => "code_signing",
             CertProfile::EndEntity => "end_entity",
         }
+    }
+}
+
+/// Public half of the backend-held issuing key.
+#[derive(Clone)]
+struct IssuingPublicKey(SubjectPublicKeyInfoOwned);
+
+impl EncodePublicKey for IssuingPublicKey {
+    fn to_public_key_der(&self) -> x509_cert::spki::Result<Document> {
+        Document::try_from(&self.0)
+    }
+}
+
+/// Presents the ceremony backend's issuing key to the `x509_cert` builder.
+///
+/// The builder needs the issuing key's public half and its signature
+/// algorithm identifier; the signature itself is produced by the backend
+/// between `Builder::finalize` and `Builder::assemble`, so this type holds
+/// no private key material.
+struct BackendIssuingKey {
+    public_key: IssuingPublicKey,
+    signature_algorithm: AlgorithmIdentifierOwned,
+}
+
+impl Keypair for BackendIssuingKey {
+    type VerifyingKey = IssuingPublicKey;
+
+    fn verifying_key(&self) -> IssuingPublicKey {
+        self.public_key.clone()
+    }
+}
+
+impl DynSignatureAlgorithmIdentifier for BackendIssuingKey {
+    fn signature_algorithm_identifier(&self) -> x509_cert::spki::Result<AlgorithmIdentifierOwned> {
+        Ok(self.signature_algorithm.clone())
+    }
+}
+
+/// Adapts a [`CertProfile`] to the `x509_cert` builder's profile interface,
+/// carrying the run-specific values the extensions are derived from.
+struct ProfileAdapter {
+    profile: CertProfile,
+    subject: Name,
+    issuer: Name,
+    /// Whether an issuer certificate was supplied; gates the
+    /// `AuthorityKeyIdentifier` extension (self-signed roots carry none).
+    has_issuer_cert: bool,
+    /// `SubjectAltName` carried over from the CSR's extensionRequest
+    /// attribute, for profiles that honor it.
+    san: Option<x509_cert::ext::Extension>,
+}
+
+impl BuilderProfile for ProfileAdapter {
+    fn get_issuer(&self, _subject: &Name) -> Name {
+        self.issuer.clone()
+    }
+
+    fn get_subject(&self) -> Name {
+        self.subject.clone()
+    }
+
+    fn build_extensions(
+        &self,
+        spk: SubjectPublicKeyInfoRef<'_>,
+        issuer_spk: SubjectPublicKeyInfoRef<'_>,
+        _tbs: &TbsCertificate,
+    ) -> x509_cert::builder::Result<Vec<x509_cert::ext::Extension>> {
+        // `issuer_spk` is derived by the builder from the issuing key
+        // adapter, so the AKI matches the signer by construction.
+        let issuer_spk = self.has_issuer_cert.then_some(issuer_spk);
+        build_extensions(&self.profile, spk, issuer_spk, self.san.as_ref())
+            .map_err(x509_cert::builder::Error::from)
     }
 }
 
@@ -162,12 +225,15 @@ impl Action for IssueCertificateAction {
         };
 
         let issuer_name: Name = if let Some(ref ic) = issuer_cert_opt {
-            ic.tbs_certificate.subject.clone()
-        } else {
-            let cn = typed.issuer_cn.as_deref().unwrap_or("Root CA");
+            ic.tbs_certificate().subject().clone()
+        } else if let Some(cn) = typed.issuer_cn.as_deref() {
             format!("CN={cn}")
                 .parse()
                 .map_err(|e| ActionError::Failed(format!("Invalid issuer CN: {e}")))?
+        } else {
+            // Self-signed issuance: the issuer is the CSR subject, so the
+            // certificate chains to itself (RFC 5280 self-issued).
+            csr.info.subject.clone()
         };
 
         // Draw the serial from the ceremony entropy source rather than an
@@ -189,29 +255,36 @@ impl Action for IssueCertificateAction {
                 ActionError::Failed(format!("Failed to build signature algorithm: {e}"))
             })?;
 
+        // The issuing key's public half: the issuer certificate's SPKI, or
+        // the CSR's own key when issuing self-signed (root) certificates.
         let issuer_spki = issuer_cert_opt
             .as_ref()
-            .map(|ic| &ic.tbs_certificate.subject_public_key_info);
+            .map(|ic| ic.tbs_certificate().subject_public_key_info().clone());
+        let has_issuer_cert = issuer_spki.is_some();
 
-        let san_ext = extract_san_from_csr(&csr);
-        let extensions = build_extensions(&profile, &csr.info.public_key, issuer_spki, san_ext)
-            .map_err(|e| ActionError::Failed(format!("Failed to build extensions: {e}")))?;
-
-        let tbs = TbsCertificate {
-            version: Version::V3,
-            serial_number: serial,
-            signature: sig_alg.clone(),
-            issuer: issuer_name,
-            validity,
-            subject: csr.info.subject.clone(),
-            subject_public_key_info: csr.info.public_key.clone(),
-            issuer_unique_id: None,
-            subject_unique_id: None,
-            extensions: Some(extensions),
+        let issuing_key = BackendIssuingKey {
+            public_key: IssuingPublicKey(
+                issuer_spki.unwrap_or_else(|| csr.info.public_key.clone()),
+            ),
+            signature_algorithm: sig_alg,
         };
 
-        let tbs_der = tbs
-            .to_der()
+        let profile_name = profile.canonical_name();
+        let adapter = ProfileAdapter {
+            profile,
+            subject: csr.info.subject.clone(),
+            issuer: issuer_name,
+            has_issuer_cert,
+            san: extract_san_from_csr(&csr),
+        };
+
+        let mut builder = CertificateBuilder::new(adapter, serial, validity, csr.info.public_key)
+            .map_err(|e| {
+            ActionError::Failed(format!("Failed to set up certificate builder: {e}"))
+        })?;
+
+        let tbs_der = builder
+            .finalize(&issuing_key)
             .map_err(|e| ActionError::Failed(format!("TBSCertificate DER encoding failed: {e}")))?;
 
         reporter.log(Icon::Spinner, "Signing TBSCertificate...")?;
@@ -238,13 +311,13 @@ impl Action for IssueCertificateAction {
 
         let signature_bytes = sign_backend.sign(&key_id, &tbs_der, sign_algorithm)?;
 
-        let cert = Certificate {
-            tbs_certificate: tbs,
-            signature_algorithm: sig_alg,
-            signature: BitString::from_bytes(&signature_bytes).map_err(|e| {
-                ActionError::Failed(format!("Failed to encode signature as BitString: {e}"))
-            })?,
-        };
+        let signature = BitString::from_bytes(&signature_bytes).map_err(|e| {
+            ActionError::Failed(format!("Failed to encode signature as BitString: {e}"))
+        })?;
+
+        let cert = builder
+            .assemble(signature, &issuing_key)
+            .map_err(|e| ActionError::Failed(format!("Certificate assembly failed: {e}")))?;
 
         let cert_der = cert
             .to_der()
@@ -257,7 +330,7 @@ impl Action for IssueCertificateAction {
             kind: "issue_certificate".to_string(),
             inputs: json!({
                 "algorithm": evidence_algorithm,
-                "profile": profile.canonical_name(),
+                "profile": profile_name,
                 "validity_days": validity_days,
                 "signing_key": signing_key_ref.display_name(),
                 "csr": csr_ref.display_name(),
@@ -306,29 +379,25 @@ fn parse_profile(profile: Option<&str>, path_len: Option<u8>) -> Result<CertProf
 
 fn build_extensions(
     profile: &CertProfile,
-    subject_spki: &SubjectPublicKeyInfoOwned,
-    issuer_spki: Option<&SubjectPublicKeyInfoOwned>,
-    san_ext: Option<x509_cert::ext::Extension>,
+    subject_spki: SubjectPublicKeyInfoRef<'_>,
+    issuer_spki: Option<SubjectPublicKeyInfoRef<'_>>,
+    san_ext: Option<&x509_cert::ext::Extension>,
 ) -> Result<x509_cert::ext::Extensions, der::Error> {
     let mut exts: x509_cert::ext::Extensions = Vec::new();
 
     match profile {
         CertProfile::RootCa => {
             exts.push(build_basic_constraints(true, None)?);
-            exts.push(build_key_usage(&[
-                KeyUsages::KeyCertSign,
-                KeyUsages::CRLSign,
-                KeyUsages::DigitalSignature,
-            ])?);
+            exts.push(build_key_usage(
+                KeyUsages::KeyCertSign | KeyUsages::CRLSign | KeyUsages::DigitalSignature,
+            )?);
             exts.push(build_ski(subject_spki)?);
         }
         CertProfile::SubCa { path_len } => {
             exts.push(build_basic_constraints(true, Some(*path_len))?);
-            exts.push(build_key_usage(&[
-                KeyUsages::KeyCertSign,
-                KeyUsages::CRLSign,
-                KeyUsages::DigitalSignature,
-            ])?);
+            exts.push(build_key_usage(
+                KeyUsages::KeyCertSign | KeyUsages::CRLSign | KeyUsages::DigitalSignature,
+            )?);
             exts.push(build_ski(subject_spki)?);
             if let Some(spki) = issuer_spki {
                 exts.push(build_aki(spki)?);
@@ -336,22 +405,21 @@ fn build_extensions(
         }
         CertProfile::TlsServer => {
             exts.push(build_basic_constraints(false, None)?);
-            exts.push(build_key_usage(&[
-                KeyUsages::DigitalSignature,
-                KeyUsages::KeyEncipherment,
-            ])?);
+            exts.push(build_key_usage(
+                KeyUsages::DigitalSignature | KeyUsages::KeyEncipherment,
+            )?);
             exts.push(build_eku(&[ID_KP_SERVER_AUTH])?);
             exts.push(build_ski(subject_spki)?);
             if let Some(spki) = issuer_spki {
                 exts.push(build_aki(spki)?);
             }
             if let Some(ext) = san_ext {
-                exts.push(ext);
+                exts.push(ext.clone());
             }
         }
         CertProfile::CodeSigning => {
             exts.push(build_basic_constraints(false, None)?);
-            exts.push(build_key_usage(&[KeyUsages::DigitalSignature])?);
+            exts.push(build_key_usage(KeyUsages::DigitalSignature.into())?);
             exts.push(build_eku(&[ID_KP_CODE_SIGNING])?);
             if let Some(spki) = issuer_spki {
                 exts.push(build_aki(spki)?);
@@ -376,81 +444,66 @@ fn build_basic_constraints(
         ca,
         path_len_constraint: path_len,
     };
-    let bc_der = bc.to_der()?;
     Ok(x509_cert::ext::Extension {
-        extn_id: ID_CE_BASIC_CONSTRAINTS,
+        extn_id: BasicConstraints::OID,
         critical: true,
-        extn_value: OctetString::new(bc_der)?,
+        extn_value: OctetString::new(bc.to_der()?)?,
     })
 }
 
-fn build_key_usage(bits: &[KeyUsages]) -> Result<x509_cert::ext::Extension, der::Error> {
-    let mut ku = KeyUsage(der::flagset::FlagSet::default());
-    for &bit in bits {
-        ku.0 |= bit;
-    }
-    let ku_der = ku.to_der()?;
+fn build_key_usage(
+    bits: der::flagset::FlagSet<KeyUsages>,
+) -> Result<x509_cert::ext::Extension, der::Error> {
+    let ku = KeyUsage(bits);
     Ok(x509_cert::ext::Extension {
-        extn_id: ID_CE_KEY_USAGE,
+        extn_id: KeyUsage::OID,
         critical: true,
-        extn_value: OctetString::new(ku_der)?,
+        extn_value: OctetString::new(ku.to_der()?)?,
     })
 }
 
 fn build_eku(oids: &[ObjectIdentifier]) -> Result<x509_cert::ext::Extension, der::Error> {
-    let eku = x509_cert::ext::pkix::ExtendedKeyUsage(oids.to_vec());
-    let eku_der = eku.to_der()?;
+    let eku = ExtendedKeyUsage(oids.to_vec());
     Ok(x509_cert::ext::Extension {
-        extn_id: ID_CE_EXT_KEY_USAGE,
+        extn_id: ExtendedKeyUsage::OID,
         critical: false,
-        extn_value: OctetString::new(eku_der)?,
+        extn_value: OctetString::new(eku.to_der()?)?,
     })
 }
 
-/// Compute RFC 5280 Method 1 key identifier: SHA-1 of `SubjectPublicKey` BIT STRING value.
-fn compute_key_identifier(spki: &SubjectPublicKeyInfoOwned) -> Vec<u8> {
-    use sha1::{Digest, Sha1};
-    Sha1::digest(spki.subject_public_key.raw_bytes()).to_vec()
-}
-
-fn build_ski(spki: &SubjectPublicKeyInfoOwned) -> Result<x509_cert::ext::Extension, der::Error> {
-    let key_id = compute_key_identifier(spki);
-    let subject_key_id = SubjectKeyIdentifier(der::asn1::OctetString::new(key_id)?);
-    let ski_der = subject_key_id.to_der()?;
+fn build_ski(spki: SubjectPublicKeyInfoRef<'_>) -> Result<x509_cert::ext::Extension, der::Error> {
+    // RFC 5280 Section 4.2.1.2 method-1 derivation, provided by `x509_cert`.
+    let subject_key_id = SubjectKeyIdentifier::try_from(spki)?;
     Ok(x509_cert::ext::Extension {
-        extn_id: ID_CE_SUBJECT_KEY_IDENTIFIER,
+        extn_id: SubjectKeyIdentifier::OID,
         critical: false,
-        extn_value: OctetString::new(ski_der)?,
+        extn_value: OctetString::new(subject_key_id.to_der()?)?,
     })
 }
 
 fn build_aki(
-    issuer_spki: &SubjectPublicKeyInfoOwned,
+    issuer_spki: SubjectPublicKeyInfoRef<'_>,
 ) -> Result<x509_cert::ext::Extension, der::Error> {
-    let key_id = compute_key_identifier(issuer_spki);
-    let aki = AuthorityKeyIdentifier {
-        key_identifier: Some(der::asn1::OctetString::new(key_id)?),
-        authority_cert_issuer: None,
-        authority_cert_serial_number: None,
-    };
-    let aki_der = aki.to_der()?;
+    // Key-identifier-only AKI, derived like the issuer's SKI (RFC 5280
+    // Section 4.2.1.1), provided by `x509_cert`.
+    let authority_key_id = AuthorityKeyIdentifier::try_from(issuer_spki)?;
     Ok(x509_cert::ext::Extension {
-        extn_id: ID_CE_AUTHORITY_KEY_IDENTIFIER,
+        extn_id: AuthorityKeyIdentifier::OID,
         critical: false,
-        extn_value: OctetString::new(aki_der)?,
+        extn_value: OctetString::new(authority_key_id.to_der()?)?,
     })
 }
 
 /// Extract the `SubjectAltName` extension from a CSR's extensionRequest attribute (if present).
 fn extract_san_from_csr(csr: &CertReq) -> Option<x509_cert::ext::Extension> {
     for attr in csr.info.attributes.iter() {
-        if attr.oid != EXTENSION_REQUEST_OID {
+        if attr.oid != ExtensionReq::OID {
             continue;
         }
         for val in attr.values.iter() {
             if let Ok(exts) = val.decode_as::<x509_cert::ext::Extensions>() {
                 for ext in exts {
-                    if ext.extn_id == ID_CE_SUBJECT_ALT_NAME {
+                    if ext.extn_id == SubjectAltName::OID {
                         return Some(ext);
                     }
                 }
@@ -541,21 +594,6 @@ fn parse_certificate(bytes: &[u8]) -> Result<Certificate, der::Error> {
 }
 
 fn build_validity(validity_days: u32) -> Result<Validity, der::Error> {
-    use der::DateTime as DerDateTime;
-    use der::asn1::GeneralizedTime;
-    use std::time::{Duration, SystemTime};
-
-    let now = SystemTime::now();
-    let duration = Duration::from_secs(u64::from(validity_days).saturating_mul(86_400));
-    let later = now
-        .checked_add(duration)
-        .ok_or(der::Error::from(der::ErrorKind::Failed))?;
-
-    let dt_now = DerDateTime::try_from(now)?;
-    let dt_later = DerDateTime::try_from(later)?;
-
-    Ok(Validity {
-        not_before: Time::GeneralTime(GeneralizedTime::from(dt_now)),
-        not_after: Time::GeneralTime(GeneralizedTime::from(dt_later)),
-    })
+    let duration = std::time::Duration::from_secs(u64::from(validity_days).saturating_mul(86_400));
+    Validity::from_now(duration)
 }

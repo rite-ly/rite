@@ -1,6 +1,6 @@
 //! `rite check`: validate a ceremony definition file.
 
-use crate::common::{InputArgs, build_inputs_or_exit, resolve_or_exit};
+use crate::common::{InputArgs, build_inputs_or_exit, resolve_or_exit, unsupported_action_names};
 use clap::Args as ClapArgs;
 use std::path::PathBuf;
 
@@ -17,18 +17,6 @@ pub fn run(args: &Args) {
     let inputs = build_inputs_or_exit(&args.input);
     let resolved = resolve_or_exit(&args.file, (!inputs.is_empty()).then_some(&inputs));
 
-    let registry = rite_stdlib::default_registry();
-    let unsupported = registry.unsupported_actions(&resolved.execution_plan);
-    if !unsupported.is_empty() {
-        let names: Vec<_> = unsupported.iter().map(ToString::to_string).collect();
-        eprintln!("Validation errors:");
-        eprintln!(
-            "  - Unsupported action(s) for this build: {}",
-            names.join(", ")
-        );
-        std::process::exit(1);
-    }
-
     println!("Valid ceremony: {}", resolved.metadata.name);
     println!("  Roles: {}", resolved.roles.len());
     println!("  Steps: {}", resolved.execution_plan.len());
@@ -43,5 +31,20 @@ pub fn run(args: &Args) {
     }
     if !resolved.after.is_empty() {
         println!("  Post-ceremony duties: {}", resolved.after.len());
+    }
+
+    // Build-relative, not a definition error: the ceremony is valid, but this
+    // binary lacks the feature(s) to run these actions. The machine that
+    // executes may be a fuller build, so warn rather than fail. `rite run`
+    // makes the same check fatal.
+    let unsupported = unsupported_action_names(&resolved);
+    if !unsupported.is_empty() {
+        eprintln!();
+        eprintln!(
+            "Note: this build cannot execute {} action(s): {}",
+            unsupported.len(),
+            unsupported.join(", ")
+        );
+        eprintln!("Run it with a build that includes the required feature(s).");
     }
 }

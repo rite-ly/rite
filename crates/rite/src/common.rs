@@ -267,6 +267,30 @@ pub fn preflight_check_materials(resolved: &rite_model::Ceremony) -> Result<(), 
     Ok(())
 }
 
+/// Names of actions in the execution plan that *this* build has no handler for.
+///
+/// "Unsupported" is relative to the running binary: an action is missing only
+/// because the crate was compiled without the feature that registers it (e.g.
+/// `piv`). It is not a defect in the ceremony definition.
+///
+/// This is why `check` and `run` treat the result differently. `check`
+/// validates the definition and only *warns*, because the binary that
+/// eventually executes may be a fuller build than the one running `check`
+/// (a laptop or CI runner validating a ceremony that an air-gapped machine will
+/// run). `run` *is* the executor, so a missing feature is fatal and should
+/// abort before any hardware is touched or transcript written.
+///
+/// Returns the action names in first-occurrence order, deduplicated. Empty when
+/// the build supports every action the plan uses.
+#[must_use]
+pub fn unsupported_action_names(resolved: &Ceremony) -> Vec<String> {
+    rite_stdlib::default_registry()
+        .unsupported_actions(&resolved.execution_plan)
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
 /// Prompt the user for any required parameters that have no value yet.
 ///
 /// Skips parameters whose value is already set (either from CLI/env or by a default

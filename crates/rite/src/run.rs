@@ -1,12 +1,13 @@
 //! `rite run`: execute a ceremony interactively.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args as ClapArgs, ValueEnum};
 use crossbeam_channel::unbounded;
 
 use rite_runtime::{
-    ExecEvent, Executor, InMemorySink, JsonlFileSink, StartupSnapshot, TranscriptSink, UiCommand,
+    ExecEvent, ExecutionError, ExecutionSummary, Executor, InMemorySink, JsonlFileSink,
+    StartupSnapshot, TranscriptSink, UiCommand,
 };
 
 use crate::common::{
@@ -160,16 +161,38 @@ pub fn run(args: Args) {
         eprintln!("Frontend error: {e}");
     }
 
+    report_outcome(exec_result, &output_dir, args.no_transcript);
+}
+
+/// Print the terminal summary and exit the process with the matching code.
+///
+/// On success prints the output directory and transcript fingerprint (exit 0).
+/// On failure or operator abort, exits non-zero: an abort is a deliberate stop
+/// rather than a failure, but the ceremony did not complete either way. The
+/// transcript is recorded up to the stopping point in both cases, so the output
+/// directory is reported so the operator can find the evidence.
+fn report_outcome(
+    exec_result: Result<ExecutionSummary, ExecutionError>,
+    output_dir: &Path,
+    no_transcript: bool,
+) -> ! {
     match exec_result {
         Ok(summary) => {
-            if !args.no_transcript {
+            if !no_transcript {
                 println!("Output directory: {}", output_dir.display());
                 println!("Transcript fingerprint: {}", summary.transcript_fingerprint);
             }
             std::process::exit(0);
         }
         Err(e) => {
-            eprintln!("Ceremony failed: {e}");
+            if matches!(e, ExecutionError::Aborted) {
+                eprintln!("Ceremony aborted by the operator.");
+            } else {
+                eprintln!("Ceremony failed: {e}");
+            }
+            if !no_transcript {
+                eprintln!("Output directory: {}", output_dir.display());
+            }
             std::process::exit(1);
         }
     }

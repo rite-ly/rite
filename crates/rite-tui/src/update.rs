@@ -461,8 +461,12 @@ fn handle_fact(model: &mut Model, at: DateTime<Utc>, fact: &StepFact) -> Vec<Cmd
             model.running = RunningState::Done;
         }
         StepFact::CeremonyFailed { error, .. } => {
-            model.screen = Screen::Failed {
-                reason: error.message.clone(),
+            model.screen = match error.class {
+                // An abort is a deliberate stop, not a failure: its own screen.
+                rite_model::ErrorClass::Abort => Screen::Aborted,
+                _ => Screen::Failed {
+                    reason: error.message.clone(),
+                },
             };
             model.running = RunningState::Done;
         }

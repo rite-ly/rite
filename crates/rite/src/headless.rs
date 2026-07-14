@@ -107,7 +107,10 @@ fn render_fact<W: Write>(out: &mut W, fact: &StepFact) -> io::Result<()> {
         StepFact::StepStarted { id, label, .. } => writeln!(out, "[step] {label} ({id})"),
         StepFact::StepCompleted { id, .. } => writeln!(out, "[step-done] {id}"),
         StepFact::CeremonyCompleted { .. } => writeln!(out, "[done]"),
-        StepFact::CeremonyFailed { error, .. } => writeln!(out, "[failed] {}", error.message),
+        StepFact::CeremonyFailed { error, .. } => match error.class {
+            rite_model::ErrorClass::Abort => writeln!(out, "[aborted] {}", error.message),
+            _ => writeln!(out, "[failed] {}", error.message),
+        },
         // The headless driver is intentionally terse for the remaining facts.
         _ => Ok(()),
     }

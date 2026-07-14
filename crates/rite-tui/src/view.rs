@@ -140,6 +140,10 @@ fn render_body(model: &Model, frame: &mut Frame<'_>, area: Rect) -> usize {
             render_failed(reason, frame, area);
             model.log_scroll
         }
+        Screen::Aborted => {
+            render_aborted(frame, area);
+            model.log_scroll
+        }
     }
 }
 
@@ -912,11 +916,30 @@ fn render_failed(reason: &str, frame: &mut Frame<'_>, area: Rect) {
     );
 }
 
+fn render_aborted(frame: &mut Frame<'_>, area: Rect) {
+    let lines = vec![
+        Line::from(Span::styled(
+            "Ceremony aborted",
+            theme::text().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Stopped by the operator. The abort is recorded in the transcript."),
+        Line::from(""),
+        Line::from("Press Enter to exit."),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(plain_block()),
+        area,
+    );
+}
+
 fn render_footer(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     let hint = match &model.screen {
         Screen::DeviationModal { .. } => "Enter: submit  ·  Backspace: edit  ·  Esc: cancel",
         Screen::AbortConfirm => "y: abort  ·  n / Esc: cancel",
-        Screen::Completed { .. } | Screen::Failed { .. } => "Enter / Esc: exit",
+        Screen::Completed { .. } | Screen::Failed { .. } | Screen::Aborted => "Enter / Esc: exit",
         // The submit hint moved into the prompt box title, so the Ceremony
         // footer no longer changes width as prompts come and go.
         Screen::Step { tab } => match tab {

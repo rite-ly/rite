@@ -156,7 +156,7 @@ pub fn parse_params<P: serde::de::DeserializeOwned>(
 impl From<ReporterError> for ExecutionError {
     fn from(value: ReporterError) -> Self {
         match value {
-            ReporterError::Aborted => ExecutionError::StepAborted(rite_model::StepId::new("")),
+            ReporterError::Aborted => ExecutionError::Aborted,
             ReporterError::Disconnected => {
                 ExecutionError::TranscriptError("frontend channel disconnected".to_string())
             }
@@ -649,7 +649,7 @@ fn execute_step_with_retry(
             Ok(result) => return Ok(result),
             // Abort is an operator decision, not an attempt failure: no
             // StepAttemptFailed is recorded, the run terminates here.
-            Err(ActionError::Aborted) => return Err(ExecutionError::StepAborted(step.id.clone())),
+            Err(ActionError::Aborted) => return Err(ExecutionError::Aborted),
             Err(action_err) => action_err,
         };
 
@@ -693,7 +693,7 @@ fn execute_step_with_retry(
 /// failure for an abort.
 fn action_error_to_execution(err: ActionError, step_id: &rite_model::StepId) -> ExecutionError {
     match err {
-        ActionError::Aborted => ExecutionError::StepAborted(step_id.clone()),
+        ActionError::Aborted => ExecutionError::Aborted,
         ActionError::Disconnected => ExecutionError::StepFailed {
             step: step_id.clone(),
             reason: "frontend channel disconnected".to_string(),
@@ -716,7 +716,7 @@ impl ExecutionError {
     fn to_error_record(&self) -> ErrorRecord {
         let (class, kind) = match self {
             ExecutionError::ValidationFailed(_) => (ErrorClass::Integrity, "validation_failed"),
-            ExecutionError::StepAborted(_) => (ErrorClass::Abort, "aborted"),
+            ExecutionError::Aborted => (ErrorClass::Abort, "aborted"),
             ExecutionError::Io(_) => (ErrorClass::Integrity, "io"),
             ExecutionError::StepFailed { .. } => (ErrorClass::Procedural, "step_failed"),
             ExecutionError::UnknownAction(_) => (ErrorClass::Integrity, "unknown_action"),
@@ -1154,13 +1154,17 @@ sections:
             } = ev
             {
                 assert_eq!(error.kind, "aborted");
+                // An abort is classified distinctly from a failure, and its
+                // message is ceremony-level (no empty step-id quotes).
+                assert_eq!(error.class, ErrorClass::Abort);
+                assert_eq!(error.message, "Ceremony aborted by the operator");
                 got_failed = true;
             }
         }
         assert!(got_failed, "expected CeremonyFailed event");
 
         let result = join.join().expect("executor join");
-        assert!(matches!(result, Err(ExecutionError::StepAborted(_))));
+        assert!(matches!(result, Err(ExecutionError::Aborted)));
     }
 
     // ---- Retry loop tests ----

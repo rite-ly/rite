@@ -11,7 +11,7 @@
 //! was already surfaced by `AwaitPrompt` and the operator typed the
 //! answer in front of them).
 
-use rite_model::StepFact;
+use rite_model::{ErrorClass, StepFact};
 
 use crate::protocol::{Icon, UiSignal};
 
@@ -58,9 +58,12 @@ pub fn fact_summary(fact: &StepFact) -> Option<(Icon, String)> {
             Icon::Cross,
             format!("Attempt {attempt} failed: {}", error.message),
         )),
-        StepFact::CeremonyFailed { error, .. } => {
-            Some((Icon::Cross, format!("Ceremony failed: {}", error.message)))
-        }
+        StepFact::CeremonyFailed { error, .. } => match error.class {
+            // An abort is a deliberate operator decision, not a failure: show it
+            // neutrally rather than with the failure cross.
+            ErrorClass::Abort => Some((Icon::Info, error.message.clone())),
+            _ => Some((Icon::Cross, format!("Ceremony failed: {}", error.message))),
+        },
         StepFact::EntropySeeded { source, .. } => {
             Some((Icon::Info, format!("Entropy source seeded ({source})")))
         }

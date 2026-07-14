@@ -213,13 +213,19 @@ pub enum Screen {
         /// Failure reason.
         reason: String,
     },
+    /// Terminal "ceremony aborted" screen. Distinct from `Failed`: an abort is
+    /// a deliberate operator decision, not an error.
+    Aborted,
 }
 
 impl Screen {
     /// Whether this screen is a terminal end-state (no further interaction).
     #[must_use]
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Screen::Completed { .. } | Screen::Failed { .. })
+        matches!(
+            self,
+            Screen::Completed { .. } | Screen::Failed { .. } | Screen::Aborted
+        )
     }
 }
 

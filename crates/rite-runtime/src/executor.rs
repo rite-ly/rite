@@ -21,9 +21,11 @@ pub enum ExecutionError {
     #[error("Validation failed: {0}")]
     ValidationFailed(String),
 
-    /// A step was aborted by the user.
-    #[error("Step '{0}' was aborted by user")]
-    StepAborted(StepId),
+    /// The operator chose to stop the ceremony. Not an error condition: the
+    /// active step (if any) is already recorded in the transcript stream, so
+    /// the terminal message stays ceremony-level rather than naming a step.
+    #[error("Ceremony aborted by the operator")]
+    Aborted,
 
     /// An I/O error occurred.
     #[error("IO error: {0}")]

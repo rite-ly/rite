@@ -77,6 +77,19 @@ pub fn run(args: Args) {
         std::process::exit(1);
     };
 
+    // Fail fast if this build lacks a feature the ceremony needs: abort before
+    // any hardware is touched, directory created, or transcript opened, rather
+    // than partway through when execution reaches the step. `rite check` warns
+    // on the same condition instead of failing, since the executing build may
+    // differ from the one that validated.
+    let unsupported = crate::common::unsupported_action_names(&resolved);
+    if !unsupported.is_empty() {
+        eprintln!("This build of rite cannot run this ceremony.");
+        eprintln!("  Unsupported action(s): {}", unsupported.join(", "));
+        eprintln!("  Rebuild rite with the required feature(s) enabled.");
+        std::process::exit(1);
+    }
+
     if let Err(e) = preflight_check_materials(&resolved) {
         eprintln!("Error: {e}");
         std::process::exit(1);

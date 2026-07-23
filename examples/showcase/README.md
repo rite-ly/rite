@@ -13,7 +13,7 @@ All ceremonies in this directory are runnable with no external setup.
 
 ## Ceremonies
 
-### `demo.rite.yaml` — Root Signing Key Ceremony
+### `demo.rite.yaml` — Demo: Root Signing Key Ceremony
 
 A compact, single-page ceremony: environment check, RSA-4096 keypair generation,
 self-signed certificate issuance, public-key export, and witness attestation. This

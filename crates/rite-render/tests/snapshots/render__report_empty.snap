@@ -447,6 +447,8 @@ code, .hash {
 }
 .hash {
   word-break: break-all;
+  /* Slightly smaller so a full fingerprint stays compact in a narrow column. */
+  font-size: 0.75em;
 }
 .status-completed {
   color: #1f6b2e;
@@ -527,7 +529,8 @@ code, .hash {
 </head>
 <body class="theme-formal report">
   <header class="doc-header">
-    <h1> &middot; Ceremony Report</h1>
+    <p class="doc-eyebrow">Ceremony Report</p>
+    <h1></h1>
   </header>
 
   <div class="summary-box">

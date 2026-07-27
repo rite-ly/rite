@@ -492,22 +492,27 @@ pub(crate) fn render_prose_html(text: &str) -> String {
 }
 
 /// Build a deterministic, unique abbreviation for every role, keyed by id.
-#[allow(clippy::arithmetic_side_effects)]
 fn build_abbrevs(resolved: &Ceremony) -> HashMap<RoleId, String> {
     let mut used: HashSet<String> = HashSet::new();
-    let mut out = HashMap::new();
-    for (id, role) in resolved.roles.iter() {
-        let base = abbrev_of(&role.name);
-        let mut candidate = base.clone();
-        let mut n = 2u32;
-        while used.contains(&candidate) {
-            candidate = format!("{base}{n}");
-            n += 1;
-        }
-        used.insert(candidate.clone());
-        out.insert(id.clone(), candidate);
+    resolved
+        .roles
+        .iter()
+        .map(|(id, role)| (id.clone(), unique_abbrev(&abbrev_of(&role.name), &mut used)))
+        .collect()
+}
+
+/// Reserve a unique abbreviation derived from `base`, suffixing `2`, `3`, ...
+/// on collision. Records the chosen value in `used` so later calls stay unique.
+#[allow(clippy::arithmetic_side_effects)]
+fn unique_abbrev(base: &str, used: &mut HashSet<String>) -> String {
+    let mut candidate = base.to_string();
+    let mut n = 2u32;
+    while used.contains(&candidate) {
+        candidate = format!("{base}{n}");
+        n += 1;
     }
-    out
+    used.insert(candidate.clone());
+    candidate
 }
 
 /// Derive a short abbreviation from a role name.
@@ -559,6 +564,8 @@ pub struct ReportView {
     pub deviations: Vec<DeviationView>,
     /// Produced artifacts.
     pub artifacts: Vec<ArtifactView>,
+    /// Distinct roles seen in the log, with abbreviations (legend).
+    pub roles: Vec<ReportRoleView>,
     /// Per-step execution log.
     pub steps: Vec<ExecStepView>,
     /// The `rite` version that produced the report.
@@ -617,6 +624,15 @@ pub struct ArtifactView {
     pub sha256: String,
 }
 
+/// A role in the report's roles legend.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportRoleView {
+    /// Human-readable role name.
+    pub name: String,
+    /// Short abbreviation, unique within the report.
+    pub abbrev: String,
+}
+
 /// A per-step row in the report execution log.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecStepView {
@@ -626,6 +642,8 @@ pub struct ExecStepView {
     pub label: String,
     /// Role name.
     pub role: String,
+    /// Role abbreviation, matching the roles legend.
+    pub role_abbrev: String,
     /// Formatted start timestamp.
     pub started: String,
     /// Formatted completion timestamp, if any.
@@ -673,6 +691,25 @@ impl ReportView {
                 })
             })
             .collect();
+        // The report is transcript-only, so roles come from the names recorded
+        // in the log. Abbreviate them with the same helpers the script uses, so
+        // a run's report and its script agree on `CO`, `Wi`, and so on.
+        let mut used = HashSet::new();
+        let mut roles: Vec<ReportRoleView> = Vec::new();
+        for name in data.steps.iter().map(|s| &s.role) {
+            if roles.iter().any(|r| &r.name == name) {
+                continue;
+            }
+            roles.push(ReportRoleView {
+                name: name.clone(),
+                abbrev: unique_abbrev(&abbrev_of(name), &mut used),
+            });
+        }
+        let abbrev_by_name: HashMap<&str, &str> = roles
+            .iter()
+            .map(|r| (r.name.as_str(), r.abbrev.as_str()))
+            .collect();
+
         let steps = data
             .steps
             .iter()
@@ -684,6 +721,11 @@ impl ReportView {
                 ExecStepView {
                     step_id: s.step_id.clone(),
                     label: s.label.clone(),
+                    role_abbrev: abbrev_by_name
+                        .get(s.role.as_str())
+                        .copied()
+                        .unwrap_or_default()
+                        .to_string(),
                     role: s.role.clone(),
                     started: format_datetime(&s.started_at),
                     completed: s.completed_at.as_ref().map(format_datetime),
@@ -710,6 +752,7 @@ impl ReportView {
             attempts,
             deviations,
             artifacts,
+            roles,
             steps,
             rite_version: env!("CARGO_PKG_VERSION").to_string(),
         }

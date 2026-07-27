@@ -6,7 +6,7 @@ expression: html
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Root Signing Key Ceremony</title>
+  <title>Demo: Root Signing Key Ceremony</title>
   <style>
 /* Formal theme: a serif "ceremony protocol" look.
    Shared by ceremony scripts and post-ceremony reports.
@@ -447,6 +447,8 @@ code, .hash {
 }
 .hash {
   word-break: break-all;
+  /* Slightly smaller so a full fingerprint stays compact in a narrow column. */
+  font-size: 0.75em;
 }
 .status-completed {
   color: #1f6b2e;
@@ -528,7 +530,7 @@ code, .hash {
 <body class="theme-formal">
   <header class="doc-header">
     <p class="doc-eyebrow">Ceremony Protocol</p>
-    <h1>Root Signing Key Ceremony</h1>
+    <h1>Demo: Root Signing Key Ceremony</h1>
   </header>
   <section>
     <h2>Overview</h2>

@@ -1,5 +1,5 @@
 version: "0.2"
-name: "Root Signing Key Ceremony"
+name: "Demo: Root Signing Key Ceremony"
 description: |
   Generate an offline root signing key on an air-gapped workstation, issue its
   self-signed certificate, and export the public half for distribution. Two

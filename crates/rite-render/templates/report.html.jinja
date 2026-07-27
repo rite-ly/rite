@@ -18,7 +18,8 @@
 {%- if branding.brand_name %}
     <p class="brand-name">{{ branding.brand_name }}</p>
 {%- endif %}
-    <h1>{{ report.ceremony_name }} &middot; Ceremony Report</h1>
+    <p class="doc-eyebrow">Ceremony Report</p>
+    <h1>{{ report.ceremony_name }}</h1>
   </header>
 
   <div class="summary-box">
@@ -63,7 +64,7 @@
 {%- if report.artifacts %}
   <h2>Artifacts</h2>
   <table class="artifacts">
-    <thead><tr><th>Name</th><th>Step</th><th>Path</th><th>SHA-256</th></tr></thead>
+    <thead><tr><th>Name</th><th>Step</th><th>Path</th><th>Fingerprint</th></tr></thead>
     <tbody>
 {%- for a in report.artifacts %}
       <tr><td>{{ a.name }}</td><td><code>{{ a.step_id }}</code></td><td><code>{{ a.path }}</code></td><td><code class="hash">{{ a.sha256 }}</code></td></tr>
@@ -72,13 +73,22 @@
   </table>
 {%- endif %}
 
+{%- if report.roles %}
+  <h2>Roles</h2>
+  <ul class="roles">
+{%- for r in report.roles %}
+    <li><span class="role-abbrev">{{ r.abbrev }}</span> <strong>{{ r.name }}</strong></li>
+{%- endfor %}
+  </ul>
+{%- endif %}
+
 {%- if report.steps %}
   <h2>Execution Log</h2>
   <table class="execution-log">
-    <thead><tr><th>Step</th><th>Label</th><th>Role</th><th>Started</th><th>Completed</th><th>Outcome</th></tr></thead>
+    <thead><tr><th class="step-num">Label</th><th>Step</th><th class="role">Role</th><th>Started</th><th>Completed</th><th>Outcome</th></tr></thead>
     <tbody>
 {%- for s in report.steps %}
-      <tr><td><code>{{ s.step_id }}</code></td><td>{{ s.label }}</td><td><code>{{ s.role }}</code></td><td>{{ s.started }}</td><td>{{ s.completed if s.completed else "&ndash;" | safe }}</td><td>{{ s.outcome }}</td></tr>
+      <tr><td class="step-num">{{ s.label }}</td><td><code>{{ s.step_id }}</code></td><td class="role">{% if s.role_abbrev %}<abbr title="{{ s.role }}">{{ s.role_abbrev }}</abbr>{% else %}{{ s.role }}{% endif %}</td><td>{{ s.started }}</td><td>{{ s.completed if s.completed else "&ndash;" | safe }}</td><td>{{ s.outcome }}</td></tr>
 {%- endfor %}
     </tbody>
   </table>

@@ -2010,6 +2010,7 @@ dependencies = [
  "insta",
  "openssl",
  "rite-model",
+ "rite-openssl",
  "rite-render",
  "rite-resolver",
  "rite-runtime",

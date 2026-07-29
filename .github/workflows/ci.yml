@@ -77,6 +77,11 @@ jobs:
         run: |
           cargo build -p rite --features openssl-vendored
           cargo build -p rite-ls
+      # The default runner links OpenSSL 3.0, which has no ML-DSA, so the Test
+      # job skips the post-quantum example. This job already bundles a current
+      # OpenSSL, so the example smoke tests run here to cover it.
+      - name: Test examples (vendored OpenSSL)
+        run: cargo test -p rite --features openssl-vendored --test examples
 
   docker:
     name: Docker (smoke)

@@ -28,3 +28,15 @@
 mod backend;
 
 pub use backend::{OpenSslBackend, verify_ml_dsa_signature};
+
+/// Whether this build can perform ML-DSA operations.
+///
+/// ML-DSA arrived in OpenSSL 3.5, and the bindings for it are selected when
+/// `rite-openssl` is compiled, not when it runs. A binary linked against an
+/// older OpenSSL contains no ML-DSA code at all, so this is a property of the
+/// build and cannot be recovered by inspecting the runtime library version.
+///
+/// Callers that can offer a useful alternative (skipping a test, warning before
+/// a ceremony starts) should branch on this rather than waiting for
+/// [`BackendError::UnsupportedAlgorithm`](rite_sdk::BackendError) mid-run.
+pub const ML_DSA_AVAILABLE: bool = cfg!(ossl350);

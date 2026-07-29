@@ -2048,6 +2048,7 @@ version = "0.4.2"
 dependencies = [
  "base16ct 1.0.0",
  "openssl",
+ "openssl-sys",
  "rite-sdk",
  "tempfile",
  "zeroize",

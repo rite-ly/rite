@@ -46,7 +46,10 @@ use x509_cert::{
 
 use crate::params::IssueCertificateParams;
 
-use super::oids::{ECDSA_WITH_SHA256, SHA256_WITH_RSA_ENCRYPTION, sig_profile_for_algorithm};
+use super::oids::{
+    ECDSA_WITH_SHA256, ML_DSA_44, ML_DSA_65, ML_DSA_87, SHA256_WITH_RSA_ENCRYPTION,
+    sig_profile_for_algorithm,
+};
 
 /// id-kp-serverAuth OID (1.3.6.1.5.5.7.3.1)
 const ID_KP_SERVER_AUTH: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.1");
@@ -565,12 +568,38 @@ fn verify_csr_signature(csr: &CertReq) -> Result<(), String> {
         verifying_key.verify(&info_der, &signature).map_err(|_| {
             "CSR self-signature verification failed: ECDSA signature does not match".to_string()
         })
+    } else if oid == ML_DSA_44 || oid == ML_DSA_65 || oid == ML_DSA_87 {
+        verify_ml_dsa_csr(&spki_der, &info_der, csr.signature.raw_bytes())
     } else {
         Err(format!(
             "CSR signature algorithm {oid} is not supported for verification. \
-             Supported algorithms are sha256WithRSAEncryption and ecdsa-with-SHA256."
+             Supported algorithms are sha256WithRSAEncryption, ecdsa-with-SHA256, \
+             and ML-DSA-44/65/87."
         ))
     }
+}
+
+/// Verify an ML-DSA CSR self-signature.
+///
+/// The RSA and ECDSA branches above verify with `RustCrypto`, but no equivalent
+/// in-tree verifier covers ML-DSA, so this delegates to the same OpenSSL
+/// provider that produced the signature. Unifying all three onto one
+/// implementation is tracked as the open question in the meta-repo's
+/// `sign-verify-actions` investigation.
+#[cfg(feature = "openssl")]
+fn verify_ml_dsa_csr(spki_der: &[u8], info_der: &[u8], signature: &[u8]) -> Result<(), String> {
+    match rite_openssl::verify_ml_dsa_signature(spki_der, info_der, signature) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(
+            "CSR self-signature verification failed: ML-DSA signature does not match".to_string(),
+        ),
+        Err(e) => Err(format!("Failed to verify ML-DSA CSR self-signature: {e}")),
+    }
+}
+
+#[cfg(not(feature = "openssl"))]
+fn verify_ml_dsa_csr(_spki_der: &[u8], _info_der: &[u8], _signature: &[u8]) -> Result<(), String> {
+    Err("ML-DSA CSR verification requires the 'openssl' feature".to_string())
 }
 
 fn parse_csr(bytes: &[u8]) -> Result<CertReq, der::Error> {

@@ -27,4 +27,4 @@
 
 mod backend;
 
-pub use backend::OpenSslBackend;
+pub use backend::{OpenSslBackend, verify_ml_dsa_signature};

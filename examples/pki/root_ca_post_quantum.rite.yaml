@@ -1,0 +1,173 @@
+version: "0.2"
+name: "Post-Quantum Root CA Key Generation"
+description: |
+  Generate an offline root CA keypair using ML-DSA-87 (FIPS 204) on an air-gapped machine.
+
+  A root CA minted today with a 20-year validity is still a trust anchor in the window where
+  a cryptographically relevant quantum computer is plausible, and a root key cannot be
+  rotated without redistributing the trust anchor everywhere it is pinned. That lifetime,
+  not any present-day threat, is the reason to choose a lattice signature now.
+
+  ML-DSA-87 is the NIST category 5 parameter set and the CNSA 2.0 requirement. Certificates
+  and signatures are roughly an order of magnitude larger than their ECDSA equivalents,
+  which is immaterial at root scale where a handful of certificates are ever issued.
+
+  Requires OpenSSL 3.5 or newer. Builds linked against an older OpenSSL will fail this
+  ceremony at the key generation step with an unsupported-algorithm error.
+
+backends:
+  openssl:
+    provider: openssl
+
+parameters:
+  ceremony_date:
+    type: date
+    default: "2026-07-28"
+    description: "Date of the ceremony (YYYY-MM-DD)"
+
+materials:
+  transport_pubkey:
+    type: digital
+    path: "test_keys/transport_public.pem"
+    description: |
+      Crypto officer's transport RSA-4096 public key.
+
+      The transport key stays classical: it protects the backup only until the key is
+      restored, so it does not carry the root key's multi-decade exposure.
+
+output:
+  root_ca_cert:
+    type: certificate
+    description: "Self-signed ML-DSA-87 root CA certificate"
+  wrapped_root_ca_key:
+    type: wrapped_key
+    description: "Root CA private key wrapped with transport key"
+
+roles:
+  crypto_officer:
+    name: "Crypto Officer"
+    person: "Alice Smith"
+  witness__1:
+    person: "Bob Jones"
+  witness__2:
+    person: "Carol White"
+
+acts:
+  - id: opening
+    name: "Opening"
+    description: "Verify participants and environment before proceeding."
+  - id: key_generation
+    name: "Root CA Key Generation"
+    description: "Generate and protect the post-quantum root CA keypair."
+  - id: closing
+    name: "Closing"
+
+prerequisites:
+  - "Air-gapped workstation is powered on with all network interfaces disabled"
+  - "The rite build in use links OpenSSL 3.5 or newer"
+
+sections:
+  environment:
+    act: opening
+    name: "Environment Verification"
+    role: ${role.crypto_officer}
+    steps:
+      verify_time:
+        action: clock_check
+        with:
+          message: "Verify system clock before recording timestamps"
+      record_machine:
+        action: machine_info
+        with:
+          include_machine_id: true
+          include_cpu: true
+          include_os: true
+      verify_air_gap:
+        action: confirm
+        with:
+          message: "Confirm the workstation has no active network connections"
+
+  keygen:
+    act: key_generation
+    name: "Key Generation"
+    role: ${role.crypto_officer}
+    steps:
+      generate_root_ca:
+        action: generate_keypair
+        backend: openssl
+        with:
+          algorithm: ML-DSA-87
+          key_usage:
+            - key_cert_sign
+            - crl_sign
+        creates: root_ca_keypair
+        description: "Generate ML-DSA-87 root CA keypair."
+      generate_root_csr:
+        action: generate_csr
+        backend: openssl
+        reads:
+          signing_key: ${artifact.root_ca_keypair}
+        with:
+          subject: "CN=Post-Quantum Root CA,O=Example Org"
+        creates: root_ca_csr
+        description: "Generate a certificate signing request for the root CA key."
+      issue_root_cert:
+        action: issue_certificate
+        backend: openssl
+        reads:
+          signing_key: ${artifact.root_ca_keypair}
+          csr: ${artifact.root_ca_csr}
+        with:
+          profile: root_ca
+          validity_days: 7300
+        creates: root_ca_cert
+        description: "Issue the self-signed ML-DSA-87 root CA certificate."
+
+  protection:
+    act: key_generation
+    name: "Key Protection"
+    role: ${role.crypto_officer}
+    steps:
+      wrap_root_ca_key:
+        action: wrap_key
+        backend: openssl
+        reads:
+          key_to_wrap: ${artifact.root_ca_keypair}
+          wrapping_key: ${artifact.transport_pubkey}
+        with:
+          algorithm: CMS-RSA-GCM
+        creates: wrapped_root_ca_key
+        description: "Encrypt the root CA private key with the transport public key."
+
+  attestation:
+    act: closing
+    name: "Witness Attestation"
+    steps:
+      witness1_attest:
+        action: attest
+        role: ${role.witness__1}
+        with:
+          statement: "I witnessed the post-quantum root CA key generation and key wrapping."
+      witness2_attest:
+        action: attest
+        role: ${role.witness__2}
+        with:
+          statement: "I witnessed the post-quantum root CA key generation and key wrapping."
+      officer_attest:
+        action: attest
+        role: ${role.crypto_officer}
+        with:
+          statement: "ML-DSA-87 root CA keypair generated."
+
+after:
+  archive:
+    type: archive_materials
+    role: crypto_officer
+    items:
+      - "Ceremony transcript"
+      - "Root CA certificate (root_ca_cert.pem)"
+      - "Wrapped root CA key backup (wrapped_root_ca_key.bin)"
+    location: "Secure document archive"
+  notify:
+    type: notify_stakeholders
+    description: "Distribute root_ca_cert.pem to PKI team and update trust anchor documentation"

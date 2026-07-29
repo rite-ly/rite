@@ -139,6 +139,7 @@ Both bundle the `rite-ls` language server. For other LSP-aware editors, run `rit
     - [ ] Teardown act on abort or failure
 - [x] **Cryptographic backends**
   - [x] OpenSSL: RSA, ECDSA-P256, signing, wrapping, PKI
+    - [x] Post-quantum: ML-DSA-44/65/87 signatures and certificates (needs OpenSSL 3.5+)
     - [ ] Post-quantum: ML-KEM key encapsulation
   - [x] Hardware backends
     - [x] YubiKey PIV: key generation, signing, certificate read, on-device attestation

@@ -84,6 +84,12 @@ pub enum KeyAlgorithm {
     EcdsaP384,
     /// Ed25519 (`EdDSA`).
     Ed25519,
+    /// ML-DSA-44, module-lattice signature at NIST security category 2 (FIPS 204).
+    MlDsa44,
+    /// ML-DSA-65, module-lattice signature at NIST security category 3 (FIPS 204).
+    MlDsa65,
+    /// ML-DSA-87, module-lattice signature at NIST security category 5 (FIPS 204).
+    MlDsa87,
     /// AES 128-bit symmetric key.
     Aes128,
     /// AES 256-bit symmetric key.
@@ -98,6 +104,9 @@ impl fmt::Display for KeyAlgorithm {
             KeyAlgorithm::EcdsaP256 => write!(f, "ECDSA-P256"),
             KeyAlgorithm::EcdsaP384 => write!(f, "ECDSA-P384"),
             KeyAlgorithm::Ed25519 => write!(f, "Ed25519"),
+            KeyAlgorithm::MlDsa44 => write!(f, "ML-DSA-44"),
+            KeyAlgorithm::MlDsa65 => write!(f, "ML-DSA-65"),
+            KeyAlgorithm::MlDsa87 => write!(f, "ML-DSA-87"),
             KeyAlgorithm::Aes128 => write!(f, "AES-128"),
             KeyAlgorithm::Aes256 => write!(f, "AES-256"),
         }
@@ -121,6 +130,9 @@ impl std::str::FromStr for KeyAlgorithm {
             "ECDSA-P256" => Ok(Self::EcdsaP256),
             "ECDSA-P384" => Ok(Self::EcdsaP384),
             "Ed25519" => Ok(Self::Ed25519),
+            "ML-DSA-44" => Ok(Self::MlDsa44),
+            "ML-DSA-65" => Ok(Self::MlDsa65),
+            "ML-DSA-87" => Ok(Self::MlDsa87),
             "AES-128" => Ok(Self::Aes128),
             "AES-256" => Ok(Self::Aes256),
             _ => Err(ParseError(s.to_owned())),
@@ -263,6 +275,12 @@ pub enum SignAlgorithm {
     EcdsaSha384,
     /// Ed25519 (pure `EdDSA`, no hash function).
     Ed25519,
+    /// ML-DSA-44 (pure, no pre-hash). FIPS 204.
+    MlDsa44,
+    /// ML-DSA-65 (pure, no pre-hash). FIPS 204.
+    MlDsa65,
+    /// ML-DSA-87 (pure, no pre-hash). FIPS 204.
+    MlDsa87,
 }
 
 impl SignAlgorithm {
@@ -278,6 +296,9 @@ impl SignAlgorithm {
             SignAlgorithm::EcdsaSha256 => KeyAlgorithm::EcdsaP256,
             SignAlgorithm::EcdsaSha384 => KeyAlgorithm::EcdsaP384,
             SignAlgorithm::Ed25519 => KeyAlgorithm::Ed25519,
+            SignAlgorithm::MlDsa44 => KeyAlgorithm::MlDsa44,
+            SignAlgorithm::MlDsa65 => KeyAlgorithm::MlDsa65,
+            SignAlgorithm::MlDsa87 => KeyAlgorithm::MlDsa87,
         }
     }
 }

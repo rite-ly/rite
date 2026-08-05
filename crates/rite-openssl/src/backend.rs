@@ -122,9 +122,11 @@ impl Backend for OpenSslBackend {
     }
 
     rite_sdk::backend_capabilities!(
-        /// Supports RSA-2048, RSA-4096, and ECDSA-P256 key generation and storage.
+        /// Supports RSA-2048, RSA-4096, ECDSA-P256, and (with OpenSSL 3.5+)
+        /// ML-DSA-44/65/87 key generation and storage.
         as_keystore_mut: KeyStoreBackend,
-        /// Supports RSA-PKCS1-v1.5 (SHA-256), RSA-PSS (SHA-256), and ECDSA-P256 (SHA-256) signing.
+        /// Supports RSA-PKCS1-v1.5 (SHA-256), RSA-PSS (SHA-256), ECDSA-P256
+        /// (SHA-256), and (with OpenSSL 3.5+) ML-DSA-44/65/87 signing.
         as_sign_mut: SignBackend,
         /// Supports CMS-RSA-GCM and CMS-RSA-CBC key wrapping and unwrapping.
         as_transport_mut: KeyTransportBackend,
@@ -167,8 +169,130 @@ fn detect_key_algorithm(pkey: &PKey<Private>) -> Result<KeyAlgorithm, BackendErr
         };
     }
 
+    #[cfg(ossl350)]
+    for (algorithm, key_type) in ML_DSA_KEY_TYPES {
+        if pkey.is_a(key_type) {
+            return Ok(algorithm);
+        }
+    }
+
     Err(BackendError::Other(
-        "Unwrapped key is neither RSA nor a supported EC key".to_string(),
+        "Unwrapped key is not RSA, a supported EC key, or ML-DSA".to_string(),
+    ))
+}
+
+/// Seed length shared by every ML-DSA parameter set (FIPS 204 xi is 32 bytes).
+#[cfg(ossl350)]
+const ML_DSA_SEED_LEN: usize = 32;
+
+/// The ML-DSA parameter sets, paired with their OpenSSL provider key types.
+///
+/// Single source of truth for the mapping in both directions: key generation
+/// looks up a key type, and CMS unwrap probes each one to recover the algorithm.
+#[cfg(ossl350)]
+const ML_DSA_KEY_TYPES: [(KeyAlgorithm, openssl::pkey::KeyType); 3] = [
+    (KeyAlgorithm::MlDsa44, openssl::pkey::KeyType::ML_DSA_44),
+    (KeyAlgorithm::MlDsa65, openssl::pkey::KeyType::ML_DSA_65),
+    (KeyAlgorithm::MlDsa87, openssl::pkey::KeyType::ML_DSA_87),
+];
+
+/// Generate an ML-DSA keypair.
+///
+/// FIPS 204 derives the entire keypair deterministically from a 32-byte seed.
+/// `EVP_PKEY_fromdata` with a `seed` parameter is the only generation route the
+/// `openssl` crate exposes without raw FFI, so the seed is drawn from the
+/// OpenSSL CSPRNG here and wiped once the provider has expanded it.
+#[cfg(ossl350)]
+fn generate_ml_dsa(algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendError> {
+    let key_type = ML_DSA_KEY_TYPES
+        .iter()
+        .find(|(candidate, _)| *candidate == algorithm)
+        .map(|(_, key_type)| *key_type)
+        .ok_or_else(|| {
+            BackendError::UnsupportedAlgorithm(format!(
+                "{algorithm} is not an ML-DSA parameter set"
+            ))
+        })?;
+    let mut seed = Zeroizing::new(vec![0u8; ML_DSA_SEED_LEN]);
+    openssl::rand::rand_bytes(&mut seed).map_err(|e| ossl_err("ML-DSA seed generation", &e))?;
+    PKey::private_key_from_seed(None, key_type, None, &seed)
+        .map_err(|e| ossl_err("ML-DSA key generation", &e))
+}
+
+#[cfg(not(ossl350))]
+fn generate_ml_dsa(_algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendError> {
+    Err(unsupported_ml_dsa("key generation"))
+}
+
+/// Sign with ML-DSA.
+///
+/// FIPS 204 signs the message directly with no pre-hash, so this takes the
+/// digest-free `EVP_DigestSign` path. Signing is hedged by default, so two
+/// signatures over the same message with the same key differ.
+#[cfg(ossl350)]
+fn ml_dsa_sign(pkey: &PKeyRef<Private>, message: &[u8]) -> Result<Vec<u8>, BackendError> {
+    let mut signer =
+        Signer::new_without_digest(pkey).map_err(|e| ossl_err("Create ML-DSA signer", &e))?;
+    signer
+        .sign_oneshot_to_vec(message)
+        .map_err(|e| ossl_err("ML-DSA sign operation", &e))
+}
+
+#[cfg(not(ossl350))]
+fn ml_dsa_sign(_pkey: &PKeyRef<Private>, _message: &[u8]) -> Result<Vec<u8>, BackendError> {
+    Err(unsupported_ml_dsa("signing"))
+}
+
+/// Verify an ML-DSA signature against an SPKI DER public key, without a backend.
+///
+/// Verification needs only the public key, so this takes no [`OpenSslBackend`]
+/// and no [`KeyId`]. Signing-only devices (PIV cards, HSMs) can therefore have
+/// their signatures checked through the same path as software keys.
+///
+/// # Errors
+///
+/// Returns [`BackendError::UnsupportedAlgorithm`] when the linked OpenSSL
+/// predates 3.5, and [`BackendError::Other`] when the public key or signature
+/// cannot be parsed.
+#[cfg(ossl350)]
+pub fn verify_ml_dsa_signature(
+    public_der: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<bool, BackendError> {
+    let pub_pkey = PKey::public_key_from_der(public_der)
+        .map_err(|e| ossl_err("Decode ML-DSA public key", &e))?;
+    let mut verifier = Verifier::new_without_digest(&pub_pkey)
+        .map_err(|e| ossl_err("Create ML-DSA verifier", &e))?;
+    verifier
+        .verify_oneshot(signature, message)
+        .map_err(|e| ossl_err("ML-DSA verify operation", &e))
+}
+
+/// Verify an ML-DSA signature against an SPKI DER public key, without a backend.
+///
+/// # Errors
+///
+/// Always returns [`BackendError::UnsupportedAlgorithm`]: this build links an
+/// OpenSSL older than 3.5, which has no ML-DSA provider.
+#[cfg(not(ossl350))]
+pub fn verify_ml_dsa_signature(
+    _public_der: &[u8],
+    _message: &[u8],
+    _signature: &[u8],
+) -> Result<bool, BackendError> {
+    Err(unsupported_ml_dsa("verification"))
+}
+
+/// Error for an ML-DSA `operation` on a build linked against OpenSSL below 3.5.
+///
+/// Reports the runtime version, which is the one that actually lacks the
+/// provider and the one an operator can act on.
+#[cfg(not(ossl350))]
+fn unsupported_ml_dsa(operation: &str) -> BackendError {
+    BackendError::UnsupportedAlgorithm(format!(
+        "ML-DSA {operation} requires OpenSSL 3.5 or newer, but this build links OpenSSL {}",
+        openssl::version::version()
     ))
 }
 
@@ -202,6 +326,9 @@ impl KeyStoreBackend for OpenSslBackend {
                 let ec_key =
                     EcKey::generate(&group).map_err(|e| ossl_err("ECDSA-P256 keygen", &e))?;
                 PKey::from_ec_key(ec_key).map_err(|e| ossl_err("PKey from ECDSA-P256", &e))?
+            }
+            KeyAlgorithm::MlDsa44 | KeyAlgorithm::MlDsa65 | KeyAlgorithm::MlDsa87 => {
+                generate_ml_dsa(spec.algorithm)?
             }
             other => {
                 return Err(BackendError::UnsupportedAlgorithm(format!(
@@ -299,6 +426,17 @@ impl SignBackend for OpenSslBackend {
                     .sign_oneshot_to_vec(message)
                     .map_err(|e| ossl_err("ECDSA sign operation", &e))
             }
+            KeyAlgorithm::MlDsa44 | KeyAlgorithm::MlDsa65 | KeyAlgorithm::MlDsa87 => {
+                // ML-DSA fixes one signature scheme per parameter set, so the
+                // request is valid only if it names the key's own algorithm.
+                if algorithm.key_algorithm() != key.algorithm {
+                    return Err(BackendError::UnsupportedAlgorithm(format!(
+                        "Sign algorithm {algorithm:?} not supported for {} keys",
+                        key.algorithm
+                    )));
+                }
+                ml_dsa_sign(&key.pkey, message)
+            }
             other => Err(BackendError::UnsupportedAlgorithm(format!(
                 "Signing not yet implemented for algorithm {other:?}"
             ))),
@@ -361,6 +499,15 @@ impl SignBackend for OpenSslBackend {
                 Ok(verifier
                     .verify_oneshot(signature, message)
                     .map_err(|e| ossl_err("ECDSA verify operation", &e))?)
+            }
+            KeyAlgorithm::MlDsa44 | KeyAlgorithm::MlDsa65 | KeyAlgorithm::MlDsa87 => {
+                if algorithm.key_algorithm() != key.algorithm {
+                    return Err(BackendError::UnsupportedAlgorithm(format!(
+                        "Verify algorithm {algorithm:?} not supported for {} keys",
+                        key.algorithm
+                    )));
+                }
+                verify_ml_dsa_signature(&key.public_der, message, signature)
             }
             other => Err(BackendError::UnsupportedAlgorithm(format!(
                 "Verification not yet implemented for algorithm {other:?}"
@@ -1075,5 +1222,163 @@ mod tests {
         // Two calls should produce different results (with overwhelming probability)
         let bytes2 = backend.generate_random(32).unwrap();
         assert_ne!(bytes, bytes2);
+    }
+
+    /// Every ML-DSA parameter set, with the FIPS 204 sizes each one fixes.
+    #[cfg(ossl350)]
+    const ML_DSA_PARAMS: [(KeyAlgorithm, SignAlgorithm, usize, usize); 3] = [
+        (KeyAlgorithm::MlDsa44, SignAlgorithm::MlDsa44, 1312, 2420),
+        (KeyAlgorithm::MlDsa65, SignAlgorithm::MlDsa65, 1952, 3309),
+        (KeyAlgorithm::MlDsa87, SignAlgorithm::MlDsa87, 2592, 4627),
+    ];
+
+    /// Known-answer test for seed-derived key generation.
+    ///
+    /// FIPS 204 expands the keypair deterministically from the 32-byte seed, so
+    /// a fixed seed pins an exact public key. The expected digests are an
+    /// independent cross-check produced with the OpenSSL CLI
+    /// (`openssl genpkey -algorithm ML-DSA-NN -pkeyopt hexseed:...`), which
+    /// exercises the provider through a different entry point than the
+    /// `EVP_PKEY_fromdata` path the backend uses.
+    #[test]
+    #[cfg(ossl350)]
+    fn ml_dsa_seed_derivation_matches_known_answer() {
+        use openssl::hash::{MessageDigest, hash};
+
+        let seed: [u8; ML_DSA_SEED_LEN] = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
+            0x1c, 0x1d, 0x1e, 0x1f,
+        ];
+        let expected = [
+            (
+                KeyAlgorithm::MlDsa44,
+                "837832708c5236d951581f1fddf2b79991b3424a0486d16da1ddad0fd69701be",
+            ),
+            (
+                KeyAlgorithm::MlDsa65,
+                "b8b62131bfbe84433efb2273d7f5b87f7a22854a2cfd366fc2aead86d837c52d",
+            ),
+            (
+                KeyAlgorithm::MlDsa87,
+                "07e57c4f14dbad1267f621ec3777b4e2e6c4fbc4c22fbb87510ff8e0b3c6a642",
+            ),
+        ];
+
+        // Zipped against the production table so a reordering there is caught
+        // rather than silently pairing a digest with the wrong parameter set.
+        for ((algorithm, key_type), (expected_algorithm, expected_digest)) in
+            ML_DSA_KEY_TYPES.into_iter().zip(expected)
+        {
+            assert_eq!(algorithm, expected_algorithm);
+            let pkey = PKey::private_key_from_seed(None, key_type, None, &seed).unwrap();
+            let spki = pkey.public_key_to_der().unwrap();
+            let digest = hash(MessageDigest::sha256(), &spki).unwrap();
+            assert_eq!(
+                base16ct::lower::encode_string(&digest),
+                expected_digest,
+                "{algorithm} public key does not match the known answer for this seed"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(ossl350)]
+    fn ml_dsa_generate_sign_and_verify_roundtrip() {
+        for (key_algorithm, sign_algorithm, public_len, signature_len) in ML_DSA_PARAMS {
+            let mut backend = OpenSslBackend::try_new("test").unwrap();
+            let metadata = backend.generate_key(spec(key_algorithm, "pq-key")).unwrap();
+
+            assert_eq!(metadata.algorithm, key_algorithm);
+            let public_key = metadata.public_key.as_ref().unwrap();
+            // SPKI wraps the raw public key in an AlgorithmIdentifier header,
+            // so the encoding is a little longer than the FIPS 204 figure.
+            assert!(
+                public_key.len() > public_len,
+                "{key_algorithm} SPKI ({}) should exceed the raw public key ({public_len})",
+                public_key.len()
+            );
+
+            let message = b"ceremony transcript digest";
+            let signature = backend
+                .sign(&metadata.key_id, message, sign_algorithm)
+                .unwrap();
+            assert_eq!(signature.len(), signature_len, "{key_algorithm}");
+
+            assert!(
+                backend
+                    .verify(&metadata.key_id, message, &signature, sign_algorithm)
+                    .unwrap(),
+                "{key_algorithm} signature should verify"
+            );
+            assert!(
+                !backend
+                    .verify(&metadata.key_id, b"tampered", &signature, sign_algorithm)
+                    .unwrap(),
+                "{key_algorithm} signature should not verify against a different message"
+            );
+        }
+    }
+
+    /// ML-DSA signing is hedged by default: it mixes fresh randomness into every
+    /// signature, so the same key over the same message yields different bytes.
+    /// Ceremony assertions must therefore verify signatures, never compare them.
+    #[test]
+    #[cfg(ossl350)]
+    fn ml_dsa_signing_is_hedged() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let metadata = backend
+            .generate_key(spec(KeyAlgorithm::MlDsa65, "pq-key"))
+            .unwrap();
+
+        let message = b"same message";
+        let first = backend
+            .sign(&metadata.key_id, message, SignAlgorithm::MlDsa65)
+            .unwrap();
+        let second = backend
+            .sign(&metadata.key_id, message, SignAlgorithm::MlDsa65)
+            .unwrap();
+
+        assert_ne!(first, second);
+        assert!(
+            backend
+                .verify(&metadata.key_id, message, &first, SignAlgorithm::MlDsa65)
+                .unwrap()
+        );
+        assert!(
+            backend
+                .verify(&metadata.key_id, message, &second, SignAlgorithm::MlDsa65)
+                .unwrap()
+        );
+    }
+
+    /// Each parameter set is its own signature scheme, so a request naming a
+    /// different one is rejected rather than silently signing.
+    #[test]
+    #[cfg(ossl350)]
+    fn ml_dsa_rejects_mismatched_parameter_set() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let metadata = backend
+            .generate_key(spec(KeyAlgorithm::MlDsa65, "pq-key"))
+            .unwrap();
+
+        let result = backend.sign(&metadata.key_id, b"data", SignAlgorithm::MlDsa87);
+        assert!(matches!(result, Err(BackendError::UnsupportedAlgorithm(_))));
+    }
+
+    /// Two independently generated keys must differ, confirming the seed is
+    /// drawn fresh per key rather than fixed.
+    #[test]
+    #[cfg(ossl350)]
+    fn ml_dsa_generation_uses_a_fresh_seed() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let first = backend
+            .generate_key(spec(KeyAlgorithm::MlDsa65, "key-a"))
+            .unwrap();
+        let second = backend
+            .generate_key(spec(KeyAlgorithm::MlDsa65, "key-b"))
+            .unwrap();
+
+        assert_ne!(first.public_key, second.public_key);
     }
 }

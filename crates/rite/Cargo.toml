@@ -53,6 +53,10 @@ insta = { workspace = true }
 tempfile = { workspace = true }
 chrono = { workspace = true }
 assert_cmd = { workspace = true }
+# Only for `ML_DSA_AVAILABLE` in the example smoke tests: whether the binary
+# under test can run the post-quantum ceremony is decided by the OpenSSL this
+# workspace links, and no Cargo feature records that.
+rite-openssl = { workspace = true }
 
 [lints]
 workspace = true

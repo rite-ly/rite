@@ -28,20 +28,33 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Whether an example needs a Cargo feature this test binary was built
-/// without. Feature unification builds the `rite` binary under test with the
-/// same features as the test itself, so `cfg!` reflects what that binary
-/// supports.
-fn needs_missing_feature(path: &Path) -> bool {
+/// Whether an example needs something this test binary was built without.
+///
+/// Two kinds of gap, both fixed at build time. Cargo features are visible
+/// through `cfg!`, because feature unification builds the `rite` binary under
+/// test with the same features as the test itself. Linked-library capabilities
+/// are not, so those are read from the crate that owns the detection.
+fn needs_unavailable_capability(path: &Path) -> bool {
     // examples/piv uses the hardware-backend actions (`piv_sign`,
     // `yubikey_attest_slot`), which are off in the default feature set.
-    !cfg!(feature = "yubikey") && path.starts_with(examples_dir().join("piv"))
+    if !cfg!(feature = "yubikey") && path.starts_with(examples_dir().join("piv")) {
+        return true;
+    }
+
+    // The post-quantum root CA needs ML-DSA, which OpenSSL only provides from
+    // 3.5 onwards. Distributions still shipping 3.0 (Ubuntu 24.04, and so the
+    // default CI runner) produce a binary with no ML-DSA support compiled in.
+    // CI covers this example in the vendored-OpenSSL job instead.
+    !rite_openssl::ML_DSA_AVAILABLE
+        && path
+            .file_name()
+            .is_some_and(|n| n == "root_ca_post_quantum.rite.yaml")
 }
 
 fn ceremonies() -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect(&examples_dir(), &mut out);
-    out.retain(|p| !needs_missing_feature(p));
+    out.retain(|p| !needs_unavailable_capability(p));
     out.sort();
     assert!(
         !out.is_empty(),

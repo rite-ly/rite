@@ -18,6 +18,11 @@ vendored = ["openssl/vendored"]
 [dependencies]
 rite-sdk = { workspace = true }
 openssl = { workspace = true }
+# Referenced by build.rs, not by the source. `openssl-sys` carries the
+# `links = "openssl"` key, and Cargo only hands `DEP_OPENSSL_*` metadata to
+# build scripts of *direct* dependents. Removing this as an "unused" dependency
+# silently drops ML-DSA support from every build.
+openssl-sys = { workspace = true }
 base16ct = { workspace = true }
 zeroize = { workspace = true }
 

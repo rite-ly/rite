@@ -2010,6 +2010,7 @@ dependencies = [
  "insta",
  "openssl",
  "rite-model",
+ "rite-openssl",
  "rite-render",
  "rite-resolver",
  "rite-runtime",
@@ -2048,6 +2049,7 @@ version = "0.4.2"
 dependencies = [
  "base16ct 1.0.0",
  "openssl",
+ "openssl-sys",
  "rite-sdk",
  "tempfile",
  "zeroize",

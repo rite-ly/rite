@@ -12,6 +12,10 @@
 //! - [`KeyTransportBackend`](rite_sdk::KeyTransportBackend): key wrapping and unwrapping
 //! - [`RandomBackend`](rite_sdk::RandomBackend): random byte generation
 //!
+//! [`verify_signature`] is also available on its own, without a backend
+//! instance: checking a signature needs only the public key, so it works for
+//! keys this crate never held (a PIV card's, say).
+//!
 //! # Feature flags
 //!
 //! - `vendored`: bundle OpenSSL at build time (no system library needed). Required for
@@ -27,7 +31,7 @@
 
 mod backend;
 
-pub use backend::{OpenSslBackend, verify_ml_dsa_signature};
+pub use backend::{OpenSslBackend, public_key_algorithm, verify_signature};
 
 /// Whether this build can perform ML-DSA operations.
 ///

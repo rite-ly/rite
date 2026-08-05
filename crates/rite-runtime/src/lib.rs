@@ -101,4 +101,4 @@ pub use expressions::{
 };
 
 // Artifact resolution (used by action implementors).
-pub use artifact_resolver::{resolve_artifact_bytes, resolve_backend_key};
+pub use artifact_resolver::{BackendKeyMeta, resolve_artifact_bytes, resolve_backend_key};

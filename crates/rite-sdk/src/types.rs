@@ -96,6 +96,31 @@ pub enum KeyAlgorithm {
     Aes256,
 }
 
+impl KeyAlgorithm {
+    /// The signature algorithm to use with this key unless told otherwise.
+    ///
+    /// `None` for symmetric keys, which sign nothing.
+    ///
+    /// A key algorithm does not always determine a signature algorithm: RSA
+    /// keys work with both PKCS#1 v1.5 and PSS, and this picks v1.5 for
+    /// interoperability. Everywhere else the pairing is forced, either by the
+    /// curve's matching digest strength (RFC 5480) or by the scheme naming its
+    /// own digest (Ed25519, ML-DSA).
+    #[must_use]
+    pub fn default_sign_algorithm(self) -> Option<SignAlgorithm> {
+        match self {
+            KeyAlgorithm::Rsa2048 | KeyAlgorithm::Rsa4096 => Some(SignAlgorithm::RsaPkcs1Sha256),
+            KeyAlgorithm::EcdsaP256 => Some(SignAlgorithm::EcdsaSha256),
+            KeyAlgorithm::EcdsaP384 => Some(SignAlgorithm::EcdsaSha384),
+            KeyAlgorithm::Ed25519 => Some(SignAlgorithm::Ed25519),
+            KeyAlgorithm::MlDsa44 => Some(SignAlgorithm::MlDsa44),
+            KeyAlgorithm::MlDsa65 => Some(SignAlgorithm::MlDsa65),
+            KeyAlgorithm::MlDsa87 => Some(SignAlgorithm::MlDsa87),
+            KeyAlgorithm::Aes128 | KeyAlgorithm::Aes256 => None,
+        }
+    }
+}
+
 impl fmt::Display for KeyAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -262,7 +287,7 @@ pub struct KeySecurityAttributes {
 
 /// Signature algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(into = "String", try_from = "String")]
 #[non_exhaustive]
 pub enum SignAlgorithm {
     /// RSASSA-PKCS1-v1_5 with SHA-256.
@@ -284,11 +309,18 @@ pub enum SignAlgorithm {
 }
 
 impl SignAlgorithm {
-    /// The key algorithm this signature algorithm is used with.
+    /// A representative key algorithm for this signature algorithm.
     ///
-    /// This pairing is the shared source of truth for backends that select a
-    /// device algorithm from a signature request and for test doubles that
-    /// mint stand-in keys, so the two cannot drift apart.
+    /// Used where a signature request must be turned into a concrete key
+    /// algorithm: selecting a card algorithm, or minting a stand-in key for a
+    /// rehearsal. Keeping that mapping here means those callers cannot drift
+    /// apart from each other.
+    ///
+    /// The mapping is deliberately lossy for RSA: both RSA schemes answer
+    /// `Rsa2048`, because a signature algorithm does not name a modulus size.
+    /// Use [`accepts_key`](Self::accepts_key) to test whether a key may be used
+    /// with this algorithm; the equality `alg.key_algorithm() == key` is not
+    /// that test and rejects RSA-4096 keys.
     #[must_use]
     pub fn key_algorithm(self) -> KeyAlgorithm {
         match self {
@@ -300,6 +332,78 @@ impl SignAlgorithm {
             SignAlgorithm::MlDsa65 => KeyAlgorithm::MlDsa65,
             SignAlgorithm::MlDsa87 => KeyAlgorithm::MlDsa87,
         }
+    }
+
+    /// Whether a key of `key_algorithm` may be used with this signature algorithm.
+    ///
+    /// The compatibility check every signing backend needs, in one place, so
+    /// each one does not reinvent it per key type. Curve and parameter set are
+    /// pinned: an ECDSA-SHA256 request will not take a P-384 key, and each
+    /// ML-DSA parameter set fixes its own scheme. Only the RSA schemes span
+    /// more than one key, since they are defined for any modulus size.
+    #[must_use]
+    pub fn accepts_key(self, key_algorithm: KeyAlgorithm) -> bool {
+        match self {
+            SignAlgorithm::RsaPkcs1Sha256 | SignAlgorithm::RsaPssSha256 => {
+                matches!(key_algorithm, KeyAlgorithm::Rsa2048 | KeyAlgorithm::Rsa4096)
+            }
+            // Every other scheme pins exactly one key algorithm, which
+            // `key_algorithm` already names. Restating the pairing here would
+            // give it two places to be wrong in.
+            SignAlgorithm::EcdsaSha256
+            | SignAlgorithm::EcdsaSha384
+            | SignAlgorithm::Ed25519
+            | SignAlgorithm::MlDsa44
+            | SignAlgorithm::MlDsa65
+            | SignAlgorithm::MlDsa87 => self.key_algorithm() == key_algorithm,
+        }
+    }
+}
+
+impl fmt::Display for SignAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SignAlgorithm::RsaPkcs1Sha256 => write!(f, "RSA-PKCS1-SHA256"),
+            SignAlgorithm::RsaPssSha256 => write!(f, "RSA-PSS-SHA256"),
+            SignAlgorithm::EcdsaSha256 => write!(f, "ECDSA-SHA256"),
+            SignAlgorithm::EcdsaSha384 => write!(f, "ECDSA-SHA384"),
+            SignAlgorithm::Ed25519 => write!(f, "Ed25519"),
+            SignAlgorithm::MlDsa44 => write!(f, "ML-DSA-44"),
+            SignAlgorithm::MlDsa65 => write!(f, "ML-DSA-65"),
+            SignAlgorithm::MlDsa87 => write!(f, "ML-DSA-87"),
+        }
+    }
+}
+
+impl std::str::FromStr for SignAlgorithm {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "RSA-PKCS1-SHA256" => Ok(Self::RsaPkcs1Sha256),
+            "RSA-PSS-SHA256" => Ok(Self::RsaPssSha256),
+            "ECDSA-SHA256" => Ok(Self::EcdsaSha256),
+            "ECDSA-SHA384" => Ok(Self::EcdsaSha384),
+            "Ed25519" => Ok(Self::Ed25519),
+            "ML-DSA-44" => Ok(Self::MlDsa44),
+            "ML-DSA-65" => Ok(Self::MlDsa65),
+            "ML-DSA-87" => Ok(Self::MlDsa87),
+            _ => Err(ParseError(s.to_owned())),
+        }
+    }
+}
+
+impl From<SignAlgorithm> for String {
+    fn from(a: SignAlgorithm) -> String {
+        a.to_string()
+    }
+}
+
+impl TryFrom<String> for SignAlgorithm {
+    type Error = ParseError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -737,6 +841,9 @@ mod tests {
             (KeyAlgorithm::EcdsaP256, "\"ECDSA-P256\""),
             (KeyAlgorithm::EcdsaP384, "\"ECDSA-P384\""),
             (KeyAlgorithm::Ed25519, "\"Ed25519\""),
+            (KeyAlgorithm::MlDsa44, "\"ML-DSA-44\""),
+            (KeyAlgorithm::MlDsa65, "\"ML-DSA-65\""),
+            (KeyAlgorithm::MlDsa87, "\"ML-DSA-87\""),
             (KeyAlgorithm::Aes128, "\"AES-128\""),
             (KeyAlgorithm::Aes256, "\"AES-256\""),
         ];
@@ -746,6 +853,92 @@ mod tests {
             let deserialized: KeyAlgorithm = serde_json::from_str(expected).unwrap();
             assert_eq!(deserialized, variant, "deserialize {expected}");
         }
+    }
+
+    #[test]
+    fn sign_algorithm_serde_roundtrip() {
+        // Serde uses Display strings via `serde(into/try_from)`. These are the canonical
+        // strings for ceremony YAML `algorithm:` fields and transcripts.
+        let cases: &[(SignAlgorithm, &str)] = &[
+            (SignAlgorithm::RsaPkcs1Sha256, "\"RSA-PKCS1-SHA256\""),
+            (SignAlgorithm::RsaPssSha256, "\"RSA-PSS-SHA256\""),
+            (SignAlgorithm::EcdsaSha256, "\"ECDSA-SHA256\""),
+            (SignAlgorithm::EcdsaSha384, "\"ECDSA-SHA384\""),
+            (SignAlgorithm::Ed25519, "\"Ed25519\""),
+            (SignAlgorithm::MlDsa44, "\"ML-DSA-44\""),
+            (SignAlgorithm::MlDsa65, "\"ML-DSA-65\""),
+            (SignAlgorithm::MlDsa87, "\"ML-DSA-87\""),
+        ];
+        for &(variant, expected) in cases {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, expected, "serialize {variant:?}");
+            let deserialized: SignAlgorithm = serde_json::from_str(expected).unwrap();
+            assert_eq!(deserialized, variant, "deserialize {expected}");
+        }
+    }
+
+    #[test]
+    fn sign_algorithm_from_str_rejects_unknown() {
+        assert!("RSA-PKCS1-SHA512".parse::<SignAlgorithm>().is_err());
+        assert!("".parse::<SignAlgorithm>().is_err());
+        assert!(
+            "ecdsa-sha256".parse::<SignAlgorithm>().is_err(),
+            "must be case-sensitive"
+        );
+        assert!(
+            "ecdsa_sha256".parse::<SignAlgorithm>().is_err(),
+            "the snake_case spelling is not accepted"
+        );
+    }
+
+    /// The default must be a signature algorithm the key can actually perform,
+    /// or actions that derive one would hand backends an impossible request.
+    #[test]
+    fn every_default_sign_algorithm_accepts_its_own_key() {
+        let signing_keys = [
+            KeyAlgorithm::Rsa2048,
+            KeyAlgorithm::Rsa4096,
+            KeyAlgorithm::EcdsaP256,
+            KeyAlgorithm::EcdsaP384,
+            KeyAlgorithm::Ed25519,
+            KeyAlgorithm::MlDsa44,
+            KeyAlgorithm::MlDsa65,
+            KeyAlgorithm::MlDsa87,
+        ];
+        for key_algorithm in signing_keys {
+            let algorithm = key_algorithm
+                .default_sign_algorithm()
+                .unwrap_or_else(|| panic!("{key_algorithm} must have a default"));
+            assert!(
+                algorithm.accepts_key(key_algorithm),
+                "{key_algorithm} defaults to {algorithm}, which rejects it"
+            );
+        }
+
+        // Symmetric keys sign nothing.
+        assert!(KeyAlgorithm::Aes128.default_sign_algorithm().is_none());
+        assert!(KeyAlgorithm::Aes256.default_sign_algorithm().is_none());
+    }
+
+    #[test]
+    fn sign_algorithm_accepts_key_spans_rsa_sizes_and_pins_everything_else() {
+        // RSA signature schemes are defined for any modulus size, so both key
+        // sizes are valid. This is what `key_algorithm()` cannot express.
+        for algorithm in [SignAlgorithm::RsaPkcs1Sha256, SignAlgorithm::RsaPssSha256] {
+            assert!(algorithm.accepts_key(KeyAlgorithm::Rsa2048));
+            assert!(algorithm.accepts_key(KeyAlgorithm::Rsa4096));
+            assert!(!algorithm.accepts_key(KeyAlgorithm::EcdsaP256));
+        }
+
+        // Curves and ML-DSA parameter sets are pinned: a signature algorithm
+        // names exactly one key algorithm and rejects its neighbours.
+        assert!(SignAlgorithm::EcdsaSha256.accepts_key(KeyAlgorithm::EcdsaP256));
+        assert!(!SignAlgorithm::EcdsaSha256.accepts_key(KeyAlgorithm::EcdsaP384));
+        assert!(SignAlgorithm::MlDsa65.accepts_key(KeyAlgorithm::MlDsa65));
+        assert!(!SignAlgorithm::MlDsa65.accepts_key(KeyAlgorithm::MlDsa87));
+
+        // A signing algorithm never accepts a symmetric key.
+        assert!(!SignAlgorithm::Ed25519.accepts_key(KeyAlgorithm::Aes256));
     }
 
     #[test]

@@ -12,7 +12,7 @@ use openssl::cms::CmsContentInfo;
 use openssl::ec::{EcGroup, EcKey};
 use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
-use openssl::pkey::{PKey, PKeyRef, Private};
+use openssl::pkey::{HasPublic, Id, PKey, PKeyRef, Private};
 use openssl::rsa::{Padding, Rsa};
 use openssl::sign::{Signer, Verifier};
 use openssl::symm::Cipher;
@@ -122,11 +122,12 @@ impl Backend for OpenSslBackend {
     }
 
     rite_sdk::backend_capabilities!(
-        /// Supports RSA-2048, RSA-4096, ECDSA-P256, and (with OpenSSL 3.5+)
-        /// ML-DSA-44/65/87 key generation and storage.
+        /// Supports RSA-2048, RSA-4096, ECDSA-P256, ECDSA-P384, Ed25519, and
+        /// (with OpenSSL 3.5+) ML-DSA-44/65/87 key generation and storage.
         as_keystore_mut: KeyStoreBackend,
-        /// Supports RSA-PKCS1-v1.5 (SHA-256), RSA-PSS (SHA-256), ECDSA-P256
-        /// (SHA-256), and (with OpenSSL 3.5+) ML-DSA-44/65/87 signing.
+        /// Supports RSA-PKCS1-v1.5 (SHA-256), RSA-PSS (SHA-256), ECDSA
+        /// (SHA-256/SHA-384), Ed25519, and (with OpenSSL 3.5+) ML-DSA-44/65/87
+        /// signing.
         as_sign_mut: SignBackend,
         /// Supports CMS-RSA-GCM and CMS-RSA-CBC key wrapping and unwrapping.
         as_transport_mut: KeyTransportBackend,
@@ -140,45 +141,66 @@ fn ossl_err(context: &str, e: &openssl::error::ErrorStack) -> BackendError {
     BackendError::Other(format!("{context}: {e}"))
 }
 
-/// Infer `KeyAlgorithm` from a private key recovered by CMS decryption.
+/// Reject a signature request whose algorithm does not match the stored key.
 ///
-/// CMS `EnvelopedData` carries the raw key bytes as opaque content — the algorithm
-/// of the wrapped key is not encoded in the CMS structure itself.
-fn detect_key_algorithm(pkey: &PKey<Private>) -> Result<KeyAlgorithm, BackendError> {
-    if let Ok(rsa) = pkey.rsa() {
-        return match rsa.size() {
-            256 => Ok(KeyAlgorithm::Rsa2048),
-            512 => Ok(KeyAlgorithm::Rsa4096),
-            n => Err(BackendError::UnsupportedAlgorithm(format!(
-                "RSA modulus size {n} bytes ({} bits) not supported (expected 2048 or 4096 bits)",
-                n.saturating_mul(8)
-            ))),
-        };
+/// Runs once at the top of `sign` and `verify`, so the per-key-type arms below
+/// only have to select an OpenSSL primitive. `operation` names the caller for
+/// the error message ("Sign" or "Verify").
+fn check_key_accepted(
+    operation: &str,
+    algorithm: SignAlgorithm,
+    key_algorithm: KeyAlgorithm,
+) -> Result<(), BackendError> {
+    if algorithm.accepts_key(key_algorithm) {
+        return Ok(());
     }
+    Err(BackendError::UnsupportedAlgorithm(format!(
+        "{operation} algorithm {algorithm} not supported for {key_algorithm} keys"
+    )))
+}
 
-    if let Ok(ec_key) = pkey.ec_key() {
-        let nid = ec_key
-            .group()
-            .curve_name()
-            .ok_or_else(|| BackendError::Other("EC key has no named curve".to_string()))?;
-        return match nid {
-            Nid::X9_62_PRIME256V1 => Ok(KeyAlgorithm::EcdsaP256),
-            _ => Err(BackendError::UnsupportedAlgorithm(format!(
-                "EC curve {nid:?} is not supported for key transport (only P-256)"
+/// Recover the `KeyAlgorithm` of a key from the key object itself.
+///
+/// Needed wherever the algorithm is not carried alongside the key: CMS
+/// `EnvelopedData` holds the raw key bytes as opaque content, and a bare SPKI
+/// public key arrives with no ceremony metadata attached.
+fn key_algorithm_of<T: HasPublic>(pkey: &PKeyRef<T>) -> Result<KeyAlgorithm, BackendError> {
+    match pkey.id() {
+        Id::RSA => match pkey.bits() {
+            2048 => Ok(KeyAlgorithm::Rsa2048),
+            4096 => Ok(KeyAlgorithm::Rsa4096),
+            bits => Err(BackendError::UnsupportedAlgorithm(format!(
+                "RSA key size {bits} bits not supported (expected 2048 or 4096)"
             ))),
-        };
-    }
+        },
+        Id::EC => {
+            let ec_key = pkey.ec_key().map_err(|e| ossl_err("Read EC key", &e))?;
+            let nid = ec_key
+                .group()
+                .curve_name()
+                .ok_or_else(|| BackendError::Other("EC key has no named curve".to_string()))?;
+            match nid {
+                Nid::X9_62_PRIME256V1 => Ok(KeyAlgorithm::EcdsaP256),
+                Nid::SECP384R1 => Ok(KeyAlgorithm::EcdsaP384),
+                _ => Err(BackendError::UnsupportedAlgorithm(format!(
+                    "EC curve {nid:?} is not supported (expected P-256 or P-384)"
+                ))),
+            }
+        }
+        Id::ED25519 => Ok(KeyAlgorithm::Ed25519),
+        _ => {
+            #[cfg(ossl350)]
+            for (algorithm, key_type) in ML_DSA_KEY_TYPES {
+                if pkey.is_a(key_type) {
+                    return Ok(algorithm);
+                }
+            }
 
-    #[cfg(ossl350)]
-    for (algorithm, key_type) in ML_DSA_KEY_TYPES {
-        if pkey.is_a(key_type) {
-            return Ok(algorithm);
+            Err(BackendError::UnsupportedAlgorithm(
+                "Key is not RSA, a supported EC curve, Ed25519, or ML-DSA".to_string(),
+            ))
         }
     }
-
-    Err(BackendError::Other(
-        "Unwrapped key is not RSA, a supported EC key, or ML-DSA".to_string(),
-    ))
 }
 
 /// Seed length shared by every ML-DSA parameter set (FIPS 204 xi is 32 bytes).
@@ -224,64 +246,183 @@ fn generate_ml_dsa(_algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendErr
     Err(unsupported_ml_dsa("key generation"))
 }
 
-/// Sign with ML-DSA.
+/// Refuse ML-DSA on a build whose OpenSSL has no provider for it.
 ///
-/// FIPS 204 signs the message directly with no pre-hash, so this takes the
-/// digest-free `EVP_DigestSign` path. Signing is hedged by default, so two
-/// signatures over the same message with the same key differ.
+/// The signing and verification paths below are generic: `digest_for` already
+/// routes ML-DSA to the digest-free `EVP_DigestSign` path that FIPS 204 needs,
+/// so no separate implementation is required. What a pre-3.5 build does need is
+/// this, an error naming the missing provider instead of whatever OpenSSL
+/// reports when handed a key type it does not know.
+#[cfg(not(ossl350))]
+fn check_ml_dsa_available(algorithm: SignAlgorithm, operation: &str) -> Result<(), BackendError> {
+    if matches!(
+        algorithm,
+        SignAlgorithm::MlDsa44 | SignAlgorithm::MlDsa65 | SignAlgorithm::MlDsa87
+    ) {
+        return Err(unsupported_ml_dsa(operation));
+    }
+    Ok(())
+}
+
+/// Refuse ML-DSA on a build whose OpenSSL has no provider for it.
+///
+/// This build has one, so every algorithm is available.
 #[cfg(ossl350)]
-fn ml_dsa_sign(pkey: &PKeyRef<Private>, message: &[u8]) -> Result<Vec<u8>, BackendError> {
-    let mut signer =
-        Signer::new_without_digest(pkey).map_err(|e| ossl_err("Create ML-DSA signer", &e))?;
+#[allow(clippy::unnecessary_wraps)]
+fn check_ml_dsa_available(_algorithm: SignAlgorithm, _operation: &str) -> Result<(), BackendError> {
+    Ok(())
+}
+
+/// The RSA padding controls `Signer` and `Verifier` both have, which the
+/// `openssl` crate does not express through a shared trait.
+trait RsaPadding {
+    fn padding(&mut self, padding: Padding) -> Result<(), openssl::error::ErrorStack>;
+    fn mgf1_md(&mut self, md: MessageDigest) -> Result<(), openssl::error::ErrorStack>;
+}
+
+impl RsaPadding for Signer<'_> {
+    fn padding(&mut self, padding: Padding) -> Result<(), openssl::error::ErrorStack> {
+        self.set_rsa_padding(padding)
+    }
+    fn mgf1_md(&mut self, md: MessageDigest) -> Result<(), openssl::error::ErrorStack> {
+        self.set_rsa_mgf1_md(md)
+    }
+}
+
+impl RsaPadding for Verifier<'_> {
+    fn padding(&mut self, padding: Padding) -> Result<(), openssl::error::ErrorStack> {
+        self.set_rsa_padding(padding)
+    }
+    fn mgf1_md(&mut self, md: MessageDigest) -> Result<(), openssl::error::ErrorStack> {
+        self.set_rsa_mgf1_md(md)
+    }
+}
+
+/// Apply the padding scheme an RSA algorithm names. A no-op for everything else.
+///
+/// PKCS#1 v1.5 is OpenSSL's default, but it is set explicitly so the scheme is
+/// never left to a library default that could change.
+fn apply_rsa_padding<T: RsaPadding>(
+    operation: &mut T,
+    algorithm: SignAlgorithm,
+) -> Result<(), BackendError> {
+    match algorithm {
+        SignAlgorithm::RsaPkcs1Sha256 => operation
+            .padding(Padding::PKCS1)
+            .map_err(|e| ossl_err("Set PKCS1 padding", &e)),
+        SignAlgorithm::RsaPssSha256 => {
+            operation
+                .padding(Padding::PKCS1_PSS)
+                .map_err(|e| ossl_err("Set PSS padding", &e))?;
+            operation
+                .mgf1_md(MessageDigest::sha256())
+                .map_err(|e| ossl_err("Set MGF1 MD", &e))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The message digest an algorithm signs over, or `None` for the digest-free
+/// schemes that take the message whole (Ed25519, ML-DSA).
+fn digest_for(algorithm: SignAlgorithm) -> Option<MessageDigest> {
+    match algorithm {
+        SignAlgorithm::EcdsaSha384 => Some(MessageDigest::sha384()),
+        SignAlgorithm::Ed25519
+        | SignAlgorithm::MlDsa44
+        | SignAlgorithm::MlDsa65
+        | SignAlgorithm::MlDsa87 => None,
+        _ => Some(MessageDigest::sha256()),
+    }
+}
+
+/// Sign `message` with a private key.
+///
+/// The caller has already checked that the key and algorithm agree, so this
+/// only selects an OpenSSL primitive.
+fn sign_with_key(
+    pkey: &PKeyRef<Private>,
+    message: &[u8],
+    algorithm: SignAlgorithm,
+) -> Result<Vec<u8>, BackendError> {
+    check_ml_dsa_available(algorithm, "signing")?;
+
+    let mut signer = match digest_for(algorithm) {
+        Some(digest) => Signer::new(digest, pkey),
+        None => Signer::new_without_digest(pkey),
+    }
+    .map_err(|e| ossl_err("Create signer", &e))?;
+    apply_rsa_padding(&mut signer, algorithm)?;
     signer
         .sign_oneshot_to_vec(message)
-        .map_err(|e| ossl_err("ML-DSA sign operation", &e))
+        .map_err(|e| ossl_err("Sign operation", &e))
 }
 
-#[cfg(not(ossl350))]
-fn ml_dsa_sign(_pkey: &PKeyRef<Private>, _message: &[u8]) -> Result<Vec<u8>, BackendError> {
-    Err(unsupported_ml_dsa("signing"))
-}
-
-/// Verify an ML-DSA signature against an SPKI DER public key, without a backend.
+/// Verify `signature` over `message` with a public key.
 ///
-/// Verification needs only the public key, so this takes no [`OpenSslBackend`]
-/// and no [`KeyId`]. Signing-only devices (PIV cards, HSMs) can therefore have
-/// their signatures checked through the same path as software keys.
+/// The caller has already checked that the key and algorithm agree, so this
+/// only selects an OpenSSL primitive.
+fn verify_with_key<T: HasPublic>(
+    pkey: &PKeyRef<T>,
+    message: &[u8],
+    signature: &[u8],
+    algorithm: SignAlgorithm,
+) -> Result<bool, BackendError> {
+    check_ml_dsa_available(algorithm, "verification")?;
+
+    let mut verifier = match digest_for(algorithm) {
+        Some(digest) => Verifier::new(digest, pkey),
+        None => Verifier::new_without_digest(pkey),
+    }
+    .map_err(|e| ossl_err("Create verifier", &e))?;
+    apply_rsa_padding(&mut verifier, algorithm)?;
+    verifier
+        .verify_oneshot(signature, message)
+        .map_err(|e| ossl_err("Verify operation", &e))
+}
+
+/// Read the key algorithm out of an SPKI DER public key.
+///
+/// A public key that arrives as bytes carries no metadata, so callers that must
+/// know what they are holding (to pick a signature algorithm, say) recover it
+/// from the key structure.
 ///
 /// # Errors
 ///
-/// Returns [`BackendError::UnsupportedAlgorithm`] when the linked OpenSSL
-/// predates 3.5, and [`BackendError::Other`] when the public key or signature
-/// cannot be parsed.
-#[cfg(ossl350)]
-pub fn verify_ml_dsa_signature(
+/// Returns [`BackendError::UnsupportedAlgorithm`] for a key type this crate
+/// does not handle, and [`BackendError::Other`] when the key cannot be parsed.
+pub fn public_key_algorithm(public_der: &[u8]) -> Result<KeyAlgorithm, BackendError> {
+    let pkey =
+        PKey::public_key_from_der(public_der).map_err(|e| ossl_err("Decode public key", &e))?;
+    key_algorithm_of(&pkey)
+}
+
+/// Verify a signature against an SPKI DER public key, without a backend.
+///
+/// Verification needs only the public key, so this takes no [`OpenSslBackend`]
+/// and no [`KeyId`]. Signatures from signing-only devices (PIV cards, HSMs) are
+/// therefore checked through the same path as software keys.
+///
+/// The key is required to match `algorithm`. Without that check, a caller who
+/// took the algorithm from an untrusted source (a CSR's `signatureAlgorithm`,
+/// say) could hand over an RSA key labelled as ECDSA and have OpenSSL quietly
+/// verify it as RSA.
+///
+/// # Errors
+///
+/// Returns [`BackendError::UnsupportedAlgorithm`] when the key and algorithm
+/// disagree, or when the algorithm is absent from this build (ML-DSA on an
+/// OpenSSL older than 3.5), and [`BackendError::Other`] when the public key or
+/// signature cannot be parsed.
+pub fn verify_signature(
     public_der: &[u8],
     message: &[u8],
     signature: &[u8],
+    algorithm: SignAlgorithm,
 ) -> Result<bool, BackendError> {
-    let pub_pkey = PKey::public_key_from_der(public_der)
-        .map_err(|e| ossl_err("Decode ML-DSA public key", &e))?;
-    let mut verifier = Verifier::new_without_digest(&pub_pkey)
-        .map_err(|e| ossl_err("Create ML-DSA verifier", &e))?;
-    verifier
-        .verify_oneshot(signature, message)
-        .map_err(|e| ossl_err("ML-DSA verify operation", &e))
-}
-
-/// Verify an ML-DSA signature against an SPKI DER public key, without a backend.
-///
-/// # Errors
-///
-/// Always returns [`BackendError::UnsupportedAlgorithm`]: this build links an
-/// OpenSSL older than 3.5, which has no ML-DSA provider.
-#[cfg(not(ossl350))]
-pub fn verify_ml_dsa_signature(
-    _public_der: &[u8],
-    _message: &[u8],
-    _signature: &[u8],
-) -> Result<bool, BackendError> {
-    Err(unsupported_ml_dsa("verification"))
+    let pkey =
+        PKey::public_key_from_der(public_der).map_err(|e| ossl_err("Decode public key", &e))?;
+    check_key_accepted("Verify", algorithm, key_algorithm_of(&pkey)?)?;
+    verify_with_key(&pkey, message, signature, algorithm)
 }
 
 /// Error for an ML-DSA `operation` on a build linked against OpenSSL below 3.5.
@@ -320,19 +461,27 @@ impl KeyStoreBackend for OpenSslBackend {
                 let rsa = Rsa::generate(4096).map_err(|e| ossl_err("RSA-4096 keygen", &e))?;
                 PKey::from_rsa(rsa).map_err(|e| ossl_err("PKey from RSA-4096", &e))?
             }
-            KeyAlgorithm::EcdsaP256 => {
-                let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)
-                    .map_err(|e| ossl_err("Load P-256 group", &e))?;
+            KeyAlgorithm::EcdsaP256 | KeyAlgorithm::EcdsaP384 => {
+                let (nid, name) = if spec.algorithm == KeyAlgorithm::EcdsaP384 {
+                    (Nid::SECP384R1, "ECDSA-P384")
+                } else {
+                    (Nid::X9_62_PRIME256V1, "ECDSA-P256")
+                };
+                let group = EcGroup::from_curve_name(nid)
+                    .map_err(|e| ossl_err(&format!("Load {name} group"), &e))?;
                 let ec_key =
-                    EcKey::generate(&group).map_err(|e| ossl_err("ECDSA-P256 keygen", &e))?;
-                PKey::from_ec_key(ec_key).map_err(|e| ossl_err("PKey from ECDSA-P256", &e))?
+                    EcKey::generate(&group).map_err(|e| ossl_err(&format!("{name} keygen"), &e))?;
+                PKey::from_ec_key(ec_key).map_err(|e| ossl_err(&format!("PKey from {name}"), &e))?
+            }
+            KeyAlgorithm::Ed25519 => {
+                PKey::generate_ed25519().map_err(|e| ossl_err("Ed25519 keygen", &e))?
             }
             KeyAlgorithm::MlDsa44 | KeyAlgorithm::MlDsa65 | KeyAlgorithm::MlDsa87 => {
                 generate_ml_dsa(spec.algorithm)?
             }
             other => {
                 return Err(BackendError::UnsupportedAlgorithm(format!(
-                    "Algorithm {other:?} not yet implemented for OpenSslBackend"
+                    "Algorithm {other} not yet implemented for OpenSslBackend"
                 )));
             }
         };
@@ -383,64 +532,8 @@ impl SignBackend for OpenSslBackend {
         algorithm: SignAlgorithm,
     ) -> Result<Vec<u8>, BackendError> {
         let key = self.get_key(key_id)?;
-
-        match key.algorithm {
-            KeyAlgorithm::Rsa2048 | KeyAlgorithm::Rsa4096 => {
-                let mut signer = Signer::new(MessageDigest::sha256(), &key.pkey)
-                    .map_err(|e| ossl_err("Create signer", &e))?;
-
-                match algorithm {
-                    SignAlgorithm::RsaPkcs1Sha256 => {
-                        signer
-                            .set_rsa_padding(Padding::PKCS1)
-                            .map_err(|e| ossl_err("Set PKCS1 padding", &e))?;
-                    }
-                    SignAlgorithm::RsaPssSha256 => {
-                        signer
-                            .set_rsa_padding(Padding::PKCS1_PSS)
-                            .map_err(|e| ossl_err("Set PSS padding", &e))?;
-                        signer
-                            .set_rsa_mgf1_md(MessageDigest::sha256())
-                            .map_err(|e| ossl_err("Set MGF1 MD", &e))?;
-                    }
-                    other => {
-                        return Err(BackendError::UnsupportedAlgorithm(format!(
-                            "Sign algorithm {other:?} not supported for RSA keys"
-                        )));
-                    }
-                }
-
-                signer
-                    .sign_oneshot_to_vec(message)
-                    .map_err(|e| ossl_err("Sign operation", &e))
-            }
-            KeyAlgorithm::EcdsaP256 => {
-                if algorithm != SignAlgorithm::EcdsaSha256 {
-                    return Err(BackendError::UnsupportedAlgorithm(format!(
-                        "Sign algorithm {algorithm:?} not supported for ECDSA-P256 keys"
-                    )));
-                }
-                let mut signer = Signer::new(MessageDigest::sha256(), &key.pkey)
-                    .map_err(|e| ossl_err("Create ECDSA signer", &e))?;
-                signer
-                    .sign_oneshot_to_vec(message)
-                    .map_err(|e| ossl_err("ECDSA sign operation", &e))
-            }
-            KeyAlgorithm::MlDsa44 | KeyAlgorithm::MlDsa65 | KeyAlgorithm::MlDsa87 => {
-                // ML-DSA fixes one signature scheme per parameter set, so the
-                // request is valid only if it names the key's own algorithm.
-                if algorithm.key_algorithm() != key.algorithm {
-                    return Err(BackendError::UnsupportedAlgorithm(format!(
-                        "Sign algorithm {algorithm:?} not supported for {} keys",
-                        key.algorithm
-                    )));
-                }
-                ml_dsa_sign(&key.pkey, message)
-            }
-            other => Err(BackendError::UnsupportedAlgorithm(format!(
-                "Signing not yet implemented for algorithm {other:?}"
-            ))),
-        }
+        check_key_accepted("Sign", algorithm, key.algorithm)?;
+        sign_with_key(&key.pkey, message, algorithm)
     }
 
     fn verify(
@@ -451,68 +544,10 @@ impl SignBackend for OpenSslBackend {
         algorithm: SignAlgorithm,
     ) -> Result<bool, BackendError> {
         let key = self.get_key(key_id)?;
-
-        match key.algorithm {
-            KeyAlgorithm::Rsa2048 | KeyAlgorithm::Rsa4096 => {
-                let pub_pkey = PKey::public_key_from_der(&key.public_der)
-                    .map_err(|e| ossl_err("Decode public key", &e))?;
-
-                let mut verifier = Verifier::new(MessageDigest::sha256(), &pub_pkey)
-                    .map_err(|e| ossl_err("Create verifier", &e))?;
-
-                match algorithm {
-                    SignAlgorithm::RsaPkcs1Sha256 => {
-                        verifier
-                            .set_rsa_padding(Padding::PKCS1)
-                            .map_err(|e| ossl_err("Set PKCS1 padding", &e))?;
-                    }
-                    SignAlgorithm::RsaPssSha256 => {
-                        verifier
-                            .set_rsa_padding(Padding::PKCS1_PSS)
-                            .map_err(|e| ossl_err("Set PSS padding", &e))?;
-                        verifier
-                            .set_rsa_mgf1_md(MessageDigest::sha256())
-                            .map_err(|e| ossl_err("Set MGF1 MD", &e))?;
-                    }
-                    other => {
-                        return Err(BackendError::UnsupportedAlgorithm(format!(
-                            "Verify algorithm {other:?} not supported for RSA keys"
-                        )));
-                    }
-                }
-
-                Ok(verifier
-                    .verify_oneshot(signature, message)
-                    .map_err(|e| ossl_err("Verify operation", &e))?)
-            }
-            KeyAlgorithm::EcdsaP256 => {
-                if algorithm != SignAlgorithm::EcdsaSha256 {
-                    return Err(BackendError::UnsupportedAlgorithm(format!(
-                        "Verify algorithm {algorithm:?} not supported for ECDSA-P256 keys"
-                    )));
-                }
-
-                let pub_pkey = PKey::public_key_from_der(&key.public_der)
-                    .map_err(|e| ossl_err("Decode ECDSA public key", &e))?;
-                let mut verifier = Verifier::new(MessageDigest::sha256(), &pub_pkey)
-                    .map_err(|e| ossl_err("Create ECDSA verifier", &e))?;
-                Ok(verifier
-                    .verify_oneshot(signature, message)
-                    .map_err(|e| ossl_err("ECDSA verify operation", &e))?)
-            }
-            KeyAlgorithm::MlDsa44 | KeyAlgorithm::MlDsa65 | KeyAlgorithm::MlDsa87 => {
-                if algorithm.key_algorithm() != key.algorithm {
-                    return Err(BackendError::UnsupportedAlgorithm(format!(
-                        "Verify algorithm {algorithm:?} not supported for {} keys",
-                        key.algorithm
-                    )));
-                }
-                verify_ml_dsa_signature(&key.public_der, message, signature)
-            }
-            other => Err(BackendError::UnsupportedAlgorithm(format!(
-                "Verification not yet implemented for algorithm {other:?}"
-            ))),
-        }
+        check_key_accepted("Verify", algorithm, key.algorithm)?;
+        // The stored private key carries its public half, so there is nothing
+        // to decode: `public_der` exists for export, not for verification.
+        verify_with_key(&key.pkey, message, signature, algorithm)
     }
 }
 
@@ -706,7 +741,7 @@ impl KeyTransportBackend for OpenSslBackend {
 
         let pkey = parse_private_key_der(&key_material)?;
 
-        let key_algorithm = detect_key_algorithm(&pkey)?;
+        let key_algorithm = key_algorithm_of(&pkey)?;
         self.store_key(key_algorithm, label.to_string(), pkey)
     }
 
@@ -891,6 +926,118 @@ mod tests {
             )
             .unwrap();
         assert!(valid);
+    }
+
+    /// Every signature family the backend claims must round-trip through
+    /// `sign` and `verify`, including the two digest-free schemes whose OpenSSL
+    /// path differs (Ed25519 and, above, ML-DSA).
+    #[test]
+    fn signs_and_verifies_every_supported_algorithm() {
+        let cases: &[(KeyAlgorithm, SignAlgorithm)] = &[
+            (KeyAlgorithm::Rsa2048, SignAlgorithm::RsaPkcs1Sha256),
+            (KeyAlgorithm::Rsa2048, SignAlgorithm::RsaPssSha256),
+            (KeyAlgorithm::EcdsaP256, SignAlgorithm::EcdsaSha256),
+            (KeyAlgorithm::EcdsaP384, SignAlgorithm::EcdsaSha384),
+            (KeyAlgorithm::Ed25519, SignAlgorithm::Ed25519),
+        ];
+
+        for &(key_algorithm, algorithm) in cases {
+            let mut backend = OpenSslBackend::try_new("test").unwrap();
+            let metadata = backend
+                .generate_key(spec(key_algorithm, "signing-key"))
+                .unwrap();
+            let message = b"ceremony transcript";
+
+            let signature = backend
+                .sign(&metadata.key_id, message, algorithm)
+                .unwrap_or_else(|e| panic!("{key_algorithm} signs with {algorithm}: {e}"));
+
+            assert!(
+                backend
+                    .verify(&metadata.key_id, message, &signature, algorithm)
+                    .unwrap(),
+                "{key_algorithm} must verify its own {algorithm} signature"
+            );
+            assert!(
+                !backend
+                    .verify(&metadata.key_id, b"tampered", &signature, algorithm)
+                    .unwrap(),
+                "{key_algorithm} must reject a {algorithm} signature over other data"
+            );
+
+            // The same signature must check out through the backend-free entry
+            // point, which is what actions and CSR checking use.
+            let public_der = metadata.public_key.as_ref().unwrap();
+            assert!(verify_signature(public_der, message, &signature, algorithm).unwrap());
+        }
+    }
+
+    /// `verify_signature` takes its algorithm from the caller, which for CSR
+    /// checking means from the document being checked. A key of another family
+    /// must be refused rather than verified under whatever scheme it fits.
+    #[test]
+    fn backend_free_verification_refuses_a_key_of_the_wrong_family() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let metadata = backend
+            .generate_key(spec(KeyAlgorithm::Rsa2048, "rsa-key"))
+            .unwrap();
+        let message = b"data";
+        let signature = backend
+            .sign(&metadata.key_id, message, SignAlgorithm::RsaPkcs1Sha256)
+            .unwrap();
+        let public_der = metadata.public_key.as_ref().unwrap();
+
+        let err = verify_signature(public_der, message, &signature, SignAlgorithm::EcdsaSha256)
+            .unwrap_err();
+        assert!(
+            matches!(err, BackendError::UnsupportedAlgorithm(_)),
+            "{err:?}"
+        );
+    }
+
+    /// An RSA signature scheme is defined for any modulus size, so the shared
+    /// compatibility check must not pin RSA requests to one key size.
+    #[test]
+    fn signs_with_an_rsa_4096_key() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let metadata = backend
+            .generate_key(spec(KeyAlgorithm::Rsa4096, "signing-key-4096"))
+            .unwrap();
+
+        let message = b"Hello, large modulus!";
+        let signature = backend
+            .sign(&metadata.key_id, message, SignAlgorithm::RsaPkcs1Sha256)
+            .unwrap();
+
+        let valid = backend
+            .verify(
+                &metadata.key_id,
+                message,
+                &signature,
+                SignAlgorithm::RsaPkcs1Sha256,
+            )
+            .unwrap();
+        assert!(valid);
+    }
+
+    /// A key of the wrong family is refused before any OpenSSL primitive is
+    /// selected, and the error names both sides in their DSL spelling.
+    #[test]
+    fn rejects_a_signature_algorithm_the_key_cannot_perform() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let metadata = backend
+            .generate_key(spec(KeyAlgorithm::EcdsaP256, "signing-key-p256"))
+            .unwrap();
+
+        let err = backend
+            .sign(&metadata.key_id, b"data", SignAlgorithm::RsaPkcs1Sha256)
+            .unwrap_err();
+
+        let BackendError::UnsupportedAlgorithm(message) = err else {
+            panic!("expected an unsupported-algorithm error, got {err:?}");
+        };
+        assert!(message.contains("RSA-PKCS1-SHA256"), "{message}");
+        assert!(message.contains("ECDSA-P256"), "{message}");
     }
 
     #[test]

@@ -15,8 +15,10 @@ publish = true
 default      = ["verification", "attestation", "crypto", "pki", "openssl"]
 verification = ["dep:subtle", "dep:sysinfo"]
 attestation  = []
-crypto       = []
-pki          = ["dep:x509-cert", "dep:signature", "dep:rsa", "dep:p256"]
+# Both verify signatures in process (CSR proof-of-possession, `verify_signature`),
+# so they need a crypto provider rather than only a backend at run time.
+crypto       = ["openssl"]
+pki          = ["dep:x509-cert", "dep:signature", "openssl"]
 openssl          = ["dep:rite-openssl"]
 openssl-vendored = ["openssl", "rite-openssl/vendored"]
 # Hardware smart-card backends. Opt-in: they pull in the `yubikey` crate, which
@@ -43,8 +45,6 @@ subtle    = { workspace = true, optional = true }
 sysinfo   = { workspace = true, optional = true }
 x509-cert = { workspace = true, optional = true }
 signature = { workspace = true, optional = true }
-rsa       = { workspace = true, optional = true }
-p256      = { workspace = true, optional = true }
 secrecy   = { workspace = true, optional = true }
 
 [dev-dependencies]

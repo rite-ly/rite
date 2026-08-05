@@ -19,7 +19,7 @@ pub struct PivSignParams {
     /// PIV slot containing the signing key (default: "9c").
     #[serde(default = "default_sign_slot")]
     pub slot: String,
-    /// Signing algorithm: `ecdsa_sha256`, `ecdsa_sha384`, `rsa_pkcs1_sha256`.
+    /// Signing algorithm: `ECDSA-SHA256`, `ECDSA-SHA384`, `RSA-PKCS1-SHA256`.
     #[serde(default = "default_sign_algorithm")]
     pub algorithm: String,
     /// Optional display message.
@@ -31,8 +31,10 @@ fn default_sign_slot() -> String {
     "9c".to_string()
 }
 
+// Spelled by the SDK enum rather than a literal, so the default cannot drift
+// from the names the action parses.
 fn default_sign_algorithm() -> String {
-    "ecdsa_sha256".to_string()
+    rite_sdk::SignAlgorithm::EcdsaSha256.to_string()
 }
 
 /// Parameters for the `yubikey_attest_slot` action.
@@ -70,7 +72,7 @@ mod tests {
         let json = serde_json::json!({});
         let params: PivSignParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.slot, "9c");
-        assert_eq!(params.algorithm, "ecdsa_sha256");
+        assert_eq!(params.algorithm, "ECDSA-SHA256");
         assert!(params.message.is_none());
     }
 
@@ -78,12 +80,12 @@ mod tests {
     fn sign_params_explicit_values() {
         let json = serde_json::json!({
             "slot": "9d",
-            "algorithm": "rsa_pkcs1_sha256",
+            "algorithm": "RSA-PKCS1-SHA256",
             "message": "Sign the key"
         });
         let params: PivSignParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.slot, "9d");
-        assert_eq!(params.algorithm, "rsa_pkcs1_sha256");
+        assert_eq!(params.algorithm, "RSA-PKCS1-SHA256");
         assert_eq!(params.message.as_deref(), Some("Sign the key"));
     }
 }

@@ -61,9 +61,24 @@ pub static ALL: &[ActionMeta] = &[
         long: "Export public key from keypair.",
     },
     ActionMeta {
+        name: "sign_data",
+        short: "Sign data with a backend-managed key",
+        long: "Sign arbitrary data with a backend-managed key. The signature algorithm follows from the key unless `algorithm:` names another one the key accepts.",
+    },
+    ActionMeta {
+        name: "verify_signature",
+        short: "Verify a signature against a public key",
+        long: "Verify a signature over data, given the signer's public key. Needs no backend, so it works on evidence the ceremony did not produce; naming a `backend:` delegates the check to that backend.",
+    },
+    ActionMeta {
         name: "attest",
         short: "Formal attestation statement",
         long: "Formal attestation statement.",
+    },
+    ActionMeta {
+        name: "gather_entropy",
+        short: "Fold human-supplied entropy into the ceremony seed",
+        long: "Fold human-supplied entropy into the ceremony seed. A participant supplies a free-form random value, such as the result of rolling physical dice, which is mixed into the entropy source's ratchet.",
     },
     ActionMeta {
         name: "tpm_attest",
@@ -100,4 +115,28 @@ pub static ALL: &[ActionMeta] = &[
 /// Look up the hover description for a known action name.
 pub fn hover_description(name: &str) -> Option<&'static str> {
     ALL.iter().find(|a| a.name == name).map(|a| a.long)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ALL;
+    use rite_model::ActionType;
+    use std::collections::BTreeSet;
+
+    /// Completion offers exactly the actions the runtime has.
+    ///
+    /// This list is static, so nothing in the compiler ties it to `ActionType`:
+    /// a new action would otherwise be invisible in the editor while working
+    /// perfectly at run time, and a removed one would still be suggested.
+    #[test]
+    fn catalogue_matches_the_action_types() {
+        let catalogued: BTreeSet<&str> = ALL.iter().map(|a| a.name).collect();
+        let defined: BTreeSet<String> = ActionType::ALL.iter().map(ToString::to_string).collect();
+        let defined: BTreeSet<&str> = defined.iter().map(String::as_str).collect();
+
+        assert_eq!(
+            catalogued, defined,
+            "editor action catalogue is out of step with ActionType"
+        );
+    }
 }

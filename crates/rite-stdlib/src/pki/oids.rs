@@ -12,6 +12,13 @@ pub(super) const SHA256_WITH_RSA_ENCRYPTION: ObjectIdentifier =
 pub(super) const ECDSA_WITH_SHA256: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
 
+/// ecdsa-with-SHA384 (1.2.840.10045.4.3.3)
+pub(super) const ECDSA_WITH_SHA384: ObjectIdentifier =
+    ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.3");
+
+/// id-Ed25519 (1.3.101.112)
+pub(super) const ED25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
+
 /// id-ml-dsa-44 (2.16.840.1.101.3.4.3.17)
 pub(super) const ML_DSA_44: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.17");
@@ -24,55 +31,137 @@ pub(super) const ML_DSA_65: ObjectIdentifier =
 pub(super) const ML_DSA_87: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.19");
 
+/// The X.509 signature identifier for each algorithm Rite signs and accepts.
+///
+/// One table, deliberately. It answers both directions: which identifier to
+/// stamp on something Rite signs, and whether an identifier found on an
+/// incoming CSR may be verified. Keeping them separate let the emit set and the
+/// accept set drift, which would have Rite generating CSRs its own
+/// `issue_certificate` refuses.
+///
+/// Membership is ceremony **policy**, not a statement of what the crypto
+/// provider can do. OpenSSL will happily verify md5WithRSA and SHA-1; a key
+/// ceremony should not accept either, so what may appear on a CSR is named here
+/// and everything else is refused by default.
+///
+/// `null_parameters` distinguishes RFC 3279, where RSA identifiers carry an
+/// explicit NULL, from RFC 5758 and RFC 8410, where the parameters are absent.
+const SIGNATURE_IDENTIFIERS: [(SignAlgorithm, ObjectIdentifier, bool, &str); 7] = [
+    (
+        SignAlgorithm::RsaPkcs1Sha256,
+        SHA256_WITH_RSA_ENCRYPTION,
+        true,
+        "sha256WithRSAEncryption",
+    ),
+    (
+        SignAlgorithm::EcdsaSha256,
+        ECDSA_WITH_SHA256,
+        false,
+        "ecdsa-with-SHA256",
+    ),
+    (
+        SignAlgorithm::EcdsaSha384,
+        ECDSA_WITH_SHA384,
+        false,
+        "ecdsa-with-SHA384",
+    ),
+    (SignAlgorithm::Ed25519, ED25519, false, "Ed25519"),
+    (SignAlgorithm::MlDsa44, ML_DSA_44, false, "ML-DSA-44"),
+    (SignAlgorithm::MlDsa65, ML_DSA_65, false, "ML-DSA-65"),
+    (SignAlgorithm::MlDsa87, ML_DSA_87, false, "ML-DSA-87"),
+];
+
+/// The signature profile to use when signing with a key of `key_algorithm`.
+///
+/// Which signature algorithm suits a key is the SDK's decision, shared with the
+/// signing actions; this adds only the X.509 encoding of that choice.
 pub(super) fn sig_profile_for_algorithm(
     key_algorithm: KeyAlgorithm,
 ) -> Result<(SignAlgorithm, AlgorithmIdentifier<Any>, &'static str), String> {
-    match key_algorithm {
-        KeyAlgorithm::Rsa2048 | KeyAlgorithm::Rsa4096 => Ok((
-            SignAlgorithm::RsaPkcs1Sha256,
-            AlgorithmIdentifier {
-                oid: SHA256_WITH_RSA_ENCRYPTION,
-                // RSA algorithm identifiers carry explicit NULL parameters per RFC 3279.
-                parameters: Some(Any::null()),
-            },
-            "sha256WithRSAEncryption",
-        )),
-        KeyAlgorithm::EcdsaP256 => Ok((
-            SignAlgorithm::EcdsaSha256,
-            AlgorithmIdentifier {
-                oid: ECDSA_WITH_SHA256,
-                // RFC 5758: ECDSA-with-SHA2 identifiers use absent parameters.
-                parameters: None,
-            },
-            "ecdsa-with-SHA256",
-        )),
-        // FIPS 204 fixes one signature scheme per parameter set, with no hash
-        // or padding left to choose, so the key algorithm fully determines the
-        // signature algorithm identifier. Parameters are absent.
-        KeyAlgorithm::MlDsa44 | KeyAlgorithm::MlDsa65 | KeyAlgorithm::MlDsa87 => {
-            let (sign_algorithm, oid, name) = match key_algorithm {
-                KeyAlgorithm::MlDsa44 => (SignAlgorithm::MlDsa44, ML_DSA_44, "ML-DSA-44"),
-                KeyAlgorithm::MlDsa65 => (SignAlgorithm::MlDsa65, ML_DSA_65, "ML-DSA-65"),
-                _ => (SignAlgorithm::MlDsa87, ML_DSA_87, "ML-DSA-87"),
-            };
-            Ok((
-                sign_algorithm,
+    let sign_algorithm = key_algorithm.default_sign_algorithm().ok_or_else(|| {
+        format!("key algorithm '{key_algorithm}' is not supported for PKI signing yet")
+    })?;
+    let (identifier, name) = signature_identifier(sign_algorithm).ok_or_else(|| {
+        format!("signature algorithm '{sign_algorithm}' has no X.509 identifier in Rite")
+    })?;
+    Ok((sign_algorithm, identifier, name))
+}
+
+/// The X.509 identifier and display name for a signature algorithm.
+fn signature_identifier(
+    algorithm: SignAlgorithm,
+) -> Option<(AlgorithmIdentifier<Any>, &'static str)> {
+    SIGNATURE_IDENTIFIERS
+        .iter()
+        .find(|(candidate, ..)| *candidate == algorithm)
+        .map(|(_, oid, null_parameters, name)| {
+            (
                 AlgorithmIdentifier {
-                    oid,
-                    parameters: None,
+                    oid: *oid,
+                    parameters: null_parameters.then(Any::null),
                 },
-                name,
-            ))
-        }
-        other => Err(format!(
-            "key algorithm '{other}' is not supported for PKI signing yet"
-        )),
-    }
+                *name,
+            )
+        })
+}
+
+/// Resolve a CSR `signatureAlgorithm` OID against the table above.
+pub(super) fn verifiable_sign_algorithm(oid: ObjectIdentifier) -> Option<SignAlgorithm> {
+    SIGNATURE_IDENTIFIERS
+        .iter()
+        .find(|(_, candidate, ..)| *candidate == oid)
+        .map(|(algorithm, ..)| *algorithm)
+}
+
+/// The accepted algorithm names, for an error message listing what is allowed.
+pub(super) fn verifiable_algorithm_names() -> String {
+    SIGNATURE_IDENTIFIERS
+        .iter()
+        .map(|(algorithm, ..)| algorithm.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every key algorithm Rite can sign with must reach an X.509 identifier.
+    ///
+    /// The SDK decides which signature algorithm suits a key; this module
+    /// decides how to encode it. A key algorithm that gains a default in the
+    /// SDK without an identifier here would fail at certificate-issuing time.
+    #[test]
+    fn every_signing_key_algorithm_has_an_identifier() {
+        let signing_keys = [
+            KeyAlgorithm::Rsa2048,
+            KeyAlgorithm::Rsa4096,
+            KeyAlgorithm::EcdsaP256,
+            KeyAlgorithm::EcdsaP384,
+            KeyAlgorithm::Ed25519,
+            KeyAlgorithm::MlDsa44,
+            KeyAlgorithm::MlDsa65,
+            KeyAlgorithm::MlDsa87,
+        ];
+        for key_algorithm in signing_keys {
+            let (sign_algorithm, ..) = sig_profile_for_algorithm(key_algorithm)
+                .unwrap_or_else(|e| panic!("{key_algorithm}: {e}"));
+            // What Rite stamps on a certificate is what it accepts on a CSR.
+            assert_eq!(
+                verifiable_sign_algorithm(
+                    signature_identifier(sign_algorithm)
+                        .expect("identifier")
+                        .0
+                        .oid
+                ),
+                Some(sign_algorithm),
+                "{key_algorithm} signs with {sign_algorithm}, which is not accepted on a CSR"
+            );
+        }
+
+        // Symmetric keys sign nothing, and must say so rather than panic.
+        assert!(sig_profile_for_algorithm(KeyAlgorithm::Aes256).is_err());
+    }
 
     /// The ML-DSA identifiers are a wire contract: they appear in every
     /// certificate and CSR the runtime emits, so they are pinned by value

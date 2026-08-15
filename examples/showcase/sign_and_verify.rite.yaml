@@ -4,9 +4,8 @@ description: |
   Sign a document with a ceremony key, then verify the signature back.
 
   Demonstrates sign_data and verify_signature. The signing step needs the
-  private key, so it names a backend. The verification step does not: checking a
-  signature needs only the public key, which is why it can be pointed at
-  evidence the ceremony never produced.
+  private key, so it names a backend. The verification step needs only the
+  public key, so it names none.
 
   The verification step is not ornamental. A signature nobody checked is an
   assumption, and the operator finding out during the ceremony beats a relying
@@ -86,9 +85,9 @@ sections:
         with:
           message: "Checking the signature against the signing key."
         description: |
-          Verify in software, with no backend: field. The step needs only the
-          public key, so the same step shape would check a signature made on a
-          smart card, or one that arrived from outside the ceremony.
+          Verify in software, with no backend: field. The same step shape would
+          check a signature made on a smart card, or one that arrived from
+          outside the ceremony.
 
           A failure here fails the ceremony. This is a check, not a record.
 

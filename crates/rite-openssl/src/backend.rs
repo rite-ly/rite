@@ -300,12 +300,9 @@ impl RsaPadding for Verifier<'_> {
 
 /// Apply the padding scheme an RSA algorithm names. A no-op for everything else.
 ///
-/// PKCS#1 v1.5 is OpenSSL's default, but it is set explicitly so the scheme is
-/// never left to a library default that could change.
-///
-/// The wildcard arm is safe only because `digest_for` runs first and refuses
-/// anything it does not name, so a future RSA scheme cannot reach this and
-/// silently inherit v1.5 padding without being listed there first.
+/// PKCS#1 v1.5 is set explicitly rather than left to OpenSSL's default. The
+/// wildcard arm is safe because `digest_for` runs first and refuses any
+/// algorithm it does not name.
 fn apply_rsa_padding<T: RsaPadding>(
     operation: &mut T,
     algorithm: SignAlgorithm,
@@ -329,12 +326,10 @@ fn apply_rsa_padding<T: RsaPadding>(
 /// The message digest an algorithm signs over, or `None` for the digest-free
 /// schemes that take the message whole (Ed25519, ML-DSA).
 ///
-/// `SignAlgorithm` is `#[non_exhaustive]`, so a crate outside `rite-sdk` cannot
-/// match it exhaustively and the compiler will not point here when a variant is
-/// added. An unrecognised algorithm is refused rather than defaulted: signing
-/// under a digest the caller did not ask for produces a signature that is
-/// perfectly valid over the wrong message, which nothing downstream would
-/// catch.
+/// An algorithm this function does not name is refused rather than given a
+/// default digest, which would sign over the wrong message and still produce a
+/// signature that looks valid. `SignAlgorithm` is `#[non_exhaustive]`, so no
+/// compiler error marks this function when a variant is added.
 ///
 /// # Errors
 ///
@@ -419,10 +414,10 @@ pub fn public_key_algorithm(public_der: &[u8]) -> Result<KeyAlgorithm, BackendEr
 
 /// Read the subject public key out of a DER certificate, as SPKI DER.
 ///
-/// A certificate is how a signer's public key usually reaches a ceremony:
-/// `piv_read_certificate` pulls one off the card, and a counterparty sends one
-/// rather than a bare key. Unwrapping it here means a verification step can name
-/// the certificate directly instead of the author having to extract the key.
+/// A signer's public key usually reaches a ceremony inside a certificate rather
+/// than on its own: `piv_read_certificate` pulls one off the card, and a
+/// counterparty sends one. Unwrapping it here lets a step name the certificate
+/// directly instead of the author extracting the key first.
 ///
 /// # Errors
 ///
@@ -439,10 +434,6 @@ pub fn certificate_public_key(certificate_der: &[u8]) -> Result<Vec<u8>, Backend
 }
 
 /// Verify a signature against an SPKI DER public key, without a backend.
-///
-/// Verification needs only the public key, so this takes no [`OpenSslBackend`]
-/// and no [`KeyId`]. Signatures from signing-only devices (PIV cards, HSMs) are
-/// therefore checked through the same path as software keys.
 ///
 /// The key is required to match `algorithm`. Without that check, a caller who
 /// took the algorithm from an untrusted source (a CSR's `signatureAlgorithm`,

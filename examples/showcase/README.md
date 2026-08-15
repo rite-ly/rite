@@ -52,6 +52,4 @@ shape verify a signature made on a smart card, or one that arrived from outside
 the ceremony. Neither step names an algorithm; both derive it from the key.
 
 The `key` a verification step names can be a keypair, a bare public key, or a
-certificate carrying one. That last form is what makes the smart-card case work
-in practice, since `piv_read_certificate` yields a certificate rather than a
-bare key.
+certificate carrying one.

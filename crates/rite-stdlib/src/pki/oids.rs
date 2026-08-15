@@ -33,16 +33,12 @@ pub(super) const ML_DSA_87: ObjectIdentifier =
 
 /// The X.509 signature identifier for each algorithm Rite signs and accepts.
 ///
-/// One table, deliberately. It answers both directions: which identifier to
-/// stamp on something Rite signs, and whether an identifier found on an
-/// incoming CSR may be verified. Keeping them separate let the emit set and the
-/// accept set drift, which would have Rite generating CSRs its own
-/// `issue_certificate` refuses.
+/// One table drives both directions: what to stamp on outgoing certificates and
+/// what to accept on incoming CSRs. Two lists could drift, leaving Rite unable
+/// to verify the CSRs it generates itself.
 ///
-/// Membership is ceremony **policy**, not a statement of what the crypto
-/// provider can do. OpenSSL will happily verify md5WithRSA and SHA-1; a key
-/// ceremony should not accept either, so what may appear on a CSR is named here
-/// and everything else is refused by default.
+/// Membership is ceremony **policy**, not what the provider can do. OpenSSL
+/// verifies md5WithRSA and SHA-1 happily; a key ceremony should accept neither.
 ///
 /// `null_parameters` distinguishes RFC 3279, where RSA identifiers carry an
 /// explicit NULL, from RFC 5758 and RFC 8410, where the parameters are absent.

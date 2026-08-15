@@ -336,20 +336,18 @@ impl SignAlgorithm {
 
     /// Whether a key of `key_algorithm` may be used with this signature algorithm.
     ///
-    /// The compatibility check every signing backend needs, in one place, so
-    /// each one does not reinvent it per key type. Curve and parameter set are
-    /// pinned: an ECDSA-SHA256 request will not take a P-384 key, and each
-    /// ML-DSA parameter set fixes its own scheme. Only the RSA schemes span
-    /// more than one key, since they are defined for any modulus size.
+    /// The compatibility check every signing backend needs, kept in one place.
+    /// Curve and parameter set are pinned: ECDSA-SHA256 will not take a P-384
+    /// key. Only the RSA schemes span more than one key algorithm, since they
+    /// are defined for any modulus size.
     #[must_use]
     pub fn accepts_key(self, key_algorithm: KeyAlgorithm) -> bool {
         match self {
             SignAlgorithm::RsaPkcs1Sha256 | SignAlgorithm::RsaPssSha256 => {
                 matches!(key_algorithm, KeyAlgorithm::Rsa2048 | KeyAlgorithm::Rsa4096)
             }
-            // Every other scheme pins exactly one key algorithm, which
-            // `key_algorithm` already names. Restating the pairing here would
-            // give it two places to be wrong in.
+            // Every other scheme pins exactly one key algorithm, already named
+            // by `key_algorithm`. Reuse it rather than repeating the pairing.
             SignAlgorithm::EcdsaSha256
             | SignAlgorithm::EcdsaSha384
             | SignAlgorithm::Ed25519

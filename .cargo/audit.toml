@@ -25,8 +25,8 @@ ignore = [
     #
     # Revisit if any of the following becomes true:
     #   - `rsa` returns as a direct dependency of a crate in this workspace;
-    #   - `yubikey` gains an RSA private-key code path — grep the dependency
-    #     for `RsaPrivateKey`, `decrypt`, and `sign`;
+    #   - `yubikey` gains an RSA private-key code path (grep the dependency for
+    #     `RsaPrivateKey`, `decrypt`, and `sign`);
     #   - a fixed release of `rsa` ships (drop this entry and upgrade).
     "RUSTSEC-2023-0071",
 ]

@@ -12,9 +12,8 @@
 //! - [`KeyTransportBackend`](rite_sdk::KeyTransportBackend): key wrapping and unwrapping
 //! - [`RandomBackend`](rite_sdk::RandomBackend): random byte generation
 //!
-//! [`verify_signature`] is also available on its own, without a backend
-//! instance: checking a signature needs only the public key, so it works for
-//! keys this crate never held (a PIV card's, say).
+//! [`verify_signature`] and [`certificate_public_key`] work without a backend
+//! instance, so they apply to keys this crate never held (a PIV card's, say).
 //!
 //! # Feature flags
 //!

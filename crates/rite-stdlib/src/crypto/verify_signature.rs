@@ -14,13 +14,10 @@ use crate::params::VerifySignatureParams;
 
 /// Verify a signature over data, given the signer's public key.
 ///
-/// Unlike every other cryptographic action, this one needs no backend.
-/// Verification takes only a public key, so a ceremony can check evidence it
-/// did not produce: a signature made on a smart card, or one that arrived with
-/// a document from outside. The `key` input may be a keypair, a bare public
-/// key, or a certificate carrying one, since that is how a signer's key usually
-/// arrives. Naming a `backend:` on the step delegates the check to that backend
-/// instead, which is what a remote or hardware verifier needs.
+/// Alone among the cryptographic actions, this one needs no backend (see
+/// [`crate::signatures`] for why). The `key` input may be a keypair, a bare
+/// public key, or a certificate carrying one. Naming a `backend:` on the step
+/// delegates the check to it instead, for a remote or hardware verifier.
 pub struct VerifySignatureAction;
 
 impl Action for VerifySignatureAction {
@@ -130,8 +127,8 @@ impl Action for VerifySignatureAction {
             }),
             outputs: json!({
                 "verified": true,
-                // Absent when the key never left the device that checked the
-                // signature, which is the only case with nothing to fingerprint.
+                // None only when the key never left the device that checked the
+                // signature; there is nothing to fingerprint in that case.
                 "public_key_fingerprint": public_der.as_deref().map(compute_fingerprint),
                 "signature_fingerprint": compute_fingerprint(&signature),
             }),
@@ -173,12 +170,9 @@ fn verify_through_backend(
 
 /// Recover the public key to verify under, and the algorithm it implies.
 ///
-/// A backend-managed key states its own algorithm and may keep the key itself
-/// on the device, so the key material is optional: it is needed to verify in
-/// software and to fingerprint the verifier in the transcript, but a backend
-/// asked to check its own signature needs neither. A bare key states nothing,
-/// so the provider reads the algorithm out of the structure rather than the
-/// ceremony having to declare what the bytes already say.
+/// The key material is optional. Software verification and the transcript
+/// fingerprint both need it, but a backend checking its own signature needs
+/// neither, and a device may not export the key at all.
 fn resolve_public_key(
     ctx: &HandlerContext,
     key_ref: &rite_model::ArtifactRef,
@@ -189,9 +183,9 @@ fn resolve_public_key(
         return Ok((public_key.map(|key| (*key).clone()), *algorithm));
     }
 
-    // A signer's public key usually arrives inside a certificate rather than on
-    // its own: `piv_read_certificate` produces one, and a counterparty sends
-    // one. Unwrapping it here lets a step name the certificate directly.
+    // A certificate can stand in for a bare public key. Note this reads the
+    // artifact directly, so a `property` on a certificate reference is ignored;
+    // every other artifact type goes through `resolve_artifact_bytes`.
     let der = match ctx.artifacts.get(key_id) {
         Some(ArtifactValue::Certificate { der }) => crate::signatures::certificate_public_key(der)
             .map_err(|e| {

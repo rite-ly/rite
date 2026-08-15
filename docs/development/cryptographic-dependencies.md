@@ -57,10 +57,8 @@ Backend *construction* is a separate seam and names providers of its own
 which device performs an operation; `signatures.rs` covers the operations that
 use no device at all.
 
-Verification specifically needs a seam because it needs no backend: it takes a
-public key, so it is the one cryptographic operation a ceremony can perform on
-evidence it did not produce. A CSR that arrived from elsewhere, or a signature
-made on a card that will never expose its key, is checked here.
+Verification needs a seam because it takes only a public key, which is what lets
+it check evidence the ceremony did not produce.
 
 Operations that need a private key go through the `rite-sdk` backend traits
 instead. Those already abstract the provider, because the provider might be a

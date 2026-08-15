@@ -157,8 +157,7 @@ pub enum ActionType {
 /// Whether an action needs the `backend:` field on its step.
 ///
 /// Three states, not two: an action can also *accept* a backend without needing
-/// one. Verification is the case that forces the distinction, since a signature
-/// check needs only a public key but may still be delegated to a device.
+/// one. Verification is the case that forces the distinction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -219,8 +218,6 @@ impl ActionType {
             | ActionType::YubikeyAttestSlot
             | ActionType::TpmAttest => BackendUsage::Required,
 
-            // Verification needs only a public key, so a backend is a choice
-            // rather than a requirement: naming one delegates the check to it.
             ActionType::VerifySignature => BackendUsage::Optional,
 
             ActionType::ClockCheck

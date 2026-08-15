@@ -226,8 +226,8 @@ fn fails_when_the_signature_is_corrupt() {
     );
 }
 
-/// Naming a backend delegates the check to it, which is what a remote or
-/// hardware verifier needs. The result must agree with the software path.
+/// Naming a backend delegates the check to it. A remote or hardware verifier
+/// needs this, and the result must agree with the software path.
 #[test]
 fn delegates_to_the_backend_when_the_step_names_one() {
     let mut signed = sign_with("ECDSA-P256", &serde_json::json!({}));
@@ -235,10 +235,9 @@ fn delegates_to_the_backend_when_the_step_names_one() {
         .expect("the backend must verify its own signature");
 }
 
-/// A signer's public key normally reaches a ceremony wrapped in a certificate
-/// rather than on its own: `piv_read_certificate` reads one off the card, and a
-/// counterparty sends one. Naming that certificate as the key has to work, or
-/// the hardware case the action exists for cannot be expressed at all.
+/// A certificate can serve as the verification key, not just a bare one. This
+/// is the only way to check a signature from a device that never exports its
+/// key, since `piv_read_certificate` yields a certificate.
 #[test]
 fn verifies_against_a_certificate_carrying_the_signers_key() {
     let mut signed = issue_self_signed_certificate(sign_with("ECDSA-P256", &serde_json::json!({})));
@@ -263,8 +262,7 @@ fn fails_against_a_certificate_when_the_data_differs() {
 }
 
 /// A device that never exports its key can still verify what it signed. Only
-/// software verification needs the key material, so refusing the step outright
-/// would rule out exactly the hardware verifier the backend path exists for.
+/// software verification needs the key material.
 #[test]
 fn verifies_a_non_exportable_backend_key_through_its_own_backend() {
     let signed = sign_with("ECDSA-P256", &serde_json::json!({}));
@@ -303,13 +301,7 @@ fn verifies_a_non_exportable_backend_key_through_its_own_backend() {
 
 /// Issue a self-signed certificate over `signing_key` and store it as
 /// `signing_cert`, standing in for a certificate read off a card.
-fn issue_self_signed_certificate(signed: Signed) -> Signed {
-    let Signed {
-        mut backend,
-        mut harness,
-        mut state,
-    } = signed;
-
+fn issue_self_signed_certificate(mut signed: Signed) -> Signed {
     let csr_step = step(
         "csr",
         Some("csr"),
@@ -317,20 +309,20 @@ fn issue_self_signed_certificate(signed: Signed) -> Signed {
         named_inputs(&[("signing_key", "signing_key")]),
     );
     let csr = {
-        let ctx = state.handler_context();
-        let mut reporter = harness.reporter(csr_step.id.clone());
+        let ctx = signed.state.handler_context();
+        let mut reporter = signed.harness.reporter(csr_step.id.clone());
         GenerateCsrAction
             .execute(
                 &csr_step,
                 &ctx,
                 &serde_json::json!({ "subject": "CN=Release Signer" }),
                 &mut reporter,
-                Some(&mut backend),
+                Some(&mut signed.backend),
             )
             .expect("generate_csr")
     };
     for (id, value) in csr.artifacts {
-        state = state.with_material(id, value);
+        signed.state = signed.state.with_material(id, value);
     }
 
     let cert_step = step(
@@ -340,25 +332,21 @@ fn issue_self_signed_certificate(signed: Signed) -> Signed {
         named_inputs(&[("signing_key", "signing_key"), ("csr", "csr")]),
     );
     let cert = {
-        let ctx = state.handler_context();
-        let mut reporter = harness.reporter(cert_step.id.clone());
+        let ctx = signed.state.handler_context();
+        let mut reporter = signed.harness.reporter(cert_step.id.clone());
         IssueCertificateAction
             .execute(
                 &cert_step,
                 &ctx,
                 &serde_json::json!({ "profile": "root_ca", "validity_days": 365 }),
                 &mut reporter,
-                Some(&mut backend),
+                Some(&mut signed.backend),
             )
             .expect("issue_certificate")
     };
     for (id, value) in cert.artifacts {
-        state = state.with_material(id, value);
+        signed.state = signed.state.with_material(id, value);
     }
 
-    Signed {
-        backend,
-        harness,
-        state,
-    }
+    signed
 }

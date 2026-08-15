@@ -7,10 +7,6 @@ description: |
   private key, so it names a backend. The verification step needs only the
   public key, so it names none.
 
-  The verification step is not ornamental. A signature nobody checked is an
-  assumption, and the operator finding out during the ceremony beats a relying
-  party finding out later.
-
 backends:
   openssl:
     provider: openssl
@@ -34,17 +30,8 @@ roles:
     name: "Witness"
     person: "Bob Jones"
 
-acts:
-  - id: signing
-    name: "Signing"
-    description: "Generate the key and sign the manifest."
-  - id: verification
-    name: "Verification"
-    description: "Prove the signature checks out before the ceremony closes."
-
 sections:
   produce:
-    act: signing
     name: "Sign the Manifest"
     role: ${role.signer}
     steps:
@@ -66,13 +53,12 @@ sections:
           message: "Signing the release manifest."
         creates: manifest_signature
         description: |
-          Produce a detached signature. No algorithm: field, so it follows from
+          Produce a detached signature. No algorithm field, so it follows from
           the key: an ECDSA-P256 key signs with ECDSA-SHA256. Naming an
           algorithm is only useful for an RSA key, which can sign under either
           PKCS#1 v1.5 or PSS.
 
   confirm:
-    act: verification
     name: "Verify the Signature"
     role: ${role.witness}
     steps:
@@ -85,15 +71,11 @@ sections:
         with:
           message: "Checking the signature against the signing key."
         description: |
-          Verify in software, with no backend: field. The same step shape would
+          Verify in software, with no backend field. The same step shape would
           check a signature made on a smart card, or one that arrived from
           outside the ceremony.
 
-          A failure here fails the ceremony. This is a check, not a record.
-
       witness_confirms:
         action: confirm
-        role: ${role.witness}
         with:
           statement: "I observed the signature being produced and verified."
-        description: "The machine checked the mathematics; the witness attests to the circumstances."

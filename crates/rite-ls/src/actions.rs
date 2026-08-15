@@ -130,9 +130,8 @@ mod tests {
     /// perfectly at run time, and a removed one would still be suggested.
     #[test]
     fn catalogue_matches_the_action_types() {
-        let catalogued: BTreeSet<&str> = ALL.iter().map(|a| a.name).collect();
+        let catalogued: BTreeSet<String> = ALL.iter().map(|a| a.name.to_string()).collect();
         let defined: BTreeSet<String> = ActionType::ALL.iter().map(ToString::to_string).collect();
-        let defined: BTreeSet<&str> = defined.iter().map(String::as_str).collect();
 
         assert_eq!(
             catalogued, defined,

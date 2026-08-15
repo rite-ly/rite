@@ -113,8 +113,6 @@ impl Action for VerifySignatureAction {
             )));
         }
 
-        reporter.log(Icon::Checkmark, "Signature verified")?;
-
         reporter.fact(StepFact::BackendOperation {
             step: step.id.clone(),
             kind: "verify_signature".to_string(),

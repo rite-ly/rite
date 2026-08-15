@@ -84,10 +84,9 @@ impl Action for SignDataAction {
         let signature = sign_backend.sign(&backend_key_id, &data, algorithm)?;
 
         let signature_fingerprint = compute_fingerprint(&signature);
-        reporter.log(
-            Icon::Checkmark,
-            format!("Signature produced ({} bytes)", signature.len()),
-        )?;
+        // The step's completion message is shown on its own, so it carries the
+        // result rather than a log line repeating it.
+        let summary = format!("Signature produced ({} bytes)", signature.len());
 
         reporter.fact(StepFact::BackendOperation {
             step: step.id.clone(),
@@ -112,12 +111,12 @@ impl Action for SignDataAction {
                 format!("Signature stored as artifact '{produces}'"),
             )?;
             Ok(StepResult::completed_with_artifact(
-                "Signature produced",
+                summary,
                 produces.clone(),
                 ArtifactValue::Bytes(signature),
             ))
         } else {
-            Ok(StepResult::completed("Signature produced"))
+            Ok(StepResult::completed(summary))
         }
     }
 }

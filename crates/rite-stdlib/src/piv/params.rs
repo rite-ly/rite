@@ -31,8 +31,6 @@ fn default_sign_slot() -> String {
     "9c".to_string()
 }
 
-// Spelled by the SDK enum rather than a literal, so the default cannot drift
-// from the names the action parses.
 fn default_sign_algorithm() -> String {
     rite_sdk::SignAlgorithm::EcdsaSha256.to_string()
 }

@@ -68,7 +68,7 @@ pub static ALL: &[ActionMeta] = &[
     ActionMeta {
         name: "verify_signature",
         short: "Verify a signature against a public key",
-        long: "Verify a signature over data, given the signer's public key. Needs no backend, so it works on evidence the ceremony did not produce; naming a `backend:` delegates the check to that backend.",
+        long: "Verify a signature over data, given the signer's public key. The key may be a bare public key or a certificate carrying one. Needs no backend, so it works on evidence the ceremony did not produce; naming a `backend:` delegates the check to that backend.",
     },
     ActionMeta {
         name: "attest",

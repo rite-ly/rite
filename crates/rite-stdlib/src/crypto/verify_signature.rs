@@ -2,9 +2,9 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, BackendKeyMeta, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
-    resolve_backend_key,
+    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, BackendKeyMeta,
+    HandlerContext, Icon, Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
+    resolve_artifact_bytes, resolve_backend_key,
 };
 use rite_sdk::{Backend, KeyAlgorithm};
 use serde_json::json;
@@ -17,8 +17,10 @@ use crate::params::VerifySignatureParams;
 /// Unlike every other cryptographic action, this one needs no backend.
 /// Verification takes only a public key, so a ceremony can check evidence it
 /// did not produce: a signature made on a smart card, or one that arrived with
-/// a document from outside. Naming a `backend:` on the step delegates the check
-/// to that backend instead, which is what a remote or hardware verifier needs.
+/// a document from outside. The `key` input may be a keypair, a bare public
+/// key, or a certificate carrying one, since that is how a signer's key usually
+/// arrives. Naming a `backend:` on the step delegates the check to that backend
+/// instead, which is what a remote or hardware verifier needs.
 pub struct VerifySignatureAction;
 
 impl Action for VerifySignatureAction {
@@ -82,20 +84,26 @@ impl Action for VerifySignatureAction {
             ),
         )?;
 
-        let (verified, checked_by) = match backend {
-            Some(backend) => verify_through_backend(
+        let (verified, checked_by) = if let Some(backend) = backend {
+            verify_through_backend(
                 backend,
                 backend_key.as_ref(),
                 &data,
                 &signature,
                 algorithm,
                 &key_ref.display_name(),
-            )?,
-            None => (
-                crate::signatures::verify(&public_der, &data, &signature, algorithm)
-                    .map_err(|e| ActionError::Failed(format!("Verification failed to run: {e}")))?,
-                "software".to_string(),
-            ),
+            )?
+        } else {
+            let public_der = public_der.as_deref().ok_or_else(|| {
+                ActionError::Failed(format!(
+                    "Key '{}' does not expose a public key, so its signatures can only be \
+                     checked by the backend holding it. Name that backend on this step.",
+                    key_ref.display_name()
+                ))
+            })?;
+            let verified = crate::signatures::verify(public_der, &data, &signature, algorithm)
+                .map_err(|e| ActionError::Failed(format!("Verification failed to run: {e}")))?;
+            (verified, "software".to_string())
         };
 
         if !verified {
@@ -122,7 +130,9 @@ impl Action for VerifySignatureAction {
             }),
             outputs: json!({
                 "verified": true,
-                "public_key_fingerprint": compute_fingerprint(&public_der),
+                // Absent when the key never left the device that checked the
+                // signature, which is the only case with nothing to fingerprint.
+                "public_key_fingerprint": public_der.as_deref().map(compute_fingerprint),
                 "signature_fingerprint": compute_fingerprint(&signature),
             }),
             fingerprint: None,
@@ -163,36 +173,47 @@ fn verify_through_backend(
 
 /// Recover the public key to verify under, and the algorithm it implies.
 ///
-/// A backend-managed key states its own algorithm. A bare public key does not,
-/// so the provider reads it out of the SPKI structure rather than the ceremony
-/// having to declare something the bytes already say.
+/// A backend-managed key states its own algorithm and may keep the key itself
+/// on the device, so the key material is optional: it is needed to verify in
+/// software and to fingerprint the verifier in the transcript, but a backend
+/// asked to check its own signature needs neither. A bare key states nothing,
+/// so the provider reads the algorithm out of the structure rather than the
+/// ceremony having to declare what the bytes already say.
 fn resolve_public_key(
     ctx: &HandlerContext,
     key_ref: &rite_model::ArtifactRef,
     key_id: &rite_model::ArtifactId,
     backend_key: Option<&BackendKeyMeta<'_>>,
-) -> Result<(Vec<u8>, KeyAlgorithm), ActionError> {
-    match backend_key {
-        Some((_, _, algorithm, Some(public_key))) => Ok(((*public_key).clone(), *algorithm)),
-        Some((_, _, _, None)) => Err(ActionError::Failed(format!(
-            "Key '{}' has no exportable public key, so its signatures cannot be verified here",
-            key_ref.display_name()
-        ))),
-        None => {
-            let der =
-                resolve_artifact_bytes(ctx.artifacts, key_id, key_ref.property()).map_err(|e| {
-                    ActionError::Failed(format!(
-                        "verify_signature input 'key' ('{}') could not be resolved: {e}",
-                        key_ref.display_name()
-                    ))
-                })?;
-            let algorithm = crate::signatures::public_key_algorithm(&der).map_err(|e| {
-                ActionError::Failed(format!(
-                    "verify_signature input 'key' ('{}') is not a usable public key: {e}",
-                    key_ref.display_name()
-                ))
-            })?;
-            Ok((der, algorithm))
-        }
+) -> Result<(Option<Vec<u8>>, KeyAlgorithm), ActionError> {
+    if let Some((_, _, algorithm, public_key)) = backend_key {
+        return Ok((public_key.map(|key| (*key).clone()), *algorithm));
     }
+
+    // A signer's public key usually arrives inside a certificate rather than on
+    // its own: `piv_read_certificate` produces one, and a counterparty sends
+    // one. Unwrapping it here lets a step name the certificate directly.
+    let der = match ctx.artifacts.get(key_id) {
+        Some(ArtifactValue::Certificate { der }) => crate::signatures::certificate_public_key(der)
+            .map_err(|e| {
+            ActionError::Failed(format!(
+                "verify_signature input 'key' ('{}') is a certificate whose public key could not \
+                 be read: {e}",
+                key_ref.display_name()
+            ))
+        })?,
+        _ => resolve_artifact_bytes(ctx.artifacts, key_id, key_ref.property()).map_err(|e| {
+            ActionError::Failed(format!(
+                "verify_signature input 'key' ('{}') could not be resolved: {e}",
+                key_ref.display_name()
+            ))
+        })?,
+    };
+
+    let algorithm = crate::signatures::public_key_algorithm(&der).map_err(|e| {
+        ActionError::Failed(format!(
+            "verify_signature input 'key' ('{}') is not a usable public key: {e}",
+            key_ref.display_name()
+        ))
+    })?;
+    Ok((Some(der), algorithm))
 }

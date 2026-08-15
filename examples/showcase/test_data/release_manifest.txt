@@ -1,10 +1,3 @@
-rite release manifest
-======================
-
-artifact: rite-cli
-version: 0.4.2
-sha256:  0000000000000000000000000000000000000000000000000000000000000000
-
 This file stands in for the real artifact a ceremony would sign. The bytes
 here are what `sign_data` signs and what `verify_signature` checks the
 signature against.

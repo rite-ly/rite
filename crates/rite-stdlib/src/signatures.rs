@@ -79,3 +79,29 @@ pub fn public_key_algorithm(_public_der: &[u8]) -> Result<KeyAlgorithm, BackendE
         "reading a public key requires the 'openssl' feature".to_string(),
     ))
 }
+
+/// Read the subject public key out of a DER certificate, as SPKI DER.
+///
+/// A signer's public key usually reaches a ceremony wrapped in a certificate
+/// rather than on its own, which is what `piv_read_certificate` produces and
+/// what a counterparty sends.
+///
+/// # Errors
+///
+/// Returns [`BackendError::Other`] when the certificate cannot be parsed.
+#[cfg(feature = "openssl")]
+pub fn certificate_public_key(certificate_der: &[u8]) -> Result<Vec<u8>, BackendError> {
+    rite_openssl::certificate_public_key(certificate_der)
+}
+
+/// Read the subject public key out of a DER certificate, as SPKI DER.
+///
+/// # Errors
+///
+/// Always fails: this build has no crypto provider compiled in.
+#[cfg(not(feature = "openssl"))]
+pub fn certificate_public_key(_certificate_der: &[u8]) -> Result<Vec<u8>, BackendError> {
+    Err(BackendError::UnsupportedAlgorithm(
+        "reading a certificate's public key requires the 'openssl' feature".to_string(),
+    ))
+}

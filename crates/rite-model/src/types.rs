@@ -106,8 +106,9 @@ pub enum ActionType {
     /// Verify a signature over data, given the signer's public key.
     ///
     /// Needs no backend: verification takes only a public key, so it works on
-    /// evidence the ceremony did not produce. Naming a `backend:` delegates the
-    /// check to that backend instead.
+    /// evidence the ceremony did not produce. The key may be a bare public key
+    /// or a certificate carrying one. Naming a `backend:` delegates the check
+    /// to that backend instead.
     VerifySignature,
     /// Formal attestation statement.
     Attest,

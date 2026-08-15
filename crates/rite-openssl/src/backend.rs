@@ -302,6 +302,10 @@ impl RsaPadding for Verifier<'_> {
 ///
 /// PKCS#1 v1.5 is OpenSSL's default, but it is set explicitly so the scheme is
 /// never left to a library default that could change.
+///
+/// The wildcard arm is safe only because `digest_for` runs first and refuses
+/// anything it does not name, so a future RSA scheme cannot reach this and
+/// silently inherit v1.5 padding without being listed there first.
 fn apply_rsa_padding<T: RsaPadding>(
     operation: &mut T,
     algorithm: SignAlgorithm,
@@ -324,14 +328,31 @@ fn apply_rsa_padding<T: RsaPadding>(
 
 /// The message digest an algorithm signs over, or `None` for the digest-free
 /// schemes that take the message whole (Ed25519, ML-DSA).
-fn digest_for(algorithm: SignAlgorithm) -> Option<MessageDigest> {
+///
+/// `SignAlgorithm` is `#[non_exhaustive]`, so a crate outside `rite-sdk` cannot
+/// match it exhaustively and the compiler will not point here when a variant is
+/// added. An unrecognised algorithm is refused rather than defaulted: signing
+/// under a digest the caller did not ask for produces a signature that is
+/// perfectly valid over the wrong message, which nothing downstream would
+/// catch.
+///
+/// # Errors
+///
+/// Returns [`BackendError::UnsupportedAlgorithm`] for an algorithm this
+/// function does not name.
+fn digest_for(algorithm: SignAlgorithm) -> Result<Option<MessageDigest>, BackendError> {
     match algorithm {
-        SignAlgorithm::EcdsaSha384 => Some(MessageDigest::sha384()),
+        SignAlgorithm::RsaPkcs1Sha256
+        | SignAlgorithm::RsaPssSha256
+        | SignAlgorithm::EcdsaSha256 => Ok(Some(MessageDigest::sha256())),
+        SignAlgorithm::EcdsaSha384 => Ok(Some(MessageDigest::sha384())),
         SignAlgorithm::Ed25519
         | SignAlgorithm::MlDsa44
         | SignAlgorithm::MlDsa65
-        | SignAlgorithm::MlDsa87 => None,
-        _ => Some(MessageDigest::sha256()),
+        | SignAlgorithm::MlDsa87 => Ok(None),
+        _ => Err(BackendError::UnsupportedAlgorithm(format!(
+            "{algorithm} has no digest mapping in the OpenSSL backend"
+        ))),
     }
 }
 
@@ -346,7 +367,7 @@ fn sign_with_key(
 ) -> Result<Vec<u8>, BackendError> {
     check_ml_dsa_available(algorithm, "signing")?;
 
-    let mut signer = match digest_for(algorithm) {
+    let mut signer = match digest_for(algorithm)? {
         Some(digest) => Signer::new(digest, pkey),
         None => Signer::new_without_digest(pkey),
     }
@@ -369,7 +390,7 @@ fn verify_with_key<T: HasPublic>(
 ) -> Result<bool, BackendError> {
     check_ml_dsa_available(algorithm, "verification")?;
 
-    let mut verifier = match digest_for(algorithm) {
+    let mut verifier = match digest_for(algorithm)? {
         Some(digest) => Verifier::new(digest, pkey),
         None => Verifier::new_without_digest(pkey),
     }
@@ -394,6 +415,27 @@ pub fn public_key_algorithm(public_der: &[u8]) -> Result<KeyAlgorithm, BackendEr
     let pkey =
         PKey::public_key_from_der(public_der).map_err(|e| ossl_err("Decode public key", &e))?;
     key_algorithm_of(&pkey)
+}
+
+/// Read the subject public key out of a DER certificate, as SPKI DER.
+///
+/// A certificate is how a signer's public key usually reaches a ceremony:
+/// `piv_read_certificate` pulls one off the card, and a counterparty sends one
+/// rather than a bare key. Unwrapping it here means a verification step can name
+/// the certificate directly instead of the author having to extract the key.
+///
+/// # Errors
+///
+/// Returns [`BackendError::Other`] when the certificate cannot be parsed or its
+/// public key cannot be re-encoded.
+pub fn certificate_public_key(certificate_der: &[u8]) -> Result<Vec<u8>, BackendError> {
+    let certificate = openssl::x509::X509::from_der(certificate_der)
+        .map_err(|e| ossl_err("Decode certificate", &e))?;
+    certificate
+        .public_key()
+        .map_err(|e| ossl_err("Read certificate public key", &e))?
+        .public_key_to_der()
+        .map_err(|e| ossl_err("Encode certificate public key", &e))
 }
 
 /// Verify a signature against an SPKI DER public key, without a backend.

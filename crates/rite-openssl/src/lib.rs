@@ -31,7 +31,7 @@
 
 mod backend;
 
-pub use backend::{OpenSslBackend, public_key_algorithm, verify_signature};
+pub use backend::{OpenSslBackend, certificate_public_key, public_key_algorithm, verify_signature};
 
 /// Whether this build can perform ML-DSA operations.
 ///

@@ -10,18 +10,23 @@ ignore = [
     # timing sidechannels in the `rsa` crate. No fixed version is available
     # upstream.
     #
-    # Why it does not apply here: the `rsa` crate is pulled in only for
-    # *public-key* operations — verifying the self-signature on an incoming
-    # CSR (`rsa::RsaPublicKey::verify` in
-    # `crates/rite-stdlib/src/pki/issue_certificate.rs`). The Marvin attack
-    # targets RSA *private-key* decryption/signing (PKCS#1 v1.5 unpadding),
-    # which is never performed: Rite holds no RSA private keys in this crate
-    # and never decrypts or signs with `rsa`. All private-key crypto lives in
-    # the OpenSSL backend (`rite-openssl`), not in the `rsa` crate.
+    # Why it does not apply here: `rsa` is not a dependency of this workspace.
+    # It arrives only transitively through the `yubikey` crate, and so only in
+    # builds with the `piv` or `yubikey` feature enabled. The default build and
+    # the static musl release artifacts do not contain it at all. Software RSA
+    # in Rite is performed by OpenSSL, through `rite-openssl`.
+    #
+    # Where it does appear, the attack still does not reach: Marvin targets RSA
+    # *private-key* operations (PKCS#1 v1.5 decryption and signing), and
+    # `yubikey` performs none. It uses `rsa` only to rebuild an `RsaPublicKey`
+    # from the modulus and exponent a card reports and re-encode it as SPKI
+    # (`yubikey::piv`). The private key never leaves the card, which is the
+    # reason for using one.
     #
     # Revisit if any of the following becomes true:
-    #   - `rsa` gains a private-key code path here (decryption, signing, or
-    #     key import) — grep for `RsaPrivateKey`, `decrypt`, `sign`;
+    #   - `rsa` returns as a direct dependency of a crate in this workspace;
+    #   - `yubikey` gains an RSA private-key code path (grep the dependency for
+    #     `RsaPrivateKey`, `decrypt`, and `sign`);
     #   - a fixed release of `rsa` ships (drop this entry and upgrade).
     "RUSTSEC-2023-0071",
 ]

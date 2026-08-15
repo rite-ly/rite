@@ -94,8 +94,8 @@ CI cannot touch a physical device, so:
      `yubikey_attest_slot` emits an attestation certificate that chains to the
      Yubico attestation root.
   4. Cover the full algorithm matrix, not just the example's default: repeat
-     `piv_sign` for each supported algorithm (`ecdsa_sha256`, `ecdsa_sha384`,
-     `rsa_pkcs1_sha256`, each against a slot provisioned with the matching key
+     `piv_sign` for each supported algorithm (`ECDSA-SHA256`, `ECDSA-SHA384`,
+     `RSA-PKCS1-SHA256`, each against a slot provisioned with the matching key
      type) and verify every signature off-card against the slot certificate
      (`openssl dgst -sha256 -verify`). Cargo tests exercise these paths only
      against test doubles; the encoding the card actually accepts (bare digest

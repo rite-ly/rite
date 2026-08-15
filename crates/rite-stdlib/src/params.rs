@@ -175,6 +175,38 @@ pub struct WrapKeyParams {
     pub algorithm: Option<String>,
 }
 
+/// Params for `sign_data` action.
+#[cfg(feature = "crypto")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SignDataParams {
+    /// Signature algorithm. Defaults to the one implied by the key.
+    ///
+    /// Worth setting for an RSA key, which can sign under either
+    /// `"RSA-PKCS1-SHA256"` (the default) or `"RSA-PSS-SHA256"`. Every other
+    /// key type admits exactly one algorithm, so naming it only restates the
+    /// key.
+    #[serde(default)]
+    pub algorithm: Option<String>,
+    /// Optional display message.
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Params for `verify_signature` action.
+#[cfg(feature = "crypto")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VerifySignatureParams {
+    /// Signature algorithm. Defaults to the one implied by the public key.
+    ///
+    /// Required when checking an RSA-PSS signature, since an RSA key alone
+    /// does not say which scheme was used.
+    #[serde(default)]
+    pub algorithm: Option<String>,
+    /// Optional display message.
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
 /// Params for `unwrap_key` action.
 #[cfg(feature = "crypto")]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -152,21 +152,32 @@ impl Action for PivSignAction {
     }
 }
 
-/// Map a string algorithm name to a `SignAlgorithm` supported by PIV cards.
+/// What `piv_sign` offers to ceremony authors.
 ///
-/// This is the action-level allowlist: it names what `piv_sign` offers to
-/// ceremony authors. RSA-PSS is absent because PIV cards apply a raw RSA
-/// operation and the client-side PSS encoding is not implemented.
+/// The action-level allowlist, applied on top of the SDK's parsing. RSA-PSS is
+/// absent because PIV cards apply a raw RSA operation and the client-side PSS
+/// encoding is not implemented; Ed25519 and ML-DSA because no PIV card does them.
+const SUPPORTED_ALGORITHMS: [SignAlgorithm; 3] = [
+    SignAlgorithm::EcdsaSha256,
+    SignAlgorithm::EcdsaSha384,
+    SignAlgorithm::RsaPkcs1Sha256,
+];
+
+/// Parse an algorithm name from the DSL and check it against the allowlist.
 fn parse_sign_algorithm(s: &str) -> Result<SignAlgorithm, ActionError> {
-    match s {
-        "ecdsa_sha256" => Ok(SignAlgorithm::EcdsaSha256),
-        "ecdsa_sha384" => Ok(SignAlgorithm::EcdsaSha384),
-        "rsa_pkcs1_sha256" => Ok(SignAlgorithm::RsaPkcs1Sha256),
-        other => Err(ActionError::Failed(format!(
-            "Unsupported signing algorithm: {other}. \
-             Supported: ecdsa_sha256, ecdsa_sha384, rsa_pkcs1_sha256"
-        ))),
-    }
+    s.parse()
+        .ok()
+        .filter(|algorithm| SUPPORTED_ALGORITHMS.contains(algorithm))
+        .ok_or_else(|| {
+            let supported = SUPPORTED_ALGORITHMS
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            ActionError::Failed(format!(
+                "Unsupported signing algorithm: {s}. Supported: {supported}"
+            ))
+        })
 }
 
 #[cfg(test)]
@@ -177,32 +188,43 @@ mod tests {
     #[test]
     fn parse_sign_algorithm_valid() {
         assert_eq!(
-            parse_sign_algorithm("ecdsa_sha256").unwrap(),
+            parse_sign_algorithm("ECDSA-SHA256").unwrap(),
             SignAlgorithm::EcdsaSha256
         );
         assert_eq!(
-            parse_sign_algorithm("ecdsa_sha384").unwrap(),
+            parse_sign_algorithm("ECDSA-SHA384").unwrap(),
             SignAlgorithm::EcdsaSha384
         );
         assert_eq!(
-            parse_sign_algorithm("rsa_pkcs1_sha256").unwrap(),
+            parse_sign_algorithm("RSA-PKCS1-SHA256").unwrap(),
             SignAlgorithm::RsaPkcs1Sha256
         );
     }
 
     #[test]
     fn parse_sign_algorithm_invalid() {
-        let err = parse_sign_algorithm("ed25519").unwrap_err();
+        let err = parse_sign_algorithm("SHA256-WITH-VIBES").unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("ed25519"));
+        assert!(msg.contains("SHA256-WITH-VIBES"));
         assert!(msg.contains("Supported:"));
     }
 
     #[test]
-    fn parse_sign_algorithm_rejects_pss() {
-        // PIV cards do raw RSA; the client-side PSS encoding is not
-        // implemented, so the action must refuse it up front.
-        assert!(parse_sign_algorithm("rsa_pss_sha256").is_err());
+    fn parse_sign_algorithm_rejects_algorithms_no_piv_card_offers() {
+        // Each of these parses as a `SignAlgorithm`, so only the action-level
+        // allowlist stands between them and a card that cannot perform them.
+        // PIV does raw RSA and the client-side PSS encoding is not implemented;
+        // Ed25519 and ML-DSA have no PIV key reference at all.
+        for name in ["RSA-PSS-SHA256", "Ed25519", "ML-DSA-87"] {
+            assert!(
+                name.parse::<SignAlgorithm>().is_ok(),
+                "{name} must be a known algorithm for this test to mean anything"
+            );
+            assert!(
+                parse_sign_algorithm(name).is_err(),
+                "{name} must be refused"
+            );
+        }
     }
 
     // Signing needs the mock's embedded crypto (and its lazy stand-in key),
@@ -247,7 +269,7 @@ mod tests {
             Some(ArtifactId::new("signature")),
             Some(input),
         );
-        let params = serde_json::json!({ "slot": "9c", "algorithm": "ecdsa_sha256" });
+        let params = serde_json::json!({ "slot": "9c", "algorithm": "ECDSA-SHA256" });
         let mut backend = MockBackend::new("token".to_string(), "seed".to_string());
 
         let result = {
@@ -376,7 +398,7 @@ mod tests {
             Some(ArtifactId::new("signature")),
             Some(input),
         );
-        let params = serde_json::json!({ "slot": "9c", "algorithm": "ecdsa_sha256" });
+        let params = serde_json::json!({ "slot": "9c", "algorithm": "ECDSA-SHA256" });
         let mut backend = EmptySlotBackend;
 
         let mut reporter = harness.reporter(StepId::new("sign"));
@@ -492,7 +514,7 @@ mod tests {
                 None,
                 Some(input),
             );
-            let params = serde_json::json!({ "slot": slot, "algorithm": "ecdsa_sha256" });
+            let params = serde_json::json!({ "slot": slot, "algorithm": "ECDSA-SHA256" });
             let mut reporter = harness.reporter(StepId::new("sign"));
             PivSignAction
                 .execute(&step, &ctx, &params, &mut reporter, Some(&mut backend))

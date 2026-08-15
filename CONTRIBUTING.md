@@ -5,7 +5,8 @@ Pull requests are welcome, but opening an issue to discuss the change first is s
 
 CLI behavior conventions are documented in `docs/development/cli-conventions.md`.
 Runtime and frontend architecture is documented in `docs/development/runtime-and-frontend.md`,
-crate layout in `docs/development/crate-layout.md`, and the testing strategy in
+crate layout in `docs/development/crate-layout.md`, the crypto stack in
+`docs/development/cryptographic-dependencies.md`, and the testing strategy in
 `docs/development/testing.md`.
 
 ## AI-assisted contributions
@@ -21,6 +22,12 @@ datapoint for any contribution, not as a compliance step.
 ## Development setup
 
 Requires Rust 1.88+ and `libssl-dev` (OpenSSL headers).
+
+The post-quantum algorithms (ML-DSA) additionally need **OpenSSL 3.5 or
+newer**. Building against an older one succeeds, with those algorithms absent
+from the binary and their tests and examples skipped; see
+`docs/development/cryptographic-dependencies.md`. `--features openssl-vendored`
+bundles a current OpenSSL and sidesteps the question.
 
 ```sh
 cargo build -p rite --features openssl-vendored

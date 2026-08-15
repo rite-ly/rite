@@ -41,3 +41,15 @@ Demonstrates verifiable ceremony randomness: a participant folds a physical dice
 roll into the run seed with `gather_entropy`, then a certificate is issued whose
 serial number is drawn from that seed. `rite verify` later re-derives the seed,
 the dice contribution, and the serial from the transcript alone.
+
+### `sign_and_verify.rite.yaml` — Detached Signature over a Release Manifest
+
+Signs a document with `sign_data` and checks it back with `verify_signature`.
+The contrast between the two steps is the point: signing names a `backend:`
+because it needs the private key, while verification names none, because a
+public key is all a signature check requires. That is what lets the same step
+shape verify a signature made on a smart card, or one that arrived from outside
+the ceremony. Neither step names an algorithm; both derive it from the key.
+
+The `key` a verification step names can be a keypair, a bare public key, or a
+certificate carrying one.

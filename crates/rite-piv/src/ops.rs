@@ -385,7 +385,7 @@ pub fn sign(
         SignAlgorithm::RsaPssSha256 => {
             return Err(BackendError::UnsupportedAlgorithm(
                 "RSA-PSS requires client-side encoding that is not implemented; \
-                 use rsa_pkcs1_sha256"
+                 use RSA-PKCS1-SHA256"
                     .to_string(),
             ));
         }
@@ -397,14 +397,14 @@ pub fn sign(
         // `SignAlgorithm` is #[non_exhaustive]; reject anything PIV cannot do.
         _ => {
             return Err(BackendError::UnsupportedAlgorithm(format!(
-                "{algorithm:?} is not supported by PIV cards"
+                "{algorithm} is not supported by PIV cards"
             )));
         }
     };
     // The card algorithm comes from the shared SignAlgorithm -> KeyAlgorithm
     // pairing so this table cannot drift from the SDK or the mock backend.
     let yk_algo = convert::to_yubikey_algorithm(algorithm.key_algorithm()).ok_or_else(|| {
-        BackendError::UnsupportedAlgorithm(format!("{algorithm:?} is not supported by PIV cards"))
+        BackendError::UnsupportedAlgorithm(format!("{algorithm} is not supported by PIV cards"))
     })?;
     let sig = piv::sign_data(yk, &input, yk_algo, slot).map_err(map_error)?;
     Ok(sig.to_vec())

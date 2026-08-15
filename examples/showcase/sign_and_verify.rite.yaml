@@ -1,0 +1,81 @@
+version: "0.2"
+name: "Detached Signature over a Release Manifest"
+description: |
+  Sign a document with a ceremony key, then verify the signature back.
+
+  Demonstrates sign_data and verify_signature. The signing step needs the
+  private key, so it names a backend. The verification step needs only the
+  public key, so it names none.
+
+backends:
+  openssl:
+    provider: openssl
+
+materials:
+  manifest:
+    type: digital
+    path: "test_data/release_manifest.txt"
+    description: "The document to be signed."
+
+output:
+  manifest_signature:
+    type: document
+    description: "Detached signature over the release manifest."
+
+roles:
+  signer:
+    name: "Release Signer"
+    person: "Alice Rivera"
+  witness:
+    name: "Witness"
+    person: "Bob Jones"
+
+sections:
+  produce:
+    name: "Sign the Manifest"
+    role: ${role.signer}
+    steps:
+      generate_signing_key:
+        action: generate_keypair
+        backend: openssl
+        with:
+          algorithm: ECDSA-P256
+        creates: signing_keypair
+        description: "Generate the keypair that will sign the manifest."
+
+      sign_manifest:
+        action: sign_data
+        backend: openssl
+        reads:
+          key: ${artifact.signing_keypair}
+          data: ${artifact.manifest}
+        with:
+          message: "Signing the release manifest."
+        creates: manifest_signature
+        description: |
+          Produce a detached signature. No algorithm field, so it follows from
+          the key: an ECDSA-P256 key signs with ECDSA-SHA256. Naming an
+          algorithm is only useful for an RSA key, which can sign under either
+          PKCS#1 v1.5 or PSS.
+
+  confirm:
+    name: "Verify the Signature"
+    role: ${role.witness}
+    steps:
+      verify_manifest_signature:
+        action: verify_signature
+        reads:
+          key: ${artifact.signing_keypair}
+          data: ${artifact.manifest}
+          signature: ${artifact.manifest_signature}
+        with:
+          message: "Checking the signature against the signing key."
+        description: |
+          Verify in software, with no backend field. The same step shape would
+          check a signature made on a smart card, or one that arrived from
+          outside the ceremony.
+
+      witness_confirms:
+        action: confirm
+        with:
+          statement: "I observed the signature being produced and verified."

@@ -95,7 +95,7 @@ sections:
         reads: "${artifact.manifest}"
         with:
           slot: "9c"
-          algorithm: ecdsa_sha256
+          algorithm: ECDSA-SHA256
           message: "Enter the PIV PIN to sign the release manifest"
         creates: manifest_signature
         description: "Produce a detached ECDSA-P256 signature over the manifest."

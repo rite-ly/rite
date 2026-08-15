@@ -98,6 +98,18 @@ pub enum ActionType {
     UnwrapKey,
     /// Export public key from keypair.
     ExportPublic,
+    /// Sign arbitrary data with a backend-managed key.
+    ///
+    /// The signature algorithm follows from the key unless `algorithm:` names
+    /// another one the key accepts. Requires a backend implementing `SignBackend`.
+    SignData,
+    /// Verify a signature over data, given the signer's public key.
+    ///
+    /// Needs no backend: verification takes only a public key, so it works on
+    /// evidence the ceremony did not produce. The key may be a bare public key
+    /// or a certificate carrying one. Naming a `backend:` delegates the check
+    /// to that backend instead.
+    VerifySignature,
     /// Formal attestation statement.
     Attest,
     /// Fold human-supplied entropy into the ceremony seed.
@@ -142,27 +154,80 @@ pub enum ActionType {
     GenerateCsr,
 }
 
+/// Whether an action needs the `backend:` field on its step.
+///
+/// Three states, not two: an action can also *accept* a backend without needing
+/// one. Verification is the case that forces the distinction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum BackendUsage {
+    /// The step must name a backend; omitting it is an error.
+    Required,
+    /// The step may name a backend, which changes how the action runs.
+    Optional,
+    /// The action never uses a backend; naming one is a mistake worth warning about.
+    Unused,
+}
+
 impl ActionType {
-    /// Returns `true` if this action requires a `backend:` field in the step.
+    /// Every action type, for callers that need to enumerate them.
+    ///
+    /// Maintained by hand: `#[non_exhaustive]` means no downstream crate can
+    /// derive this list, and adding a variant produces no error outside this
+    /// crate. Adding one here is what keeps editor completion and any other
+    /// catalogue from silently missing it. The test below catches omissions.
+    pub const ALL: &'static [ActionType] = &[
+        ActionType::ClockCheck,
+        ActionType::Confirm,
+        ActionType::CheckValue,
+        ActionType::OralReadback,
+        ActionType::MachineInfo,
+        ActionType::GenerateKeypair,
+        ActionType::WrapKey,
+        ActionType::UnwrapKey,
+        ActionType::ExportPublic,
+        ActionType::SignData,
+        ActionType::VerifySignature,
+        ActionType::Attest,
+        ActionType::GatherEntropy,
+        ActionType::TpmAttest,
+        ActionType::PivReadCertificate,
+        ActionType::PivSign,
+        ActionType::YubikeyAttestSlot,
+        ActionType::IssueCertificate,
+        ActionType::GenerateCsr,
+    ];
+
+    /// How this action relates to the `backend:` field on its step.
     ///
     /// TODO: Replace this with a nested enum split — `ActionType::Backend(BackendAction)` vs
-    /// `ActionType::Local(LocalAction)`. The `requires_backend` check then becomes
-    /// `matches!(self, ActionType::Backend(_))` with no hardcoded list, and each group gains
-    /// its own `impl` block. This is a breaking change to every match on `ActionType` variants.
-    pub fn requires_backend(self) -> bool {
-        matches!(
-            self,
+    /// `ActionType::Local(LocalAction)`, once a home is found for the actions that are
+    /// neither. This is a breaking change to every match on `ActionType` variants.
+    pub fn backend_usage(self) -> BackendUsage {
+        match self {
             ActionType::GenerateKeypair
-                | ActionType::WrapKey
-                | ActionType::UnwrapKey
-                | ActionType::ExportPublic
-                | ActionType::GenerateCsr
-                | ActionType::IssueCertificate
-                | ActionType::PivReadCertificate
-                | ActionType::PivSign
-                | ActionType::YubikeyAttestSlot
-                | ActionType::TpmAttest
-        )
+            | ActionType::SignData
+            | ActionType::WrapKey
+            | ActionType::UnwrapKey
+            | ActionType::ExportPublic
+            | ActionType::GenerateCsr
+            | ActionType::IssueCertificate
+            | ActionType::PivReadCertificate
+            | ActionType::PivSign
+            | ActionType::YubikeyAttestSlot
+            | ActionType::TpmAttest => BackendUsage::Required,
+
+            ActionType::VerifySignature => BackendUsage::Optional,
+
+            ActionType::ClockCheck
+            | ActionType::Confirm
+            | ActionType::CheckValue
+            | ActionType::OralReadback
+            | ActionType::MachineInfo
+            | ActionType::Attest
+            | ActionType::GatherEntropy => BackendUsage::Unused,
+        }
     }
 
     /// Returns the `with:` field names that are required for this action.
@@ -197,6 +262,8 @@ impl ActionType {
             ActionType::TpmAttest => "Record TPM platform attestation (PCR values).",
             ActionType::GenerateKeypair => "Generate an asymmetric keypair.",
             ActionType::ExportPublic => "Export the public component of a keypair.",
+            ActionType::SignData => "Sign data with a ceremony key.",
+            ActionType::VerifySignature => "Verify a signature against a public key.",
             ActionType::WrapKey => "Wrap (encrypt) a key for secure transport.",
             ActionType::UnwrapKey => "Unwrap (decrypt) a transported key.",
             ActionType::GenerateCsr => "Generate a Certificate Signing Request.",
@@ -220,6 +287,8 @@ impl std::fmt::Display for ActionType {
             ActionType::WrapKey => write!(f, "wrap_key"),
             ActionType::UnwrapKey => write!(f, "unwrap_key"),
             ActionType::ExportPublic => write!(f, "export_public"),
+            ActionType::SignData => write!(f, "sign_data"),
+            ActionType::VerifySignature => write!(f, "verify_signature"),
             ActionType::Attest => write!(f, "attest"),
             ActionType::GatherEntropy => write!(f, "gather_entropy"),
             ActionType::TpmAttest => write!(f, "tpm_attest"),
@@ -551,5 +620,47 @@ mod tests {
                 "{duty:?} must have built-in prose"
             );
         }
+    }
+
+    /// `ActionType::ALL` is written by hand, so it can fall behind the enum.
+    ///
+    /// The match below is exhaustive, so adding a variant fails to compile
+    /// here. That is the whole mechanism: it puts a compiler error next to the
+    /// list an author has to extend. The name check then catches a variant
+    /// listed twice, and `rite-ls` compares its own catalogue against `ALL`,
+    /// which is what catches one left out.
+    #[test]
+    fn all_lists_every_action_type() {
+        for action in ActionType::ALL {
+            match action {
+                ActionType::ClockCheck
+                | ActionType::Confirm
+                | ActionType::CheckValue
+                | ActionType::OralReadback
+                | ActionType::MachineInfo
+                | ActionType::GenerateKeypair
+                | ActionType::WrapKey
+                | ActionType::UnwrapKey
+                | ActionType::ExportPublic
+                | ActionType::SignData
+                | ActionType::VerifySignature
+                | ActionType::Attest
+                | ActionType::GatherEntropy
+                | ActionType::TpmAttest
+                | ActionType::PivReadCertificate
+                | ActionType::PivSign
+                | ActionType::YubikeyAttestSlot
+                | ActionType::IssueCertificate
+                | ActionType::GenerateCsr => {}
+            }
+        }
+
+        let names: std::collections::BTreeSet<String> =
+            ActionType::ALL.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            names.len(),
+            ActionType::ALL.len(),
+            "two actions share a DSL name"
+        );
     }
 }

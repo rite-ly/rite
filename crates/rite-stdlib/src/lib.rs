@@ -4,7 +4,8 @@
 //!
 //! - **Verification**: `clock_check`, `confirm`, `check_value`, `oral_readback`, `machine_info`
 //! - **Attestation**: `attest`
-//! - **Crypto**: `generate_keypair`, `export_public`, `wrap_key`, `unwrap_key`
+//! - **Crypto**: `generate_keypair`, `export_public`, `wrap_key`, `unwrap_key`,
+//!   `sign_data`, `verify_signature`
 //! - **PKI**: `generate_csr`, `issue_certificate`
 //!
 //! # Backend integration
@@ -17,8 +18,9 @@
 //!
 //! - `verification`: verification actions (requires `subtle`, `sysinfo`)
 //! - `attestation`: attestation recording
-//! - `crypto`: crypto actions (`generate_keypair`, `export_public`, `wrap_key`, `unwrap_key`)
-//! - `pki`: PKI actions (`generate_csr`, `issue_certificate`; requires `x509-cert`, `der`, `sha1`, `rsa`, `p256`)
+//! - `crypto`: crypto actions (`generate_keypair`, `export_public`, `wrap_key`, `unwrap_key`,
+//!   `sign_data`, `verify_signature`)
+//! - `pki`: PKI actions (`generate_csr`, `issue_certificate`; requires `x509-cert`, `signature`)
 //! - `piv`: PIV smart-card actions (`piv_read_certificate`, `piv_sign`; requires PC/SC)
 //! - `yubikey`: `YubiKey` actions (`yubikey_attest_slot`; implies `piv`; requires PC/SC)
 //! - `default`: all features enabled except the hardware backends (`piv`, `yubikey`)
@@ -41,6 +43,7 @@
 
 pub mod backend;
 mod params;
+pub mod signatures;
 
 #[cfg(feature = "attestation")]
 pub mod attestation;
@@ -63,7 +66,10 @@ pub use backend::{MockBackend, create_backend, default_backend_factory};
 #[cfg(feature = "attestation")]
 pub use attestation::AttestAction;
 #[cfg(feature = "crypto")]
-pub use crypto::{ExportPublicAction, GenerateKeypairAction, UnwrapKeyAction, WrapKeyAction};
+pub use crypto::{
+    ExportPublicAction, GenerateKeypairAction, SignDataAction, UnwrapKeyAction,
+    VerifySignatureAction, WrapKeyAction,
+};
 pub use entropy::GatherEntropyAction;
 #[cfg(feature = "yubikey")]
 pub use piv::YubikeyAttestSlotAction;
@@ -112,6 +118,8 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
         registry.register(Arc::new(ExportPublicAction));
         registry.register(Arc::new(WrapKeyAction));
         registry.register(Arc::new(UnwrapKeyAction));
+        registry.register(Arc::new(SignDataAction));
+        registry.register(Arc::new(VerifySignatureAction));
     }
 
     #[cfg(feature = "pki")]

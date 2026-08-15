@@ -15,7 +15,7 @@ use rite_model::{
     MaterialSource, Metadata, Output, OutputId, ParamId, Parameter, PostCeremonyDuty, RetryPolicy,
     Role, RoleId, Section, SectionId, Step, StepId, StepInputs, SymbolTable,
 };
-use rite_model::{DutyType, ParameterType};
+use rite_model::{BackendUsage, DutyType, ParameterType};
 use std::collections::{HashMap, HashSet};
 
 /// Schema versions this resolver understands.
@@ -558,7 +558,7 @@ impl ResolveContext {
         step: &schema::StepBody,
         ceremony: &schema::Ceremony,
     ) {
-        if step.backend.is_some() && !step.action.requires_backend() {
+        if step.backend.is_some() && step.action.backend_usage() == BackendUsage::Unused {
             self.warnings
                 .push(ResolveWarning::UnusedBackend { step: id.clone() });
         }
@@ -570,7 +570,7 @@ impl ResolveContext {
                 backend: backend_name.clone(),
             });
         }
-        if step.action.requires_backend() && step.backend.is_none() {
+        if step.action.backend_usage() == BackendUsage::Required && step.backend.is_none() {
             self.add_error(ResolveError::MissingRequiredBackend {
                 step: id.clone(),
                 action: step.action,

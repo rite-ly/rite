@@ -47,8 +47,7 @@ use x509_cert::{
 use crate::params::IssueCertificateParams;
 
 use super::oids::{
-    ECDSA_WITH_SHA256, ML_DSA_44, ML_DSA_65, ML_DSA_87, SHA256_WITH_RSA_ENCRYPTION,
-    sig_profile_for_algorithm,
+    sig_profile_for_algorithm, verifiable_algorithm_names, verifiable_sign_algorithm,
 };
 
 /// id-kp-serverAuth OID (1.3.6.1.5.5.7.3.1)
@@ -516,15 +515,22 @@ fn extract_san_from_csr(csr: &CertReq) -> Option<x509_cert::ext::Extension> {
     None
 }
 
-/// SHA-256 `DigestInfo` DER prefix for PKCS#1 v1.5 (RFC 3447 §9.2, note 1).
-const SHA256_DIGEST_INFO_PREFIX: &[u8] = &[
-    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
-    0x00, 0x04, 0x20,
-];
-
 /// Verify the CSR's self-signature.
+///
+/// Proof of possession: the requester holds the private key matching the public
+/// key inside the request. The algorithm is named by the CSR itself, so it is
+/// resolved against the allowlist first and passed to the verifier explicitly.
+/// Letting the verifier infer a scheme from the key would accept a request that
+/// claims one algorithm and carries a key for another.
 fn verify_csr_signature(csr: &CertReq) -> Result<(), String> {
     let oid = csr.algorithm.oid;
+    let algorithm = verifiable_sign_algorithm(oid).ok_or_else(|| {
+        format!(
+            "CSR signature algorithm {oid} is not supported for verification. \
+             Supported algorithms are {}.",
+            verifiable_algorithm_names()
+        )
+    })?;
 
     let spki_der = csr
         .info
@@ -536,70 +542,13 @@ fn verify_csr_signature(csr: &CertReq) -> Result<(), String> {
         .to_der()
         .map_err(|e| format!("Failed to encode CertReqInfo: {e}"))?;
 
-    if oid == SHA256_WITH_RSA_ENCRYPTION {
-        use rsa::pkcs8::DecodePublicKey;
-        use sha2::Digest;
-
-        let rsa_key = rsa::RsaPublicKey::from_public_key_der(&spki_der)
-            .map_err(|e| format!("Failed to parse RSA public key from CSR: {e}"))?;
-
-        let hash = sha2::Sha256::digest(&info_der);
-        let mut digest_info = SHA256_DIGEST_INFO_PREFIX.to_vec();
-        digest_info.extend_from_slice(&hash);
-
-        rsa_key
-            .verify(
-                rsa::pkcs1v15::Pkcs1v15Sign::new_unprefixed(),
-                &digest_info,
-                csr.signature.raw_bytes(),
-            )
-            .map_err(|_| {
-                "CSR self-signature verification failed: signature does not match".to_string()
-            })
-    } else if oid == ECDSA_WITH_SHA256 {
-        use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
-        use p256::pkcs8::DecodePublicKey;
-
-        let verifying_key = VerifyingKey::from_public_key_der(&spki_der)
-            .map_err(|e| format!("Failed to parse ECDSA P-256 public key from CSR: {e}"))?;
-        let signature = Signature::from_der(csr.signature.raw_bytes())
-            .map_err(|e| format!("Failed to parse ECDSA signature from CSR: {e}"))?;
-
-        verifying_key.verify(&info_der, &signature).map_err(|_| {
-            "CSR self-signature verification failed: ECDSA signature does not match".to_string()
-        })
-    } else if oid == ML_DSA_44 || oid == ML_DSA_65 || oid == ML_DSA_87 {
-        verify_ml_dsa_csr(&spki_der, &info_der, csr.signature.raw_bytes())
-    } else {
-        Err(format!(
-            "CSR signature algorithm {oid} is not supported for verification. \
-             Supported algorithms are sha256WithRSAEncryption, ecdsa-with-SHA256, \
-             and ML-DSA-44/65/87."
-        ))
-    }
-}
-
-/// Verify an ML-DSA CSR self-signature.
-///
-/// The RSA and ECDSA branches above verify with `RustCrypto`, but no equivalent
-/// in-tree verifier covers ML-DSA, so this delegates to the same OpenSSL
-/// provider that produced the signature. Unifying all three onto one
-/// implementation is tracked as the open question in the meta-repo's
-/// `sign-verify-actions` investigation.
-#[cfg(feature = "openssl")]
-fn verify_ml_dsa_csr(spki_der: &[u8], info_der: &[u8], signature: &[u8]) -> Result<(), String> {
-    match rite_openssl::verify_ml_dsa_signature(spki_der, info_der, signature) {
+    match crate::signatures::verify(&spki_der, &info_der, csr.signature.raw_bytes(), algorithm) {
         Ok(true) => Ok(()),
-        Ok(false) => Err(
-            "CSR self-signature verification failed: ML-DSA signature does not match".to_string(),
-        ),
-        Err(e) => Err(format!("Failed to verify ML-DSA CSR self-signature: {e}")),
+        Ok(false) => Err(format!(
+            "CSR self-signature verification failed: {algorithm} signature does not match"
+        )),
+        Err(e) => Err(format!("Failed to verify CSR self-signature: {e}")),
     }
-}
-
-#[cfg(not(feature = "openssl"))]
-fn verify_ml_dsa_csr(_spki_der: &[u8], _info_der: &[u8], _signature: &[u8]) -> Result<(), String> {
-    Err("ML-DSA CSR verification requires the 'openssl' feature".to_string())
 }
 
 fn parse_csr(bytes: &[u8]) -> Result<CertReq, der::Error> {

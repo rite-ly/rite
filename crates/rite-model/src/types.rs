@@ -156,16 +156,20 @@ pub enum ActionType {
 
 /// Whether an action needs the `backend:` field on its step.
 ///
-/// Three states, not two: an action can also *accept* a backend without needing
-/// one. Verification is the case that forces the distinction.
+/// Three states, not two: an action can also run without a backend and accept
+/// one anyway. Verification is the case that forces the distinction, since a
+/// signature check needs only a public key but a validated deployment may
+/// require it inside the boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum BackendUsage {
     /// The step must name a backend; omitting it is an error.
     Required,
-    /// The step may name a backend, which changes how the action runs.
-    Optional,
+    /// The step runs in software unless it names a backend, which then does the
+    /// work instead. Naming one changes who performs the operation, not what
+    /// the step accepts or produces.
+    SoftwareUnlessNamed,
     /// The action never uses a backend; naming one is a mistake worth warning about.
     Unused,
 }
@@ -218,7 +222,7 @@ impl ActionType {
             | ActionType::YubikeyAttestSlot
             | ActionType::TpmAttest => BackendUsage::Required,
 
-            ActionType::VerifySignature => BackendUsage::Optional,
+            ActionType::VerifySignature => BackendUsage::SoftwareUnlessNamed,
 
             ActionType::ClockCheck
             | ActionType::Confirm

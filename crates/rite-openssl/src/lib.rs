@@ -8,12 +8,13 @@
 //! [`OpenSslBackend`] implements the following [`rite_sdk`] traits:
 //!
 //! - [`KeyStoreBackend`](rite_sdk::KeyStoreBackend): key generation and import
-//! - [`SignBackend`](rite_sdk::SignBackend): signing and verification
+//! - [`SignBackend`](rite_sdk::SignBackend): signing
+//! - [`VerifyBackend`](rite_sdk::VerifyBackend): signature verification
 //! - [`KeyTransportBackend`](rite_sdk::KeyTransportBackend): key wrapping and unwrapping
 //! - [`RandomBackend`](rite_sdk::RandomBackend): random byte generation
 //!
-//! [`verify_signature`] and [`certificate_public_key`] work without a backend
-//! instance, so they apply to keys this crate never held (a PIV card's, say).
+//! [`verify_signature`] works without a backend instance, so it applies to keys
+//! this crate never held (a PIV card's, say).
 //!
 //! # Feature flags
 //!
@@ -30,7 +31,7 @@
 
 mod backend;
 
-pub use backend::{OpenSslBackend, certificate_public_key, public_key_algorithm, verify_signature};
+pub use backend::{OpenSslBackend, verify_signature};
 
 /// Whether this build can perform ML-DSA operations.
 ///

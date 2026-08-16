@@ -19,7 +19,7 @@ use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
     Reporter, StepInfo, StepResult, parse_params, resolve_artifact_bytes, resolve_backend_key,
 };
-use rite_sdk::Backend;
+use rite_sdk::{Backend, CertificateDer, PublicKeyDer};
 use serde_json::json;
 use signature::Keypair;
 use x509_cert::der::{
@@ -180,15 +180,13 @@ impl Action for IssueCertificateAction {
         let issuer_cert_ref = step.named_input("issuer_cert");
 
         let signing_key_id = signing_key_ref.artifact_id();
-        let (key_backend_name, key_id, key_algorithm, _) =
-            resolve_backend_key(ctx.artifacts, &signing_key_id).map_err(|e| {
-                ActionError::Failed(format!(
-                    "signing_key '{}' must be a BackendKey: {e}",
-                    signing_key_ref.display_name()
-                ))
-            })?;
-        let key_id = key_id.clone();
-        let key_backend_name = key_backend_name.to_string();
+        let signing_key = resolve_backend_key(ctx.artifacts, &signing_key_id).map_err(|e| {
+            ActionError::Failed(format!(
+                "signing_key '{}' must be a BackendKey: {e}",
+                signing_key_ref.display_name()
+            ))
+        })?;
+        let key_algorithm = signing_key.algorithm;
 
         let csr_id = csr_ref.artifact_id();
         let csr_bytes = resolve_artifact_bytes(ctx.artifacts, &csr_id, csr_ref.property())
@@ -210,16 +208,18 @@ impl Action for IssueCertificateAction {
 
         let issuer_cert_opt = if let Some(issuer_ref) = issuer_cert_ref {
             let issuer_id = issuer_ref.artifact_id();
-            let issuer_bytes =
-                resolve_artifact_bytes(ctx.artifacts, &issuer_id, issuer_ref.property()).map_err(
-                    |e| {
-                        ActionError::Failed(format!(
-                            "issuer_cert '{}' could not be resolved: {e}",
-                            issuer_ref.display_name()
-                        ))
-                    },
-                )?;
-            let issuer_cert = parse_certificate(&issuer_bytes)
+            let issuer_der = crate::signatures::resolve_certificate(
+                ctx.artifacts,
+                &issuer_id,
+                issuer_ref.property(),
+            )
+            .map_err(|e| {
+                ActionError::Failed(format!(
+                    "issuer_cert '{}' could not be resolved: {e}",
+                    issuer_ref.display_name()
+                ))
+            })?;
+            let issuer_cert = Certificate::from_der(issuer_der.as_bytes())
                 .map_err(|e| ActionError::Failed(format!("Failed to parse issuer cert: {e}")))?;
             Some(issuer_cert)
         } else {
@@ -301,9 +301,10 @@ impl Action for IssueCertificateAction {
         let backend_fingerprint = backend.fingerprint();
         let backend_name = backend.name().to_string();
 
-        if backend_name != key_backend_name {
+        if backend_name != signing_key.backend_name {
             return Err(ActionError::Failed(format!(
-                "Signing key is on backend '{key_backend_name}', but step backend is '{backend_name}'"
+                "Signing key is on backend '{}', but step backend is '{backend_name}'",
+                signing_key.backend_name
             )));
         }
 
@@ -311,7 +312,7 @@ impl Action for IssueCertificateAction {
             ActionError::Failed(format!("Backend '{backend_name}' does not support signing"))
         })?;
 
-        let signature_bytes = sign_backend.sign(&key_id, &tbs_der, sign_algorithm)?;
+        let signature_bytes = sign_backend.sign(signing_key.key_id, &tbs_der, sign_algorithm)?;
 
         let signature = BitString::from_bytes(&signature_bytes).map_err(|e| {
             ActionError::Failed(format!("Failed to encode signature as BitString: {e}"))
@@ -344,7 +345,9 @@ impl Action for IssueCertificateAction {
             fingerprint: None,
         })?;
 
-        let artifact = ArtifactValue::Certificate { der: cert_der };
+        let artifact = ArtifactValue::Certificate(CertificateDer::new(cert_der).map_err(|e| {
+            ActionError::Failed(format!("Issued certificate does not parse back: {e}"))
+        })?);
         let message = "X.509 certificate issued from CSR".to_string();
 
         if let Some(produces) = &step.produces {
@@ -537,12 +540,14 @@ fn verify_csr_signature(csr: &CertReq) -> Result<(), String> {
         .public_key
         .to_der()
         .map_err(|e| format!("Failed to encode public key: {e}"))?;
+    let key = PublicKeyDer::new(spki_der)
+        .map_err(|e| format!("CSR does not carry a usable public key: {e}"))?;
     let info_der = csr
         .info
         .to_der()
         .map_err(|e| format!("Failed to encode CertReqInfo: {e}"))?;
 
-    match crate::signatures::verify(&spki_der, &info_der, csr.signature.raw_bytes(), algorithm) {
+    match crate::signatures::verify(&key, &info_der, csr.signature.raw_bytes(), algorithm) {
         Ok(true) => Ok(()),
         Ok(false) => Err(format!(
             "CSR self-signature verification failed: {algorithm} signature does not match"
@@ -558,16 +563,6 @@ fn parse_csr(bytes: &[u8]) -> Result<CertReq, der::Error> {
         CertReq::from_pem(pem_str)
     } else {
         CertReq::from_der(bytes)
-    }
-}
-
-fn parse_certificate(bytes: &[u8]) -> Result<Certificate, der::Error> {
-    if bytes.starts_with(b"-----") {
-        let pem_str =
-            std::str::from_utf8(bytes).map_err(|_| der::Error::from(der::ErrorKind::Failed))?;
-        Certificate::from_pem(pem_str)
-    } else {
-        Certificate::from_der(bytes)
     }
 }
 

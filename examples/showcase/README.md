@@ -52,4 +52,6 @@ shape verify a signature made on a smart card, or one that arrived from outside
 the ceremony. Neither step names an algorithm; both derive it from the key.
 
 The `key` a verification step names can be a keypair, a bare public key, or a
-certificate carrying one.
+certificate carrying one, in DER or PEM. Adding a `backend:` chooses who runs
+the check, for a deployment that requires it inside a validated boundary, and
+does not change what the step accepts.

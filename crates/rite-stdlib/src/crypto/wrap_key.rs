@@ -3,8 +3,7 @@
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
-    resolve_backend_key,
+    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_backend_key,
 };
 use rite_sdk::{Backend, KeyTransportBackend, WrapAlgorithm};
 use serde_json::json;
@@ -57,19 +56,18 @@ impl Action for WrapKeyAction {
         let key_to_wrap_id = key_to_wrap_ref.artifact_id();
         let wrapping_key_id = wrapping_key_ref.artifact_id();
 
-        let (key_backend, key_id, _, _) = resolve_backend_key(ctx.artifacts, &key_to_wrap_id)
-            .map_err(|e| {
-                ActionError::Failed(format!(
-                    "key_to_wrap '{}' must be a BackendKey: {e}",
-                    key_to_wrap_ref.display_name()
-                ))
-            })?;
+        let key_to_wrap = resolve_backend_key(ctx.artifacts, &key_to_wrap_id).map_err(|e| {
+            ActionError::Failed(format!(
+                "key_to_wrap '{}' must be a BackendKey: {e}",
+                key_to_wrap_ref.display_name()
+            ))
+        })?;
 
-        let wrapping_key_meta = resolve_backend_key(ctx.artifacts, &wrapping_key_id);
-
-        let (wrapped_key, backend_fingerprint) = if let Ok((wrap_key_backend, wrap_key_id, _, _)) =
-            wrapping_key_meta
+        let key_backend = key_to_wrap.backend_name;
+        let (wrapped_key, backend_fingerprint) = if let Ok(wrapping_key) =
+            resolve_backend_key(ctx.artifacts, &wrapping_key_id)
         {
+            let wrap_key_backend = wrapping_key.backend_name;
             if key_backend != wrap_key_backend {
                 return Err(ActionError::Failed(format!(
                     "Key wrapping requires both keys on same backend (key: '{key_backend}', wrapper: '{wrap_key_backend}')"
@@ -77,17 +75,17 @@ impl Action for WrapKeyAction {
             }
             let (transport, backend_fp) = require_transport_backend(backend, key_backend)?;
             reporter.log(Icon::Spinner, "Wrapping key using backend...")?;
-            let wk = transport.wrap(key_id, wrap_key_id, wrap_alg)?;
+            let wk = transport.wrap(key_to_wrap.key_id, wrapping_key.key_id, wrap_alg)?;
             (wk, backend_fp)
         } else {
-            let pub_key_bytes = resolve_artifact_bytes(
+            let recipient = crate::signatures::resolve_public_key(
                 ctx.artifacts,
                 &wrapping_key_id,
                 wrapping_key_ref.property(),
             )
-            .map_err(|_| {
+            .map_err(|e| {
                 ActionError::Failed(format!(
-                    "Cannot resolve wrapping key '{}' as a public key",
+                    "Cannot resolve wrapping key '{}' as a public key: {e}",
                     wrapping_key_ref.display_name()
                 ))
             })?;
@@ -96,7 +94,7 @@ impl Action for WrapKeyAction {
                 Icon::Spinner,
                 "Wrapping key to external recipient public key...",
             )?;
-            let wk = transport.wrap_to_public(key_id, &pub_key_bytes, wrap_alg)?;
+            let wk = transport.wrap_to_public(key_to_wrap.key_id, &recipient, wrap_alg)?;
             (wk, backend_fp)
         };
 

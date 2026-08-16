@@ -6,6 +6,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use crate::key_material::PublicKeyDer;
+
 /// Opaque key identifier (backend-specific).
 ///
 /// This is an opaque reference to a key managed by a backend. The internal
@@ -63,8 +65,8 @@ pub struct KeyMetadata {
     pub algorithm: KeyAlgorithm,
     /// Human-readable label.
     pub label: String,
-    /// Public key in SPKI DER format (if exportable).
-    pub public_key: Option<Vec<u8>>,
+    /// Public key, if the backend exports one.
+    pub public_key: Option<PublicKeyDer>,
     /// Attestation evidence (if backend supports attestation).
     pub attestation: Option<Attestation>,
 }
@@ -721,8 +723,8 @@ pub struct YubikeySlotMetadata {
     pub touch_policy: PivTouchPolicy,
     /// Origin of the key in this slot.
     pub origin: PivKeyOrigin,
-    /// Public key in `SubjectPublicKeyInfo` (SPKI) DER format.
-    pub public_key: Option<Vec<u8>>,
+    /// Public key, if the slot reports one.
+    pub public_key: Option<PublicKeyDer>,
 }
 
 bitflags::bitflags! {

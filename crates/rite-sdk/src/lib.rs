@@ -25,12 +25,15 @@
 #![warn(missing_docs)]
 
 mod backend;
+mod key_material;
 mod types;
+
+pub use key_material::{CertificateDer, PublicKeyDer};
 
 pub use backend::{
     AttestationBackend, Backend, BackendError, CertStoreBackend, KeyStoreBackend,
     KeyTransportBackend, PivBackend, Pkcs11AdminBackend, Pkcs11Backend, RandomBackend,
-    Retriability, SignBackend, TpmBackend, YubikeyBackend,
+    Retriability, SignBackend, TpmBackend, VerifyBackend, YubikeyBackend,
 };
 
 pub use types::{

@@ -5,7 +5,7 @@ use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
     Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
 };
-use rite_sdk::Backend;
+use rite_sdk::{Backend, CertificateDer};
 use serde_json::json;
 
 use super::params::AttestSlotParams;
@@ -89,7 +89,11 @@ impl Action for YubikeyAttestSlotAction {
             Ok(StepResult::completed_with_artifact(
                 "YubiKey attestation certificate generated",
                 produces.clone(),
-                ArtifactValue::Bytes(cert_der),
+                ArtifactValue::Certificate(CertificateDer::new(cert_der).map_err(|e| {
+                    ActionError::Failed(format!(
+                        "Backend returned an attestation certificate that is not X.509: {e}"
+                    ))
+                })?),
             ))
         } else {
             Ok(StepResult::completed(
@@ -140,7 +144,10 @@ mod tests {
         assert_eq!(result.artifacts.len(), 1);
         let (id, value) = result.artifacts.first().expect("one produced artifact");
         assert_eq!(id.as_str(), "attestation");
-        assert!(matches!(value, ArtifactValue::Bytes(b) if b == b"MOCK_ATTESTATION_CERT_DER"));
+        let ArtifactValue::Certificate(certificate) = value else {
+            panic!("attestation is produced as a certificate, got {value:?}");
+        };
+        assert!(!certificate.as_bytes().is_empty());
 
         assert!(harness.facts().iter().any(|f| matches!(
             f,

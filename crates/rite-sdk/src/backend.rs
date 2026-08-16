@@ -25,6 +25,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::key_material::PublicKeyDer;
 use crate::types::{
     Attestation, CertRef, KeyId, KeyMetadata, KeySecurityAttributes, KeySpec, PcrValue,
     PivDeviceInfo, PivSlot, PivSlotInfo, Pkcs11Mechanism, Pkcs11TokenInfo, SignAlgorithm, TpmInfo,
@@ -66,8 +67,6 @@ use crate::types::{
 /// impl SignBackend for MyBackend {
 ///     fn sign(&mut self, _key: &KeyId, _msg: &[u8], _alg: SignAlgorithm)
 ///         -> Result<Vec<u8>, BackendError> { Ok(Vec::new()) }
-///     fn verify(&self, _key: &KeyId, _msg: &[u8], _sig: &[u8], _alg: SignAlgorithm)
-///         -> Result<bool, BackendError> { Ok(true) }
 /// }
 ///
 /// impl RandomBackend for MyBackend {
@@ -132,6 +131,11 @@ pub trait Backend: Send + Sync {
 
     /// Not supported by this backend, always returns `None`.
     fn as_sign_mut(&mut self) -> Option<&mut dyn SignBackend> {
+        None
+    }
+
+    /// Not supported by this backend, always returns `None`.
+    fn as_verify_mut(&mut self) -> Option<&mut dyn VerifyBackend> {
         None
     }
 
@@ -205,8 +209,8 @@ pub trait KeyStoreBackend: Backend {
         key_bytes: &[u8],
     ) -> Result<KeyMetadata, BackendError>;
 
-    /// Export the public key for `key_id` in `SubjectPublicKeyInfo` (SPKI) DER format.
-    fn export_public_key(&self, key_id: &KeyId) -> Result<Vec<u8>, BackendError>;
+    /// Export the public key for `key_id`.
+    fn export_public_key(&self, key_id: &KeyId) -> Result<PublicKeyDer, BackendError>;
 
     /// List all keys managed by this backend.
     fn list_keys(&self) -> Result<Vec<KeyMetadata>, BackendError>;
@@ -215,7 +219,7 @@ pub trait KeyStoreBackend: Backend {
     fn delete_key(&mut self, key_id: &KeyId) -> Result<(), BackendError>;
 }
 
-/// Signing and verification operations.
+/// Signing operations.
 pub trait SignBackend: Backend {
     /// Sign `message` with `key_id` using `algorithm`.
     ///
@@ -226,11 +230,32 @@ pub trait SignBackend: Backend {
         message: &[u8],
         algorithm: SignAlgorithm,
     ) -> Result<Vec<u8>, BackendError>;
+}
 
-    /// Verify `signature` over `message` with `key_id` and `algorithm`.
-    fn verify(
-        &self,
-        key_id: &KeyId,
+/// Signature verification operations.
+///
+/// Separate from [`SignBackend`] because the two need different things. Signing
+/// needs a secret, so only the device holding it can do the work; verification
+/// needs a public key, so anything can. A card that signs and never verifies
+/// implements one trait, and a verification-only backend (a notary, an enclave)
+/// implements the other without having to refuse `sign`.
+///
+/// Most ceremonies verify in software and name no backend. Naming one is for a
+/// deployment that requires the check inside a validated boundary, or a
+/// verifier that is not local.
+pub trait VerifyBackend: Backend {
+    /// Verify `signature` over `message` under `key`.
+    ///
+    /// Takes the key rather than a reference to one the backend holds, because
+    /// the evidence a ceremony checks usually comes from outside it: a CSR from
+    /// another party, a signature made on a card that is no longer present.
+    /// There is no handle to name for those.
+    ///
+    /// `&mut self` because a verifier may need a session to work in. PKCS#11
+    /// creates a public key object, verifies against it, and destroys it.
+    fn verify_public_key(
+        &mut self,
+        key: &PublicKeyDer,
         message: &[u8],
         signature: &[u8],
         algorithm: SignAlgorithm,
@@ -291,13 +316,13 @@ pub trait KeyTransportBackend: Backend {
         label: &str,
     ) -> Result<KeyMetadata, BackendError>;
 
-    /// Wrap `key_id` to an external recipient's raw public key.
+    /// Wrap `key_id` to an external recipient's public key.
     ///
     /// Default implementation returns `UnsupportedOperation`.
     fn wrap_to_public(
         &mut self,
         key_id: &KeyId,
-        recipient_pub_key: &[u8],
+        recipient_pub_key: &PublicKeyDer,
         algorithm: WrapAlgorithm,
     ) -> Result<WrappedKey, BackendError> {
         let _ = (key_id, recipient_pub_key, algorithm);

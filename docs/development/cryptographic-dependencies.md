@@ -16,6 +16,12 @@ The dividing line is whether the code touches a key. Parsing a
 primitive. A new algorithm needs work on both sides: an OID and identifier in
 `rite-stdlib/src/pki/oids.rs`, and an implementation in `rite-openssl`.
 
+`rite-sdk` sits on the structure side of that line. `PublicKeyDer` and
+`CertificateDer` parse their own encoding with `x509-cert` so a build with no
+crypto provider can still tell a key from a certificate and read a key's
+algorithm. A new key algorithm also needs its OID in
+`rite-sdk/src/key_material.rs`.
+
 ## Why one provider for primitives
 
 Primitives use a single implementation rather than one crate per algorithm
@@ -45,6 +51,11 @@ The cost is a C dependency and its build requirements.
 Actions call `signatures::verify`, never `rite_openssl::` directly. That module
 is the only place backend-free cryptography names a provider, so changing the
 provider is an edit to one file rather than an audit of every action.
+
+The same module holds `signatures::resolve_public_key`, which turns an artifact
+reference into a `PublicKeyDer`. It needs structure and no provider, and it sits
+here so that every action naming a key accepts the same shapes: a keypair, an
+exported key, a certificate, and DER or PEM bytes off a disk.
 
 Backend *construction* is a separate seam with providers of its own
 (`backend/mod.rs`, and `backend/mock.rs` for the rehearsal mock). Those select

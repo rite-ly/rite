@@ -13,7 +13,7 @@
 use crate::actions::ArtifactValue;
 use crate::executor::ExecutionError;
 use rite_model::ArtifactId;
-use rite_sdk::{KeyAlgorithm, KeyId};
+use rite_sdk::{KeyAlgorithm, KeyId, PublicKeyDer};
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
@@ -48,7 +48,7 @@ pub fn resolve_artifact_bytes<S: BuildHasher>(
                 ..
             },
             Some("public"),
-        ) => Ok(pub_key.clone()),
+        ) => Ok(pub_key.as_bytes().to_vec()),
         (
             ArtifactValue::BackendKey {
                 public_key: None, ..
@@ -68,7 +68,7 @@ pub fn resolve_artifact_bytes<S: BuildHasher>(
         }
 
         // Real public key
-        (ArtifactValue::PublicKey { key_data, .. }, None) => Ok(key_data.clone()),
+        (ArtifactValue::PublicKey(key), None) => Ok(key.as_bytes().to_vec()),
 
         // Real wrapped key
         (ArtifactValue::WrappedKey { data, .. }, None) => Ok(data.clone()),
@@ -77,8 +77,9 @@ pub fn resolve_artifact_bytes<S: BuildHasher>(
         (ArtifactValue::Bytes(bytes), None) => Ok(bytes.clone()),
         (ArtifactValue::Text(text), None) => Ok(text.as_bytes().to_vec()),
 
-        // X.509 certificate: return DER bytes
-        (ArtifactValue::Certificate { der }, None) => Ok(der.clone()),
+        // X.509 certificate: the whole certificate, not the key inside it.
+        // `issue_certificate` reads an issuer certificate through here.
+        (ArtifactValue::Certificate(certificate), None) => Ok(certificate.as_bytes().to_vec()),
 
         // Invalid combinations
         _ => Err(ExecutionError::InvalidParams(format!(
@@ -87,14 +88,27 @@ pub fn resolve_artifact_bytes<S: BuildHasher>(
     }
 }
 
-/// Backend key metadata returned by artifact resolution.
-/// Contains (`backend_name`, `key_id`, `algorithm`, `public_key`).
-pub type BackendKeyMeta<'a> = (&'a str, &'a KeyId, KeyAlgorithm, Option<&'a Vec<u8>>);
+/// What an action needs to know about a backend-managed key.
+///
+/// Borrowed from the artifact store rather than cloned: a caller that needs an
+/// owned `KeyId` or key past the borrow clones the field it needs.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct BackendKeyMeta<'a> {
+    /// Backend that owns the key. A step running on another one is an error.
+    pub backend_name: &'a str,
+    /// The reference that backend answers to.
+    pub key_id: &'a KeyId,
+    /// Algorithm, for choosing a signature scheme and for the transcript.
+    pub algorithm: KeyAlgorithm,
+    /// Public half, absent for a key the backend does not export.
+    pub public_key: Option<&'a PublicKeyDer>,
+}
 
 /// Resolve an artifact to a backend-managed key reference.
 ///
-/// Returns (`backend_name`, `key_id`, `algorithm`, `public_key`) tuple for backend operations.
-/// This is used when actions need to perform operations on backend-managed keys.
+/// Used when an action operates on a key the backend holds, which is every
+/// action that needs a private key.
 ///
 /// # Errors
 /// Returns an error if:
@@ -115,12 +129,12 @@ pub fn resolve_backend_key<'a, S: BuildHasher>(
             key_id,
             algorithm,
             public_key,
-        } => Ok((
-            backend_name.as_str(),
+        } => Ok(BackendKeyMeta {
+            backend_name: backend_name.as_str(),
             key_id,
-            *algorithm,
-            public_key.as_ref(),
-        )),
+            algorithm: *algorithm,
+            public_key: public_key.as_ref(),
+        }),
         _ => Err(ExecutionError::InvalidParams(format!(
             "Artifact '{id}' is not a backend-managed key"
         ))),

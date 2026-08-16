@@ -66,7 +66,10 @@ impl Action for GenerateKeypairAction {
         };
         let metadata = keystore.generate_key(spec)?;
 
-        let public_key_fingerprint = metadata.public_key.as_deref().map(compute_fingerprint);
+        let public_key_fingerprint = metadata
+            .public_key
+            .as_ref()
+            .map(|key| compute_fingerprint(key.as_bytes()));
 
         let keypair = ArtifactValue::BackendKey {
             backend_name: backend_name.clone(),

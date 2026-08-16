@@ -16,7 +16,8 @@ use openssl::rsa::Rsa;
 use openssl::x509::{X509Builder, X509NameBuilder};
 use rite_openssl::OpenSslBackend;
 use rite_sdk::{
-    KeyAlgorithm, KeyPolicy, KeySpec, KeyStoreBackend, KeyTransportBackend, WrapAlgorithm,
+    KeyAlgorithm, KeyPolicy, KeySpec, KeyStoreBackend, KeyTransportBackend, PublicKeyDer,
+    WrapAlgorithm,
 };
 use std::io::Write as _;
 use std::process::Command;
@@ -72,7 +73,7 @@ fn run_interop_test(algorithm: WrapAlgorithm) {
     // ── Recipient keypair + cert (created outside the backend) ──────────────
     let rsa = Rsa::generate(2048).unwrap();
     let recipient_pkey = PKey::from_rsa(rsa).unwrap();
-    let recipient_pub_der = recipient_pkey.public_key_to_der().unwrap();
+    let recipient_pub_der = PublicKeyDer::new(recipient_pkey.public_key_to_der().unwrap()).unwrap();
 
     // Self-signed cert with same issuer/serial that cert_for_public_key uses.
     let cert = build_recipient_cert(&recipient_pkey);
@@ -150,7 +151,8 @@ fn run_interop_test(algorithm: WrapAlgorithm) {
     let decrypted_pub = PKey::from_rsa(rsa).unwrap().public_key_to_der().unwrap();
 
     assert_eq!(
-        payload_pub, decrypted_pub,
+        payload_pub.as_bytes(),
+        decrypted_pub,
         "Decrypted key public component does not match the original payload key"
     );
 }

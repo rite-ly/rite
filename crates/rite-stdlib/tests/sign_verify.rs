@@ -261,10 +261,15 @@ fn fails_against_a_certificate_when_the_data_differs() {
     assert!(err.contains("does not match"), "{err}");
 }
 
-/// A device that never exports its key can still verify what it signed. Only
-/// software verification needs the key material.
+/// A key the device never exports cannot be verified, by anyone.
+///
+/// Naming the signing backend does not rescue it. Verification takes a public
+/// key, and there is none; a signature only its producing device can check is
+/// not evidence an auditor can confirm from the transcript. Both ways out say
+/// the same thing, which is the point of resolving the key before choosing a
+/// verifier.
 #[test]
-fn verifies_a_non_exportable_backend_key_through_its_own_backend() {
+fn refuses_a_backend_key_that_exports_no_public_half() {
     let signed = sign_with("ECDSA-P256", &serde_json::json!({}));
 
     // The same key as the backend holds it, minus the public half: what a
@@ -288,15 +293,11 @@ fn verifies_a_non_exportable_backend_key_through_its_own_backend() {
     };
     let mut signed = signed.replace("signing_key", stripped);
 
-    verify(&mut signed, &serde_json::json!({}), Some("openssl"))
-        .expect("the backend must verify a key it does not export");
-
-    // Without a backend there is nothing to verify against, and the error has
-    // to say which way out the author has.
-    let err = verify(&mut signed, &serde_json::json!({}), None)
-        .expect_err("software verification has no key material to work with");
-    assert!(err.contains("does not expose a public key"), "{err}");
-    assert!(err.contains("Name that backend"), "{err}");
+    for backend in [Some("openssl"), None] {
+        let err = verify(&mut signed, &serde_json::json!({}), backend)
+            .expect_err("there is no public key to verify under");
+        assert!(err.contains("does not export it"), "{err}");
+    }
 }
 
 /// Issue a self-signed certificate over `signing_key` and store it as
@@ -349,4 +350,93 @@ fn issue_self_signed_certificate(mut signed: Signed) -> Signed {
     }
 
     signed
+}
+
+/// The four shapes a signer's key arrives in all verify the same signature.
+///
+/// Verification resolves the key before it picks a verifier, so a step written
+/// against a keypair works unchanged when the ceremony later feeds it an
+/// exported key, a certificate, or a file loaded off a USB stick. The PEM and
+/// raw-bytes cases are the ones a ceremony author hits: `piv_read_certificate`
+/// and a `material:` both land as bytes with no artifact type to help.
+#[test]
+fn verifies_under_every_shape_a_key_arrives_in() {
+    let signed = sign_with("ECDSA-P256", &serde_json::json!({}));
+    let mut signed = issue_self_signed_certificate(signed);
+
+    let certificate_der = {
+        let ctx = signed.state.handler_context();
+        match ctx.artifacts.get(&ArtifactId::new("signing_cert")) {
+            Some(ArtifactValue::Certificate(certificate)) => certificate.as_bytes().to_vec(),
+            other => panic!("expected a certificate, got {other:?}"),
+        }
+    };
+    let public_der = rite_sdk::CertificateDer::new(certificate_der.clone())
+        .unwrap()
+        .public_key()
+        .unwrap();
+
+    let staged: Vec<(&str, ArtifactValue)> = vec![
+        // A bare public key, as `export_public` produces it.
+        (
+            "as_public_key",
+            ArtifactValue::PublicKey(public_der.clone()),
+        ),
+        // A certificate that arrived as loose bytes, which is what
+        // `piv_read_certificate` produced before it was typed, and what a
+        // certificate read from a file still looks like.
+        (
+            "as_certificate_bytes",
+            ArtifactValue::Bytes(certificate_der.clone()),
+        ),
+        // PEM off disk, the usual way a counterparty's key reaches a ceremony.
+        (
+            "as_key_pem",
+            ArtifactValue::Bytes(pem("PUBLIC KEY", public_der.as_bytes())),
+        ),
+        (
+            "as_certificate_pem",
+            ArtifactValue::Bytes(pem("CERTIFICATE", &certificate_der)),
+        ),
+    ];
+
+    for (id, value) in staged {
+        signed = signed.replace(id, value);
+        verify_under(id, &mut signed, &serde_json::json!({}), None)
+            .unwrap_or_else(|e| panic!("verification under '{id}' must succeed: {e}"));
+    }
+
+    // The keypair and the certificate artifact itself, for completeness.
+    for id in ["signing_key", "signing_cert"] {
+        verify_under(id, &mut signed, &serde_json::json!({}), None)
+            .unwrap_or_else(|e| panic!("verification under '{id}' must succeed: {e}"));
+    }
+}
+
+/// Naming a backend picks who checks the signature, never what is checked.
+///
+/// The same certificate artifact that verifies in software verifies through a
+/// backend, with no `backend:`-shaped input rules of its own.
+#[test]
+fn a_named_backend_verifies_the_same_input_software_does() {
+    let signed = sign_with("ECDSA-P256", &serde_json::json!({}));
+    let mut signed = issue_self_signed_certificate(signed);
+
+    verify_under("signing_cert", &mut signed, &serde_json::json!({}), None)
+        .expect("software verifies under the certificate");
+    verify_under(
+        "signing_cert",
+        &mut signed,
+        &serde_json::json!({}),
+        Some("openssl"),
+    )
+    .expect("the backend verifies under the same certificate");
+}
+
+/// PEM-armour `der` under `label`, the way a file on disk carries it.
+fn pem(label: &str, der: &[u8]) -> Vec<u8> {
+    use x509_cert::der::pem::{LineEnding, encode_string};
+    encode_string(label, LineEnding::LF, der)
+        .expect("label is valid")
+        .into_bytes()
 }

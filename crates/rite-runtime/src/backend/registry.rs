@@ -331,8 +331,11 @@ mod tests {
                 attestation: None,
             })
         }
-        fn export_public_key(&self, _key_id: &KeyId) -> Result<Vec<u8>, BackendError> {
-            Ok(vec![])
+        fn export_public_key(
+            &self,
+            key_id: &KeyId,
+        ) -> Result<rite_sdk::PublicKeyDer, BackendError> {
+            Err(BackendError::KeyNotFound(key_id.to_string()))
         }
         fn list_keys(&self) -> Result<Vec<KeyMetadata>, BackendError> {
             Ok(vec![])

@@ -2,22 +2,24 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, BackendKeyMeta,
-    HandlerContext, Icon, Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
-    resolve_artifact_bytes, resolve_backend_key,
+    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, StepInfo,
+    StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
 };
-use rite_sdk::{Backend, KeyAlgorithm};
+use rite_sdk::Backend;
 use serde_json::json;
 
-use super::sign_data::{require_sign_backend, resolve_sign_algorithm};
+use super::sign_data::resolve_sign_algorithm;
 use crate::params::VerifySignatureParams;
 
 /// Verify a signature over data, given the signer's public key.
 ///
 /// Alone among the cryptographic actions, this one needs no backend (see
 /// [`crate::signatures`] for why). The `key` input may be a keypair, a bare
-/// public key, or a certificate carrying one. Naming a `backend:` on the step
-/// delegates the check to it instead, for a remote or hardware verifier.
+/// public key, or a certificate carrying one.
+///
+/// Naming a `backend:` chooses who runs the check, not what is checked. The key
+/// resolves the same way either way, so a step gains a hardware or remote
+/// verifier without changing what it accepts.
 pub struct VerifySignatureAction;
 
 impl Action for VerifySignatureAction {
@@ -48,9 +50,20 @@ impl Action for VerifySignatureAction {
         let signature_ref = step.required_named_input("signature", "verify_signature")?;
 
         let key_id = key_ref.artifact_id();
-        let backend_key = resolve_backend_key(ctx.artifacts, &key_id).ok();
-        let (public_der, key_algorithm) =
-            resolve_public_key(ctx, key_ref, &key_id, backend_key.as_ref())?;
+        let public_key =
+            crate::signatures::resolve_public_key(ctx.artifacts, &key_id, key_ref.property())
+                .map_err(|e| {
+                    ActionError::Failed(format!(
+                        "verify_signature input 'key' ('{}') is not a usable public key: {e}",
+                        key_ref.display_name()
+                    ))
+                })?;
+        let key_algorithm = public_key.algorithm().map_err(|e| {
+            ActionError::Failed(format!(
+                "verify_signature input 'key' ('{}') uses an algorithm Rite cannot verify: {e}",
+                key_ref.display_name()
+            ))
+        })?;
 
         let algorithm = resolve_sign_algorithm(typed.algorithm.as_deref(), key_algorithm)?;
 
@@ -81,26 +94,22 @@ impl Action for VerifySignatureAction {
             ),
         )?;
 
+        // The key is already resolved, so the backend decides only who runs the
+        // check, never what is checked.
         let (verified, checked_by) = if let Some(backend) = backend {
-            verify_through_backend(
-                backend,
-                backend_key.as_ref(),
-                &data,
-                &signature,
-                algorithm,
-                &key_ref.display_name(),
-            )?
-        } else {
-            let public_der = public_der.as_deref().ok_or_else(|| {
+            let backend_name = backend.name().to_string();
+            let verifier = backend.as_verify_mut().ok_or_else(|| {
                 ActionError::Failed(format!(
-                    "Key '{}' does not expose a public key, so its signatures can only be \
-                     checked by the backend holding it. Name that backend on this step.",
-                    key_ref.display_name()
+                    "Backend '{backend_name}' does not verify signatures. \
+                     Drop the `backend:` field to check this one in software."
                 ))
             })?;
-            let verified = crate::signatures::verify(public_der, &data, &signature, algorithm)
+            let checked = verifier.verify_public_key(&public_key, &data, &signature, algorithm)?;
+            (checked, backend_name)
+        } else {
+            let checked = crate::signatures::verify(&public_key, &data, &signature, algorithm)
                 .map_err(|e| ActionError::Failed(format!("Verification failed to run: {e}")))?;
-            (verified, "software".to_string())
+            (checked, "software".to_string())
         };
 
         if !verified {
@@ -125,9 +134,7 @@ impl Action for VerifySignatureAction {
             }),
             outputs: json!({
                 "verified": true,
-                // None only when the key never left the device that checked the
-                // signature; there is nothing to fingerprint in that case.
-                "public_key_fingerprint": public_der.as_deref().map(compute_fingerprint),
+                "public_key_fingerprint": compute_fingerprint(public_key.as_bytes()),
                 "signature_fingerprint": compute_fingerprint(&signature),
             }),
             fingerprint: None,
@@ -135,77 +142,4 @@ impl Action for VerifySignatureAction {
 
         Ok(StepResult::completed("Signature verified"))
     }
-}
-
-/// Delegate verification to the backend named on the step.
-///
-/// The backend verifies by key reference, so this needs a key the backend
-/// holds. A step that names a backend but passes a bare public key is refused
-/// rather than quietly verified in software: the author asked for a specific
-/// verifier, and silently substituting another would misreport who checked the
-/// evidence.
-fn verify_through_backend(
-    backend: &mut dyn Backend,
-    backend_key: Option<&BackendKeyMeta<'_>>,
-    data: &[u8],
-    signature: &[u8],
-    algorithm: rite_sdk::SignAlgorithm,
-    key_name: &str,
-) -> Result<(bool, String), ActionError> {
-    let backend_name = backend.name().to_string();
-
-    let Some((owner, key_id, _, _)) = backend_key else {
-        return Err(ActionError::Failed(format!(
-            "Step names backend '{backend_name}', but key '{key_name}' is not managed by a backend. \
-             Drop the `backend:` field to verify it in software."
-        )));
-    };
-
-    let sign_backend = require_sign_backend(backend, owner, key_name)?;
-    let verified = sign_backend.verify(key_id, data, signature, algorithm)?;
-    Ok((verified, backend_name))
-}
-
-/// Recover the public key to verify under, and the algorithm it implies.
-///
-/// The key material is optional. Software verification and the transcript
-/// fingerprint both need it, but a backend checking its own signature needs
-/// neither, and a device may not export the key at all.
-fn resolve_public_key(
-    ctx: &HandlerContext,
-    key_ref: &rite_model::ArtifactRef,
-    key_id: &rite_model::ArtifactId,
-    backend_key: Option<&BackendKeyMeta<'_>>,
-) -> Result<(Option<Vec<u8>>, KeyAlgorithm), ActionError> {
-    if let Some((_, _, algorithm, public_key)) = backend_key {
-        return Ok((public_key.map(|key| (*key).clone()), *algorithm));
-    }
-
-    // A certificate can stand in for a bare public key. Note this reads the
-    // artifact directly, so a `property` on a certificate reference is ignored;
-    // every other artifact type goes through `resolve_artifact_bytes`.
-    let der = match ctx.artifacts.get(key_id) {
-        Some(ArtifactValue::Certificate { der }) => crate::signatures::certificate_public_key(der)
-            .map_err(|e| {
-            ActionError::Failed(format!(
-                "verify_signature input 'key' ('{}') is a certificate whose public key could not \
-                 be read: {e}",
-                key_ref.display_name()
-            ))
-        })?,
-        _ => resolve_artifact_bytes(ctx.artifacts, key_id, key_ref.property()).map_err(|e| {
-            ActionError::Failed(format!(
-                "verify_signature input 'key' ('{}') could not be resolved: {e}",
-                key_ref.display_name()
-            ))
-        })?,
-    };
-
-    let algorithm = crate::signatures::public_key_algorithm(&der).map_err(|e| {
-        ActionError::Failed(format!(
-            "verify_signature input 'key' ('{}') is not a usable public key: {e}",
-            key_ref.display_name()
-        ))
-    })?;
-    Ok((Some(der), algorithm))
 }

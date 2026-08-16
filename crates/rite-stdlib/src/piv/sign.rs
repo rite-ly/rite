@@ -361,15 +361,6 @@ mod tests {
             ) -> Result<Vec<u8>, BackendError> {
                 Err(BackendError::KeyNotFound(key_id.to_string()))
             }
-            fn verify(
-                &self,
-                _key_id: &KeyId,
-                _message: &[u8],
-                _signature: &[u8],
-                _algorithm: SignAlgorithm,
-            ) -> Result<bool, BackendError> {
-                Ok(false)
-            }
         }
 
         let mut harness = ReporterHarness::new();
@@ -465,15 +456,6 @@ mod tests {
         ) -> Result<Vec<u8>, BackendError> {
             self.seen.push(key_id.to_string());
             Ok(vec![0x01])
-        }
-        fn verify(
-            &self,
-            _key_id: &KeyId,
-            _message: &[u8],
-            _signature: &[u8],
-            _algorithm: SignAlgorithm,
-        ) -> Result<bool, BackendError> {
-            Ok(true)
         }
     }
 

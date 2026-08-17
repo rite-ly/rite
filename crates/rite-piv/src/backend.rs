@@ -7,7 +7,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use rite_sdk::{
     Backend, BackendConfig, BackendError, CertRef, CertStoreBackend, KeyId, KeyMetadata, KeySpec,
-    KeyStoreBackend, PivBackend, PivDeviceInfo, PivSlotInfo, SignAlgorithm, SignBackend,
+    KeyStoreBackend, PivBackend, PivDeviceInfo, PivSlotInfo, PublicKeyDer, SignAlgorithm,
+    SignBackend,
 };
 
 use crate::ops;
@@ -106,7 +107,7 @@ impl KeyStoreBackend for PivCardBackend {
         ))
     }
 
-    fn export_public_key(&self, key_id: &KeyId) -> Result<Vec<u8>, BackendError> {
+    fn export_public_key(&self, key_id: &KeyId) -> Result<PublicKeyDer, BackendError> {
         let mut yk = self.device();
         ops::export_public_key(&mut yk, key_id)
     }
@@ -132,18 +133,6 @@ impl SignBackend for PivCardBackend {
     ) -> Result<Vec<u8>, BackendError> {
         let mut yk = self.device();
         ops::sign(&mut yk, key_id, message, algorithm)
-    }
-
-    fn verify(
-        &self,
-        _key_id: &KeyId,
-        _message: &[u8],
-        _signature: &[u8],
-        _algorithm: SignAlgorithm,
-    ) -> Result<bool, BackendError> {
-        Err(BackendError::UnsupportedOperation(
-            "PIV cards are signing-only; call verify with the raw public key".to_string(),
-        ))
     }
 }
 

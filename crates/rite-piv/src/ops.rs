@@ -14,7 +14,7 @@ use yubikey::{Certificate, YubiKey};
 
 use rite_sdk::{
     BackendError, KeyAlgorithm, KeyId, KeyMetadata, PivDeviceInfo, PivKeyOrigin, PivPinPolicy,
-    PivSlot, PivSlotInfo, PivTouchPolicy, SignAlgorithm, YubikeySlotMetadata,
+    PivSlot, PivSlotInfo, PivTouchPolicy, PublicKeyDer, SignAlgorithm, YubikeySlotMetadata,
 };
 
 use crate::convert;
@@ -257,32 +257,42 @@ pub fn generate_key(
         yubikey::TouchPolicy::Default,
     )
     .map_err(map_error)?;
-    let spki_der = spki
-        .to_der()
-        .map_err(|e| BackendError::Other(e.to_string()))?;
     let key_id = key_id_for_slot(slot);
     Ok(KeyMetadata {
         key_id,
         algorithm,
         label: label.to_string(),
-        public_key: Some(spki_der),
+        public_key: Some(encode_public_key(&spki)?),
         attestation: None,
     })
 }
 
-/// Export the public key from a slot in SPKI DER format.
+/// Export the public key from a slot.
 ///
 /// # Errors
 ///
 /// Returns a `BackendError` if the slot is invalid or empty.
-pub fn export_public_key(yk: &mut YubiKey, key_id: &KeyId) -> Result<Vec<u8>, BackendError> {
+pub fn export_public_key(yk: &mut YubiKey, key_id: &KeyId) -> Result<PublicKeyDer, BackendError> {
     let slot = convert::to_yubikey_slot(slot_from_key_id(key_id)?)?;
     let meta = piv::metadata(yk, slot).map_err(map_error)?;
     let spki = meta
         .public
         .ok_or_else(|| BackendError::SlotEmpty(key_id.to_string()))?;
-    spki.to_der()
-        .map_err(|e| BackendError::Other(e.to_string()))
+    encode_public_key(&spki)
+}
+
+/// Encode a card-reported `SubjectPublicKeyInfo` as a typed public key.
+///
+/// Every caller passes `x509_cert::spki::SubjectPublicKeyInfoOwned`, but from
+/// the `yubikey` crate's `der` 0.7 rather than the `der` 0.8 that `rite-sdk`
+/// parses with. Naming the type would mean depending on both majors at once,
+/// so the bound is on `der::Encode` (0.7, per this crate's `Cargo.toml`) and
+/// only the DER bytes cross the boundary.
+fn encode_public_key<T: Encode>(spki: &T) -> Result<PublicKeyDer, BackendError> {
+    let der = spki
+        .to_der()
+        .map_err(|e| BackendError::Other(e.to_string()))?;
+    PublicKeyDer::new(der)
 }
 
 /// List all keys (slots with certificates) on the device.
@@ -302,7 +312,10 @@ pub fn list_keys(yk: &mut YubiKey) -> Result<Vec<KeyMetadata>, BackendError> {
                     piv::ManagementAlgorithmId::Asymmetric(a) => convert::from_yubikey_algorithm(a),
                     _ => None,
                 };
-                let pk = meta.public.and_then(|spki| spki.to_der().ok());
+                // Enumeration reports every slot it can reach, so a slot whose
+                // key will not encode is listed without one rather than failing
+                // the whole listing.
+                let pk = meta.public.and_then(|spki| encode_public_key(&spki).ok());
                 (algo, pk)
             }
             Err(_) => (None, None),
@@ -439,7 +452,7 @@ pub fn yubikey_slot_metadata(
     let origin = meta
         .origin
         .map_or(PivKeyOrigin::Unknown, convert::from_yubikey_origin);
-    let public_key = meta.public.and_then(|spki| spki.to_der().ok());
+    let public_key = meta.public.and_then(|spki| encode_public_key(&spki).ok());
     Ok(YubikeySlotMetadata {
         pin_policy,
         touch_policy,

@@ -163,7 +163,7 @@ fn test_ecdsa_p256_pki_flow() {
         .expect("certificate artifact must be produced");
 
     let cert_der = match cert_artifact {
-        ArtifactValue::Certificate { der } => der,
+        ArtifactValue::Certificate(certificate) => certificate.as_bytes().to_vec(),
         other => panic!("expected Certificate for certificate artifact, got {other:?}"),
     };
 
@@ -295,7 +295,7 @@ fn test_csr_san_roundtrip() {
         .into_iter()
         .find_map(|(id, v)| (id == cert_id).then_some(v))
         .and_then(|v| match v {
-            ArtifactValue::Certificate { der } => Some(der),
+            ArtifactValue::Certificate(certificate) => Some(certificate.as_bytes().to_vec()),
             _ => None,
         })
         .expect("certificate artifact must be produced");

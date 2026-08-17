@@ -40,11 +40,25 @@ the backends. See [`docs/docker.md`](../docker.md) for the image build split.
 
 ## Actions
 
-| Action                 | Feature   | Backend capability used                  |
-|------------------------|-----------|------------------------------------------|
-| `piv_read_certificate` | `piv`     | `CertStoreBackend::read_cert`            |
-| `piv_sign`             | `piv`     | `PivBackend` (PIN) + `SignBackend::sign` |
-| `yubikey_attest_slot`  | `yubikey` | `YubikeyBackend::attest_slot`            |
+| Action                 | Feature   | Backend capability used                  | Produces      |
+|------------------------|-----------|------------------------------------------|---------------|
+| `piv_read_certificate` | `piv`     | `CertStoreBackend::read_cert`            | `Certificate` |
+| `piv_sign`             | `piv`     | `PivBackend` (PIN) + `SignBackend::sign` | `Bytes`       |
+| `yubikey_attest_slot`  | `yubikey` | `YubikeyBackend::attest_slot`            | `Certificate` |
+
+Both certificate-producing actions return a parsed `CertificateDer`, so a
+malformed certificate is refused at the step that read it rather than deep
+inside a later parser, and both write out as PEM by default.
+
+Neither PIV backend implements `VerifyBackend`. A card signs; a signature check
+needs only the public key, so it runs in software or on a backend named for the
+purpose. Naming a card on a `verify_signature` step fails when the step runs,
+naming the missing capability.
+
+The capability is absent rather than refused, which makes it a static property
+`as_verify_mut` exposes. Nothing reads it ahead of time yet: `rite check` sees
+only whether an action requires a backend, never whether the named backend can
+do the work.
 
 A ceremony selects a backend by provider string:
 
@@ -80,10 +94,15 @@ CI cannot touch a physical device, so:
   prompt via `ReporterHarness::enqueue_response`. These run in CI behind the
   `piv`/`yubikey` features (`cargo test -p rite-stdlib --features piv,yubikey`).
 - **Dry run** (`rite run --dry-run --frontend headless`) substitutes the mock
-  backend and walks the whole ceremony, including `piv_sign`: the mock lazily
-  mints a synthetic stand-in key for any slot reference it was never asked to
-  generate, so a rehearsal of a pre-provisioned-slot ceremony completes without
-  hardware. The signatures and attestation certificates are clearly synthetic.
+  backend and walks the whole ceremony, including `piv_sign`, so a rehearsal of
+  a pre-provisioned-slot ceremony completes without hardware. The mock holds one
+  committed P-256 keypair standing in for the slot: it reports that key in slot
+  metadata, reads the certificate carrying it, and signs P-256 slot references
+  with it. A signature made during a rehearsal therefore verifies against the
+  certificate the rehearsal just read, which is what a ceremony checks. Other
+  algorithms have no committed slot key and mint a stand-in on first use, so
+  their signatures verify only against the exported stand-in. Attestation
+  certificates are synthetic throughout: nothing chains to the Yubico root.
 - **Manual hardware check** with a real YubiKey, run before a release that
   touches this code:
 

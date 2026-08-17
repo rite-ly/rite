@@ -57,15 +57,14 @@ impl Action for GenerateCsrAction {
         let signing_key_ref = step.required_named_input("signing_key", "generate_csr")?;
 
         let signing_key_id = signing_key_ref.artifact_id();
-        let (key_backend_name, key_id, key_algorithm, public_key_bytes) =
-            resolve_backend_key(ctx.artifacts, &signing_key_id).map_err(|e| {
-                ActionError::Failed(format!(
-                    "signing_key '{}' must be a BackendKey: {e}",
-                    signing_key_ref.display_name()
-                ))
-            })?;
+        let signing_key = resolve_backend_key(ctx.artifacts, &signing_key_id).map_err(|e| {
+            ActionError::Failed(format!(
+                "signing_key '{}' must be a BackendKey: {e}",
+                signing_key_ref.display_name()
+            ))
+        })?;
 
-        let public_key_bytes = public_key_bytes.ok_or_else(|| {
+        let public_key_bytes = signing_key.public_key.ok_or_else(|| {
             ActionError::Failed(
                 "generate_csr: signing key has no exported public key \
                  (non-exportable HSM keys are not supported)"
@@ -73,8 +72,7 @@ impl Action for GenerateCsrAction {
             )
         })?;
 
-        let key_id = key_id.clone();
-        let key_backend_name = key_backend_name.to_string();
+        let key_algorithm = signing_key.algorithm;
         let (sign_algorithm, sig_alg, evidence_algorithm) =
             sig_profile_for_algorithm(key_algorithm)
                 .map_err(|e| ActionError::Failed(format!("generate_csr: {e}")))?;
@@ -88,9 +86,10 @@ impl Action for GenerateCsrAction {
 
         reporter.log(Icon::Info, format!("Subject: {subject}"))?;
 
-        let spki = SubjectPublicKeyInfoOwned::from_der(public_key_bytes).map_err(|e| {
-            ActionError::Failed(format!("Failed to parse signing key's public key: {e}"))
-        })?;
+        let spki =
+            SubjectPublicKeyInfoOwned::from_der(public_key_bytes.as_bytes()).map_err(|e| {
+                ActionError::Failed(format!("Failed to parse signing key's public key: {e}"))
+            })?;
 
         let attributes: SetOfVec<Attribute> = if let Some(san) =
             typed.san.as_ref().filter(|v| !v.is_empty())
@@ -126,9 +125,10 @@ impl Action for GenerateCsrAction {
         let backend_fingerprint = backend.fingerprint();
         let backend_name = backend.name().to_string();
 
-        if backend_name != key_backend_name {
+        if backend_name != signing_key.backend_name {
             return Err(ActionError::Failed(format!(
-                "Signing key is on backend '{key_backend_name}', but step backend is '{backend_name}'"
+                "Signing key is on backend '{}', but step backend is '{backend_name}'",
+                signing_key.backend_name
             )));
         }
 
@@ -136,7 +136,7 @@ impl Action for GenerateCsrAction {
             ActionError::Failed(format!("Backend '{backend_name}' does not support signing"))
         })?;
 
-        let signature_bytes = sign_backend.sign(&key_id, &info_der, sign_algorithm)?;
+        let signature_bytes = sign_backend.sign(signing_key.key_id, &info_der, sign_algorithm)?;
 
         let csr = CertReq {
             info,

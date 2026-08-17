@@ -19,7 +19,8 @@ use openssl::symm::Cipher;
 use openssl::x509::{X509Builder, X509NameBuilder};
 use rite_sdk::{
     Backend, BackendError, KeyAlgorithm, KeyId, KeyMetadata, KeySpec, KeyStoreBackend,
-    KeyTransportBackend, RandomBackend, SignAlgorithm, SignBackend, WrapAlgorithm, WrappedKey,
+    KeyTransportBackend, PublicKeyDer, RandomBackend, SignAlgorithm, SignBackend, VerifyBackend,
+    WrapAlgorithm, WrappedKey,
 };
 use std::collections::HashMap;
 use zeroize::Zeroizing;
@@ -41,8 +42,8 @@ struct StoredKey {
     label: String,
     /// OpenSSL private key (manages its own memory).
     pkey: PKey<Private>,
-    /// Cached `SubjectPublicKeyInfo` DER for export.
-    public_der: Vec<u8>,
+    /// Cached public key for export.
+    public_der: PublicKeyDer,
 }
 
 impl OpenSslBackend {
@@ -73,9 +74,10 @@ impl OpenSslBackend {
         label: String,
         pkey: PKey<Private>,
     ) -> Result<KeyMetadata, BackendError> {
-        let public_der = pkey
-            .public_key_to_der()
-            .map_err(|e| ossl_err("Public key DER encoding", &e))?;
+        let public_der = PublicKeyDer::new(
+            pkey.public_key_to_der()
+                .map_err(|e| ossl_err("Public key DER encoding", &e))?,
+        )?;
         let mut id_bytes = [0u8; 16];
         openssl::rand::rand_bytes(&mut id_bytes).map_err(|e| ossl_err("Generate key ID", &e))?;
         let key_id = KeyId::new(base16ct::lower::encode_string(&id_bytes));
@@ -129,6 +131,8 @@ impl Backend for OpenSslBackend {
         /// (SHA-256/SHA-384), Ed25519, and (with OpenSSL 3.5+) ML-DSA-44/65/87
         /// signing.
         as_sign_mut: SignBackend,
+        /// Verifies signatures for every algorithm this build can sign with.
+        as_verify_mut: VerifyBackend,
         /// Supports CMS-RSA-GCM and CMS-RSA-CBC key wrapping and unwrapping.
         as_transport_mut: KeyTransportBackend,
         /// Provides cryptographically secure random bytes via the OpenSSL CSPRNG.
@@ -396,43 +400,6 @@ fn verify_with_key<T: HasPublic>(
         .map_err(|e| ossl_err("Verify operation", &e))
 }
 
-/// Read the key algorithm out of an SPKI DER public key.
-///
-/// A public key that arrives as bytes carries no metadata, so callers that must
-/// know what they are holding (to pick a signature algorithm, say) recover it
-/// from the key structure.
-///
-/// # Errors
-///
-/// Returns [`BackendError::UnsupportedAlgorithm`] for a key type this crate
-/// does not handle, and [`BackendError::Other`] when the key cannot be parsed.
-pub fn public_key_algorithm(public_der: &[u8]) -> Result<KeyAlgorithm, BackendError> {
-    let pkey =
-        PKey::public_key_from_der(public_der).map_err(|e| ossl_err("Decode public key", &e))?;
-    key_algorithm_of(&pkey)
-}
-
-/// Read the subject public key out of a DER certificate, as SPKI DER.
-///
-/// A signer's public key usually reaches a ceremony inside a certificate rather
-/// than on its own: `piv_read_certificate` pulls one off the card, and a
-/// counterparty sends one. Unwrapping it here lets a step name the certificate
-/// directly instead of the author extracting the key first.
-///
-/// # Errors
-///
-/// Returns [`BackendError::Other`] when the certificate cannot be parsed or its
-/// public key cannot be re-encoded.
-pub fn certificate_public_key(certificate_der: &[u8]) -> Result<Vec<u8>, BackendError> {
-    let certificate = openssl::x509::X509::from_der(certificate_der)
-        .map_err(|e| ossl_err("Decode certificate", &e))?;
-    certificate
-        .public_key()
-        .map_err(|e| ossl_err("Read certificate public key", &e))?
-        .public_key_to_der()
-        .map_err(|e| ossl_err("Encode certificate public key", &e))
-}
-
 /// Verify a signature against an SPKI DER public key, without a backend.
 ///
 /// The key is required to match `algorithm`. Without that check, a caller who
@@ -530,7 +497,7 @@ impl KeyStoreBackend for OpenSslBackend {
         self.store_key(spec.algorithm, spec.label, pkey)
     }
 
-    fn export_public_key(&self, key_id: &KeyId) -> Result<Vec<u8>, BackendError> {
+    fn export_public_key(&self, key_id: &KeyId) -> Result<PublicKeyDer, BackendError> {
         let key = self.get_key(key_id)?;
         Ok(key.public_der.clone())
     }
@@ -568,19 +535,17 @@ impl SignBackend for OpenSslBackend {
         check_key_accepted("Sign", algorithm, key.algorithm)?;
         sign_with_key(&key.pkey, message, algorithm)
     }
+}
 
-    fn verify(
-        &self,
-        key_id: &KeyId,
+impl VerifyBackend for OpenSslBackend {
+    fn verify_public_key(
+        &mut self,
+        key: &PublicKeyDer,
         message: &[u8],
         signature: &[u8],
         algorithm: SignAlgorithm,
     ) -> Result<bool, BackendError> {
-        let key = self.get_key(key_id)?;
-        check_key_accepted("Verify", algorithm, key.algorithm)?;
-        // The stored private key carries its public half, so there is nothing
-        // to decode: `public_der` exists for export, not for verification.
-        verify_with_key(&key.pkey, message, signature, algorithm)
+        verify_signature(key.as_bytes(), message, signature, algorithm)
     }
 }
 
@@ -605,10 +570,11 @@ fn self_signed_cert(pkey: &PKeyRef<Private>) -> Result<openssl::x509::X509, Back
 /// OpenSSL's CMS encrypt only reads the subject public key from the cert; it never
 /// validates the cert signature. We sign with a throwaway key so we can embed any
 /// public key as the subject without needing the matching private key.
-fn cert_for_public_key(recipient_public_key: &[u8]) -> Result<openssl::x509::X509, BackendError> {
-    let recipient_pub = PKey::public_key_from_der(recipient_public_key)
-        .or_else(|_| PKey::public_key_from_pem(recipient_public_key))
-        .map_err(|e| ossl_err("Parse recipient public key (DER or PEM)", &e))?;
+fn cert_for_public_key(
+    recipient_public_key: &PublicKeyDer,
+) -> Result<openssl::x509::X509, BackendError> {
+    let recipient_pub = PKey::public_key_from_der(recipient_public_key.as_bytes())
+        .map_err(|e| ossl_err("Parse recipient public key", &e))?;
 
     // Generate a throwaway key just for signing the cert.
     // CMS encrypt does NOT verify the cert signature; it only reads the public key.
@@ -781,7 +747,7 @@ impl KeyTransportBackend for OpenSslBackend {
     fn wrap_to_public(
         &mut self,
         key_id: &KeyId,
-        recipient_pub_key: &[u8],
+        recipient_pub_key: &PublicKeyDer,
         algorithm: WrapAlgorithm,
     ) -> Result<WrappedKey, BackendError> {
         let target = self.get_key(key_id)?;
@@ -821,6 +787,26 @@ mod tests {
             policy: KeyPolicy::default(),
             location_hint: None,
         }
+    }
+
+    /// Check a signature against the key's exported public half.
+    ///
+    /// Verification deliberately does not go back through the key object that
+    /// produced the signature. Reusing it would let a bug in export or in SPKI
+    /// encoding pass unnoticed, which is the pairing every consumer of these
+    /// keys actually relies on.
+    fn check(
+        metadata: &KeyMetadata,
+        message: &[u8],
+        signature: &[u8],
+        algorithm: SignAlgorithm,
+    ) -> bool {
+        let public = metadata
+            .public_key
+            .as_ref()
+            .expect("software keys always export a public half");
+        verify_signature(public.as_bytes(), message, signature, algorithm)
+            .expect("verification must run")
     }
 
     #[test]
@@ -881,84 +867,33 @@ mod tests {
         assert_eq!(backend.list_keys().unwrap().len(), 0);
     }
 
+    /// The `VerifyBackend` impl must agree with the free function it wraps.
+    ///
+    /// Everything else here checks signatures through `verify_signature`
+    /// directly, so without this the trait impl the runtime dispatches to would
+    /// go unexercised in this crate.
     #[test]
-    fn test_sign_and_verify_pkcs1() {
+    fn verifies_through_the_backend_capability() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let metadata = backend
-            .generate_key(spec(KeyAlgorithm::Rsa2048, "signing-key"))
+            .generate_key(spec(KeyAlgorithm::EcdsaP256, "signing-key"))
             .unwrap();
-
-        let message = b"Hello, world!";
-        let signature = backend
-            .sign(&metadata.key_id, message, SignAlgorithm::RsaPkcs1Sha256)
-            .unwrap();
-
-        let valid = backend
-            .verify(
-                &metadata.key_id,
-                message,
-                &signature,
-                SignAlgorithm::RsaPkcs1Sha256,
-            )
-            .unwrap();
-        assert!(valid);
-
-        // Wrong message should fail.
-        let invalid = backend
-            .verify(
-                &metadata.key_id,
-                b"Different message",
-                &signature,
-                SignAlgorithm::RsaPkcs1Sha256,
-            )
-            .unwrap();
-        assert!(!invalid);
-    }
-
-    #[test]
-    fn test_sign_and_verify_pss() {
-        let mut backend = OpenSslBackend::try_new("test").unwrap();
-        let metadata = backend
-            .generate_key(spec(KeyAlgorithm::Rsa2048, "signing-key"))
-            .unwrap();
-
-        let message = b"Hello, world!";
-        let signature = backend
-            .sign(&metadata.key_id, message, SignAlgorithm::RsaPssSha256)
-            .unwrap();
-
-        let valid = backend
-            .verify(
-                &metadata.key_id,
-                message,
-                &signature,
-                SignAlgorithm::RsaPssSha256,
-            )
-            .unwrap();
-        assert!(valid);
-    }
-
-    #[test]
-    fn test_sign_and_verify_ecdsa_p256() {
-        let mut backend = OpenSslBackend::try_new("test").unwrap();
-        let metadata = backend
-            .generate_key(spec(KeyAlgorithm::EcdsaP256, "signing-key-p256"))
-            .unwrap();
-
-        let message = b"Hello, ECDSA!";
+        let message = b"ceremony transcript";
         let signature = backend
             .sign(&metadata.key_id, message, SignAlgorithm::EcdsaSha256)
             .unwrap();
+        let public = metadata.public_key.clone().unwrap();
 
-        let valid = backend
-            .verify(
-                &metadata.key_id,
-                message,
-                &signature,
-                SignAlgorithm::EcdsaSha256,
-            )
-            .unwrap();
-        assert!(valid);
+        assert!(
+            backend
+                .verify_public_key(&public, message, &signature, SignAlgorithm::EcdsaSha256)
+                .unwrap()
+        );
+        assert!(
+            !backend
+                .verify_public_key(&public, b"tampered", &signature, SignAlgorithm::EcdsaSha256)
+                .unwrap()
+        );
     }
 
     /// Every signature family the backend claims must round-trip through
@@ -986,22 +921,13 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{key_algorithm} signs with {algorithm}: {e}"));
 
             assert!(
-                backend
-                    .verify(&metadata.key_id, message, &signature, algorithm)
-                    .unwrap(),
+                check(&metadata, message, &signature, algorithm),
                 "{key_algorithm} must verify its own {algorithm} signature"
             );
             assert!(
-                !backend
-                    .verify(&metadata.key_id, b"tampered", &signature, algorithm)
-                    .unwrap(),
+                !check(&metadata, b"tampered", &signature, algorithm),
                 "{key_algorithm} must reject a {algorithm} signature over other data"
             );
-
-            // The same signature must check out through the backend-free entry
-            // point, which is what actions and CSR checking use.
-            let public_der = metadata.public_key.as_ref().unwrap();
-            assert!(verify_signature(public_der, message, &signature, algorithm).unwrap());
         }
     }
 
@@ -1020,8 +946,13 @@ mod tests {
             .unwrap();
         let public_der = metadata.public_key.as_ref().unwrap();
 
-        let err = verify_signature(public_der, message, &signature, SignAlgorithm::EcdsaSha256)
-            .unwrap_err();
+        let err = verify_signature(
+            public_der.as_bytes(),
+            message,
+            &signature,
+            SignAlgorithm::EcdsaSha256,
+        )
+        .unwrap_err();
         assert!(
             matches!(err, BackendError::UnsupportedAlgorithm(_)),
             "{err:?}"
@@ -1042,15 +973,12 @@ mod tests {
             .sign(&metadata.key_id, message, SignAlgorithm::RsaPkcs1Sha256)
             .unwrap();
 
-        let valid = backend
-            .verify(
-                &metadata.key_id,
-                message,
-                &signature,
-                SignAlgorithm::RsaPkcs1Sha256,
-            )
-            .unwrap();
-        assert!(valid);
+        assert!(check(
+            &metadata,
+            message,
+            &signature,
+            SignAlgorithm::RsaPkcs1Sha256
+        ));
     }
 
     /// A key of the wrong family is refused before any OpenSSL primitive is
@@ -1264,33 +1192,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_wrap_key_to_public_pem() {
-        let mut backend = OpenSslBackend::try_new("test").unwrap();
-
-        let recipient = backend
-            .generate_key(spec(KeyAlgorithm::Rsa2048, "recipient"))
-            .unwrap();
-        let recipient_pub_der = backend.export_public_key(&recipient.key_id).unwrap();
-        let recipient_pkey = openssl::pkey::PKey::public_key_from_der(&recipient_pub_der).unwrap();
-        let recipient_pub_pem = recipient_pkey.public_key_to_pem().unwrap();
-
-        let target = backend
-            .generate_key(spec(KeyAlgorithm::Rsa2048, "target"))
-            .unwrap();
-        let original_pub = backend.export_public_key(&target.key_id).unwrap();
-
-        let wrapped = backend
-            .wrap_to_public(&target.key_id, &recipient_pub_pem, WrapAlgorithm::CmsRsaCbc)
-            .unwrap();
-        let unwrapped = backend
-            .unwrap(&wrapped, &recipient.key_id, "unwrapped")
-            .unwrap();
-
-        let unwrapped_pub = backend.export_public_key(&unwrapped.key_id).unwrap();
-        assert_eq!(original_pub, unwrapped_pub);
-    }
-
     // EC key-transport round-trip tests.
     //
     // All three combinations of (content key type, KEK type) are exercised:
@@ -1474,9 +1375,9 @@ mod tests {
             // SPKI wraps the raw public key in an AlgorithmIdentifier header,
             // so the encoding is a little longer than the FIPS 204 figure.
             assert!(
-                public_key.len() > public_len,
+                public_key.as_bytes().len() > public_len,
                 "{key_algorithm} SPKI ({}) should exceed the raw public key ({public_len})",
-                public_key.len()
+                public_key.as_bytes().len()
             );
 
             let message = b"ceremony transcript digest";
@@ -1486,15 +1387,11 @@ mod tests {
             assert_eq!(signature.len(), signature_len, "{key_algorithm}");
 
             assert!(
-                backend
-                    .verify(&metadata.key_id, message, &signature, sign_algorithm)
-                    .unwrap(),
+                check(&metadata, message, &signature, sign_algorithm),
                 "{key_algorithm} signature should verify"
             );
             assert!(
-                !backend
-                    .verify(&metadata.key_id, b"tampered", &signature, sign_algorithm)
-                    .unwrap(),
+                !check(&metadata, b"tampered", &signature, sign_algorithm),
                 "{key_algorithm} signature should not verify against a different message"
             );
         }
@@ -1520,16 +1417,8 @@ mod tests {
             .unwrap();
 
         assert_ne!(first, second);
-        assert!(
-            backend
-                .verify(&metadata.key_id, message, &first, SignAlgorithm::MlDsa65)
-                .unwrap()
-        );
-        assert!(
-            backend
-                .verify(&metadata.key_id, message, &second, SignAlgorithm::MlDsa65)
-                .unwrap()
-        );
+        assert!(check(&metadata, message, &first, SignAlgorithm::MlDsa65));
+        assert!(check(&metadata, message, &second, SignAlgorithm::MlDsa65));
     }
 
     /// Each parameter set is its own signature scheme, so a request naming a

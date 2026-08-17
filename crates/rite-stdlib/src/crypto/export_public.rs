@@ -3,7 +3,7 @@
 use rite_model::{ActionType, StepFact, StepInputs};
 use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    KeyFormat, Reporter, StepInfo, StepResult, compute_fingerprint, resolve_backend_key,
+    Reporter, StepInfo, StepResult, compute_fingerprint, resolve_backend_key,
 };
 use rite_sdk::Backend;
 use serde_json::json;
@@ -40,36 +40,31 @@ impl Action for ExportPublicAction {
         })?;
         let artifact_id = source_ref.artifact_id();
 
-        let (backend_name, key_id, _algorithm, cached_pub_key) =
-            resolve_backend_key(ctx.artifacts, &artifact_id).map_err(|_| {
-                ActionError::Failed("export_public requires BackendKey artifact".to_string())
-            })?;
+        let source_key = resolve_backend_key(ctx.artifacts, &artifact_id).map_err(|_| {
+            ActionError::Failed("export_public requires BackendKey artifact".to_string())
+        })?;
+        let owner = source_key.backend_name;
 
-        let public_key_bytes = if let Some(pub_key) = cached_pub_key {
+        let exported = if let Some(pub_key) = source_key.public_key {
             pub_key.clone()
         } else {
             let backend_mut = backend.ok_or_else(|| {
                 ActionError::Failed("Backend required to export public key".to_string())
             })?;
-            if backend_mut.name() != backend_name {
+            if backend_mut.name() != owner {
                 return Err(ActionError::Failed(format!(
-                    "Key owned by backend '{backend_name}', but current backend is '{}'",
+                    "Key owned by backend '{owner}', but current backend is '{}'",
                     backend_mut.name()
                 )));
             }
             let keystore = backend_mut.as_keystore_mut().ok_or_else(|| {
-                ActionError::Failed(format!(
-                    "Backend '{backend_name}' does not support key export"
-                ))
+                ActionError::Failed(format!("Backend '{owner}' does not support key export"))
             })?;
-            keystore.export_public_key(key_id)?
+            keystore.export_public_key(source_key.key_id)?
         };
 
-        let fingerprint = compute_fingerprint(&public_key_bytes);
-        let public_key = ArtifactValue::PublicKey {
-            key_data: public_key_bytes,
-            format: KeyFormat::Pem,
-        };
+        let fingerprint = compute_fingerprint(exported.as_bytes());
+        let public_key = ArtifactValue::PublicKey(exported);
 
         reporter.fact(StepFact::BackendOperation {
             step: step.id.clone(),

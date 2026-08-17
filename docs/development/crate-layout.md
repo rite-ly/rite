@@ -38,7 +38,7 @@ flowchart TD
 
 | Crate           | Purpose                                                                                                                                              |
 |-----------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `rite-sdk`      | Backend traits and key-material types. The boundary any external backend implements against.                                                         |
+| `rite-sdk`      | Backend traits and key-material types (`PublicKeyDer`, `CertificateDer`). The boundary any external backend implements against.                       |
 | `rite-model`    | DSL IR (`Ceremony`, `Step`, `Prompt`, …) and the durable transcript schema (`StepFact`, `ResponseRecord`, …). Carries no executor or channel types.  |
 | `rite-resolver` | YAML resolution and lowering, diagnostics, parameter checks.                                                                                         |
 | `rite-runtime`  | Channel protocol, executor, reporter, transcript sink, action trait and registry.                                                                    |

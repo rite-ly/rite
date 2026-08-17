@@ -60,7 +60,7 @@ impl Action for UnwrapKeyAction {
         let unwrapping_key_id = unwrapping_key_ref.artifact_id();
         let wrapped_data_id = wrapped_data_ref.artifact_id();
 
-        let (key_backend, unwrapping_key_keyid, _, _) =
+        let unwrapping_key =
             resolve_backend_key(ctx.artifacts, &unwrapping_key_id).map_err(|e| {
                 ActionError::Failed(format!(
                     "Unwrapping key '{}' must be a BackendKey: {e}",
@@ -93,9 +93,10 @@ impl Action for UnwrapKeyAction {
         let backend_name = backend_mut.name().to_string();
         let backend_fingerprint = backend_mut.fingerprint();
 
-        if backend_name != key_backend {
+        if backend_name != unwrapping_key.backend_name {
             return Err(ActionError::Failed(format!(
-                "Unwrapping key owned by backend '{key_backend}', but current backend is '{backend_name}'"
+                "Unwrapping key owned by backend '{}', but current backend is '{backend_name}'",
+                unwrapping_key.backend_name
             )));
         }
 
@@ -111,7 +112,7 @@ impl Action for UnwrapKeyAction {
             data: wrapped_data,
             recipient_hint: None,
         };
-        let key_metadata = unwrap_backend.unwrap(&wrapped, unwrapping_key_keyid, &label)?;
+        let key_metadata = unwrap_backend.unwrap(&wrapped, unwrapping_key.key_id, &label)?;
 
         reporter.fact(StepFact::BackendOperation {
             step: step.id.clone(),

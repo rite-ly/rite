@@ -2,16 +2,7 @@
 
 use base64ct::{Base64, Encoding};
 
-use rite_sdk::{KeyAlgorithm, KeyId, WrapAlgorithm};
-
-/// Output format for public keys.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyFormat {
-    /// DER binary format.
-    Der,
-    /// PEM text format.
-    Pem,
-}
+use rite_sdk::{CertificateDer, KeyAlgorithm, KeyId, PublicKeyDer, WrapAlgorithm};
 
 /// Runtime representation of an artifact.
 #[derive(Debug)]
@@ -25,8 +16,8 @@ pub enum ArtifactValue {
         key_id: KeyId,
         /// Algorithm for type checking and evidence.
         algorithm: KeyAlgorithm,
-        /// Public key in SPKI DER format (None for non-exportable HSM keys).
-        public_key: Option<Vec<u8>>,
+        /// Public key (None for non-exportable HSM keys).
+        public_key: Option<PublicKeyDer>,
     },
     /// Wrapped key (CMS `EnvelopedData`, AES Key Wrap, or RSA-OAEP).
     WrappedKey {
@@ -36,12 +27,7 @@ pub enum ArtifactValue {
         algorithm: WrapAlgorithm,
     },
     /// Exported public key.
-    PublicKey {
-        /// Public key bytes (SPKI DER format).
-        key_data: Vec<u8>,
-        /// Output format.
-        format: KeyFormat,
-    },
+    PublicKey(PublicKeyDer),
     /// Binary content from files or inline data (documents, crypto materials).
     /// Used for hashing, cryptographic operations, and verification.
     Bytes(Vec<u8>),
@@ -50,12 +36,8 @@ pub enum ArtifactValue {
     /// Used in messages and prompts when referencing physical objects.
     Text(String),
 
-    /// X.509 certificate produced by `issue_certificate` action.
-    /// Stored as DER bytes; displayed and serialized as PEM.
-    Certificate {
-        /// Certificate bytes in DER format.
-        der: Vec<u8>,
-    },
+    /// X.509 certificate. Stored as DER; displayed and serialized as PEM.
+    Certificate(CertificateDer),
 }
 
 impl std::fmt::Display for ArtifactValue {
@@ -75,7 +57,7 @@ impl std::fmt::Display for ArtifactValue {
                         f,
                         "BackendKey(backend={backend_name}, key_id={}, algorithm={algorithm:?})\n{}",
                         key_id.as_str(),
-                        encode_pem("PUBLIC KEY", pub_key)
+                        encode_pem("PUBLIC KEY", pub_key.as_bytes())
                     )
                 } else {
                     write!(
@@ -93,20 +75,9 @@ impl std::fmt::Display for ArtifactValue {
                 let pem = encode_pem(label, data);
                 write!(f, "{pem}")
             }
-            ArtifactValue::PublicKey {
-                key_data,
-                format: KeyFormat::Pem,
-            } => {
-                let pem = encode_pem("PUBLIC KEY", key_data);
+            ArtifactValue::PublicKey(key) => {
+                let pem = encode_pem("PUBLIC KEY", key.as_bytes());
                 write!(f, "{pem}")
-            }
-            ArtifactValue::PublicKey {
-                key_data,
-                format: KeyFormat::Der,
-            } => {
-                // DER is binary, output as base64
-                let encoded = base64_encode(key_data);
-                write!(f, "{encoded}")
             }
             // Materials
             ArtifactValue::Bytes(bytes) => {
@@ -117,8 +88,8 @@ impl std::fmt::Display for ArtifactValue {
                 write!(f, "Text({text})")
             }
 
-            ArtifactValue::Certificate { der } => {
-                let pem = encode_pem("CERTIFICATE", der);
+            ArtifactValue::Certificate(certificate) => {
+                let pem = encode_pem("CERTIFICATE", certificate.as_bytes());
                 write!(f, "{pem}")
             }
         }
@@ -185,7 +156,6 @@ impl ArtifactValue {
     /// - text/plain: Text artifacts
     ///
     /// Returns an error if an unsupported format is specified.
-    #[allow(clippy::too_many_lines)]
     pub fn serialize(&self, format: Option<&str>) -> Result<SerializedArtifact, String> {
         match self {
             ArtifactValue::WrappedKey { data, algorithm } => {
@@ -219,60 +189,12 @@ impl ArtifactValue {
                 }
             }
 
-            ArtifactValue::PublicKey { key_data, .. } => {
-                let fmt = format.unwrap_or("pem");
-                match fmt {
-                    "pem" => Ok(SerializedArtifact {
-                        bytes: encode_pem("PUBLIC KEY", key_data).into_bytes(),
-                        mime_type: Some("application/x-pem-file".to_string()),
-                        extension: "pem",
-                    }),
-                    "der" => Ok(SerializedArtifact {
-                        bytes: key_data.clone(),
-                        // Note: Using x509-ca-cert as conventional type for DER public keys
-                        // No official MIME type exists for bare SPKI DER
-                        mime_type: Some("application/x-x509-ca-cert".to_string()),
-                        extension: "der",
-                    }),
-                    "base64" => Ok(SerializedArtifact {
-                        bytes: base64_encode(key_data).into_bytes(),
-                        mime_type: Some("text/plain".to_string()),
-                        extension: "txt",
-                    }),
-                    _ => Err(format!(
-                        "Invalid format '{fmt}' for PublicKey (valid: pem, der, base64)"
-                    )),
-                }
-            }
+            ArtifactValue::PublicKey(key) => serialize_der(key.as_bytes(), &PUBLIC_KEY, format),
 
-            ArtifactValue::BackendKey { public_key, .. } => {
-                if let Some(pub_key) = public_key {
-                    // Public key is available - serialize like PublicKey
-                    let fmt = format.unwrap_or("pem");
-                    match fmt {
-                        "pem" => Ok(SerializedArtifact {
-                            bytes: encode_pem("PUBLIC KEY", pub_key).into_bytes(),
-                            mime_type: Some("application/x-pem-file".to_string()),
-                            extension: "pem",
-                        }),
-                        "der" => Ok(SerializedArtifact {
-                            bytes: pub_key.clone(),
-                            mime_type: Some("application/x-x509-ca-cert".to_string()),
-                            extension: "der",
-                        }),
-                        "base64" => Ok(SerializedArtifact {
-                            bytes: base64_encode(pub_key).into_bytes(),
-                            mime_type: Some("text/plain".to_string()),
-                            extension: "txt",
-                        }),
-                        _ => Err(format!(
-                            "Invalid format '{fmt}' for BackendKey (valid: pem, der, base64)"
-                        )),
-                    }
-                } else {
-                    Err("Cannot export public key from non-exportable backend key".to_string())
-                }
-            }
+            ArtifactValue::BackendKey { public_key, .. } => match public_key {
+                Some(key) => serialize_der(key.as_bytes(), &PUBLIC_KEY, format),
+                None => Err("Cannot export public key from non-exportable backend key".to_string()),
+            },
 
             ArtifactValue::Bytes(bytes) => Ok(SerializedArtifact {
                 bytes: bytes.clone(),
@@ -285,25 +207,64 @@ impl ArtifactValue {
                 extension: "txt",
             }),
 
-            ArtifactValue::Certificate { der } => {
-                let fmt = format.unwrap_or("pem");
-                match fmt {
-                    "pem" => Ok(SerializedArtifact {
-                        bytes: encode_pem("CERTIFICATE", der).into_bytes(),
-                        mime_type: Some("application/x-pem-file".to_string()),
-                        extension: "pem",
-                    }),
-                    "der" => Ok(SerializedArtifact {
-                        bytes: der.clone(),
-                        mime_type: Some("application/pkix-cert".to_string()),
-                        extension: "der",
-                    }),
-                    _ => Err(format!(
-                        "Invalid format '{fmt}' for Certificate (valid: pem, der)"
-                    )),
-                }
+            ArtifactValue::Certificate(certificate) => {
+                serialize_der(certificate.as_bytes(), &CERTIFICATE, format)
             }
         }
+    }
+}
+
+/// How one kind of DER artifact renders.
+///
+/// Public keys and certificates take the same three formats and differ only in
+/// their PEM label, their DER media type, and how they are named when a format
+/// is refused, so [`serialize_der`] holds the ladder once.
+struct DerArtifact {
+    pem_label: &'static str,
+    der_mime: &'static str,
+    name: &'static str,
+}
+
+/// x509-ca-cert by convention: no official media type exists for bare SPKI DER.
+const PUBLIC_KEY: DerArtifact = DerArtifact {
+    pem_label: "PUBLIC KEY",
+    der_mime: "application/x-x509-ca-cert",
+    name: "a public key",
+};
+
+const CERTIFICATE: DerArtifact = DerArtifact {
+    pem_label: "CERTIFICATE",
+    der_mime: "application/pkix-cert",
+    name: "a certificate",
+};
+
+/// Render DER material in the format a ceremony asked for, PEM by default.
+fn serialize_der(
+    der: &[u8],
+    artifact: &DerArtifact,
+    format: Option<&str>,
+) -> Result<SerializedArtifact, String> {
+    let fmt = format.unwrap_or("pem");
+    match fmt {
+        "pem" => Ok(SerializedArtifact {
+            bytes: encode_pem(artifact.pem_label, der).into_bytes(),
+            mime_type: Some("application/x-pem-file".to_string()),
+            extension: "pem",
+        }),
+        "der" => Ok(SerializedArtifact {
+            bytes: der.to_vec(),
+            mime_type: Some(artifact.der_mime.to_string()),
+            extension: "der",
+        }),
+        "base64" => Ok(SerializedArtifact {
+            bytes: base64_encode(der).into_bytes(),
+            mime_type: Some("text/plain".to_string()),
+            extension: "txt",
+        }),
+        _ => Err(format!(
+            "Invalid format '{fmt}' for {} (valid: pem, der, base64)",
+            artifact.name
+        )),
     }
 }
 
@@ -311,13 +272,18 @@ impl ArtifactValue {
 mod tests {
     use super::*;
 
+    /// A P-256 public key in SPKI DER, so the artifact holds a real one.
+    ///
+    /// Reproduce with:
+    /// `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 |
+    ///  openssl pkey -pubout -outform DER`
+    const P256_SPKI: &[u8] = include_bytes!("testdata/p256.spki.der");
+
     #[test]
     fn test_public_key_format_validation() {
-        let public_der = b"PUBLIC_KEY_DER_DATA".to_vec();
-        let public_key = ArtifactValue::PublicKey {
-            key_data: public_der.clone(),
-            format: KeyFormat::Pem,
-        };
+        let public_der = P256_SPKI.to_vec();
+        let public_key =
+            ArtifactValue::PublicKey(PublicKeyDer::new(public_der.clone()).expect("valid SPKI"));
 
         // Test default format (PEM)
         let serialized = public_key.serialize(None).unwrap();

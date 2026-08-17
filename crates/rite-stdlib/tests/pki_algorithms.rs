@@ -133,7 +133,7 @@ fn issue_self_signed_root(algorithm: &str) -> Vec<u8> {
         .map(|(_, v)| v)
         .expect("certificate artifact")
     {
-        ArtifactValue::Certificate { der } => der,
+        ArtifactValue::Certificate(certificate) => certificate.as_bytes().to_vec(),
         other => panic!("expected a certificate artifact, got {other:?}"),
     }
 }

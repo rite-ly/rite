@@ -45,15 +45,13 @@ impl Action for SignDataAction {
         let data_ref = step.required_named_input("data", "sign_data")?;
 
         let key_id = key_ref.artifact_id();
-        let (key_backend_name, backend_key_id, key_algorithm, _) =
-            resolve_backend_key(ctx.artifacts, &key_id).map_err(|e| {
-                ActionError::Failed(format!(
-                    "sign_data input 'key' ('{}') must be a backend-managed key: {e}",
-                    key_ref.display_name()
-                ))
-            })?;
-        let backend_key_id = backend_key_id.clone();
-
+        let key = resolve_backend_key(ctx.artifacts, &key_id).map_err(|e| {
+            ActionError::Failed(format!(
+                "sign_data input 'key' ('{}') must be a backend-managed key: {e}",
+                key_ref.display_name()
+            ))
+        })?;
+        let key_algorithm = key.algorithm;
         let algorithm = resolve_sign_algorithm(typed.algorithm.as_deref(), key_algorithm)?;
 
         let data_id = data_ref.artifact_id();
@@ -80,8 +78,8 @@ impl Action for SignDataAction {
         let backend_fingerprint = backend.fingerprint();
 
         let sign_backend =
-            require_sign_backend(backend, key_backend_name, &key_ref.display_name())?;
-        let signature = sign_backend.sign(&backend_key_id, &data, algorithm)?;
+            require_sign_backend(backend, key.backend_name, &key_ref.display_name())?;
+        let signature = sign_backend.sign(key.key_id, &data, algorithm)?;
 
         let signature_fingerprint = compute_fingerprint(&signature);
         // The step's completion message is shown on its own, so it carries the

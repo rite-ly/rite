@@ -5,7 +5,7 @@ use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
     Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
 };
-use rite_sdk::{Backend, CertRef};
+use rite_sdk::{Backend, CertRef, CertificateDer};
 use serde_json::json;
 
 use super::params::PivReadCertificateParams;
@@ -91,7 +91,9 @@ impl Action for PivReadCertificateAction {
             Ok(StepResult::completed_with_artifact(
                 "Certificate read from PIV slot",
                 produces.clone(),
-                ArtifactValue::Bytes(cert_der),
+                ArtifactValue::Certificate(CertificateDer::new(cert_der).map_err(|e| {
+                    ActionError::Failed(format!("PIV slot holds an unreadable certificate: {e}"))
+                })?),
             ))
         } else {
             Ok(StepResult::completed("Certificate read from PIV slot"))
@@ -140,7 +142,12 @@ mod tests {
         assert_eq!(result.artifacts.len(), 1);
         let (id, value) = result.artifacts.first().expect("one produced artifact");
         assert_eq!(id.as_str(), "cert");
-        assert!(matches!(value, ArtifactValue::Bytes(b) if b == b"MOCK_CERTIFICATE_DER"));
+        // A certificate, not loose bytes: every consumer downstream reads a key
+        // or a subject out of it, and typing it here is what makes that work.
+        let ArtifactValue::Certificate(certificate) = value else {
+            panic!("expected a certificate artifact, got {value:?}");
+        };
+        assert!(certificate.public_key().is_ok());
 
         assert!(harness.facts().iter().any(|f| matches!(
             f,

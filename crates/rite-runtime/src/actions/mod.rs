@@ -2,13 +2,13 @@
 //!
 //! The [`Action`](crate::Action) trait itself lives in [`crate::runner`];
 //! this module hosts the supporting data types ([`ActionCategory`],
-//! [`ActionMetadata`], [`ArtifactValue`], [`KeyFormat`]).
+//! [`ActionMetadata`], [`ArtifactValue`]).
 
 mod types;
 
 use rite_model::ActionType;
 
-pub use types::{ArtifactValue, KeyFormat};
+pub use types::ArtifactValue;
 
 /// Category of an action, determines how the frontend presents it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

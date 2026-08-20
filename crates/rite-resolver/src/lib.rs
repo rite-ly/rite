@@ -478,7 +478,7 @@ sections:
         let (_, _, diags) = analyze_str(None, yaml);
         let diag = diags
             .iter()
-            .find(|d| d.message.contains("Invalid reference syntax"))
+            .find(|d| d.message.contains("Invalid reference '${xxxx}'"))
             .expect("should have an InvalidReferenceSyntax diagnostic");
         let span = diag.span.expect("diagnostic must have a span");
 
@@ -817,5 +817,192 @@ output:
             &ResolveWarning::ArtifactNotOutput(ArtifactId::new("my_artifact")),
         );
         assert_eq!(text, "${artifact.my_artifact}");
+    }
+
+    /// A reference whose namespace does not exist used to resolve to nothing:
+    /// the input was dropped, the value kept as literal text, and the ceremony
+    /// reported valid. Every field that takes one is covered here.
+    mod unknown_namespaces {
+        use super::*;
+
+        /// Build a ceremony with `body` spliced into the one step that needs it.
+        fn ceremony_with(step_fields: &str) -> String {
+            format!(
+                r#"
+version: "0.2"
+name: "Test"
+roles:
+  op:
+    title: "Operator"
+parameters:
+  outdir:
+    type: string
+    default: "out"
+materials:
+  manifest:
+    type: digital
+acts:
+  - id: setup
+    name: "Setup"
+sections:
+  main:
+    act: setup
+    steps:
+      gen:
+        action: generate_keypair
+        backend: openssl
+        creates: k
+        with:
+          algorithm: ECDSA-P256
+      target:
+{step_fields}
+backends:
+  openssl:
+    provider: openssl
+"#
+            )
+        }
+
+        /// Resolve `step_fields` and return the single reference diagnostic it
+        /// produces, or panic naming what came back instead.
+        fn only_reference_error(step_fields: &str) -> (String, String) {
+            let yaml = ceremony_with(step_fields);
+            let result = resolve(&yaml, None);
+            let found: Vec<_> = result
+                .errors
+                .iter()
+                .filter_map(|e| match e {
+                    ResolveError::InvalidReferenceSyntax { field, reason, .. } => {
+                        Some((field.clone(), reason.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                found.len(),
+                1,
+                "expected one reference error, got {:?}",
+                result.errors
+            );
+            found.into_iter().next().expect("one error")
+        }
+
+        #[test]
+        fn a_named_input_is_reported_rather_than_dropped() {
+            let (field, reason) = only_reference_error(
+                r#"        action: sign_data
+        backend: openssl
+        creates: sig
+        reads:
+          key: "${artifact.k}"
+          data: "${nonsense.whatever}""#,
+            );
+            assert_eq!(field, "reads.data");
+            assert!(reason.contains("unknown namespace 'nonsense'"), "{reason}");
+        }
+
+        #[test]
+        fn a_single_input_is_reported() {
+            let (field, reason) = only_reference_error(
+                r#"        action: export_public
+        creates: pub
+        reads: "${nonsense.k}""#,
+            );
+            assert_eq!(field, "reads");
+            assert!(reason.contains("unknown namespace 'nonsense'"), "{reason}");
+        }
+
+        #[test]
+        fn a_with_value_is_reported_rather_than_kept_as_text() {
+            let (field, reason) = only_reference_error(
+                r#"        action: confirm
+        with:
+          prompt: "write to ${paramm.outdir}""#,
+            );
+            assert_eq!(field, "with.prompt");
+            assert!(reason.contains("unknown namespace 'paramm'"), "{reason}");
+        }
+
+        #[test]
+        fn a_description_is_reported() {
+            let (field, reason) = only_reference_error(
+                r#"        action: confirm
+        description: "check ${material.manifest} first"
+        with:
+          prompt: "ok?""#,
+            );
+            assert_eq!(field, "description");
+            assert!(reason.contains("no 'material' namespace"), "{reason}");
+        }
+
+        #[test]
+        fn a_creates_value_is_reported_rather_than_becoming_a_filename() {
+            let (field, reason) = only_reference_error(
+                r#"        action: generate_keypair
+        backend: openssl
+        creates: "${artifac.other}"
+        with:
+          algorithm: ECDSA-P256"#,
+            );
+            assert_eq!(field, "creates");
+            assert!(reason.contains("unknown namespace 'artifac'"), "{reason}");
+        }
+
+        #[test]
+        fn a_non_string_input_is_reported() {
+            let (field, reason) = only_reference_error(
+                r#"        action: sign_data
+        backend: openssl
+        creates: sig
+        reads:
+          key: "${artifact.k}"
+          data: 5"#,
+            );
+            assert_eq!(field, "reads.data");
+            assert!(reason.contains("found integer"), "{reason}");
+        }
+
+        #[test]
+        fn a_pipeline_is_refused_where_one_reference_belongs() {
+            let (field, reason) = only_reference_error(
+                r#"        action: sign_data
+        backend: openssl
+        creates: sig
+        reads:
+          key: "${artifact.k}"
+          data: "${artifact.k | sha256}""#,
+            );
+            assert_eq!(field, "reads.data");
+            assert!(reason.contains("not a pipeline"), "{reason}");
+        }
+
+        #[test]
+        fn a_valid_ceremony_still_resolves() {
+            let yaml = ceremony_with(
+                r#"        action: confirm
+        role: "${role.op}"
+        description: "hash is ${artifact.k | sha256 | hex}"
+        with:
+          prompt: "write to ${param.outdir}, reading ${artifact.manifest}""#,
+            );
+            let result = resolve(&yaml, None);
+            assert!(!result.is_err(), "unexpected errors: {:?}", result.errors);
+        }
+
+        #[test]
+        fn the_diagnostic_underlines_the_occurrence_inside_a_longer_value() {
+            let yaml = ceremony_with(
+                r#"        action: confirm
+        with:
+          prompt: "write to ${paramm.outdir} now""#,
+            );
+            let (_, _, diags) = analyze_str(None, &yaml);
+            let diag = diags
+                .iter()
+                .find(|d| d.message.contains("Invalid reference"))
+                .expect("should have a reference diagnostic");
+            let span = diag.span.expect("diagnostic must have a span");
+            assert_eq!(span_text(&yaml, span), "${paramm.outdir}");
+        }
     }
 }

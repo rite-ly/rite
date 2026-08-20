@@ -179,7 +179,9 @@ fn expression_completions(
     cursor_line: u32,
     span_map: &SpanMap,
 ) -> Vec<CompletionItem> {
-    // Build (category, id) pairs from the SpanMap.
+    // Build (namespace, id) pairs from the SpanMap. The namespace is the one a
+    // ceremony writes, so a material is offered as `artifact.<id>`: it is read
+    // the same way a step output is, and there is no `material` namespace.
     let mut candidates: Vec<(&str, &str)> = Vec::new();
     for id in span_map.roles.keys() {
         candidates.push(("role", id.as_str()));
@@ -188,7 +190,10 @@ fn expression_completions(
         candidates.push(("param", id.as_str()));
     }
     for id in span_map.materials.keys() {
-        candidates.push(("material", id.as_str()));
+        candidates.push(("artifact", id.as_str()));
+    }
+    for id in span_map.artifacts.keys() {
+        candidates.push(("artifact", id.as_str()));
     }
 
     // The replace range covers only the text after `${` up to the cursor.
@@ -372,7 +377,8 @@ mod tests {
         assert_eq!(
             sorted_labels(&items),
             [
-                "material.card",
+                // The `card` material, offered under the namespace that reads it.
+                "artifact.card",
                 "param.threshold",
                 "role.operator",
                 "role.witness"

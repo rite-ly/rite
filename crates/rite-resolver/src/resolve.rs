@@ -186,7 +186,9 @@ impl ResolveContext {
 
             // Resolve act reference if present
             let act = section.act.as_ref().map(|a| {
-                let act_id = ActId::new(extract_name(a));
+                let name =
+                    self.extract_name_checked(a, &ReferenceContext::Section(id.clone()), "act");
+                let act_id = ActId::new(name);
                 if !self.acts.contains(&act_id) {
                     self.add_error(ResolveError::UnknownAct {
                         act: act_id.clone(),
@@ -445,7 +447,7 @@ impl ResolveContext {
 
         for (section_id_str, section) in &ceremony.sections {
             let section_id = SectionId::new(section_id_str);
-            let act_id = section.act.as_ref().map(|a| ActId::new(extract_name(a)));
+            let act_id = self.sections.get(&section_id).and_then(|s| s.act.clone());
 
             for (step_id_str, step) in &section.steps {
                 let id = StepId::new(step_id_str);
@@ -498,30 +500,20 @@ impl ResolveContext {
 
                 let (reads, reads_resolved) = self.resolve_inputs(step.reads.as_ref(), &id);
 
-                let creates = step.creates.as_ref().and_then(|p| {
-                    let artifact_id = ArtifactId::new(extract_name(p));
-                    if let Err(e) = rite_model::validate_component(artifact_id.as_str()) {
-                        self.add_error(ResolveError::UnsafeArtifactId {
-                            id: artifact_id.clone(),
-                            reason: e.to_string(),
-                        });
-                        return None;
-                    }
-                    self.produced_artifacts
-                        .insert(artifact_id.clone(), id.clone());
-                    Some(artifact_id)
-                });
+                let creates = self.resolve_creates(step.creates.as_deref(), &id);
 
                 let with_json = step
                     .with
                     .clone()
                     .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+                self.validate_expressions(&with_json, &id, "with");
                 let with = parse_expr_value(&with_json);
 
-                let description = step
-                    .description
-                    .as_ref()
-                    .map(|desc| parse_expr_value(&serde_json::Value::String(desc.clone())));
+                let description = step.description.as_ref().map(|desc| {
+                    let desc = serde_json::Value::String(desc.clone());
+                    self.validate_expressions(&desc, &id, "description");
+                    parse_expr_value(&desc)
+                });
 
                 let retry = self.resolve_retry(&id, step);
 
@@ -612,36 +604,157 @@ impl ResolveContext {
         }
     }
 
-    fn resolve_role_ref(&mut self, role_ref: &str, context: &ReferenceContext) -> Option<RoleId> {
-        if let Some(reference) = parse_reference(role_ref) {
-            if reference.ref_type != RefType::Role {
-                self.add_error(ResolveError::ReferenceTypeMismatch {
-                    context: context.clone(),
-                    field: "role".to_string(),
-                    expected: RefType::Role,
-                    actual: reference.ref_type,
-                    value: role_ref.to_string(),
-                });
-                return None;
-            }
+    /// Resolve a step's `creates:` value to the artifact id it declares, and
+    /// record which step produces it.
+    ///
+    /// An id that is not a portable filename is rejected: ids name the files in
+    /// the run directory.
+    fn resolve_creates(&mut self, creates: Option<&str>, step: &StepId) -> Option<ArtifactId> {
+        let creates = creates?;
+        let name =
+            self.extract_name_checked(creates, &ReferenceContext::Step(step.clone()), "creates");
+        let artifact_id = ArtifactId::new(name);
+        if let Err(e) = rite_model::validate_component(artifact_id.as_str()) {
+            self.add_error(ResolveError::UnsafeArtifactId {
+                id: artifact_id,
+                reason: e.to_string(),
+            });
+            return None;
+        }
+        self.produced_artifacts
+            .insert(artifact_id.clone(), step.clone());
+        Some(artifact_id)
+    }
 
-            let id = RoleId::new(&reference.name);
-            if !self.roles.contains(&id) {
-                self.add_error(ResolveError::UnknownRole {
-                    role: id.clone(),
-                    context: context.clone(),
-                });
+    /// Extract the plain name a `creates:` or `act:` value names, reporting a
+    /// broken reference rather than taking the text literally.
+    ///
+    /// These fields accept a bare name as well as a reference, so a value that
+    /// does not parse has somewhere to fall back to: itself. That is the danger.
+    /// `creates: "${artifac.k}"` would otherwise name an artifact exactly that,
+    /// and an artifact id becomes an output filename.
+    fn extract_name_checked(&mut self, s: &str, context: &ReferenceContext, field: &str) -> String {
+        match require_reference(s) {
+            Ok(reference) => reference.name,
+            Err(reason) => {
+                // A bare name is the ordinary case for both fields and stays
+                // silent. Only text that opened an expression is a mistake.
+                if s.contains("${") {
+                    self.add_reference_error(context, field, s, reason);
+                }
+                s.to_string()
+            }
+        }
+    }
+
+    /// Report a scalar that should have held a reference and did not.
+    fn add_reference_error(
+        &mut self,
+        context: &ReferenceContext,
+        field: &str,
+        value: &str,
+        reason: String,
+    ) {
+        self.add_error(ResolveError::InvalidReferenceSyntax {
+            context: context.clone(),
+            field: field.to_string(),
+            value: value.to_string(),
+            reason,
+        });
+    }
+
+    /// Report every `${...}` in a step value that does not parse.
+    ///
+    /// `${` always opens an expression, so an occurrence that does not parse is
+    /// kept as the literal text an author typed and handed to the action as if
+    /// they meant it. A `path:` of `${paramm.out}` writes a file named exactly
+    /// that. Reporting here is the difference between a typo `rite check`
+    /// catches and a step that runs with the wrong value.
+    fn validate_expressions(&mut self, value: &serde_json::Value, step: &StepId, field: &str) {
+        self.validate_expressions_at(value, step, field, 0);
+    }
+
+    /// Depth-tracking worker for [`Self::validate_expressions`].
+    ///
+    /// The cap mirrors the one `lower_ceremony` enforces on ceremony YAML, so a
+    /// value that came through the parser never reaches it. It bounds the walk
+    /// for a caller that builds a `schema::Ceremony` directly.
+    fn validate_expressions_at(
+        &mut self,
+        value: &serde_json::Value,
+        step: &StepId,
+        field: &str,
+        depth: usize,
+    ) {
+        if depth >= crate::lower::MAX_YAML_DEPTH {
+            return;
+        }
+        let child_depth = depth.saturating_add(1);
+        match value {
+            serde_json::Value::String(s) => {
+                for invalid in rite_model::expression::find_invalid_expressions(s) {
+                    self.add_reference_error(
+                        &ReferenceContext::Step(step.clone()),
+                        field,
+                        &invalid.text,
+                        invalid.reason,
+                    );
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    self.validate_expressions_at(
+                        child,
+                        step,
+                        &format!("{field}.{key}"),
+                        child_depth,
+                    );
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    self.validate_expressions_at(
+                        child,
+                        step,
+                        &format!("{field}[{index}]"),
+                        child_depth,
+                    );
+                }
+            }
+            serde_json::Value::Number(_) | serde_json::Value::Bool(_) | serde_json::Value::Null => {
+            }
+        }
+    }
+
+    fn resolve_role_ref(&mut self, role_ref: &str, context: &ReferenceContext) -> Option<RoleId> {
+        let reference = match require_reference(role_ref) {
+            Ok(reference) => reference,
+            Err(reason) => {
+                self.add_reference_error(context, "role", role_ref, reason);
                 return None;
             }
-            Some(id)
-        } else {
-            self.add_error(ResolveError::InvalidReferenceSyntax {
+        };
+
+        if reference.ref_type != RefType::Role {
+            self.add_error(ResolveError::ReferenceTypeMismatch {
                 context: context.clone(),
                 field: "role".to_string(),
+                expected: RefType::Role,
+                actual: reference.ref_type,
                 value: role_ref.to_string(),
             });
-            None
+            return None;
         }
+
+        let id = RoleId::new(&reference.name);
+        if !self.roles.contains(&id) {
+            self.add_error(ResolveError::UnknownRole {
+                role: id.clone(),
+                context: context.clone(),
+            });
+            return None;
+        }
+        Some(id)
     }
 
     /// Resolve input references from step YAML.
@@ -674,12 +787,23 @@ impl ResolveContext {
                 let mut named = HashMap::new();
 
                 for (key, value) in map {
+                    let field = format!("reads.{key}");
                     if let Some(s) = value.as_str() {
-                        let field = format!("reads.{key}");
                         if let Some(artifact_ref) = self.resolve_artifact_ref(s, step_id, &field) {
                             refs.push(artifact_ref.clone());
                             named.insert(key.clone(), artifact_ref);
                         }
+                    } else {
+                        let reason = format!(
+                            "expected a string holding an artifact reference, found {}",
+                            value_type_name(value)
+                        );
+                        self.add_reference_error(
+                            &ReferenceContext::Step(step_id.clone()),
+                            &field,
+                            &value.to_string(),
+                            reason,
+                        );
                     }
                 }
 
@@ -691,7 +815,19 @@ impl ResolveContext {
 
                 (refs, typed)
             }
-            _ => (vec![], None),
+            other => {
+                let reason = format!(
+                    "expected an artifact reference or a map of named inputs, found {}",
+                    value_type_name(other)
+                );
+                self.add_reference_error(
+                    &ReferenceContext::Step(step_id.clone()),
+                    "reads",
+                    &other.to_string(),
+                    reason,
+                );
+                (vec![], None)
+            }
         }
     }
 
@@ -701,7 +837,18 @@ impl ResolveContext {
         step_id: &StepId,
         field: &str,
     ) -> Option<ArtifactRef> {
-        let reference = parse_reference(ref_str)?;
+        let reference = match require_reference(ref_str) {
+            Ok(reference) => reference,
+            Err(reason) => {
+                self.add_reference_error(
+                    &ReferenceContext::Step(step_id.clone()),
+                    field,
+                    ref_str,
+                    reason,
+                );
+                return None;
+            }
+        };
 
         if reference.ref_type != RefType::Artifact {
             self.add_error(ResolveError::ReferenceTypeMismatch {
@@ -810,12 +957,19 @@ impl ResolveContext {
     }
 }
 
-/// Parse a reference string using the expression parser.
-fn parse_reference(s: &str) -> Option<Reference> {
-    let expr = parse_expression(s)?;
-    match expr {
-        Expression::Reference(r) => Some(r),
-        _ => None,
+/// Interpret a scalar that must hold exactly one reference.
+///
+/// The fields that name a single thing (`role:`, `reads:`, `creates:`, `act:`)
+/// take a reference and nothing else: a pipeline computes a value, and a value
+/// has no name to resolve.
+///
+/// Returns the reference, or the reason the scalar is not one, ready to put in
+/// front of an author.
+fn require_reference(s: &str) -> Result<Reference, String> {
+    match parse_expression(s) {
+        Some(Expression::Reference(reference)) => Ok(reference),
+        Some(_) => Err("expected a single reference, not a pipeline".to_string()),
+        None => Err(rite_model::expression::explain_expression(s)),
     }
 }
 
@@ -858,17 +1012,6 @@ fn is_valid_date(s: &str) -> bool {
         _ => 31,
     };
     day <= max_day
-}
-
-/// Extract the plain name from a reference string or return the string as-is.
-///
-/// Handles `"${artifact.keypair}"` → `"keypair"` and `"keypair"` → `"keypair"`.
-fn extract_name(s: &str) -> String {
-    if let Some(reference) = parse_reference(s) {
-        reference.name
-    } else {
-        s.to_string()
-    }
 }
 
 #[cfg(test)]

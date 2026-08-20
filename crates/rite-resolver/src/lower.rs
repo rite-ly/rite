@@ -2,11 +2,13 @@
 
 use crate::diagnostic::{
     Diagnostic, ReferenceContext, ReferenceEntry, ReferenceTarget, Severity, Span, SpanMap,
+    UnparsedExpression,
 };
 use crate::error::ResolveError;
 use crate::schema::Ceremony;
 use marked_yaml::Node;
 use marked_yaml::types::MarkedScalarNode;
+use rite_model::expression::{Expression, RefType};
 use rite_model::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};
 use std::path::Path;
 
@@ -16,7 +18,7 @@ use std::path::Path;
 /// legitimate document while keeping every recursive walk over the tree
 /// (deserialization, scalar coercion, expression parsing) bounded to a
 /// stack depth that cannot overflow.
-const MAX_YAML_DEPTH: usize = 64;
+pub(crate) const MAX_YAML_DEPTH: usize = 64;
 
 /// Parse ceremony YAML, build a `SpanMap`, and return structured diagnostics.
 ///
@@ -349,14 +351,14 @@ impl<'src> Lowerer<'src> {
         }
     }
 
-    /// Scan a scalar value for `${prefix.NAME}` expression references and push a
-    /// `ReferenceEntry` for each recognized prefix.
+    /// Scan a scalar value for `${...}` occurrences.
     ///
-    /// `material` is handled here even though it is not a `RefType` in the model
-    /// (it resolves as an artifact at the IR level): the LSP needs to navigate
-    /// from `${material.x}` to the material declaration. Nested property paths
-    /// like `${artifact.keypair.private}` are intentionally skipped — handle
-    /// them at the expression-parser level when richer go-to-definition is needed.
+    /// An occurrence that parses and names a declaration gets a `ReferenceEntry`
+    /// so the LSP can navigate to it. One that does not parse gets an
+    /// `UnparsedExpression` instead, so the resolver's diagnostic about it can
+    /// underline the occurrence. Nested property paths like
+    /// `${artifact.keypair.private}` parse but get neither: handle them at the
+    /// expression-parser level when richer go-to-definition is needed.
     #[allow(clippy::arithmetic_side_effects)]
     fn scan_expression_refs(&mut self, scalar: &MarkedScalarNode, context: &ReferenceContext) {
         let Some(base) = self.scalar_to_span(scalar) else {
@@ -367,44 +369,49 @@ impl<'src> Lowerer<'src> {
         while let Some(rel_start) = text.get(search_from..).and_then(|s| s.find("${")) {
             let abs_start = search_from + rel_start;
             let after_open = abs_start + 2; // skip "${"
-            let Some(close_offset) = text.get(after_open..).and_then(|s| s.find('}')) else {
+            let end = match text.get(after_open..).and_then(|s| s.find('}')) {
+                Some(close_offset) => after_open + close_offset + 1,
+                // Nothing closes it, so the occurrence runs to the end.
+                None => text.len(),
+            };
+            let Some(value) = text.get(abs_start..end) else {
                 break;
             };
-            let Some(expr_content) = text.get(after_open..after_open + close_offset) else {
-                break;
+            let span = Span {
+                line: base.line,
+                column: base.column + abs_start,
+                length: Some(end - abs_start),
             };
-            let full_len = 2 + close_offset + 1; // "${" + content + "}"
 
-            if let Some(dot_pos) = expr_content.find('.') {
-                let prefix = &expr_content[..dot_pos];
-                let name = &expr_content[dot_pos + 1..];
-                if !name.is_empty() && !name.contains('.') {
-                    let target = match prefix {
-                        "param" => Some(ReferenceTarget::Param(ParamId::new(name))),
-                        "material" => Some(ReferenceTarget::Material(MaterialId::new(name))),
-                        "artifact" => Some(ReferenceTarget::Artifact(ArtifactId::new(name))),
-                        "role" => Some(ReferenceTarget::Role(RoleId::new(name))),
-                        _ => None,
+            // The parse already worked out the namespace, the name, and whether
+            // a property follows. Reading them off the `Reference` keeps this
+            // walker and the parser agreeing on what a reference is.
+            match rite_model::expression::parse_expression(value) {
+                None => self.span_map.unparsed_expressions.push(UnparsedExpression {
+                    span,
+                    context: context.clone(),
+                    value: value.to_string(),
+                }),
+                Some(Expression::Reference(reference)) if reference.property.is_none() => {
+                    let name = reference.name.as_str();
+                    let target = match reference.ref_type {
+                        RefType::Param => ReferenceTarget::Param(ParamId::new(name)),
+                        RefType::Role => ReferenceTarget::Role(RoleId::new(name)),
+                        RefType::Artifact => ReferenceTarget::Artifact(ArtifactId::new(name)),
                     };
-                    if let Some(target) = target {
-                        let value = text
-                            .get(abs_start..abs_start + full_len)
-                            .unwrap_or("")
-                            .to_string();
-                        self.span_map.references.push(ReferenceEntry {
-                            span: Span {
-                                line: base.line,
-                                column: base.column + abs_start,
-                                length: Some(full_len),
-                            },
-                            target,
-                            context: context.clone(),
-                            value,
-                        });
-                    }
+                    self.span_map.references.push(ReferenceEntry {
+                        span,
+                        target,
+                        context: context.clone(),
+                        value: value.to_string(),
+                    });
                 }
+                // A property path or a pipeline: it parses, but the editor
+                // cannot jump anywhere from it on its own.
+                Some(_) => {}
             }
-            search_from = abs_start + full_len;
+
+            search_from = end;
         }
     }
 
@@ -860,7 +867,10 @@ sections:
     }
 
     #[test]
-    fn material_expression_ref_span_covers_full_token() {
+    fn an_expression_that_does_not_parse_is_recorded_with_its_full_span() {
+        // `material` is not a namespace: a material is read as `${artifact.x}`.
+        // The occurrence points at no declaration, so it is kept for the
+        // resolver's diagnostic to underline rather than as a reference.
         let yaml = r#"
 version: "0.2"
 name: "Test"
@@ -876,14 +886,44 @@ sections:
         description: "see ${material.my_material} for details"
 "#;
         let (_, span_map, _) = lower_ceremony(None, yaml);
+        assert!(
+            !span_map
+                .references
+                .iter()
+                .any(|e| matches!(&e.target, ReferenceTarget::Material(_))),
+            "a material expression names no navigable target"
+        );
         let entry = span_map
-            .references
-            .iter()
-            .find(
-                |e| matches!(&e.target, ReferenceTarget::Material(id) if id.as_str() == "my_material"),
-            )
-            .expect("should have a Material reference entry");
+            .unparsed_expressions
+            .first()
+            .expect("should have an unparsed expression entry");
         assert_eq!(span_text(yaml, entry.span), "${material.my_material}");
+        assert_eq!(entry.value, "${material.my_material}");
+    }
+
+    #[test]
+    fn an_expression_that_parses_is_not_recorded_as_unparsed() {
+        let yaml = r#"
+version: "0.2"
+name: "Test"
+roles: {}
+parameters:
+  region:
+    type: string
+sections:
+  main:
+    steps:
+      my_step:
+        action: confirm
+        description: "operating in ${param.region} today"
+"#;
+        let (_, span_map, _) = lower_ceremony(None, yaml);
+        assert!(span_map.unparsed_expressions.is_empty());
+        assert!(
+            span_map.references.iter().any(
+                |e| matches!(&e.target, ReferenceTarget::Param(id) if id.as_str() == "region")
+            )
+        );
     }
 
     #[test]

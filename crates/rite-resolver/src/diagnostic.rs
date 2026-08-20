@@ -127,16 +127,30 @@ pub struct ReferenceEntry {
     pub value: String,
 }
 
+/// A `${...}` occurrence that does not parse, with where it was written.
+///
+/// The span walker records these because it cannot say what they mean, only
+/// where they are: naming the mistake is the resolver's job.
+#[derive(Debug, Clone)]
+pub struct UnparsedExpression {
+    /// Source location and length of the occurrence.
+    pub span: Span,
+    /// The owning step or section.
+    pub context: ReferenceContext,
+    /// The occurrence as written, including the `${` and the `}`.
+    pub value: String,
+}
+
 /// Maps ceremony element IDs to their source positions for diagnostic enrichment
 /// and editor navigation.
 ///
 /// The resolver's `Lowerer` populates this in a single pass over the parsed YAML.
 /// Declaration spans (one map per kind) record where each ID is defined; the
 /// `references` vector records every reference-value scalar — `role:`, `act:`,
-/// `backend:`, `creates:`, `reads:`, plus `${param.x}` / `${material.x}` /
-/// `${artifact.x}` / `${role.x}` expressions inside `description:` and `with:`
-/// blocks. Each reference entry stores its source span, resolved target, owning
-/// step or section, and the raw source text.
+/// `backend:`, `creates:`, `reads:`, plus `${param.x}` / `${artifact.x}` /
+/// `${role.x}` expressions inside `description:` and `with:` blocks. Each
+/// reference entry stores its source span, resolved target, owning step or
+/// section, and the raw source text.
 ///
 /// Consumers (LSP for navigation, `rite check`/`rite run` for diagnostic spans)
 /// should use the `SpanMap` methods rather than the public maps directly when a
@@ -165,6 +179,11 @@ pub struct SpanMap {
     /// Reference sites collected during parsing: value-scalar span → declaration target.
     /// Used by go-to-definition to map a cursor position to a declaration span.
     pub references: Vec<ReferenceEntry>,
+    /// `${...}` occurrences inside `description:` and `with:` scalars that do
+    /// not parse as an expression. They point at no declaration, so they are
+    /// not references; they are kept so a diagnostic about one can underline
+    /// the occurrence rather than the whole step.
+    pub unparsed_expressions: Vec<UnparsedExpression>,
     /// Spans of value scalars for enum-style fields (`action:` on steps,
     /// `provider:` on backends). The values pick from fixed registries
     /// rather than declared identifiers, so they aren't references and
@@ -365,11 +384,22 @@ impl SpanMap {
     /// `InvalidReferenceSyntax` and `ReferenceTypeMismatch`, where the value did
     /// not parse as any specific reference kind). Matches whichever entry covers
     /// the same source slice in the same step or section.
+    ///
+    /// Reference entries cover the fields that hold one reference and nothing
+    /// else (`role:`, `reads:`); `unparsed_expressions` covers an occurrence
+    /// embedded in a `description:` or `with:` scalar, where the span is the
+    /// occurrence rather than the whole value.
     fn span_for_value(&self, context: &ReferenceContext, value: &str) -> Option<Span> {
         self.references
             .iter()
             .find(|e| e.context == *context && e.value == value)
             .map(|e| e.span)
+            .or_else(|| {
+                self.unparsed_expressions
+                    .iter()
+                    .find(|e| e.context == *context && e.value == value)
+                    .map(|e| e.span)
+            })
     }
 
     /// Look up a declaration span for a context (step or section).

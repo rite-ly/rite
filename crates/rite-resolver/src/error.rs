@@ -243,14 +243,17 @@ pub enum ResolveError {
     },
 
     /// Invalid reference syntax in a field.
-    #[error("Invalid reference syntax '{value}' in '{context}' field '{field}'")]
+    #[error("Invalid reference '{value}' in '{context}' field '{field}': {reason}")]
     InvalidReferenceSyntax {
         /// Where the reference appears.
         context: ReferenceContext,
         /// The field name.
         field: String,
-        /// The invalid value.
+        /// The invalid value, used to look up the expression span.
         value: String,
+        /// Why the value is not a usable reference, from
+        /// [`rite_model::expression::explain_expression`].
+        reason: String,
     },
 
     /// An artifact id (from a step's `creates:`) is not a safe filename.

@@ -44,6 +44,14 @@ pub enum RefType {
     Artifact,
 }
 
+impl RefType {
+    /// Every namespace, in the order messages list them.
+    ///
+    /// A test matches exhaustively over `RefType` against this list, so a new
+    /// variant fails to compile until it is added here.
+    pub const ALL: &'static [Self] = &[Self::Param, Self::Role, Self::Artifact];
+}
+
 impl std::str::FromStr for RefType {
     type Err = String;
 
@@ -643,17 +651,32 @@ fn is_valid_identifier(s: &str) -> bool {
     }
 }
 
-/// Find all expressions in a string.
+/// A `${...}` occurrence located in a scalar, with the result of parsing it.
 ///
-/// Returns expressions with their locations for LSP support.
-pub fn find_expressions(s: &str) -> Vec<LocatedExpression> {
-    let mut results = Vec::new();
+/// `parsed` is `None` when the text between the braces is not an expression, or
+/// when nothing closes the occurrence.
+struct Occurrence<'a> {
+    range: Range<usize>,
+    text: &'a str,
+    /// Whether a matching `}` was found. An unbalanced `${a{b}` is not closed
+    /// even though its text ends in a brace.
+    closed: bool,
+    parsed: Option<Expression>,
+}
+
+/// Find every `${...}` occurrence in `s`, parsed or not.
+///
+/// The one place that decides where an occurrence starts and ends. Braces are
+/// balanced rather than stopping at the first `}`, so a `}` inside the
+/// expression does not cut it short. An occurrence nothing closes runs to the
+/// end of the string and parses as nothing.
+fn scan_occurrences(s: &str) -> Vec<Occurrence<'_>> {
+    let mut found = Vec::new();
     let bytes = s.as_bytes();
     let mut i = 0;
 
     while i < bytes.len() {
         if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-            // Find matching closing brace.
             let mut depth = 1;
             let mut j = i + 2;
             while j < bytes.len() && depth > 0 {
@@ -665,22 +688,230 @@ pub fn find_expressions(s: &str) -> Vec<LocatedExpression> {
                 j += 1;
             }
 
-            if depth == 0 {
-                let expr_str = &s[i..j];
-                if let Some(expression) = parse_expression(expr_str) {
-                    results.push(LocatedExpression {
-                        expression,
-                        range: i..j,
-                    });
-                }
-                i = j;
-                continue;
-            }
+            let end = if depth == 0 { j } else { s.len() };
+            let text = &s[i..end];
+            let closed = depth == 0;
+            found.push(Occurrence {
+                range: i..end,
+                text,
+                closed,
+                // An unclosed occurrence has no closing brace to parse against.
+                parsed: if closed { parse_expression(text) } else { None },
+            });
+            i = end;
+            continue;
         }
         i += 1;
     }
 
-    results
+    found
+}
+
+/// Find all expressions in a string.
+///
+/// Returns expressions with their locations for LSP support.
+pub fn find_expressions(s: &str) -> Vec<LocatedExpression> {
+    scan_occurrences(s)
+        .into_iter()
+        .filter_map(|occurrence| {
+            Some(LocatedExpression {
+                expression: occurrence.parsed?,
+                range: occurrence.range,
+            })
+        })
+        .collect()
+}
+
+/// A `${...}` occurrence that does not parse as an expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidExpression {
+    /// Byte range of the occurrence within the scanned string.
+    pub range: Range<usize>,
+    /// The occurrence as written, including the `${` and the `}`.
+    pub text: String,
+    /// Why it is not a usable expression, phrased for a diagnostic.
+    pub reason: String,
+}
+
+/// Find every `${...}` in `s` that does not parse as an expression.
+///
+/// The counterpart to [`find_expressions`], which keeps the occurrences that do
+/// parse. `${` always opens an expression, so an occurrence that fails to parse
+/// is a mistake rather than prose, and a caller reports each one it gets back.
+///
+/// # Examples
+///
+/// ```
+/// use rite_model::expression::find_invalid_expressions;
+///
+/// assert!(find_invalid_expressions("${artifact.ksr | sha256}").is_empty());
+///
+/// let found = find_invalid_expressions("sign ${nonsense.x} now");
+/// assert_eq!(found.len(), 1);
+/// assert_eq!(found[0].text, "${nonsense.x}");
+/// ```
+pub fn find_invalid_expressions(s: &str) -> Vec<InvalidExpression> {
+    scan_occurrences(s)
+        .into_iter()
+        .filter(|occurrence| occurrence.parsed.is_none())
+        .map(|occurrence| InvalidExpression {
+            reason: if occurrence.closed {
+                explain_expression(occurrence.text)
+            } else {
+                "the expression is missing its closing '}'".to_string()
+            },
+            range: occurrence.range,
+            text: occurrence.text.to_string(),
+        })
+        .collect()
+}
+
+/// What a name inside a reference may contain, quoted in messages about one
+/// that does not qualify.
+const IDENTIFIER_RULE: &str =
+    "names hold letters, digits, and underscores, and cannot start with a digit";
+
+/// Explain in one sentence why `s` is not a usable expression.
+///
+/// Takes the text as written, with or without the `${...}` wrapper, so a field
+/// that accepts a bare name as well as a reference can call it on either.
+///
+/// The answer is worked out by re-dispatching through the same predicates the
+/// parser uses, on the error path only. The parser itself reports no reason: it
+/// returns [`Option`] because most of its callers only need to know whether the
+/// text was an expression at all.
+///
+/// # Examples
+///
+/// ```
+/// use rite_model::expression::explain_expression;
+///
+/// assert!(explain_expression("${nonsense.x}").contains("unknown namespace"));
+/// ```
+pub fn explain_expression(s: &str) -> String {
+    let trimmed = s.trim();
+    let Some(inner) = trimmed.strip_prefix("${").and_then(|r| r.strip_suffix('}')) else {
+        return format!(
+            "write it as an expression, '${{<namespace>.<name>}}', where <namespace> is one of {}",
+            namespace_list()
+        );
+    };
+    explain_inner(inner)
+}
+
+/// The namespaces a reference can name, formatted for a message.
+fn namespace_list() -> String {
+    RefType::ALL
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Explain a failure inside the `${...}` wrapper.
+fn explain_inner(inner: &str) -> String {
+    let inner = inner.trim();
+    if inner.is_empty() {
+        return "the expression is empty".to_string();
+    }
+
+    let parts = split_on_pipes(inner);
+    let source = parts.first().map_or("", |p| p.trim());
+    if parse_source(source).is_none() {
+        return explain_source(source);
+    }
+
+    for stage in parts.iter().skip(1) {
+        let stage = stage.trim();
+        if parse_pipe_stage(stage).is_none() {
+            return format!(
+                "'{stage}' is not a usable pipe stage: expected a function name, \
+                 with any arguments in parentheses"
+            );
+        }
+    }
+
+    // The source and every stage parse on their own, so nothing above applies.
+    // Kept so the function is total.
+    format!("'{inner}' is not a usable expression")
+}
+
+/// Explain a failure in the part of a pipeline before the first `|`.
+///
+/// A source is a function call, a reference, or a literal. The shape the author
+/// reached for is read off the text: parentheses mean a call, a quote means a
+/// string, and anything else is judged as a reference, which is what the three
+/// namespaces are for.
+fn explain_source(s: &str) -> String {
+    if let Some(paren) = s.find('(') {
+        let name = &s[..paren];
+        if !is_valid_identifier(name) {
+            return format!("'{name}' is not a usable function name");
+        }
+        if !s.ends_with(')') {
+            return format!("the call to '{name}' is missing its closing ')'");
+        }
+        return format!("the arguments to '{name}' are not usable expressions");
+    }
+    if let Some(quote) = s.chars().next().filter(|c| *c == '"' || *c == '\'') {
+        return format!("the string is missing its closing {quote}");
+    }
+    explain_reference(s)
+}
+
+/// Explain a failure in a `namespace.name` or `namespace.name.property` reference.
+fn explain_reference(s: &str) -> String {
+    let parts: Vec<&str> = s.splitn(3, '.').collect();
+    let namespace = parts.first().copied().unwrap_or("");
+
+    if parts.len() < 2 {
+        return format!(
+            "'{s}' names no namespace: write '<namespace>.<name>', \
+             where <namespace> is one of {}",
+            namespace_list()
+        );
+    }
+
+    // Not a name at all, so it was never a reference. Says so rather than
+    // reporting an unknown namespace, which would send the author looking for
+    // the wrong mistake.
+    if !is_valid_identifier(namespace) {
+        return format!(
+            "'{s}' is neither a literal nor a reference: a reference starts with \
+             one of {}",
+            namespace_list()
+        );
+    }
+
+    if namespace.parse::<RefType>().is_err() {
+        // `material` is the namespace an author reaches for that does not
+        // exist: materials are declared under `materials:` and read as
+        // artifacts, so the mistake is worth naming rather than listing past.
+        if namespace == "material" {
+            return format!(
+                "there is no 'material' namespace: a material is read as 'artifact.{}'",
+                parts[1]
+            );
+        }
+        return format!(
+            "unknown namespace '{namespace}': expected one of {}",
+            namespace_list()
+        );
+    }
+
+    if parts[1].is_empty() {
+        return format!("nothing follows '{namespace}.': expected a name");
+    }
+    if !is_valid_identifier(parts[1]) {
+        return format!("'{}' is not a usable name: {IDENTIFIER_RULE}", parts[1]);
+    }
+    if let Some(property) = parts.get(2)
+        && !is_valid_identifier(property)
+    {
+        return format!("'{property}' is not a usable property: {IDENTIFIER_RULE}");
+    }
+
+    format!("'{s}' is not a usable reference")
 }
 
 /// Parse a JSON value into an `ExprValue`, extracting all `${...}` expressions.
@@ -1304,6 +1535,126 @@ mod tests {
                 }
                 _ => panic!("Expected Interpolated, got {expr:?}"),
             }
+        }
+    }
+
+    mod invalid_expressions {
+        use super::*;
+
+        /// `RefType::ALL` is written by hand; this match makes a new variant a
+        /// compile error until it is listed there.
+        #[test]
+        fn all_lists_every_namespace() {
+            for ref_type in RefType::ALL {
+                match ref_type {
+                    RefType::Param | RefType::Role | RefType::Artifact => {}
+                }
+            }
+            assert_eq!(RefType::ALL.len(), 3);
+            assert_eq!(namespace_list(), "param, role, artifact");
+        }
+
+        #[test]
+        fn a_valid_expression_yields_nothing() {
+            for s in [
+                "${artifact.ksr}",
+                "${artifact.keypair.public | sha256 | hex}",
+                "${param.name}",
+                "plain text with no expression",
+                "Hash: ${artifact.a | sha256 | hex} done",
+                "${concat(artifact.a | sha256, artifact.b) | hex}",
+            ] {
+                assert!(
+                    find_invalid_expressions(s).is_empty(),
+                    "{s} should be accepted"
+                );
+            }
+        }
+
+        #[test]
+        fn an_unknown_namespace_is_reported_with_its_range() {
+            let found = find_invalid_expressions("sign ${nonsense.x} now");
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].range, 5..18);
+            assert_eq!(found[0].text, "${nonsense.x}");
+            assert_eq!(
+                found[0].reason,
+                "unknown namespace 'nonsense': expected one of param, role, artifact"
+            );
+        }
+
+        #[test]
+        fn every_occurrence_in_one_string_is_reported() {
+            let found = find_invalid_expressions("${a.b} ${param.ok} ${c.d}");
+            assert_eq!(found.len(), 2);
+            assert_eq!(found[0].text, "${a.b}");
+            assert_eq!(found[1].text, "${c.d}");
+        }
+
+        #[test]
+        fn the_material_namespace_names_the_artifact_form() {
+            let found = find_invalid_expressions("${material.manifest}");
+            assert_eq!(found.len(), 1);
+            assert_eq!(
+                found[0].reason,
+                "there is no 'material' namespace: a material is read as 'artifact.manifest'"
+            );
+        }
+
+        #[test]
+        fn an_unclosed_expression_is_reported_to_the_end_of_the_string() {
+            let found = find_invalid_expressions("see ${artifact.k");
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].text, "${artifact.k");
+            assert_eq!(found[0].reason, "the expression is missing its closing '}'");
+        }
+
+        #[test]
+        fn each_shape_of_mistake_gets_its_own_reason() {
+            for (input, expected) in [
+                ("${}", "the expression is empty"),
+                (
+                    "${artifact}",
+                    "'artifact' names no namespace: write '<namespace>.<name>', \
+                     where <namespace> is one of param, role, artifact",
+                ),
+                (
+                    "${artifact.}",
+                    "nothing follows 'artifact.': expected a name",
+                ),
+                (
+                    "${artifact.9k}",
+                    "'9k' is not a usable name: names hold letters, digits, and underscores, \
+                     and cannot start with a digit",
+                ),
+                (
+                    "${artifact.k.9p}",
+                    "'9p' is not a usable property: names hold letters, digits, and underscores, \
+                     and cannot start with a digit",
+                ),
+                (
+                    "${artifact.k | 9hex}",
+                    "'9hex' is not a usable pipe stage: expected a function name, \
+                     with any arguments in parentheses",
+                ),
+                (
+                    "${concat(artifact.a}",
+                    "the call to 'concat' is missing its closing ')'",
+                ),
+            ] {
+                let found = find_invalid_expressions(input);
+                assert_eq!(found.len(), 1, "{input} should be rejected");
+                assert_eq!(found[0].reason, expected, "for {input}");
+            }
+        }
+
+        #[test]
+        fn a_bare_name_is_told_to_use_the_wrapper() {
+            assert_eq!(
+                explain_expression("keypair"),
+                "write it as an expression, '${<namespace>.<name>}', \
+                 where <namespace> is one of param, role, artifact"
+            );
         }
     }
 }

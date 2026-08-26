@@ -344,9 +344,16 @@ impl SpanMap {
                 )
                 .or_else(|| self.sections.get(section).copied()),
             ResolveError::InvalidReferenceSyntax { context, value, .. }
+            | ResolveError::ExpectedReference { context, value, .. }
             | ResolveError::ReferenceTypeMismatch { context, value, .. } => self
                 .span_for_value(context, value)
                 .or_else(|| self.span_for_context(context)),
+            // A value of the wrong YAML type has no source slice to join on,
+            // so these anchor to the step.
+            ResolveError::ReadsInputNotAString { context, .. }
+            | ResolveError::ReadsNotAReferenceOrMap { context, .. } => {
+                self.span_for_context(context)
+            }
             ResolveError::ArtifactUsedBeforeProduced { used_in, .. } => {
                 self.steps.get(used_in).copied()
             }

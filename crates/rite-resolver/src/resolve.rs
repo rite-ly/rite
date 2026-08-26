@@ -9,7 +9,9 @@ use crate::error::{ResolveError, ResolveResult, ResolveWarning};
 use crate::schema;
 use indexmap::IndexMap;
 use rite_model::expression::RefType;
-use rite_model::expression::{Expression, Reference, parse_expr_value, parse_expression};
+use rite_model::expression::{
+    ExprError, Expression, Reference, parse_expr_value, parse_expression_detailed,
+};
 use rite_model::{
     Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind,
     MaterialSource, Metadata, Output, OutputId, ParamId, Parameter, PostCeremonyDuty, RetryPolicy,
@@ -636,11 +638,11 @@ impl ResolveContext {
     fn extract_name_checked(&mut self, s: &str, context: &ReferenceContext, field: &str) -> String {
         match require_reference(s) {
             Ok(reference) => reference.name,
-            Err(reason) => {
+            Err(failure) => {
                 // A bare name is the ordinary case for both fields and stays
                 // silent. Only text that opened an expression is a mistake.
                 if s.contains("${") {
-                    self.add_reference_error(context, field, s, reason);
+                    self.add_reference_error(context, field, s, failure);
                 }
                 s.to_string()
             }
@@ -653,13 +655,23 @@ impl ResolveContext {
         context: &ReferenceContext,
         field: &str,
         value: &str,
-        reason: String,
+        failure: ReferenceFailure,
     ) {
-        self.add_error(ResolveError::InvalidReferenceSyntax {
-            context: context.clone(),
-            field: field.to_string(),
-            value: value.to_string(),
-            reason,
+        let context = context.clone();
+        let field = field.to_string();
+        let value = value.to_string();
+        self.add_error(match failure {
+            ReferenceFailure::Unparsed(reason) => ResolveError::InvalidReferenceSyntax {
+                context,
+                field,
+                value,
+                reason,
+            },
+            ReferenceFailure::Computed => ResolveError::ExpectedReference {
+                context,
+                field,
+                value,
+            },
         });
     }
 
@@ -697,7 +709,7 @@ impl ResolveContext {
                         &ReferenceContext::Step(step.clone()),
                         field,
                         &invalid.text,
-                        invalid.reason,
+                        ReferenceFailure::Unparsed(invalid.reason),
                     );
                 }
             }
@@ -729,8 +741,8 @@ impl ResolveContext {
     fn resolve_role_ref(&mut self, role_ref: &str, context: &ReferenceContext) -> Option<RoleId> {
         let reference = match require_reference(role_ref) {
             Ok(reference) => reference,
-            Err(reason) => {
-                self.add_reference_error(context, "role", role_ref, reason);
+            Err(failure) => {
+                self.add_reference_error(context, "role", role_ref, failure);
                 return None;
             }
         };
@@ -794,16 +806,11 @@ impl ResolveContext {
                             named.insert(key.clone(), artifact_ref);
                         }
                     } else {
-                        let reason = format!(
-                            "expected a string holding an artifact reference, found {}",
-                            value_type_name(value)
-                        );
-                        self.add_reference_error(
-                            &ReferenceContext::Step(step_id.clone()),
-                            &field,
-                            &value.to_string(),
-                            reason,
-                        );
+                        self.add_error(ResolveError::ReadsInputNotAString {
+                            context: ReferenceContext::Step(step_id.clone()),
+                            field,
+                            found: value_type_name(value),
+                        });
                     }
                 }
 
@@ -816,16 +823,10 @@ impl ResolveContext {
                 (refs, typed)
             }
             other => {
-                let reason = format!(
-                    "expected an artifact reference or a map of named inputs, found {}",
-                    value_type_name(other)
-                );
-                self.add_reference_error(
-                    &ReferenceContext::Step(step_id.clone()),
-                    "reads",
-                    &other.to_string(),
-                    reason,
-                );
+                self.add_error(ResolveError::ReadsNotAReferenceOrMap {
+                    context: ReferenceContext::Step(step_id.clone()),
+                    found: value_type_name(other),
+                });
                 (vec![], None)
             }
         }
@@ -839,12 +840,12 @@ impl ResolveContext {
     ) -> Option<ArtifactRef> {
         let reference = match require_reference(ref_str) {
             Ok(reference) => reference,
-            Err(reason) => {
+            Err(failure) => {
                 self.add_reference_error(
                     &ReferenceContext::Step(step_id.clone()),
                     field,
                     ref_str,
-                    reason,
+                    failure,
                 );
                 return None;
             }
@@ -963,14 +964,22 @@ impl ResolveContext {
 /// take a reference and nothing else: a pipeline computes a value, and a value
 /// has no name to resolve.
 ///
-/// Returns the reference, or the reason the scalar is not one, ready to put in
-/// front of an author.
-fn require_reference(s: &str) -> Result<Reference, String> {
-    match parse_expression(s) {
-        Some(Expression::Reference(reference)) => Ok(reference),
-        Some(_) => Err("expected a single reference, not a pipeline".to_string()),
-        None => Err(rite_model::expression::explain_expression(s)),
+/// Returns the reference, or which of the two ways the scalar is not one.
+fn require_reference(s: &str) -> Result<Reference, ReferenceFailure> {
+    match parse_expression_detailed(s) {
+        Ok(Expression::Reference(reference)) => Ok(reference),
+        Ok(_) => Err(ReferenceFailure::Computed),
+        Err(error) => Err(ReferenceFailure::Unparsed(error)),
     }
+}
+
+/// Why a scalar that must hold one reference does not.
+enum ReferenceFailure {
+    /// It is not an expression at all.
+    Unparsed(ExprError),
+    /// It is an expression, but one that computes a value rather than naming
+    /// something to look up.
+    Computed,
 }
 
 /// Return a short type name for a JSON value (used in type mismatch errors).

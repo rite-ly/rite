@@ -1,7 +1,7 @@
 //! Error types for the ceremony resolver.
 
 use crate::diagnostic::ReferenceContext;
-use rite_model::expression::RefType;
+use rite_model::expression::{ExprError, RefType};
 use rite_model::{
     ActId, ActionType, ArtifactId, MaterialId, OutputId, ParamId, ParameterType, RoleId, SectionId,
     StepId,
@@ -251,9 +251,45 @@ pub enum ResolveError {
         field: String,
         /// The invalid value, used to look up the expression span.
         value: String,
-        /// Why the value is not a usable reference, from
-        /// [`rite_model::expression::explain_expression`].
-        reason: String,
+        /// Why the value is not a usable reference.
+        reason: ExprError,
+    },
+
+    /// A field that names one thing holds an expression that computes a value.
+    #[error("Expected a single reference in '{context}' field '{field}', not '{value}'")]
+    ExpectedReference {
+        /// Where the value appears.
+        context: ReferenceContext,
+        /// The field name.
+        field: String,
+        /// The value, used to look up the expression span.
+        value: String,
+    },
+
+    /// A named entry under `reads:` holds a value of the wrong YAML type.
+    #[error(
+        "Expected a string holding an artifact reference in '{context}' field '{field}', \
+         found {found}"
+    )]
+    ReadsInputNotAString {
+        /// Where the value appears.
+        context: ReferenceContext,
+        /// The field name.
+        field: String,
+        /// The YAML type found instead.
+        found: &'static str,
+    },
+
+    /// A `reads:` value is neither a reference nor a map of named inputs.
+    #[error(
+        "Expected an artifact reference or a map of named inputs in '{context}' field \
+         'reads', found {found}"
+    )]
+    ReadsNotAReferenceOrMap {
+        /// Where the value appears.
+        context: ReferenceContext,
+        /// The YAML type found instead.
+        found: &'static str,
     },
 
     /// An artifact id (from a step's `creates:`) is not a safe filename.

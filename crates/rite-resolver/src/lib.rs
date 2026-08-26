@@ -863,8 +863,9 @@ backends:
             )
         }
 
-        /// Resolve `step_fields` and return the single reference diagnostic it
-        /// produces, or panic naming what came back instead.
+        /// Resolve `step_fields` and return the field and rendered message of
+        /// the single diagnostic it produces about a reference, or panic naming
+        /// what came back instead.
         fn only_reference_error(step_fields: &str) -> (String, String) {
             let yaml = ceremony_with(step_fields);
             let result = resolve(&yaml, None);
@@ -872,8 +873,13 @@ backends:
                 .errors
                 .iter()
                 .filter_map(|e| match e {
-                    ResolveError::InvalidReferenceSyntax { field, reason, .. } => {
-                        Some((field.clone(), reason.clone()))
+                    ResolveError::InvalidReferenceSyntax { field, .. }
+                    | ResolveError::ExpectedReference { field, .. }
+                    | ResolveError::ReadsInputNotAString { field, .. } => {
+                        Some((field.clone(), e.to_string()))
+                    }
+                    ResolveError::ReadsNotAReferenceOrMap { .. } => {
+                        Some(("reads".to_string(), e.to_string()))
                     }
                     _ => None,
                 })
@@ -973,7 +979,7 @@ backends:
           data: "${artifact.k | sha256}""#,
             );
             assert_eq!(field, "reads.data");
-            assert!(reason.contains("not a pipeline"), "{reason}");
+            assert!(reason.contains("Expected a single reference"), "{reason}");
         }
 
         #[test]

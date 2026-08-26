@@ -50,28 +50,33 @@ impl RefType {
     /// A test matches exhaustively over `RefType` against this list, so a new
     /// variant fails to compile until it is added here.
     pub const ALL: &'static [Self] = &[Self::Param, Self::Role, Self::Artifact];
+
+    /// The namespace as it is written in a ceremony.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Param => "param",
+            Self::Role => "role",
+            Self::Artifact => "artifact",
+        }
+    }
 }
 
 impl std::str::FromStr for RefType {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "param" => Ok(Self::Param),
-            "role" => Ok(Self::Role),
-            "artifact" => Ok(Self::Artifact),
-            _ => Err(format!("unknown reference type: {s}")),
-        }
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|ref_type| ref_type.as_str() == s)
+            .ok_or_else(|| format!("unknown reference type: {s}"))
     }
 }
 
 impl std::fmt::Display for RefType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Param => write!(f, "param"),
-            Self::Role => write!(f, "role"),
-            Self::Artifact => write!(f, "artifact"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -370,9 +375,244 @@ pub enum StringPart {
     Expr(Expression),
 }
 
+/// Why a `${...}` occurrence is not a usable expression.
+///
+/// Each variant names one decision the parser made, so a caller can tell an
+/// unknown namespace from a malformed name without reading the message text.
+/// [`Display`](std::fmt::Display) renders the sentence a diagnostic shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ExprError {
+    /// The text is not wrapped in `${` and `}`.
+    NotAnExpression,
+    /// Nothing closes the occurrence.
+    Unclosed,
+    /// The braces hold nothing.
+    Empty,
+    /// A pipeline has stages but nothing to compute them from.
+    MissingSource,
+    /// A quoted string never closes.
+    UnterminatedString {
+        /// The quote character that opened it.
+        quote: char,
+    },
+    /// The text before a `(` is not a function name.
+    InvalidFunctionName {
+        /// The text as written.
+        name: String,
+    },
+    /// A function call never closes its parentheses.
+    UnclosedCall {
+        /// The function named.
+        function: String,
+    },
+    /// One argument to a function call is not an expression.
+    InvalidArgument {
+        /// The function named.
+        function: String,
+        /// Which argument, counting from one.
+        position: usize,
+        /// Why that argument is not an expression.
+        cause: Box<ExprError>,
+    },
+    /// A name stands on its own, with no namespace in front of it.
+    MissingNamespace {
+        /// The text as written.
+        text: String,
+    },
+    /// The text is neither a literal nor the start of a reference.
+    NotAReference {
+        /// The text as written.
+        text: String,
+    },
+    /// The namespace is not one this DSL has.
+    UnknownNamespace {
+        /// The namespace as written.
+        namespace: String,
+    },
+    /// A reference names `material`, which is not a namespace.
+    MaterialNamespace {
+        /// The namespace as written, which may be a misspelling.
+        namespace: String,
+        /// The name that followed it.
+        name: String,
+    },
+    /// Nothing follows the namespace.
+    EmptyName {
+        /// The namespace as written.
+        namespace: String,
+    },
+    /// The name is not an identifier.
+    InvalidName {
+        /// The name as written.
+        name: String,
+    },
+    /// The property is not an identifier.
+    InvalidProperty {
+        /// The property as written.
+        property: String,
+    },
+    /// A pipe stage is not a function name.
+    InvalidPipeStage {
+        /// The stage as written.
+        stage: String,
+    },
+}
+
+/// What a name inside a reference may contain, quoted in messages about one
+/// that does not qualify.
+const IDENTIFIER_RULE: &str =
+    "names hold letters, digits, and underscores, and cannot start with a digit";
+
+impl std::fmt::Display for ExprError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAnExpression => write!(
+                f,
+                "write it as an expression, '${{<namespace>.<name>}}', \
+                 where <namespace> is one of {}",
+                namespace_list()
+            ),
+            Self::Unclosed => write!(f, "the expression is missing its closing '}}'"),
+            Self::Empty => write!(f, "the expression is empty"),
+            Self::MissingSource => write!(
+                f,
+                "nothing comes before the '|': a pipeline starts from a value"
+            ),
+            Self::UnterminatedString { quote } => {
+                write!(f, "the string is missing its closing {quote}")
+            }
+            Self::InvalidFunctionName { name } => {
+                write!(f, "'{name}' is not a usable function name")
+            }
+            Self::UnclosedCall { function } => {
+                write!(f, "the call to '{function}' is missing its closing ')'")
+            }
+            Self::InvalidArgument {
+                function,
+                position,
+                cause,
+            } => write!(
+                f,
+                "argument {position} to '{function}' is not a usable expression: {cause}"
+            ),
+            Self::MissingNamespace { text } => write!(
+                f,
+                "'{text}' names no namespace: write '<namespace>.<name>', \
+                 where <namespace> is one of {}",
+                namespace_list()
+            ),
+            Self::NotAReference { text } => write!(
+                f,
+                "'{text}' is neither a literal nor a reference: a reference starts with \
+                 one of {}",
+                namespace_list()
+            ),
+            Self::UnknownNamespace { namespace } => match nearest_namespace(namespace) {
+                Some(known) => {
+                    write!(
+                        f,
+                        "unknown namespace '{namespace}': did you mean '{known}'?"
+                    )
+                }
+                None => write!(
+                    f,
+                    "unknown namespace '{namespace}': expected one of {}",
+                    namespace_list()
+                ),
+            },
+            Self::MaterialNamespace { namespace, name } => write!(
+                f,
+                "there is no '{namespace}' namespace: a material is read as 'artifact.{name}'"
+            ),
+            Self::EmptyName { namespace } => {
+                write!(f, "nothing follows '{namespace}.': expected a name")
+            }
+            Self::InvalidName { name } => {
+                write!(f, "'{name}' is not a usable name: {IDENTIFIER_RULE}")
+            }
+            Self::InvalidProperty { property } => {
+                write!(
+                    f,
+                    "'{property}' is not a usable property: {IDENTIFIER_RULE}"
+                )
+            }
+            Self::InvalidPipeStage { stage } => write!(
+                f,
+                "'{stage}' is not a usable pipe stage: expected a function name, \
+                 with any arguments in parentheses"
+            ),
+        }
+    }
+}
+
+impl ExprError {
+    /// The namespace this failure was close enough to have been meant as.
+    ///
+    /// An editor offers it as a fix. The message says the same thing, so the
+    /// two cannot disagree.
+    #[must_use]
+    pub fn suggestion(&self) -> Option<RefType> {
+        match self {
+            Self::UnknownNamespace { namespace } => nearest_namespace(namespace),
+            // A material is read as an artifact, so the namespace to write is
+            // known outright rather than guessed at.
+            Self::MaterialNamespace { .. } => Some(RefType::Artifact),
+            Self::NotAnExpression
+            | Self::Unclosed
+            | Self::Empty
+            | Self::MissingSource
+            | Self::UnterminatedString { .. }
+            | Self::InvalidFunctionName { .. }
+            | Self::UnclosedCall { .. }
+            | Self::InvalidArgument { .. }
+            | Self::MissingNamespace { .. }
+            | Self::NotAReference { .. }
+            | Self::EmptyName { .. }
+            | Self::InvalidName { .. }
+            | Self::InvalidProperty { .. }
+            | Self::InvalidPipeStage { .. } => None,
+        }
+    }
+}
+
+impl std::error::Error for ExprError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidArgument { cause, .. } => Some(cause.as_ref()),
+            Self::NotAnExpression
+            | Self::Unclosed
+            | Self::Empty
+            | Self::MissingSource
+            | Self::UnterminatedString { .. }
+            | Self::InvalidFunctionName { .. }
+            | Self::UnclosedCall { .. }
+            | Self::MissingNamespace { .. }
+            | Self::NotAReference { .. }
+            | Self::UnknownNamespace { .. }
+            | Self::MaterialNamespace { .. }
+            | Self::EmptyName { .. }
+            | Self::InvalidName { .. }
+            | Self::InvalidProperty { .. }
+            | Self::InvalidPipeStage { .. } => None,
+        }
+    }
+}
+
+/// The namespaces a reference can name, formatted for a message.
+fn namespace_list() -> String {
+    RefType::ALL
+        .iter()
+        .map(|ref_type| ref_type.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Parse an expression string.
 ///
 /// The string should be in the form `${...}` containing a pipeline expression.
+/// Returns `None` for anything else; [`parse_expression_detailed`] returns the
+/// reason instead.
 ///
 /// # Examples
 ///
@@ -392,53 +632,78 @@ pub enum StringPart {
 /// }
 /// ```
 pub fn parse_expression(s: &str) -> Option<Expression> {
-    let s = s.trim();
+    parse_expression_detailed(s).ok()
+}
 
-    // Must be wrapped in ${ }
-    let inner = s.strip_prefix("${").and_then(|s| s.strip_suffix('}'))?;
-    let inner = inner.trim();
-
-    if inner.is_empty() {
-        return None;
-    }
+/// Parse an expression string, reporting why it is not one.
+///
+/// The counterpart to [`parse_expression`], for callers that put the failure in
+/// front of an author. Accepts exactly the same strings.
+///
+/// # Examples
+///
+/// ```
+/// use rite_model::expression::{parse_expression_detailed, ExprError, RefType};
+///
+/// let err = parse_expression_detailed("${nonsense.x}").unwrap_err();
+/// assert!(matches!(err, ExprError::UnknownNamespace { .. }));
+///
+/// let err = parse_expression_detailed("${paramm.region}").unwrap_err();
+/// assert_eq!(err.to_string(), "unknown namespace 'paramm': did you mean 'param'?");
+/// ```
+///
+/// # Errors
+///
+/// Returns the [`ExprError`] naming the first thing that did not parse.
+pub fn parse_expression_detailed(s: &str) -> Result<Expression, ExprError> {
+    // Text that never opened an expression is a different mistake from text
+    // that opened one and did not close it, and only the wrapper knows which.
+    let Some(rest) = s.trim().strip_prefix("${") else {
+        return Err(ExprError::NotAnExpression);
+    };
+    let Some(inner) = rest.strip_suffix('}') else {
+        return Err(ExprError::Unclosed);
+    };
 
     parse_pipeline(inner)
 }
 
 /// Parse a pipeline expression (without the `${ }` wrapper).
-fn parse_pipeline(s: &str) -> Option<Expression> {
+fn parse_pipeline(s: &str) -> Result<Expression, ExprError> {
     let s = s.trim();
 
     // Split on pipe operator, being careful about nested parentheses.
-    let parts = split_on_pipes(s);
+    let parts = split_top_level(s, b'|');
+    let first = parts.first().copied().unwrap_or("").trim();
 
-    if parts.is_empty() {
-        return None;
+    // An empty source with stages after it is a pipeline that starts from
+    // nothing, which is a different mistake from an empty `${}`.
+    if first.is_empty() && parts.len() > 1 {
+        return Err(ExprError::MissingSource);
     }
 
-    // First part is the source.
-    let source = parse_source(parts.first()?.trim())?;
-
+    let source = parse_source(first)?;
     if parts.len() == 1 {
         // No pipeline, just a source.
-        return Some(source);
+        return Ok(source);
     }
 
-    // Rest are pipe stages.
-    let mut stages = Vec::new();
+    let mut stages = Vec::with_capacity(parts.len().saturating_sub(1));
     for part in parts.iter().skip(1) {
-        let stage = parse_pipe_stage(part.trim())?;
-        stages.push(stage);
+        stages.push(parse_pipe_stage(part.trim())?);
     }
 
-    Some(Expression::Pipeline {
+    Ok(Expression::Pipeline {
         source: Box::new(source),
         stages,
     })
 }
 
-/// Split a string on pipe operators, respecting parentheses.
-fn split_on_pipes(s: &str) -> Vec<&str> {
+/// Split a string on `delimiter`, ignoring any inside parentheses.
+///
+/// Serves both delimiters the grammar has: `|` between pipeline stages and `,`
+/// between call arguments. An empty string splits into nothing.
+fn split_top_level(s: &str, delimiter: u8) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
     let mut paren_depth: u32 = 0;
@@ -448,7 +713,7 @@ fn split_on_pipes(s: &str) -> Vec<&str> {
         match b {
             b'(' => paren_depth += 1,
             b')' => paren_depth = paren_depth.saturating_sub(1),
-            b'|' if paren_depth == 0 => {
+            _ if b == delimiter && paren_depth == 0 => {
                 parts.push(&s[start..i]);
                 start = i + 1;
             }
@@ -464,178 +729,216 @@ fn split_on_pipes(s: &str) -> Vec<&str> {
     parts
 }
 
-/// Parse a source expression (reference, literal, or function call).
-fn parse_source(s: &str) -> Option<Expression> {
-    let s = s.trim();
-
-    // Try to parse as a function call (for concat, etc.)
-    if let Some(expr) = parse_function_call(s) {
-        return Some(expr);
-    }
-
-    // Try to parse as a reference (namespace.name.property).
-    if let Some(expr_ref) = parse_ref(s) {
-        return Some(Expression::Reference(expr_ref));
-    }
-
-    // Try to parse as a literal.
-    if let Some(lit) = parse_literal(s) {
-        return Some(Expression::Literal(lit));
-    }
-
-    None
-}
-
-/// Parse a reference: `namespace.name` or `namespace.name.property`.
-fn parse_ref(s: &str) -> Option<Reference> {
-    let parts: Vec<&str> = s.splitn(3, '.').collect();
-
-    if parts.len() < 2 {
-        return None;
-    }
-
-    let namespace = parts[0];
-    if !is_valid_identifier(namespace) {
-        return None;
-    }
-
-    // Parse and validate namespace.
-    let ref_type: RefType = namespace.parse().ok()?;
-
-    let name = parts[1];
-    if !is_valid_identifier(name) {
-        return None;
-    }
-
-    let property = if parts.len() == 3 {
-        let prop = parts[2];
-        if !is_valid_identifier(prop) {
-            return None;
-        }
-        Some(prop.to_string())
-    } else {
-        None
-    };
-
-    Some(Reference {
-        ref_type,
-        name: name.to_string(),
-        property,
-    })
-}
-
-/// Parse a literal value.
-fn parse_literal(s: &str) -> Option<Literal> {
-    let s = s.trim();
-
-    // String literal (double or single quoted).
-    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
-        let inner = &s[1..s.len() - 1];
-        return Some(Literal::String(inner.to_string()));
-    }
-
-    // Integer literal.
-    if let Ok(i) = s.parse::<i64>() {
-        return Some(Literal::Integer(i));
-    }
-
-    None
-}
-
-/// Parse a function call: `name(arg1, arg2, ...)`
-fn parse_function_call(s: &str) -> Option<Expression> {
-    let s = s.trim();
-
-    // Find the opening paren.
-    let paren_pos = s.find('(')?;
-    let name = &s[..paren_pos];
-
-    if !is_valid_identifier(name) {
-        return None;
-    }
-
-    // Must end with closing paren.
-    if !s.ends_with(')') {
-        return None;
-    }
-
-    let args_str = &s[paren_pos + 1..s.len() - 1];
-
-    // Parse arguments.
-    let args = parse_function_args(args_str)?;
-
-    // For functions like concat, the args ARE the sources, represented as a Pipeline
-    // with a placeholder source and the function as the first stage.
-    Some(Expression::Pipeline {
-        source: Box::new(Expression::Literal(Literal::Integer(0))), // Placeholder
-        stages: vec![PipeStage::with_args(name, args)],
-    })
-}
-
-/// Parse function arguments, handling nested expressions.
-fn parse_function_args(s: &str) -> Option<Vec<Expression>> {
+/// Parse the part of a pipeline before the first `|`.
+///
+/// A source is a quoted string, an integer, a function call, or a reference.
+/// Which one is decided from the text before any of them is parsed: a quote
+/// opens a string, a name followed by `(` opens a call, and a dot separates a
+/// namespace from a name. A failure then reports the shape the author reached
+/// for.
+fn parse_source(s: &str) -> Result<Expression, ExprError> {
     let s = s.trim();
 
     if s.is_empty() {
-        return Some(Vec::new());
+        return Err(ExprError::Empty);
     }
 
-    let mut args = Vec::new();
-    let mut current_start = 0;
-    let mut paren_depth: u32 = 0;
-    let bytes = s.as_bytes();
+    if let Some(quote) = s.chars().next().filter(|c| *c == '"' || *c == '\'') {
+        return parse_string_literal(s, quote).map(Expression::Literal);
+    }
 
-    for (i, &b) in bytes.iter().enumerate() {
-        match b {
-            b'(' => paren_depth += 1,
-            b')' => paren_depth = paren_depth.saturating_sub(1),
-            b',' if paren_depth == 0 => {
-                let arg = &s[current_start..i];
-                let expr = parse_pipeline(arg.trim())?;
-                args.push(expr);
-                current_start = i + 1;
-            }
-            _ => {}
+    if let Some(paren) = s.find('(')
+        && is_valid_identifier(&s[..paren])
+    {
+        // The arguments are the sources, so the source slot holds a placeholder.
+        return parse_call(s, paren).map(|stage| Expression::Pipeline {
+            source: Box::new(Expression::Literal(Literal::Integer(0))),
+            stages: vec![stage],
+        });
+    }
+
+    if let Some((namespace, rest)) = s.split_once('.') {
+        return parse_ref(namespace, rest).map(Expression::Reference);
+    }
+
+    if let Ok(value) = s.parse::<i64>() {
+        return Ok(Expression::Literal(Literal::Integer(value)));
+    }
+
+    // A bare name is a reference that lost its namespace, which is a different
+    // mistake from text that was never going to be one.
+    if is_valid_identifier(s) {
+        return Err(ExprError::MissingNamespace {
+            text: s.to_string(),
+        });
+    }
+
+    Err(ExprError::NotAReference {
+        text: s.to_string(),
+    })
+}
+
+/// Parse a reference split at its first dot: `name` or `name.property`.
+fn parse_ref(namespace: &str, rest: &str) -> Result<Reference, ExprError> {
+    // Not a name at all, so it was never a reference. Says so rather than
+    // reporting an unknown namespace, which would send the author looking for
+    // the wrong mistake.
+    if !is_valid_identifier(namespace) {
+        return Err(ExprError::NotAReference {
+            text: format!("{namespace}.{rest}"),
+        });
+    }
+
+    let (name, property) = match rest.split_once('.') {
+        Some((name, property)) => (name, Some(property)),
+        None => (rest, None),
+    };
+
+    let Ok(ref_type) = namespace.parse::<RefType>() else {
+        return Err(unknown_namespace(namespace, name));
+    };
+
+    if name.is_empty() {
+        return Err(ExprError::EmptyName {
+            namespace: namespace.to_string(),
+        });
+    }
+    if !is_valid_identifier(name) {
+        return Err(ExprError::InvalidName {
+            name: name.to_string(),
+        });
+    }
+
+    if let Some(property) = property
+        && !is_valid_identifier(property)
+    {
+        return Err(ExprError::InvalidProperty {
+            property: property.to_string(),
+        });
+    }
+
+    Ok(Reference {
+        ref_type,
+        name: name.to_string(),
+        property: property.map(ToString::to_string),
+    })
+}
+
+/// Classify a namespace that is not one this DSL has.
+fn unknown_namespace(namespace: &str, name: &str) -> ExprError {
+    // `material` is the namespace an author reaches for that does not exist:
+    // materials are declared under `materials:` and read as artifacts, so the
+    // mistake is worth naming rather than guessing at. Matched within one edit
+    // so that the plural, which is what the declaring key is called, lands on
+    // the same explanation.
+    if edit_distance(namespace, "material") <= 1 {
+        return ExprError::MaterialNamespace {
+            namespace: namespace.to_string(),
+            name: name.to_string(),
+        };
+    }
+
+    ExprError::UnknownNamespace {
+        namespace: namespace.to_string(),
+    }
+}
+
+/// The namespace `s` was close enough to have been meant as, if any.
+///
+/// Close enough is an edit distance of one or two, which covers a doubled or
+/// dropped letter and a plural. Anything further is reported as unknown rather
+/// than guessed at.
+fn nearest_namespace(s: &str) -> Option<RefType> {
+    RefType::ALL
+        .iter()
+        .map(|known| (*known, edit_distance(s, known.as_str())))
+        .filter(|(_, distance)| *distance <= 2)
+        .min_by_key(|(_, distance)| *distance)
+        .map(|(known, _)| known)
+}
+
+/// Levenshtein distance between two strings.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut previous: Vec<usize> = (0..=b_chars.len()).collect();
+    let mut current = vec![0; b_chars.len() + 1];
+
+    for (i, a_char) in a.chars().enumerate() {
+        current[0] = i + 1;
+        for (j, b_char) in b_chars.iter().enumerate() {
+            let substitution = previous[j] + usize::from(a_char != *b_char);
+            let deletion = previous[j + 1] + 1;
+            let insertion = current[j] + 1;
+            current[j + 1] = substitution.min(deletion).min(insertion);
         }
+        std::mem::swap(&mut previous, &mut current);
     }
 
-    // Add the last argument.
-    if current_start < s.len() {
-        let arg = &s[current_start..];
-        let expr = parse_pipeline(arg.trim())?;
-        args.push(expr);
+    previous[b_chars.len()]
+}
+
+/// Parse a quoted string literal, given the quote character that opened it.
+fn parse_string_literal(s: &str, quote: char) -> Result<Literal, ExprError> {
+    // Both quote characters are one byte, so the closing one cannot be the
+    // opening one read twice: a lone quote is unterminated.
+    if s.len() < 2 || !s.ends_with(quote) {
+        return Err(ExprError::UnterminatedString { quote });
     }
 
-    Some(args)
+    Ok(Literal::String(s[1..s.len() - 1].to_string()))
+}
+
+/// Parse a call `name(arg, ...)`, given the position of its `(`.
+///
+/// Serves both positions a call appears in: as a pipeline source, where the
+/// arguments are the sources, and as a pipe stage.
+fn parse_call(s: &str, paren: usize) -> Result<PipeStage, ExprError> {
+    let name = &s[..paren];
+
+    if !is_valid_identifier(name) {
+        return Err(ExprError::InvalidFunctionName {
+            name: name.to_string(),
+        });
+    }
+    if !s.ends_with(')') {
+        return Err(ExprError::UnclosedCall {
+            function: name.to_string(),
+        });
+    }
+
+    // Trimmed first so that `f(  )` splits into no arguments rather than one
+    // blank one.
+    let args = split_top_level(s[paren + 1..s.len() - 1].trim(), b',')
+        .into_iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            parse_pipeline(arg.trim()).map_err(|cause| ExprError::InvalidArgument {
+                function: name.to_string(),
+                position: index + 1,
+                cause: Box::new(cause),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(PipeStage::with_args(name, args))
 }
 
 /// Parse a pipe stage: `function` or `function(args)`.
-fn parse_pipe_stage(s: &str) -> Option<PipeStage> {
+fn parse_pipe_stage(s: &str) -> Result<PipeStage, ExprError> {
     let s = s.trim();
 
-    // Check for function with arguments.
-    if let Some(paren_pos) = s.find('(') {
-        let name = &s[..paren_pos];
-        if !is_valid_identifier(name) {
-            return None;
-        }
-
-        if !s.ends_with(')') {
-            return None;
-        }
-
-        let args_str = &s[paren_pos + 1..s.len() - 1];
-        let args = parse_function_args(args_str)?;
-
-        return Some(PipeStage::with_args(name, args));
+    if let Some(paren) = s.find('(') {
+        return parse_call(s, paren);
     }
 
     // Simple function name.
     if is_valid_identifier(s) {
-        return Some(PipeStage::new(s));
+        return Ok(PipeStage::new(s));
     }
 
-    None
+    Err(ExprError::InvalidPipeStage {
+        stage: s.to_string(),
+    })
 }
 
 /// Check if a string is a valid identifier (ASCII alphanumeric or underscore, not starting
@@ -652,16 +955,10 @@ fn is_valid_identifier(s: &str) -> bool {
 }
 
 /// A `${...}` occurrence located in a scalar, with the result of parsing it.
-///
-/// `parsed` is `None` when the text between the braces is not an expression, or
-/// when nothing closes the occurrence.
 struct Occurrence<'a> {
     range: Range<usize>,
     text: &'a str,
-    /// Whether a matching `}` was found. An unbalanced `${a{b}` is not closed
-    /// even though its text ends in a brace.
-    closed: bool,
-    parsed: Option<Expression>,
+    parsed: Result<Expression, ExprError>,
 }
 
 /// Find every `${...}` occurrence in `s`, parsed or not.
@@ -688,15 +985,19 @@ fn scan_occurrences(s: &str) -> Vec<Occurrence<'_>> {
                 j += 1;
             }
 
-            let end = if depth == 0 { j } else { s.len() };
-            let text = &s[i..end];
+            // An unbalanced `${a{b}` is not closed even though its text ends in
+            // a brace, and has no closing brace to parse against.
             let closed = depth == 0;
+            let end = if closed { j } else { s.len() };
+            let text = &s[i..end];
             found.push(Occurrence {
                 range: i..end,
                 text,
-                closed,
-                // An unclosed occurrence has no closing brace to parse against.
-                parsed: if closed { parse_expression(text) } else { None },
+                parsed: if closed {
+                    parse_expression_detailed(text)
+                } else {
+                    Err(ExprError::Unclosed)
+                },
             });
             i = end;
             continue;
@@ -715,7 +1016,7 @@ pub fn find_expressions(s: &str) -> Vec<LocatedExpression> {
         .into_iter()
         .filter_map(|occurrence| {
             Some(LocatedExpression {
-                expression: occurrence.parsed?,
+                expression: occurrence.parsed.ok()?,
                 range: occurrence.range,
             })
         })
@@ -729,8 +1030,8 @@ pub struct InvalidExpression {
     pub range: Range<usize>,
     /// The occurrence as written, including the `${` and the `}`.
     pub text: String,
-    /// Why it is not a usable expression, phrased for a diagnostic.
-    pub reason: String,
+    /// Why it is not a usable expression.
+    pub reason: ExprError,
 }
 
 /// Find every `${...}` in `s` that does not parse as an expression.
@@ -753,165 +1054,14 @@ pub struct InvalidExpression {
 pub fn find_invalid_expressions(s: &str) -> Vec<InvalidExpression> {
     scan_occurrences(s)
         .into_iter()
-        .filter(|occurrence| occurrence.parsed.is_none())
-        .map(|occurrence| InvalidExpression {
-            reason: if occurrence.closed {
-                explain_expression(occurrence.text)
-            } else {
-                "the expression is missing its closing '}'".to_string()
-            },
-            range: occurrence.range,
-            text: occurrence.text.to_string(),
+        .filter_map(|occurrence| {
+            Some(InvalidExpression {
+                reason: occurrence.parsed.err()?,
+                range: occurrence.range,
+                text: occurrence.text.to_string(),
+            })
         })
         .collect()
-}
-
-/// What a name inside a reference may contain, quoted in messages about one
-/// that does not qualify.
-const IDENTIFIER_RULE: &str =
-    "names hold letters, digits, and underscores, and cannot start with a digit";
-
-/// Explain in one sentence why `s` is not a usable expression.
-///
-/// Takes the text as written, with or without the `${...}` wrapper, so a field
-/// that accepts a bare name as well as a reference can call it on either.
-///
-/// The answer is worked out by re-dispatching through the same predicates the
-/// parser uses, on the error path only. The parser itself reports no reason: it
-/// returns [`Option`] because most of its callers only need to know whether the
-/// text was an expression at all.
-///
-/// # Examples
-///
-/// ```
-/// use rite_model::expression::explain_expression;
-///
-/// assert!(explain_expression("${nonsense.x}").contains("unknown namespace"));
-/// ```
-pub fn explain_expression(s: &str) -> String {
-    let trimmed = s.trim();
-    let Some(inner) = trimmed.strip_prefix("${").and_then(|r| r.strip_suffix('}')) else {
-        return format!(
-            "write it as an expression, '${{<namespace>.<name>}}', where <namespace> is one of {}",
-            namespace_list()
-        );
-    };
-    explain_inner(inner)
-}
-
-/// The namespaces a reference can name, formatted for a message.
-fn namespace_list() -> String {
-    RefType::ALL
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Explain a failure inside the `${...}` wrapper.
-fn explain_inner(inner: &str) -> String {
-    let inner = inner.trim();
-    if inner.is_empty() {
-        return "the expression is empty".to_string();
-    }
-
-    let parts = split_on_pipes(inner);
-    let source = parts.first().map_or("", |p| p.trim());
-    if parse_source(source).is_none() {
-        return explain_source(source);
-    }
-
-    for stage in parts.iter().skip(1) {
-        let stage = stage.trim();
-        if parse_pipe_stage(stage).is_none() {
-            return format!(
-                "'{stage}' is not a usable pipe stage: expected a function name, \
-                 with any arguments in parentheses"
-            );
-        }
-    }
-
-    // The source and every stage parse on their own, so nothing above applies.
-    // Kept so the function is total.
-    format!("'{inner}' is not a usable expression")
-}
-
-/// Explain a failure in the part of a pipeline before the first `|`.
-///
-/// A source is a function call, a reference, or a literal. The shape the author
-/// reached for is read off the text: parentheses mean a call, a quote means a
-/// string, and anything else is judged as a reference, which is what the three
-/// namespaces are for.
-fn explain_source(s: &str) -> String {
-    if let Some(paren) = s.find('(') {
-        let name = &s[..paren];
-        if !is_valid_identifier(name) {
-            return format!("'{name}' is not a usable function name");
-        }
-        if !s.ends_with(')') {
-            return format!("the call to '{name}' is missing its closing ')'");
-        }
-        return format!("the arguments to '{name}' are not usable expressions");
-    }
-    if let Some(quote) = s.chars().next().filter(|c| *c == '"' || *c == '\'') {
-        return format!("the string is missing its closing {quote}");
-    }
-    explain_reference(s)
-}
-
-/// Explain a failure in a `namespace.name` or `namespace.name.property` reference.
-fn explain_reference(s: &str) -> String {
-    let parts: Vec<&str> = s.splitn(3, '.').collect();
-    let namespace = parts.first().copied().unwrap_or("");
-
-    if parts.len() < 2 {
-        return format!(
-            "'{s}' names no namespace: write '<namespace>.<name>', \
-             where <namespace> is one of {}",
-            namespace_list()
-        );
-    }
-
-    // Not a name at all, so it was never a reference. Says so rather than
-    // reporting an unknown namespace, which would send the author looking for
-    // the wrong mistake.
-    if !is_valid_identifier(namespace) {
-        return format!(
-            "'{s}' is neither a literal nor a reference: a reference starts with \
-             one of {}",
-            namespace_list()
-        );
-    }
-
-    if namespace.parse::<RefType>().is_err() {
-        // `material` is the namespace an author reaches for that does not
-        // exist: materials are declared under `materials:` and read as
-        // artifacts, so the mistake is worth naming rather than listing past.
-        if namespace == "material" {
-            return format!(
-                "there is no 'material' namespace: a material is read as 'artifact.{}'",
-                parts[1]
-            );
-        }
-        return format!(
-            "unknown namespace '{namespace}': expected one of {}",
-            namespace_list()
-        );
-    }
-
-    if parts[1].is_empty() {
-        return format!("nothing follows '{namespace}.': expected a name");
-    }
-    if !is_valid_identifier(parts[1]) {
-        return format!("'{}' is not a usable name: {IDENTIFIER_RULE}", parts[1]);
-    }
-    if let Some(property) = parts.get(2)
-        && !is_valid_identifier(property)
-    {
-        return format!("'{property}' is not a usable property: {IDENTIFIER_RULE}");
-    }
-
-    format!("'{s}' is not a usable reference")
 }
 
 /// Parse a JSON value into an `ExprValue`, extracting all `${...}` expressions.
@@ -1579,6 +1729,12 @@ mod tests {
             assert_eq!(found[0].text, "${nonsense.x}");
             assert_eq!(
                 found[0].reason,
+                ExprError::UnknownNamespace {
+                    namespace: "nonsense".to_string(),
+                }
+            );
+            assert_eq!(
+                found[0].reason.to_string(),
                 "unknown namespace 'nonsense': expected one of param, role, artifact"
             );
         }
@@ -1593,11 +1749,42 @@ mod tests {
 
         #[test]
         fn the_material_namespace_names_the_artifact_form() {
-            let found = find_invalid_expressions("${material.manifest}");
-            assert_eq!(found.len(), 1);
+            // The plural is what the declaring key is called, so it lands on
+            // the same explanation rather than the generic unknown-namespace one.
+            for namespace in ["material", "materials"] {
+                let found = find_invalid_expressions(&format!("${{{namespace}.manifest}}"));
+                assert_eq!(found.len(), 1, "for {namespace}");
+                assert_eq!(
+                    found[0].reason,
+                    ExprError::MaterialNamespace {
+                        namespace: namespace.to_string(),
+                        name: "manifest".to_string(),
+                    }
+                );
+                assert_eq!(
+                    found[0].reason.to_string(),
+                    format!(
+                        "there is no '{namespace}' namespace: \
+                         a material is read as 'artifact.manifest'"
+                    )
+                );
+                assert_eq!(
+                    found[0].reason.suggestion(),
+                    Some(RefType::Artifact),
+                    "an editor fix points at the artifact namespace"
+                );
+            }
+        }
+
+        #[test]
+        fn a_pipeline_with_nothing_before_the_pipe_is_not_an_empty_expression() {
             assert_eq!(
-                found[0].reason,
-                "there is no 'material' namespace: a material is read as 'artifact.manifest'"
+                parse_expression_detailed("${ | sha256 }").unwrap_err(),
+                ExprError::MissingSource
+            );
+            assert_eq!(
+                parse_expression_detailed("${}").unwrap_err(),
+                ExprError::Empty
             );
         }
 
@@ -1606,7 +1793,11 @@ mod tests {
             let found = find_invalid_expressions("see ${artifact.k");
             assert_eq!(found.len(), 1);
             assert_eq!(found[0].text, "${artifact.k");
-            assert_eq!(found[0].reason, "the expression is missing its closing '}'");
+            assert_eq!(found[0].reason, ExprError::Unclosed);
+            assert_eq!(
+                found[0].reason.to_string(),
+                "the expression is missing its closing '}'"
+            );
         }
 
         #[test]
@@ -1644,17 +1835,146 @@ mod tests {
             ] {
                 let found = find_invalid_expressions(input);
                 assert_eq!(found.len(), 1, "{input} should be rejected");
-                assert_eq!(found[0].reason, expected, "for {input}");
+                assert_eq!(found[0].reason.to_string(), expected, "for {input}");
             }
         }
 
         #[test]
         fn a_bare_name_is_told_to_use_the_wrapper() {
+            let error = parse_expression_detailed("keypair").unwrap_err();
+            assert_eq!(error, ExprError::NotAnExpression);
             assert_eq!(
-                explain_expression("keypair"),
+                error.to_string(),
                 "write it as an expression, '${<namespace>.<name>}', \
                  where <namespace> is one of param, role, artifact"
             );
+        }
+
+        #[test]
+        fn a_namespace_one_or_two_edits_away_is_suggested() {
+            for (input, expected) in [
+                ("${paramm.region}", RefType::Param),
+                ("${params.region}", RefType::Param),
+                ("${roles.officer}", RefType::Role),
+                ("${artifacts.ksr}", RefType::Artifact),
+            ] {
+                let error = parse_expression_detailed(input).unwrap_err();
+                assert_eq!(error.suggestion(), Some(expected), "for {input}");
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&format!("did you mean '{expected}'")),
+                    "for {input}: {error}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_namespace_nothing_like_a_known_one_gets_no_suggestion() {
+            for input in ["${nonsense.x}", "${env.HOME}", "${secret.pin}"] {
+                let error = parse_expression_detailed(input).unwrap_err();
+                assert!(
+                    matches!(error, ExprError::UnknownNamespace { .. }),
+                    "{input} should be an unknown namespace, got {error:?}"
+                );
+                assert_eq!(error.suggestion(), None, "{input} should not be guessed at");
+            }
+        }
+
+        #[test]
+        fn a_failing_argument_names_its_position_and_its_own_cause() {
+            let error = parse_expression_detailed("${concat(artifact.a, nonsense.b)}").unwrap_err();
+            assert_eq!(
+                error,
+                ExprError::InvalidArgument {
+                    function: "concat".to_string(),
+                    position: 2,
+                    cause: Box::new(ExprError::UnknownNamespace {
+                        namespace: "nonsense".to_string(),
+                    }),
+                }
+            );
+            assert_eq!(
+                error.to_string(),
+                "argument 2 to 'concat' is not a usable expression: \
+                 unknown namespace 'nonsense': expected one of param, role, artifact"
+            );
+        }
+
+        #[test]
+        fn a_lone_quote_is_an_unterminated_string() {
+            // The source is dispatched on its first character, so a quote that
+            // opens a string is never also read as the one that closes it.
+            for (input, quote) in [("${\"}", '"'), ("${'}", '\''), ("${\"abc}", '"')] {
+                assert_eq!(
+                    parse_expression_detailed(input).unwrap_err(),
+                    ExprError::UnterminatedString { quote },
+                    "for {input}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_quote_opens_a_string_even_when_it_holds_a_parenthesis() {
+            let parsed = parse_expression_detailed("${\"a(b\"}");
+            assert!(
+                matches!(parsed, Ok(Expression::Literal(Literal::String(ref s))) if s == "a(b"),
+                "the parenthesis belongs to the string, got {parsed:?}"
+            );
+        }
+
+        #[test]
+        fn the_shape_a_source_is_read_as_comes_from_its_first_characters() {
+            // A dot means a reference, so a name with a parenthesis in it is a
+            // broken name rather than a broken call.
+            for (input, expected) in [
+                (
+                    "${param.x(1)}",
+                    ExprError::InvalidName {
+                        name: "x(1)".to_string(),
+                    },
+                ),
+                (
+                    "${42abc}",
+                    ExprError::NotAReference {
+                        text: "42abc".to_string(),
+                    },
+                ),
+                (
+                    "${1.5}",
+                    ExprError::NotAReference {
+                        text: "1.5".to_string(),
+                    },
+                ),
+            ] {
+                assert_eq!(
+                    parse_expression_detailed(input).unwrap_err(),
+                    expected,
+                    "for {input}"
+                );
+            }
+        }
+
+        #[test]
+        fn parses_every_accepted_form() {
+            for input in [
+                "${artifact.ksr}",
+                "${artifact.keypair.public}",
+                "${param.region | sha256 | hex}",
+                "${\"literal\"}",
+                "${'literal'}",
+                "${42}",
+                "${-42}",
+                "${\"\"}",
+                "${concat(artifact.a, artifact.b) | hex}",
+                "${pad(artifact.a, 4)}",
+            ] {
+                assert!(
+                    parse_expression_detailed(input).is_ok(),
+                    "{input} should parse, got {:?}",
+                    parse_expression_detailed(input)
+                );
+            }
         }
     }
 }

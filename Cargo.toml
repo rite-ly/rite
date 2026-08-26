@@ -16,7 +16,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.2"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.88"
 license = "GPL-3.0-only"
@@ -28,17 +28,17 @@ homepage = "https://ritely.io"
 # pins the inter-crate dependency for users installing from crates.io. Every crate
 # is published together at the same version each release: the runtime, stdlib,
 # OpenSSL backend, renderer, and TUI carry no cross-version API guarantee.
-rite-sdk = { path = "crates/rite-sdk", version = "0.4" }
-rite-model = { path = "crates/rite-model", version = "0.4" }
-rite-resolver = { path = "crates/rite-resolver", version = "0.4" }
-rite-runtime = { path = "crates/rite-runtime", version = "0.4" }
-rite-openssl = { path = "crates/rite-openssl", version = "0.4" }
-rite-piv = { path = "crates/rite-piv", version = "0.4" }
-rite-yubikey = { path = "crates/rite-yubikey", version = "0.4" }
+rite-sdk = { path = "crates/rite-sdk", version = "0.5" }
+rite-model = { path = "crates/rite-model", version = "0.5" }
+rite-resolver = { path = "crates/rite-resolver", version = "0.5" }
+rite-runtime = { path = "crates/rite-runtime", version = "0.5" }
+rite-openssl = { path = "crates/rite-openssl", version = "0.5" }
+rite-piv = { path = "crates/rite-piv", version = "0.5" }
+rite-yubikey = { path = "crates/rite-yubikey", version = "0.5" }
 # Sole consumer (the `rite` CLI) builds it without default features.
-rite-stdlib = { path = "crates/rite-stdlib", version = "0.4", default-features = false }
-rite-render = { path = "crates/rite-render", version = "0.4" }
-rite-tui = { path = "crates/rite-tui", version = "0.4" }
+rite-stdlib = { path = "crates/rite-stdlib", version = "0.5", default-features = false }
+rite-render = { path = "crates/rite-render", version = "0.5" }
+rite-tui = { path = "crates/rite-tui", version = "0.5" }
 
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["raw_value"] }

@@ -54,5 +54,12 @@
       ],
       minimumReleaseAge: "3 days",
     },
+    {
+      description: "Lock file maintenance is not gated on release age",
+      matchUpdateTypes: [
+        "lockFileMaintenance"
+      ],
+      minimumReleaseAge: null,
+    },
   ],
 }

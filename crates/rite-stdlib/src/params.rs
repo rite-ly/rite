@@ -170,7 +170,11 @@ impl Default for GenerateKeypairParams {
 #[cfg(feature = "crypto")]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WrapKeyParams {
-    /// Wrapping algorithm. Supported: `"CMS-RSA-GCM"` (default), `"CMS-RSA-CBC"`.
+    /// Wrapping algorithm. Defaults to `"CMS-RSA-GCM"`.
+    ///
+    /// The OpenSSL backend accepts `"CMS-RSA-GCM"` and `"CMS-RSA-CBC"`. The
+    /// other names `WrapAlgorithm` parses, `"AES-KW"`, `"AES-KWP"` and
+    /// `"RSA-OAEP-SHA256"`, have no backend and fail when the step runs.
     #[serde(default)]
     pub algorithm: Option<String>,
 }

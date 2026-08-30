@@ -19,7 +19,8 @@ pub enum ArtifactValue {
         /// Public key (None for non-exportable HSM keys).
         public_key: Option<PublicKeyDer>,
     },
-    /// Wrapped key (CMS `EnvelopedData`, AES Key Wrap, or RSA-OAEP).
+    /// Wrapped key. The container follows `algorithm`; the OpenSSL backend
+    /// produces a CMS `ContentInfo`.
     WrappedKey {
         /// Wrapped key bytes (format depends on algorithm).
         data: Vec<u8>,

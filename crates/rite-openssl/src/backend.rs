@@ -134,6 +134,9 @@ impl Backend for OpenSslBackend {
         /// Verifies signatures for every algorithm this build can sign with.
         as_verify_mut: VerifyBackend,
         /// Supports CMS-RSA-GCM and CMS-RSA-CBC key wrapping and unwrapping.
+        /// Both paths export the target key to DER in process memory before
+        /// encrypting it, so they suit software keys rather than keys held
+        /// inside a hardware boundary.
         as_transport_mut: KeyTransportBackend,
         /// Provides cryptographically secure random bytes via the OpenSSL CSPRNG.
         as_random_mut: RandomBackend,
@@ -640,23 +643,28 @@ fn build_cert(
 /// CMS-encrypt `key_material` to a recipient certificate.
 ///
 /// Shared by `wrap` (self-signed cert built from the KEK) and `wrap_to_public` (cert built
-/// from an external public key). OpenSSL's `CMS_encrypt` selects the key-encapsulation
-/// mechanism automatically based on the recipient certificate's public key type:
+/// from an external public key). `CMS_encrypt` selects the key-encapsulation path from the
+/// recipient certificate's public key type, so `algorithm` does not determine it: a
+/// `CMS-RSA-GCM` wrap to an EC recipient takes the key-agreement path below.
 ///
-/// **RSA recipient — `KeyTransportRecipientInfo` (RFC 5652 §6.2)**
+/// `algorithm` selects the content cipher, and the cipher selects the CMS structure.
+/// AES-256-GCM produces `AuthEnvelopedData` (RFC 5083), AES-256-CBC produces
+/// `EnvelopedData` (RFC 5652 §6), which carries no integrity protection.
+///
+/// **RSA recipient, `KeyTransRecipientInfo` (RFC 5652 §6.2)**
 /// The content-encryption key (CEK) is encrypted directly under the recipient's RSA public
-/// key using RSAES-PKCS1-v1.5. This is the default in OpenSSL's `CMS_encrypt`; OAEP
-/// would require `CMS_KEY_PARAM` flags and is not used here.
+/// key using RSAES-PKCS1-v1.5. OAEP requires setting a padding mode on the recipient's
+/// `EVP_PKEY_CTX`, which needs the `CMS_KEY_PARAM` partial-envelope path that rust-openssl
+/// does not expose.
 ///
-/// **EC P-256 recipient — `KeyAgreementRecipientInfo` (RFC 5753 §3.1)**
-/// OpenSSL generates an ephemeral P-256 key pair, performs one-pass ECDH between the
-/// ephemeral private key and the recipient's static public key, then feeds the shared
-/// secret into the ANSI X9.63 KDF (SHA-256) to produce a 128-bit key-encryption key.
-/// That KEK wraps the CEK with AES-128-KeyWrap (RFC 3394). The algorithm identifier in
-/// the CMS blob is `dhSinglePass-stdDH-sha256kdf-scheme` (OID 1.3.132.1.11.1).
-///
-/// The `algorithm` parameter controls only the **content** cipher (AES-256-GCM or
-/// AES-256-CBC); the key-encapsulation path above is orthogonal to it.
+/// **EC recipient, `KeyAgreeRecipientInfo` (RFC 5753 §3.1)**
+/// OpenSSL generates an ephemeral key on the recipient's curve, performs one-pass ECDH
+/// against the recipient's static public key, and feeds the shared secret into the ANSI
+/// X9.63 KDF to derive a key-encryption key that wraps the CEK with AES Key Wrap
+/// (RFC 3394). The KDF digest is SHA-1, `dhSinglePass-stdDH-sha1kdf-scheme`
+/// (OID 1.3.133.16.840.63.0.2): OpenSSL falls back to SHA-1 when no digest is set, and
+/// setting one needs the same `CMS_KEY_PARAM` path. The KEK size follows the content
+/// cipher, so AES-256-GCM gives `id-aes256-wrap` and AES-128-CBC gives `id-aes128-wrap`.
 fn cms_encrypt(
     cert: openssl::x509::X509,
     key_material: &[u8],

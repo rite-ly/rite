@@ -151,8 +151,9 @@ sections:
     name: "Key Generation"
     description: |
       Generate the backup-wrapping keypair inside the workstation. The private
-      key is created in memory, never displayed, and never leaves this machine
-      in plaintext.
+      key is created in memory and never displayed. Wrapping later serialises
+      it to DER in process memory, so nothing written to the ceremony media
+      holds it in plaintext.
     role: ${role.crypto_officer}
     steps:
       generate_backup_key:
@@ -213,7 +214,6 @@ sections:
           Before continuing, confirm with the witnesses that:
           - The escrow key fingerprint matches the value on the worksheet
           - The wrapped output is written only to the ceremony media
-          - The in-memory private key is cleared once wrapping succeeds
 
   media:
     act: protection

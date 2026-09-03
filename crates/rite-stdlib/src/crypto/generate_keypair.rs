@@ -3,12 +3,12 @@
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
+    ParamIssue, Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
 };
 use rite_sdk::{Backend, KeyAlgorithm, KeyPolicy, KeySpec};
 use serde_json::json;
 
-use crate::params::GenerateKeypairParams;
+use crate::params::{GenerateKeypairParams, string_param};
 
 /// Generate an asymmetric cryptographic keypair via the configured backend.
 pub struct GenerateKeypairAction;
@@ -19,6 +19,19 @@ impl Action for GenerateKeypairAction {
             action_type: ActionType::GenerateKeypair,
             description: "Generate an asymmetric cryptographic keypair",
             category: ActionCategory::Crypto,
+        }
+    }
+
+    fn validate(&self, params: &serde_json::Value, _step: &StepInfo) -> Vec<ParamIssue> {
+        // `algorithm` is required, but an absent value means it is deferred to
+        // run time rather than missing, so only a present value is checked.
+        match string_param(params, "algorithm") {
+            Ok(None) => Vec::new(),
+            Ok(Some(name)) if name.parse::<KeyAlgorithm>().is_ok() => Vec::new(),
+            Ok(Some(name)) => vec![ParamIssue::definition(format!(
+                "unknown key algorithm '{name}'"
+            ))],
+            Err(message) => vec![ParamIssue::definition(message)],
         }
     }
 

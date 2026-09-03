@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, StepInfo,
-    StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
+    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, ParamIssue,
+    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
 };
 use rite_sdk::Backend;
 use serde_json::json;
@@ -29,6 +29,10 @@ impl Action for VerifySignatureAction {
             description: "Verify a signature against a public key",
             category: ActionCategory::Crypto,
         }
+    }
+
+    fn validate(&self, params: &serde_json::Value, _step: &StepInfo) -> Vec<ParamIssue> {
+        super::sign_data::validate_sign_algorithm(params)
     }
 
     fn execute(

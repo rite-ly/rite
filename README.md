@@ -23,7 +23,7 @@ The industry has learned to take them seriously, but still lacks simple, reusabl
 A ceremony unfolds in phases. The same YAML drives all of them:
 
 1. **Author** — write the ceremony as YAML. Editor extensions provide diagnostics, completion, and inline navigation.
-2. **Validate** — `rite check` catches missing references, undefined roles, and schema errors.
+2. **Validate** — `rite check` catches missing references, undefined roles, schema errors, and step parameters no action can act on.
 3. **Prepare** — `rite script` produces the printed protocol participants follow and complete by hand during the ceremony, archived alongside the digital transcript.
 4. **Execute** — `rite run` walks operators and witnesses through the steps and recording every action in an append-only transcript.
 5. **Audit** — `rite verify` confirms transcript integrity; `rite report` produces a human-readable audit document for stakeholders.

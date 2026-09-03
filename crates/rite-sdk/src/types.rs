@@ -408,20 +408,19 @@ impl TryFrom<String> for SignAlgorithm {
 }
 
 /// Wrapping algorithm. Determines both the cryptographic method and the output format.
+///
+/// The `Rsa` in the CMS variant names describes the recipient type they were
+/// written for, not a restriction: an RSA recipient takes RSAES-PKCS1-v1.5 key
+/// transport, and an EC recipient takes the RFC 5753 key-agreement path under
+/// the same variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
 #[non_exhaustive]
 pub enum WrapAlgorithm {
     /// CMS `EnvelopedData` with AES-256-CBC (legacy, unauthenticated).
-    ///
-    /// An RSA recipient takes RSAES-PKCS1-v1.5 key transport. An EC recipient
-    /// takes the RFC 5753 key-agreement path instead, despite the name.
     /// Output: CMS `ContentInfo` DER.
     CmsRsaCbc,
     /// CMS `AuthEnvelopedData` with AES-256-GCM (recommended).
-    ///
-    /// An RSA recipient takes RSAES-PKCS1-v1.5 key transport. An EC recipient
-    /// takes the RFC 5753 key-agreement path instead, despite the name.
     /// Output: CMS `ContentInfo` DER.
     CmsRsaGcm,
     /// NIST AES Key Wrap (RFC 3394). Requires a symmetric wrapping key.

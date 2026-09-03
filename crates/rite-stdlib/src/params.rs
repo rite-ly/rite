@@ -2,6 +2,23 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Read a `with:` field that must hold a string, for `Action::validate`.
+///
+/// `Ok(None)` covers both an unset field and one deferred to run time, which
+/// the literal projection leaves absent. Neither is an error before execution.
+pub(crate) fn string_param<'a>(
+    params: &'a serde_json::Value,
+    field: &str,
+) -> Result<Option<&'a str>, String> {
+    match params.get(field) {
+        None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(Some)
+            .ok_or_else(|| format!("{field} must be a string, got {value}")),
+    }
+}
+
 /// Params for `clock_check` action.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClockCheckParams {

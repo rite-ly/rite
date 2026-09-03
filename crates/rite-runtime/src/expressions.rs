@@ -370,6 +370,41 @@ pub fn evaluate_expr_value(
     }
 }
 
+/// Project the literal part of an `ExprValue` to JSON, dropping whatever is
+/// only known at run time.
+///
+/// `rite check` has no artifacts, no backend, and no evaluated parameters, so
+/// an `Expr` or `Interpolated` node has no value to inspect. Such a node
+/// yields `None`, and an object field holding one is left out of the object.
+/// An array containing one yields `None` as a whole: object fields are
+/// addressed by name, so an absent one is visible to whoever reads the result,
+/// while array elements are addressed by position, and silently dropping one
+/// renumbers the rest.
+///
+/// The result is therefore a subset of the block [`evaluate_expr_value`] will
+/// build. A caller must not read an absent field as unset.
+#[must_use]
+pub fn literal_expr_value(value: &ExprValue) -> Option<serde_json::Value> {
+    match value {
+        ExprValue::Literal(lit) => Some(literal_to_json(lit)),
+        ExprValue::Expr(_) | ExprValue::Interpolated(_) => None,
+        ExprValue::Object(map) => {
+            let mut result = serde_json::Map::new();
+            for (k, v) in map {
+                if let Some(json) = literal_expr_value(v) {
+                    result.insert(k.clone(), json);
+                }
+            }
+            Some(serde_json::Value::Object(result))
+        }
+        ExprValue::Array(arr) => arr
+            .iter()
+            .map(literal_expr_value)
+            .collect::<Option<Vec<_>>>()
+            .map(serde_json::Value::Array),
+    }
+}
+
 /// Convert a Literal to a JSON value.
 fn literal_to_json(lit: &Literal) -> serde_json::Value {
     match lit {
@@ -438,6 +473,71 @@ pub fn value_to_json(value: &Value) -> serde_json::Value {
         Value::Integer(i) => serde_json::Value::Number((*i).into()),
         Value::Boolean(b) => serde_json::Value::Bool(*b),
         Value::Null => serde_json::Value::Null,
+    }
+}
+
+#[cfg(test)]
+mod literal_projection_tests {
+    use super::literal_expr_value;
+    use rite_model::expression::{ExprValue, Literal, StringPart, parse_expression};
+    use serde_json::json;
+
+    fn deferred() -> ExprValue {
+        ExprValue::Expr(parse_expression("${param.algo}").expect("parse"))
+    }
+
+    fn literal(s: &str) -> ExprValue {
+        ExprValue::Literal(Literal::String(s.to_string()))
+    }
+
+    #[test]
+    fn keeps_literal_fields_and_drops_deferred_ones() {
+        let value = ExprValue::Object(
+            [
+                ("algorithm".to_string(), literal("CMS-RSA-GCM")),
+                ("label".to_string(), deferred()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        assert_eq!(
+            literal_expr_value(&value),
+            Some(json!({"algorithm": "CMS-RSA-GCM"})),
+        );
+    }
+
+    #[test]
+    fn drops_an_interpolated_field() {
+        let value = ExprValue::Object(
+            [(
+                "subject".to_string(),
+                ExprValue::Interpolated(vec![
+                    StringPart::Literal("CN=".to_string()),
+                    StringPart::Expr(parse_expression("${param.cn}").expect("parse")),
+                ]),
+            )]
+            .into_iter()
+            .collect(),
+        );
+
+        assert_eq!(literal_expr_value(&value), Some(json!({})));
+    }
+
+    #[test]
+    fn a_deferred_element_discards_the_whole_array() {
+        // Elements are addressed by position, so dropping one would renumber
+        // the rest and change what a length or index check sees.
+        let value = ExprValue::Array(vec![literal("a"), deferred()]);
+        assert_eq!(literal_expr_value(&value), None);
+
+        let all_literal = ExprValue::Array(vec![literal("a"), literal("b")]);
+        assert_eq!(literal_expr_value(&all_literal), Some(json!(["a", "b"])));
+    }
+
+    #[test]
+    fn a_fully_deferred_block_yields_nothing() {
+        assert_eq!(literal_expr_value(&deferred()), None);
     }
 }
 

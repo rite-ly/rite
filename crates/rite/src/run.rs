@@ -91,6 +91,21 @@ pub fn run(args: Args) {
         std::process::exit(1);
     }
 
+    // Both kinds are fatal here, for the reason the unsupported-action check
+    // above is: this process is the executor, so a value it cannot carry out
+    // stops the run before the first key exists.
+    let issues = crate::common::step_param_issues(&resolved);
+    if !issues.is_empty() {
+        eprintln!(
+            "This ceremony has {} invalid step parameter(s):",
+            issues.len()
+        );
+        for issue in &issues {
+            eprintln!("  - step '{}': {}", issue.step.as_str(), issue.message);
+        }
+        std::process::exit(1);
+    }
+
     if let Err(e) = preflight_check_materials(&resolved) {
         eprintln!("Error: {e}");
         std::process::exit(1);

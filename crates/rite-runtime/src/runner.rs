@@ -182,6 +182,23 @@ pub trait Action: Send + Sync {
     /// Apply per-step parameter defaults before validation.
     fn apply_defaults(&self, _params: &mut serde_json::Value, _step: &StepInfo) {}
 
+    /// Report problems in a step's `with:` block without executing it.
+    ///
+    /// Runs before any step does, so a value the handler cannot act on is
+    /// reported while the ceremony is still a document.
+    ///
+    /// `params` holds the literal part of the block, as produced by
+    /// [`literal_expr_value`](crate::literal_expr_value): a field whose value
+    /// is an unevaluated expression is absent, because its value belongs to
+    /// run time. Report what a value that *is* present gets wrong, and never
+    /// report a field as missing.
+    ///
+    /// An empty vector means the block is acceptable as far as this handler
+    /// can tell before execution.
+    fn validate(&self, _params: &serde_json::Value, _step: &StepInfo) -> Vec<ParamIssue> {
+        Vec::new()
+    }
+
     /// Execute the action.
     ///
     /// # Errors
@@ -196,6 +213,59 @@ pub trait Action: Send + Sync {
         reporter: &mut Reporter<'_>,
         backend: Option<&mut dyn Backend>,
     ) -> Result<StepResult, ActionError>;
+}
+
+/// Whether a `with:` problem is wrong everywhere, or only here.
+///
+/// The same split [`ActionRegistry::unsupported_actions`] rests on: a
+/// definition is validated on one machine and executed on another, so a
+/// finding that depends on the running binary must not condemn the document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ParamIssueKind {
+    /// The value is not one this action accepts, in any build.
+    Definition,
+    /// The value is a valid one the running binary cannot carry out, because
+    /// the backend or feature that implements it is absent.
+    Unsupported,
+}
+
+/// A problem a handler found in a step's `with:` block.
+#[derive(Debug, Clone)]
+pub struct ParamIssue {
+    /// Whether the problem travels with the document or with this build.
+    pub kind: ParamIssueKind,
+    /// What is wrong, phrased for the ceremony author.
+    pub message: String,
+}
+
+impl ParamIssue {
+    /// A value no build accepts.
+    pub fn definition(message: impl Into<String>) -> Self {
+        Self {
+            kind: ParamIssueKind::Definition,
+            message: message.into(),
+        }
+    }
+
+    /// A valid value this build cannot carry out.
+    pub fn unsupported(message: impl Into<String>) -> Self {
+        Self {
+            kind: ParamIssueKind::Unsupported,
+            message: message.into(),
+        }
+    }
+}
+
+/// A [`ParamIssue`] together with the step it was found in.
+#[derive(Debug, Clone)]
+pub struct StepParamIssue {
+    /// The step whose `with:` block holds the problem.
+    pub step: rite_model::StepId,
+    /// Whether the problem travels with the document or with this build.
+    pub kind: ParamIssueKind,
+    /// What is wrong, phrased for the ceremony author.
+    pub message: String,
 }
 
 /// Registry mapping action types to their handlers.
@@ -241,6 +311,40 @@ impl ActionRegistry {
             }
         }
         result
+    }
+
+    /// Ask each step's handler what is wrong with its `with:` block.
+    ///
+    /// Handlers see the literal part of the block with defaults applied, the
+    /// same order the executor uses. A step whose action has no handler in
+    /// this build is skipped: [`unsupported_actions`](Self::unsupported_actions)
+    /// already reports it, and there is nobody to ask. A step whose whole
+    /// `with:` block is an expression is skipped too, since none of it is
+    /// known yet.
+    #[must_use]
+    pub fn validate_steps(&self, steps: &[rite_model::Step]) -> Vec<StepParamIssue> {
+        let mut issues = Vec::new();
+        for step in steps {
+            let Some(handler) = self.actions.get(&step.action) else {
+                continue;
+            };
+            let Some(mut params) = crate::expressions::literal_expr_value(&step.with) else {
+                continue;
+            };
+            let step_info = crate::executor::step_info_from(step);
+            handler.apply_defaults(&mut params, &step_info);
+            issues.extend(
+                handler
+                    .validate(&params, &step_info)
+                    .into_iter()
+                    .map(|issue| StepParamIssue {
+                        step: step.id.clone(),
+                        kind: issue.kind,
+                        message: issue.message,
+                    }),
+            );
+        }
+        issues
     }
 }
 
@@ -852,6 +956,111 @@ sections:
         rite_resolver::resolve(yaml, None)
             .into_result()
             .expect("resolve")
+    }
+
+    /// Rejects any `statement` naming a colour, so a test can tell a handler
+    /// finding apart from a resolution error.
+    struct PickyAction;
+
+    impl Action for PickyAction {
+        fn metadata(&self) -> ActionMetadata {
+            ActionMetadata {
+                action_type: ActionType::Attest,
+                description: "test action with an opinion about its params",
+                category: ActionCategory::Verification,
+            }
+        }
+
+        fn validate(&self, params: &serde_json::Value, _step: &StepInfo) -> Vec<ParamIssue> {
+            match params.get("statement").and_then(serde_json::Value::as_str) {
+                Some("red") => vec![ParamIssue::definition("statement must not be a colour")],
+                Some("puce") => vec![ParamIssue::unsupported("this build has no puce")],
+                _ => Vec::new(),
+            }
+        }
+
+        fn execute(
+            &self,
+            _step: &StepInfo,
+            _ctx: &HandlerContext,
+            _params: &serde_json::Value,
+            _reporter: &mut Reporter<'_>,
+            _backend: Option<&mut dyn Backend>,
+        ) -> Result<StepResult, ActionError> {
+            Ok(StepResult::completed("done".to_string()))
+        }
+    }
+
+    fn ceremony_with_statement(statement: &str) -> Ceremony {
+        let yaml = format!(
+            r#"
+version: "0.2"
+name: "Test"
+roles:
+  participant:
+    person: "Alice"
+sections:
+  main:
+    role: ${{role.participant}}
+    steps:
+      ping:
+        action: attest
+        with:
+          statement: "{statement}"
+"#
+        );
+        rite_resolver::resolve(&yaml, None)
+            .into_result()
+            .expect("resolve")
+    }
+
+    #[test]
+    fn validate_steps_reports_what_the_handler_rejects() {
+        let ceremony = ceremony_with_statement("red");
+        let mut registry = ActionRegistry::new();
+        registry.register(Arc::new(PickyAction));
+
+        let issues = registry.validate_steps(&ceremony.execution_plan);
+        let [issue] = issues.as_slice() else {
+            panic!("expected exactly one issue, got {issues:?}");
+        };
+        assert_eq!(issue.step.as_str(), "ping");
+        assert_eq!(issue.message, "statement must not be a colour");
+        assert_eq!(issue.kind, ParamIssueKind::Definition);
+    }
+
+    #[test]
+    fn validate_steps_carries_the_kind_the_handler_chose() {
+        // The kind decides whether `rite check` fails or merely warns, so it
+        // has to survive the trip through the registry.
+        let ceremony = ceremony_with_statement("puce");
+        let mut registry = ActionRegistry::new();
+        registry.register(Arc::new(PickyAction));
+
+        let issues = registry.validate_steps(&ceremony.execution_plan);
+        let [issue] = issues.as_slice() else {
+            panic!("expected exactly one issue, got {issues:?}");
+        };
+        assert_eq!(issue.kind, ParamIssueKind::Unsupported);
+    }
+
+    #[test]
+    fn validate_steps_accepts_a_block_the_handler_is_happy_with() {
+        let ceremony = ceremony_with_statement("I confirm.");
+        let mut registry = ActionRegistry::new();
+        registry.register(Arc::new(PickyAction));
+
+        assert!(registry.validate_steps(&ceremony.execution_plan).is_empty());
+    }
+
+    #[test]
+    fn validate_steps_skips_an_action_this_build_has_no_handler_for() {
+        // `unsupported_actions` is what reports these; asking a handler that
+        // does not exist would be a second, misleading error on one step.
+        let ceremony = ceremony_with_statement("red");
+        let registry = ActionRegistry::new();
+
+        assert!(registry.validate_steps(&ceremony.execution_plan).is_empty());
     }
 
     fn dry_run_output_config() -> OutputConfig {

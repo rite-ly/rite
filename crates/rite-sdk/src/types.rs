@@ -408,14 +408,19 @@ impl TryFrom<String> for SignAlgorithm {
 }
 
 /// Wrapping algorithm. Determines both the cryptographic method and the output format.
+///
+/// The `Rsa` in the CMS variant names describes the recipient type they were
+/// written for, not a restriction: an RSA recipient takes RSAES-PKCS1-v1.5 key
+/// transport, and an EC recipient takes the RFC 5753 key-agreement path under
+/// the same variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
 #[non_exhaustive]
 pub enum WrapAlgorithm {
-    /// CMS `EnvelopedData` with RSA PKCS#1 v1.5 + AES-256-CBC (legacy).
+    /// CMS `EnvelopedData` with AES-256-CBC (legacy, unauthenticated).
     /// Output: CMS `ContentInfo` DER.
     CmsRsaCbc,
-    /// CMS `AuthEnvelopedData` with RSA PKCS#1 v1.5 + AES-256-GCM (recommended).
+    /// CMS `AuthEnvelopedData` with AES-256-GCM (recommended).
     /// Output: CMS `ContentInfo` DER.
     CmsRsaGcm,
     /// NIST AES Key Wrap (RFC 3394). Requires a symmetric wrapping key.
@@ -469,21 +474,6 @@ impl TryFrom<String> for WrapAlgorithm {
     }
 }
 
-/// Output format family, derived from [`WrapAlgorithm`].
-///
-/// Used for display, artifact metadata, and compatibility checking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum WrappedKeyFormat {
-    /// CMS `ContentInfo` DER.
-    Cms,
-    /// Raw AES Key Wrap bytes (RFC 3394 / RFC 5649).
-    AesKeyWrap,
-    /// Raw RSA-OAEP encrypted bytes.
-    RsaOaep,
-}
-
 /// A wrapped (encrypted) key with its algorithm and metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WrappedKey {
@@ -493,19 +483,6 @@ pub struct WrappedKey {
     pub data: Vec<u8>,
     /// Human-readable hint identifying the intended unwrapping key (for audit).
     pub recipient_hint: Option<String>,
-}
-
-impl WrappedKey {
-    /// Return the output format family for this wrapped key.
-    pub fn format(&self) -> WrappedKeyFormat {
-        match self.algorithm {
-            WrapAlgorithm::CmsRsaCbc | WrapAlgorithm::CmsRsaGcm => WrappedKeyFormat::Cms,
-            WrapAlgorithm::AesKeyWrap | WrapAlgorithm::AesKeyWrapPad => {
-                WrappedKeyFormat::AesKeyWrap
-            }
-            WrapAlgorithm::RsaOaepSha256 => WrappedKeyFormat::RsaOaep,
-        }
-    }
 }
 
 /// The kind of attestation evidence a backend can produce.

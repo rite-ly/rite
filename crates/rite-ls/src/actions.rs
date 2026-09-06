@@ -47,13 +47,13 @@ pub static ALL: &[ActionMeta] = &[
     },
     ActionMeta {
         name: "wrap_key",
-        short: "Wrap key using CMS EnvelopedData",
-        long: "Wrap key using CMS EnvelopedData.",
+        short: "Encrypt a key under another key for transport",
+        long: "Encrypt a private key under another key so it can leave the machine. The container follows the wrapping algorithm. The OpenSSL backend produces CMS: AuthEnvelopedData for CMS-RSA-GCM, EnvelopedData for CMS-RSA-CBC.",
     },
     ActionMeta {
         name: "unwrap_key",
-        short: "Unwrap key using CMS EnvelopedData",
-        long: "Unwrap key using CMS EnvelopedData.",
+        short: "Decrypt a wrapped key and import it into a backend",
+        long: "Decrypt a wrapped key and import it into a backend under a new label.",
     },
     ActionMeta {
         name: "export_public",

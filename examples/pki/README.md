@@ -50,10 +50,12 @@ openssl version   # the library rite was built against, if system-linked
 Signs an intermediate CA CSR using the root CA private key recovered from the encrypted
 backup. Requires the wrapped key and certificate produced by `root_ca_software`.
 
-### `root_ca_hsm.rite.yaml` _(planned — requires PKCS#11 backend)_
+### `root_ca_hsm.rite.yaml` _(planned — requires a PKCS#11 backend)_
 
 Root CA key generation on a PKCS#11-capable HSM. The private key is generated on-device
-and never exported.
+and never exported, so the ceremony has no wrapping step: the wrapping actions export the
+target key to DER, which an HSM-resident key does not permit. Backup runs through the
+vendor's own cloning or backup procedure, outside PKCS#11.
 
 ## Test Keys
 

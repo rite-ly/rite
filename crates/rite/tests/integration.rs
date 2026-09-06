@@ -140,3 +140,97 @@ parameters:
         .expect("parameter exists");
     assert_eq!(param.value, serde_json::json!("Production"));
 }
+
+/// The only pass that can see a bad `with:` value is the handler's own, since
+/// the resolver keeps the block opaque.
+#[test]
+fn step_params_are_checked_before_execution() {
+    let yaml = r#"
+version: "0.2"
+name: "Unimplemented wrap scheme"
+roles:
+  officer:
+    person: "Alice"
+backends:
+  openssl:
+    provider: openssl
+sections:
+  main:
+    role: ${role.officer}
+    steps:
+      gen:
+        action: generate_keypair
+        backend: openssl
+        with:
+          algorithm: RSA-2048
+        creates: key
+      wrap:
+        action: wrap_key
+        backend: openssl
+        reads:
+          key_to_wrap: ${artifact.key}
+          wrapping_key: ${artifact.key}
+        with:
+          algorithm: AES-KW
+        creates: wrapped
+"#;
+    let (resolved, _spans, diags) = rite_resolver::analyze_str(None, yaml);
+    assert!(
+        !diags
+            .iter()
+            .any(|d| d.severity == rite_resolver::Severity::Error),
+        "the ceremony itself resolves; the defect is in `with:`: {diags:?}"
+    );
+    let resolved = resolved.expect("ceremony resolves");
+
+    let issues = rite_stdlib::default_registry().validate_steps(&resolved.execution_plan);
+    let [issue] = issues.as_slice() else {
+        panic!("expected exactly one issue, got {issues:?}");
+    };
+    assert_eq!(issue.step.as_str(), "wrap");
+    assert!(
+        issue.message.contains("no backend in this build"),
+        "unexpected message: {}",
+        issue.message
+    );
+    // A scheme with no backend here may have one elsewhere, so `rite check`
+    // warns rather than failing. Only `rite run` refuses.
+    assert_eq!(issue.kind, rite_runtime::ParamIssueKind::Unsupported);
+}
+
+/// A value the checker cannot see is not a value it may reject.
+#[test]
+fn a_deferred_param_value_is_not_reported() {
+    let yaml = r#"
+version: "0.2"
+name: "Deferred algorithm"
+roles:
+  officer:
+    person: "Alice"
+parameters:
+  algorithm:
+    type: string
+backends:
+  openssl:
+    provider: openssl
+sections:
+  main:
+    role: ${role.officer}
+    steps:
+      gen:
+        action: generate_keypair
+        backend: openssl
+        with:
+          algorithm: ${param.algorithm}
+        creates: key
+"#;
+    let (resolved, _spans, _diags) = rite_resolver::analyze_str(None, yaml);
+    let resolved = resolved.expect("ceremony resolves");
+
+    assert!(
+        rite_stdlib::default_registry()
+            .validate_steps(&resolved.execution_plan)
+            .is_empty(),
+        "an expression has no value until run time, so there is nothing to reject"
+    );
+}

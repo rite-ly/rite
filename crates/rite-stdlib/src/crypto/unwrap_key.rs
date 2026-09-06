@@ -3,7 +3,8 @@
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_backend_key,
+    ParamIssue, Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
+    resolve_backend_key,
 };
 use rite_sdk::{Backend, WrapAlgorithm, WrappedKey};
 use serde_json::json;
@@ -20,6 +21,10 @@ impl Action for UnwrapKeyAction {
             description: "Unwrap a key using another key",
             category: ActionCategory::Crypto,
         }
+    }
+
+    fn validate(&self, params: &serde_json::Value, _step: &StepInfo) -> Vec<ParamIssue> {
+        super::wrap_key::validate_wrap_algorithm(params)
     }
 
     #[allow(clippy::too_many_lines)]

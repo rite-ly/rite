@@ -41,5 +41,5 @@ pub use types::{
     KeyMetadata, KeyPolicy, KeySecurityAttributes, KeySpec, KeyUsages, ParseError, PcrValue,
     PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy,
     Pkcs11Mechanism, Pkcs11TokenFlags, Pkcs11TokenInfo, SignAlgorithm, TpmInfo, WrapAlgorithm,
-    WrappedKey, WrappedKeyFormat, YubikeySlotMetadata,
+    WrappedKey, YubikeySlotMetadata,
 };

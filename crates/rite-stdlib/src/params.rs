@@ -2,6 +2,23 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Read a `with:` field that must hold a string, for `Action::validate`.
+///
+/// `Ok(None)` covers both an unset field and one deferred to run time, which
+/// the literal projection leaves absent. Neither is an error before execution.
+pub(crate) fn string_param<'a>(
+    params: &'a serde_json::Value,
+    field: &str,
+) -> Result<Option<&'a str>, String> {
+    match params.get(field) {
+        None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(Some)
+            .ok_or_else(|| format!("{field} must be a string, got {value}")),
+    }
+}
+
 /// Params for `clock_check` action.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClockCheckParams {
@@ -170,7 +187,11 @@ impl Default for GenerateKeypairParams {
 #[cfg(feature = "crypto")]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WrapKeyParams {
-    /// Wrapping algorithm. Supported: `"CMS-RSA-GCM"` (default), `"CMS-RSA-CBC"`.
+    /// Wrapping algorithm. Defaults to `"CMS-RSA-GCM"`.
+    ///
+    /// The OpenSSL backend accepts `"CMS-RSA-GCM"` and `"CMS-RSA-CBC"`. The
+    /// other names `WrapAlgorithm` parses, `"AES-KW"`, `"AES-KWP"` and
+    /// `"RSA-OAEP-SHA256"`, have no backend and fail when the step runs.
     #[serde(default)]
     pub algorithm: Option<String>,
 }

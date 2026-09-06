@@ -78,7 +78,10 @@ pub use entropy::{
 pub use reporter::{Reporter, ReporterError};
 
 // Executor and its action trait.
-pub use runner::{Action, ActionError, ActionRegistry, ExecutionSummary, Executor, parse_params};
+pub use runner::{
+    Action, ActionError, ActionRegistry, ExecutionSummary, Executor, ParamIssue, ParamIssueKind,
+    StepParamIssue, parse_params,
+};
 
 // Transcript sink, the durable consumer of `StepFact`s.
 pub use transcript_sink::{
@@ -97,7 +100,7 @@ pub use transcript::{compute_file_fingerprint, compute_fingerprint};
 
 // Expression evaluation (used by action implementors).
 pub use expressions::{
-    evaluate, evaluate_expr_value, evaluate_expr_value_to_string, value_to_json,
+    evaluate, evaluate_expr_value, evaluate_expr_value_to_string, literal_expr_value, value_to_json,
 };
 
 // Artifact resolution (used by action implementors).

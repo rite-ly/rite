@@ -92,9 +92,13 @@ pub enum ActionType {
 
     /// Generate RSA or EC keypair.
     GenerateKeypair,
-    /// Wrap key using CMS `EnvelopedData`.
+    /// Encrypt a private key under another key so it can leave the machine.
+    ///
+    /// The container follows the wrapping algorithm. The OpenSSL backend
+    /// produces CMS: `AuthEnvelopedData` for `CMS-RSA-GCM`, `EnvelopedData`
+    /// for `CMS-RSA-CBC`.
     WrapKey,
-    /// Unwrap key using CMS `EnvelopedData`.
+    /// Decrypt a wrapped key and import it into a backend under a new label.
     UnwrapKey,
     /// Export public key from keypair.
     ExportPublic,
@@ -268,8 +272,8 @@ impl ActionType {
             ActionType::ExportPublic => "Export the public component of a keypair.",
             ActionType::SignData => "Sign data with a ceremony key.",
             ActionType::VerifySignature => "Verify a signature against a public key.",
-            ActionType::WrapKey => "Wrap (encrypt) a key for secure transport.",
-            ActionType::UnwrapKey => "Unwrap (decrypt) a transported key.",
+            ActionType::WrapKey => "Encrypt a key under another key for transport.",
+            ActionType::UnwrapKey => "Decrypt a wrapped key and import it into a backend.",
             ActionType::GenerateCsr => "Generate a Certificate Signing Request.",
             ActionType::IssueCertificate => "Issue an X.509 certificate from a CSR.",
             ActionType::PivReadCertificate => "Read a certificate from a PIV smart card slot.",

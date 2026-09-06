@@ -221,11 +221,24 @@ pub fn analyze(
     ceremony_path: &Path,
     inputs: Option<&CeremonyInputs>,
 ) -> (Option<rite_model::Ceremony>, Vec<Diagnostic>) {
+    let (resolved, _spans, diags) = analyze_with_spans(ceremony_path, inputs);
+    (resolved, diags)
+}
+
+/// Parse and validate a ceremony file, keeping the span map.
+///
+/// Same as [`analyze`], for a caller that produces its own diagnostics after
+/// resolution and needs somewhere in the source to point them at.
+pub fn analyze_with_spans(
+    ceremony_path: &Path,
+    inputs: Option<&CeremonyInputs>,
+) -> (Option<rite_model::Ceremony>, SpanMap, Vec<Diagnostic>) {
     let yaml = match std::fs::read_to_string(ceremony_path) {
         Ok(s) => s,
         Err(e) => {
             return (
                 None,
+                SpanMap::default(),
                 vec![Diagnostic {
                     path: Some(ceremony_path.to_owned()),
                     span: None,
@@ -239,7 +252,7 @@ pub fn analyze(
     let (ceremony_opt, span_map, mut diags) = lower::lower_ceremony(Some(ceremony_path), &yaml);
 
     let Some(ceremony) = ceremony_opt else {
-        return (None, diags);
+        return (None, span_map, diags);
     };
 
     let result = resolve_with_material_paths(ceremony, ceremony_path, inputs);
@@ -252,7 +265,7 @@ pub fn analyze(
     }
 
     let resolved = result.into_result().ok();
-    (resolved, diags)
+    (resolved, span_map, diags)
 }
 
 #[cfg(test)]

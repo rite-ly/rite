@@ -3,13 +3,13 @@
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
-    resolve_backend_key,
+    ParamIssue, Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
+    resolve_artifact_bytes, resolve_backend_key,
 };
 use rite_sdk::{Backend, KeyAlgorithm, SignAlgorithm, SignBackend};
 use serde_json::json;
 
-use crate::params::SignDataParams;
+use crate::params::{SignDataParams, string_param};
 
 /// Sign data with a key the backend holds.
 ///
@@ -25,6 +25,10 @@ impl Action for SignDataAction {
             description: "Sign data with a backend-managed key",
             category: ActionCategory::Crypto,
         }
+    }
+
+    fn validate(&self, params: &serde_json::Value, _step: &StepInfo) -> Vec<ParamIssue> {
+        validate_sign_algorithm(params)
     }
 
     fn execute(
@@ -140,6 +144,22 @@ pub(super) fn require_sign_backend<'a>(
     })
 }
 
+/// Check an `algorithm:` value both signing actions accept, before either runs.
+///
+/// Only the name is checked. Whether the key accepts it needs the key, which
+/// exists no earlier than execution, so [`resolve_sign_algorithm`] settles that
+/// half.
+pub(super) fn validate_sign_algorithm(params: &serde_json::Value) -> Vec<ParamIssue> {
+    match string_param(params, "algorithm") {
+        Ok(None) => Vec::new(),
+        Ok(Some(name)) if name.parse::<SignAlgorithm>().is_ok() => Vec::new(),
+        Ok(Some(name)) => vec![ParamIssue::definition(format!(
+            "unknown signature algorithm '{name}'"
+        ))],
+        Err(message) => vec![ParamIssue::definition(message)],
+    }
+}
+
 /// Decide which signature algorithm to use for a key.
 ///
 /// Shared with `verify_signature`, which faces the same choice from the other
@@ -215,5 +235,34 @@ mod tests {
     fn rejects_a_key_that_cannot_sign() {
         let err = resolve_sign_algorithm(None, KeyAlgorithm::Aes256).unwrap_err();
         assert!(err.to_string().contains("cannot produce signatures"));
+    }
+}
+
+#[cfg(test)]
+mod validate_tests {
+    use super::validate_sign_algorithm;
+    use serde_json::json;
+
+    #[test]
+    fn accepts_a_known_algorithm_name() {
+        assert!(validate_sign_algorithm(&json!({"algorithm": "RSA-PSS-SHA256"})).is_empty());
+    }
+
+    #[test]
+    fn rejects_an_unknown_algorithm_name() {
+        let issues = validate_sign_algorithm(&json!({"algorithm": "RSA-PSS-SHA255"}));
+        let [issue] = issues.as_slice() else {
+            panic!("expected exactly one issue, got {issues:?}");
+        };
+        assert!(
+            issue.message.contains("unknown signature algorithm"),
+            "{}",
+            issue.message
+        );
+    }
+
+    #[test]
+    fn an_absent_value_is_not_an_error() {
+        assert!(validate_sign_algorithm(&json!({})).is_empty());
     }
 }

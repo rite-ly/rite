@@ -17,7 +17,8 @@
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, parse_params, resolve_artifact_bytes, resolve_backend_key,
+    ParamIssue, Reporter, StepInfo, StepResult, parse_params, resolve_artifact_bytes,
+    resolve_backend_key,
 };
 use rite_sdk::{Backend, CertificateDer, PublicKeyDer};
 use serde_json::json;
@@ -44,7 +45,7 @@ use x509_cert::{
     time::Validity,
 };
 
-use crate::params::IssueCertificateParams;
+use crate::params::{IssueCertificateParams, string_param};
 
 use super::oids::{
     sig_profile_for_algorithm, verifiable_algorithm_names, verifiable_sign_algorithm,
@@ -158,6 +159,19 @@ impl Action for IssueCertificateAction {
             action_type: ActionType::IssueCertificate,
             description: "Issue X.509 certificate from PKCS#10 CSR",
             category: ActionCategory::Crypto,
+        }
+    }
+
+    fn validate(&self, params: &serde_json::Value, _step: &StepInfo) -> Vec<ParamIssue> {
+        // `path_len` only shapes the sub_ca profile, and an out-of-range value
+        // is already rejected by the u8 type, so the name is the whole check.
+        match string_param(params, "profile") {
+            Ok(None) => Vec::new(),
+            Ok(Some(name)) => match parse_profile(Some(name), None) {
+                Ok(_) => Vec::new(),
+                Err(e) => vec![ParamIssue::definition(e.to_string())],
+            },
+            Err(message) => vec![ParamIssue::definition(message)],
         }
     }
 

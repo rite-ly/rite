@@ -226,7 +226,19 @@ pub fn build_inputs_or_exit(input_args: &InputArgs) -> CeremonyInputs {
 /// Used by `check`, `script`, and `report` — any non-interactive entry point
 /// that needs a `Ceremony` from a YAML path.
 pub fn resolve_or_exit(path: &Path, inputs: Option<&CeremonyInputs>) -> Ceremony {
-    let (resolved_opt, diags) = rite_resolver::analyze(path, inputs);
+    resolve_with_spans_or_exit(path, inputs).0
+}
+
+/// Resolve a ceremony file and keep the span map, printing diagnostics and
+/// exiting on failure.
+///
+/// Used by `check`, which reports handler-level findings of its own and needs
+/// somewhere in the source to point them at.
+pub fn resolve_with_spans_or_exit(
+    path: &Path,
+    inputs: Option<&CeremonyInputs>,
+) -> (Ceremony, rite_resolver::SpanMap) {
+    let (resolved_opt, spans, diags) = rite_resolver::analyze_with_spans(path, inputs);
 
     for d in &diags {
         eprintln!("{d}");
@@ -240,10 +252,11 @@ pub fn resolve_or_exit(path: &Path, inputs: Option<&CeremonyInputs>) -> Ceremony
         std::process::exit(1);
     }
 
-    resolved_opt.unwrap_or_else(|| {
+    let resolved = resolved_opt.unwrap_or_else(|| {
         eprintln!("Internal error: ceremony resolved to None with no errors");
         std::process::exit(1);
-    })
+    });
+    (resolved, spans)
 }
 
 /// Check that all digital materials with file sources exist on disk.
@@ -284,11 +297,30 @@ pub fn preflight_check_materials(resolved: &rite_model::Ceremony) -> Result<(), 
 /// the build supports every action the plan uses.
 #[must_use]
 pub fn unsupported_action_names(resolved: &Ceremony) -> Vec<String> {
-    rite_stdlib::default_registry()
+    registry()
         .unsupported_actions(&resolved.execution_plan)
         .iter()
         .map(ToString::to_string)
         .collect()
+}
+
+/// The stdlib action registry for this build.
+///
+/// Which handlers it holds is fixed at compile time, so one instance serves
+/// every pre-flight in a run of the CLI.
+fn registry() -> &'static rite_runtime::ActionRegistry {
+    static REGISTRY: std::sync::OnceLock<rite_runtime::ActionRegistry> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(rite_stdlib::default_registry)
+}
+
+/// Ask each step's handler what is wrong with its `with:` block.
+///
+/// Each finding carries a [`rite_runtime::ParamIssueKind`] saying whether it
+/// condemns the document or only this build, which is the same split
+/// [`unsupported_action_names`] rests on.
+#[must_use]
+pub fn step_param_issues(resolved: &Ceremony) -> Vec<rite_runtime::StepParamIssue> {
+    registry().validate_steps(&resolved.execution_plan)
 }
 
 /// Prompt the user for any required parameters that have no value yet.

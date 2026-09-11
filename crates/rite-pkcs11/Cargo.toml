@@ -1,0 +1,22 @@
+[package]
+name        = "rite-pkcs11"
+description = "PKCS#11 backend for Rite ceremonies (internal to the `rite` CLI; no stable API)"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+keywords   = []
+categories = []
+publish    = true
+
+[dependencies]
+rite-sdk = { workspace = true }
+# A binding to whatever vendor module the operator loads at run time, not a
+# cryptographic implementation. See docs/development/cryptographic-dependencies.md.
+cryptoki = { workspace = true }
+
+
+[lints]
+workspace = true

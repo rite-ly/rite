@@ -3,15 +3,18 @@
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    ParamIssue, Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
-    resolve_backend_key,
+    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_backend_key,
 };
-use rite_sdk::{Backend, WrapAlgorithm, WrappedKey};
+use rite_sdk::Backend;
 use serde_json::json;
 
-use crate::params::UnwrapKeyParams;
+use crate::params::{UnwrapKeyParams, unwrapped_key_default_policy};
 
 /// Unwrap a key inside the receiving backend.
+///
+/// The scheme comes from the wrapped artifact, which carries what the wrap
+/// did. The ceremony does not restate it: a restated value could disagree with
+/// the bytes, and the bytes are what has to be decrypted.
 pub struct UnwrapKeyAction;
 
 impl Action for UnwrapKeyAction {
@@ -21,10 +24,6 @@ impl Action for UnwrapKeyAction {
             description: "Unwrap a key using another key",
             category: ActionCategory::Crypto,
         }
-    }
-
-    fn validate(&self, params: &serde_json::Value, _step: &StepInfo) -> Vec<ParamIssue> {
-        super::wrap_key::validate_wrap_algorithm(params)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -38,17 +37,11 @@ impl Action for UnwrapKeyAction {
     ) -> Result<StepResult, ActionError> {
         let typed: UnwrapKeyParams = parse_params(params)?;
 
-        let algorithm_str = typed.algorithm.as_deref().unwrap_or("CMS-RSA-GCM");
-        let wrap_alg: WrapAlgorithm = algorithm_str
-            .parse::<WrapAlgorithm>()
-            .map_err(|e| ActionError::Failed(e.to_string()))?;
         let label = typed
             .label
             .as_deref()
             .unwrap_or("unwrapped-key")
             .to_string();
-
-        reporter.log(Icon::Spinner, format!("Unwrapping key using {wrap_alg}..."))?;
 
         let unwrapping_key_ref = step.required_named_input("unwrapping_key", "unwrap_key")?;
         let wrapped_data_ref = step.required_named_input("wrapped_data", "unwrap_key")?;
@@ -79,18 +72,16 @@ impl Action for UnwrapKeyAction {
             ))
         })?;
 
-        let (wrapped_data, wrapped_fingerprint) = match wrapped_key_artifact {
-            ArtifactValue::WrappedKey { data, .. } => {
-                let fp = compute_fingerprint(data);
-                (data.clone(), fp)
-            }
-            _ => {
-                return Err(ActionError::Failed(format!(
-                    "Artifact '{wrapped_data_id}' must be a WrappedKey, found: {:?}",
-                    std::mem::discriminant(wrapped_key_artifact)
-                )));
-            }
+        let ArtifactValue::WrappedKey(wrapped) = wrapped_key_artifact else {
+            return Err(ActionError::Failed(format!(
+                "Artifact '{wrapped_data_id}' must be a WrappedKey, found: {:?}",
+                std::mem::discriminant(wrapped_key_artifact)
+            )));
         };
+        let wrapped_fingerprint = compute_fingerprint(wrapped.data());
+        let scheme = wrapped.scheme();
+
+        reporter.log(Icon::Spinner, format!("Unwrapping key using {scheme}..."))?;
 
         let backend_mut = backend.ok_or_else(|| {
             ActionError::Failed("Backend required for key unwrapping".to_string())
@@ -111,31 +102,71 @@ impl Action for UnwrapKeyAction {
             ))
         })?;
 
-        reporter.log(Icon::Spinner, "Unwrapping key using backend...")?;
-        let wrapped = WrappedKey {
-            algorithm: wrap_alg,
-            data: wrapped_data,
-            recipient_hint: None,
+        let policy = match &typed.policy {
+            None => unwrapped_key_default_policy(),
+            Some(declared) => declared
+                .resolve_from(&unwrapped_key_default_policy())
+                .map_err(ActionError::Failed)?,
         };
-        let key_metadata = unwrap_backend.unwrap(&wrapped, unwrapping_key.key_id, &label)?;
+
+        reporter.log(Icon::Spinner, "Unwrapping key using backend...")?;
+        let key_metadata =
+            unwrap_backend.unwrap(wrapped, unwrapping_key.key_id, &label, policy.clone())?;
+
+        // The public half of what came out. With the wrap step's record from
+        // the origin ceremony, this is what shows the key recovered here is the
+        // key that went in there.
+        let recovered_fingerprint = key_metadata
+            .public_key
+            .as_ref()
+            .map(|key| compute_fingerprint(key.as_bytes()));
+
+        if let Some(declared) = &typed.expect_key {
+            match &recovered_fingerprint {
+                Some(recovered) if recovered == declared => {}
+                Some(recovered) => {
+                    return Err(ActionError::Failed(format!(
+                        "Unwrapped key is {recovered}, but the ceremony declares {declared}. \
+                         The wrong key was recovered, so this step will not complete."
+                    )));
+                }
+                None => {
+                    return Err(ActionError::Failed(format!(
+                        "Backend '{backend_name}' does not export the unwrapped public key, \
+                         so the declared fingerprint {declared} cannot be checked."
+                    )));
+                }
+            }
+        }
 
         reporter.fact(StepFact::BackendOperation {
             step: step.id.clone(),
             kind: "unwrap_key".to_string(),
             inputs: json!({
-                "algorithm": algorithm_str,
+                "scheme": scheme.to_string(),
                 "unwrapping_key": unwrapping_key_ref.display_name(),
                 "wrapped_data": wrapped_data_ref.display_name(),
                 "wrapped_data_fingerprint": wrapped_fingerprint,
                 "label": label,
+                // Recorded whether or not the ceremony declared one: what a
+                // recovered key may do is the receiving ceremony's claim, and
+                // an auditor should not have to know the defaults.
+                "policy": json!({
+                    "persistent": policy.persistent,
+                    "sensitive": policy.sensitive,
+                    "extractable": policy.extractable,
+                    "wrap_with_trusted_only": policy.wrap_with_trusted_only,
+                    "usages": policy.usages.names(),
+                }),
             }),
             outputs: json!({
                 "backend": backend_name,
                 "backend_fingerprint": backend_fingerprint,
                 "unwrapped_key_id": key_metadata.key_id.as_str(),
                 "unwrapped_key_algorithm": key_metadata.algorithm.to_string(),
+                "unwrapped_key_fingerprint": recovered_fingerprint,
             }),
-            fingerprint: None,
+            fingerprint: recovered_fingerprint,
         })?;
 
         let unwrapped = ArtifactValue::BackendKey {
@@ -145,7 +176,7 @@ impl Action for UnwrapKeyAction {
             public_key: key_metadata.public_key,
         };
 
-        let message = format!("Key unwrapped using {wrap_alg}");
+        let message = format!("Key unwrapped using {scheme}");
 
         if let Some(produces) = &step.produces {
             reporter.log(

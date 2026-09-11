@@ -1,4 +1,4 @@
-version: "0.2"
+version: "0.3"
 name: "Root CA Key Generation"
 description: |
   Generate the offline root CA keypair on an air-gapped machine.
@@ -82,9 +82,9 @@ sections:
         backend: openssl
         with:
           algorithm: RSA-4096
-          key_usage:
-            - key_cert_sign
-            - crl_sign
+          policy:
+            # Wrapped for backup below, which a key may not be unless it says so.
+            extractable: true
         creates: root_ca_keypair
         description: "Generate RSA-4096 root CA keypair."
       generate_root_csr:
@@ -118,9 +118,7 @@ sections:
         backend: openssl
         reads:
           key_to_wrap: ${artifact.root_ca_keypair}
-          wrapping_key: ${artifact.transport_pubkey}
-        with:
-          algorithm: CMS-RSA-GCM
+          recipient: ${artifact.transport_pubkey}
         creates: wrapped_root_ca_key
         description: "Encrypt the root CA private key with the transport public key."
 

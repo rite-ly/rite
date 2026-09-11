@@ -40,7 +40,7 @@ fn check_minimal_ceremony_resolves_cleanly() {
 #[test]
 fn check_invalid_ceremony_produces_errors() {
     let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Invalid Ceremony"
 roles: {}
 sections:
@@ -115,7 +115,7 @@ fn assert_declared_outputs(resolved: &rite_model::Ceremony) {
 #[test]
 fn check_with_inputs_passes_parameter_values() {
     let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Parameterized"
 roles: {}
 sections: {}
@@ -141,13 +141,13 @@ parameters:
     assert_eq!(param.value, serde_json::json!("Production"));
 }
 
-/// The only pass that can see a bad `with:` value is the handler's own, since
-/// the resolver keeps the block opaque.
+/// A `with:` value outside an action's vocabulary is a resolver diagnostic,
+/// which is what puts it in front of an editor as well as `rite check`.
 #[test]
-fn step_params_are_checked_before_execution() {
+fn a_bad_with_value_is_reported_by_resolution() {
     let yaml = r#"
-version: "0.2"
-name: "Unimplemented wrap scheme"
+version: "0.3"
+name: "Unusable declared fingerprint"
 roles:
   officer:
     person: "Alice"
@@ -171,38 +171,33 @@ sections:
           key_to_wrap: ${artifact.key}
           wrapping_key: ${artifact.key}
         with:
-          algorithm: AES-KW
+          expect_recipient: "deadbeef"
         creates: wrapped
 "#;
-    let (resolved, _spans, diags) = rite_resolver::analyze_str(None, yaml);
-    assert!(
-        !diags
-            .iter()
-            .any(|d| d.severity == rite_resolver::Severity::Error),
-        "the ceremony itself resolves; the defect is in `with:`: {diags:?}"
-    );
-    let resolved = resolved.expect("ceremony resolves");
-
-    let issues = rite_stdlib::default_registry().validate_steps(&resolved.execution_plan);
-    let [issue] = issues.as_slice() else {
-        panic!("expected exactly one issue, got {issues:?}");
+    let (_resolved, _spans, diags) = rite_resolver::analyze_str(None, yaml);
+    let errors: Vec<&rite_resolver::Diagnostic> = diags
+        .iter()
+        .filter(|d| d.severity == rite_resolver::Severity::Error)
+        .collect();
+    let [error] = errors.as_slice() else {
+        panic!("expected exactly one error, got {errors:?}");
     };
-    assert_eq!(issue.step.as_str(), "wrap");
     assert!(
-        issue.message.contains("no backend in this build"),
+        error.message.contains("sha256:<64 hex digits>"),
         "unexpected message: {}",
-        issue.message
+        error.message
     );
-    // A scheme with no backend here may have one elsewhere, so `rite check`
-    // warns rather than failing. Only `rite run` refuses.
-    assert_eq!(issue.kind, rite_runtime::ParamIssueKind::Unsupported);
+    assert!(
+        error.span.is_some(),
+        "a diagnostic without a span cannot be shown in an editor"
+    );
 }
 
 /// A value the checker cannot see is not a value it may reject.
 #[test]
 fn a_deferred_param_value_is_not_reported() {
     let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Deferred algorithm"
 roles:
   officer:
@@ -224,13 +219,18 @@ sections:
           algorithm: ${param.algorithm}
         creates: key
 "#;
-    let (resolved, _spans, _diags) = rite_resolver::analyze_str(None, yaml);
+    let (resolved, _spans, diags) = rite_resolver::analyze_str(None, yaml);
+    assert!(
+        !diags
+            .iter()
+            .any(|d| d.severity == rite_resolver::Severity::Error),
+        "an expression has no value until run time, so there is nothing to reject: {diags:?}"
+    );
     let resolved = resolved.expect("ceremony resolves");
 
     assert!(
         rite_stdlib::default_registry()
-            .validate_steps(&resolved.execution_plan)
+            .unsupported_step_params(&resolved.execution_plan)
             .is_empty(),
-        "an expression has no value until run time, so there is nothing to reject"
     );
 }

@@ -15,6 +15,9 @@ use rite_model::{ErrorClass, StepFact};
 
 use crate::protocol::{Icon, UiSignal};
 
+/// What a fact with no summary of its own falls back to.
+const UNSUMMARISED: &str = "unknown fact variant";
+
 /// One-line summary of a [`StepFact`] for live-frontend display.
 ///
 /// Returns `None` for facts the live UI shouldn't surface:
@@ -74,10 +77,27 @@ pub fn fact_summary(fact: &StepFact) -> Option<(Icon, String)> {
         StepFact::EntropyDrawn { path, .. } => {
             Some((Icon::Info, format!("Random value drawn: {path}")))
         }
-        // `StepFact` is `#[non_exhaustive]`; future variants may carry
-        // payloads the live UI shouldn't blindly Debug-print. Surface a
-        // typed placeholder until each new variant is given a summary.
-        _ => Some((Icon::Info, "unknown fact variant".to_string())),
+        // Who the wrap is addressed to is the operator's last chance to stop a
+        // wrap they cannot undo, so the fingerprint is shown, not summarised
+        // away.
+        StepFact::WrapRecipientRecorded {
+            source,
+            fingerprint,
+            declared,
+            ..
+        } => Some((
+            Icon::Info,
+            if *declared {
+                format!("Recipient {source} matches the declared {fingerprint}")
+            } else {
+                format!("Recipient {source} is {fingerprint}, undeclared")
+            },
+        )),
+        // `StepFact` is `#[non_exhaustive]`, so this arm is unavoidable in a
+        // crate downstream of the one defining it. A variant reaching it is a
+        // variant added without a line of its own, which an operator sees
+        // mid-ceremony; give every new variant an arm above.
+        _ => Some((Icon::Info, UNSUMMARISED.to_string())),
     }
 }
 
@@ -120,7 +140,24 @@ pub fn truncate_for_display(s: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate_for_display;
+    use super::{UNSUMMARISED, fact_summary, truncate_for_display};
+    use rite_model::{StepFact, StepId};
+
+    /// A fact with no arm of its own reaches the operator as a placeholder in
+    /// the middle of a ceremony, which is worse than saying nothing.
+    #[test]
+    fn the_wrap_recipient_carries_its_fingerprint() {
+        let (_, line) = fact_summary(&StepFact::WrapRecipientRecorded {
+            step: StepId::new("wrap"),
+            source: "escrow_pubkey".to_string(),
+            fingerprint: "sha256:abcd".to_string(),
+            declared: false,
+        })
+        .expect("the live feed surfaces the recipient");
+        assert_ne!(line, UNSUMMARISED);
+        assert!(line.contains("escrow_pubkey"), "{line}");
+        assert!(line.contains("sha256:abcd"), "{line}");
+    }
 
     #[test]
     fn truncate_passes_through_short_input() {

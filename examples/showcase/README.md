@@ -21,10 +21,12 @@ is the ceremony used in the project demo recording.
 
 ### `offline_backup.rite.yaml` — Offline Backup Key Ceremony
 
-A deliberately maximalist ceremony spanning four acts, four roles, physical and
-digital materials, and long structured step instructions. It generates a
-backup-wrapping key, escrows it under the bundled test key, and hands sealed media
-to a custodian. Use it to see how a dense, formal script renders across pages.
+The structure and rendering showcase, and the only ceremony here that uses acts,
+prerequisites, physical materials, and post-ceremony duties. Deliberately
+maximalist: four acts, four roles, and long step instructions built from
+paragraphs and bullet lists. Use it to see how a dense, formal script renders
+across pages. It escrows a key along the way, but `wrap_and_unwrap.rite.yaml` is
+where wrapping itself is explained.
 
 ### `retry_guards.rite.yaml` — Signing Key Ceremony with Retry Guards
 
@@ -45,13 +47,33 @@ the dice contribution, and the serial from the transcript alone.
 ### `sign_and_verify.rite.yaml` — Detached Signature over a Release Manifest
 
 Signs a document with `sign_data` and checks it back with `verify_signature`.
-The contrast between the two steps is the point: signing names a `backend:`
-because it needs the private key, while verification names none, because a
-public key is all a signature check requires. That is what lets the same step
-shape verify a signature made on a smart card, or one that arrived from outside
-the ceremony. Neither step names an algorithm; both derive it from the key.
+Signing names a `backend:` because it needs the private key; verification names
+none, because a public key is all a signature check requires. The same step
+shape therefore verifies a signature made on a smart card, or one that arrived
+from outside the ceremony. Neither step names an algorithm; both derive it from
+the key.
 
 The `key` a verification step names can be a keypair, a bare public key, or a
 certificate carrying one, in DER or PEM. Adding a `backend:` chooses who runs
 the check, for a deployment that requires it inside a validated boundary, and
 does not change what the step accepts.
+
+### `wrap_and_unwrap.rite.yaml` — Wrapping a Key for Transport
+
+Wraps one key twice and unwraps it back. `wrapping_key:` names a key the backend
+already holds, so the ceremony can undo the wrap itself; `recipient:` names a
+public key held by someone else, so only they can open the result. The step
+reads one or the other, never both, and `rite check` rejects a step that names
+neither.
+
+The escrow wrap declares `expect_recipient:`, so the step refuses a key whose
+fingerprint does not match what the ceremony committed to in advance. The
+unwrap declares `expect_key:` as an expression over the key that went in, which
+makes the step assert the round trip; a restore ceremony would put the origin
+ceremony's recorded fingerprint there instead. Neither step names a scheme:
+`unwrap_key` reads it from the wrapped artifact, so it cannot disagree with the
+bytes being decrypted.
+
+Run it and then `rite verify` on the output directory to see the wrap checks:
+each blob is read back and compared against what the transcript says was done
+to it. See `docs/key-wrapping.md`.

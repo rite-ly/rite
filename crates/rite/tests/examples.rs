@@ -41,11 +41,12 @@ fn needs_unavailable_capability(path: &Path) -> bool {
         return true;
     }
 
-    // The post-quantum root CA needs ML-DSA, which OpenSSL only provides from
-    // 3.5 onwards. Distributions still shipping 3.0 (Ubuntu 24.04, and so the
-    // default CI runner) produce a binary with no ML-DSA support compiled in.
-    // CI covers this example in the vendored-OpenSSL job instead.
-    !rite_openssl::ML_DSA_AVAILABLE
+    // The post-quantum root CA needs ML-DSA to sign and ML-KEM to wrap, both
+    // of which OpenSSL only provides from 3.5 onwards. Distributions still
+    // shipping 3.0 (Ubuntu 24.04, and so the default CI runner) produce a
+    // binary with neither compiled in. CI covers this example in the
+    // vendored-OpenSSL job instead.
+    !rite_openssl::POST_QUANTUM_AVAILABLE
         && path
             .file_name()
             .is_some_and(|n| n == "root_ca_post_quantum.rite.yaml")

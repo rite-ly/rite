@@ -1,4 +1,4 @@
-version: "0.2"
+version: "0.3"
 name: "Demo: Root Signing Key Ceremony"
 description: |
   Generate an offline root signing key on an air-gapped workstation, issue its

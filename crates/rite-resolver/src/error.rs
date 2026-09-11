@@ -194,6 +194,68 @@ pub enum ResolveError {
         field: &'static str,
     },
 
+    /// Step `with:` block names a key the action does not have.
+    ///
+    /// Serde ignores an unknown key, so an unreported one is dropped in
+    /// silence and the step quietly does something other than what its author
+    /// wrote. A typo and a field that no longer exists fail the same way and
+    /// are reported the same way.
+    #[error(
+        "Step '{step}': action '{action}' has no '{field}' parameter. Accepted: {}",
+        .action.known_with_fields().join(", ")
+    )]
+    UnknownWithField {
+        /// The step ID.
+        step: StepId,
+        /// The action whose block holds the key.
+        action: ActionType,
+        /// The key that is not a parameter.
+        field: String,
+    },
+
+    /// Step `with:` block holds a value the action cannot accept.
+    ///
+    /// Only values wrong in every build reach here. Whether the running binary
+    /// can carry out an otherwise valid value is a separate question, asked of
+    /// the action handler where a backend exists to answer it.
+    #[error("Step '{step}': action '{action}': {message}")]
+    InvalidWithValue {
+        /// The step ID.
+        step: StepId,
+        /// The action whose parameter is wrong.
+        action: ActionType,
+        /// What is wrong, phrased for the ceremony author. Names the `with:`
+        /// key it is about.
+        message: String,
+    },
+
+    /// Step `reads:` map is missing an input the action requires.
+    #[error("Step '{step}': action '{action}' requires 'reads.{field}'")]
+    MissingReadsInput {
+        /// The step ID.
+        step: StepId,
+        /// The action whose input is missing.
+        action: ActionType,
+        /// The missing `reads:` key.
+        field: &'static str,
+    },
+
+    /// Step `reads:` map names neither or both of two alternative inputs, so
+    /// the path the action would take is undetermined.
+    #[error(
+        "Step '{step}': action '{action}' requires exactly one of {alternatives}, found {found}"
+    )]
+    AmbiguousReadsInput {
+        /// The step ID.
+        step: StepId,
+        /// The action whose input group is unsatisfied.
+        action: ActionType,
+        /// The alternatives, quoted and comma-separated.
+        alternatives: String,
+        /// What the step names instead: `none`, or the keys it declares.
+        found: String,
+    },
+
     /// Step `retry: { attempts: N }` has a zero attempt budget, which can never
     /// run the step. Use `retry: never` to forbid retries instead.
     #[error(

@@ -17,15 +17,19 @@ use rite_model::{
     MaterialSource, Metadata, Output, OutputId, ParamId, Parameter, PostCeremonyDuty, RetryPolicy,
     Role, RoleId, Section, SectionId, Step, StepId, StepInputs, SymbolTable,
 };
-use rite_model::{BackendUsage, DutyType, ParameterType};
+use rite_model::{ActionType, BackendUsage, DutyType, ParameterType};
 use std::collections::{HashMap, HashSet};
 
 /// Schema versions this resolver understands.
 ///
+/// Only the current version is read. A ceremony written against an earlier one
+/// fails here, during resolution, which is before any key exists; that is the
+/// loud failure a compatibility table would otherwise be working around.
+///
 /// When adding support for a new schema version, add its string here and branch the
 /// resolution logic in `resolve_ceremony` as needed. Older versions may need a separate
 /// resolution path if they differ structurally.
-const SUPPORTED_VERSIONS: &[&str] = &["0.2"];
+const SUPPORTED_VERSIONS: &[&str] = &["0.3"];
 
 /// Resolve a ceremony and optional external inputs into IR.
 pub(crate) fn resolve_ceremony(
@@ -538,6 +542,8 @@ impl ResolveContext {
 
                 self.validate_step_backend(&id, step, ceremony);
                 self.validate_step_with_fields(&id, step);
+                self.validate_step_with_values(&id, step.action, &resolved.with);
+                self.validate_step_reads(&id, step);
 
                 steps.push(resolved);
             }
@@ -590,12 +596,9 @@ impl ResolveContext {
     }
 
     fn validate_step_with_fields(&mut self, id: &StepId, step: &schema::StepBody) {
-        let required = step.action.required_with_fields();
-        if required.is_empty() {
-            return;
-        }
         let with_obj = step.with.as_ref().and_then(|w| w.as_object());
-        for field in required {
+
+        for field in step.action.required_with_fields() {
             if !with_obj.is_some_and(|m| m.contains_key(*field)) {
                 self.add_error(ResolveError::MissingWithField {
                     step: id.clone(),
@@ -603,6 +606,90 @@ impl ResolveContext {
                     field,
                 });
             }
+        }
+
+        // Keys are checked before values, and by name rather than through the
+        // literal projection, so a misspelling is caught even where its value
+        // is an expression that resolution cannot see into.
+        let known = step.action.known_with_fields();
+        for field in with_obj.into_iter().flatten().map(|(name, _)| name) {
+            if !known.contains(&field.as_str()) {
+                self.add_error(ResolveError::UnknownWithField {
+                    step: id.clone(),
+                    action: step.action,
+                    field: field.clone(),
+                });
+            }
+        }
+    }
+
+    /// Check the literal `with:` values against the rules that hold in every
+    /// build.
+    ///
+    /// Values still carrying an expression have nothing to check yet, so the
+    /// literal projection is what gets inspected and an absent field is never
+    /// reported.
+    fn validate_step_with_values(
+        &mut self,
+        id: &StepId,
+        action: ActionType,
+        with: &rite_model::expression::ExprValue,
+    ) {
+        let Some(literal) = rite_model::expression::literal_expr_value(with) else {
+            return;
+        };
+        for error in rite_model::params::check(action, &literal) {
+            self.add_error(ResolveError::InvalidWithValue {
+                step: id.clone(),
+                action,
+                message: error.message,
+            });
+        }
+    }
+
+    /// Check a step's `reads:` map against its action's input contract.
+    ///
+    /// A step that names a single positional input has no keys to check, so it
+    /// is reported as naming none of them.
+    fn validate_step_reads(&mut self, id: &StepId, step: &schema::StepBody) {
+        let contract = step.action.reads_contract();
+        if contract.is_empty() {
+            return;
+        }
+        let reads = step.reads.as_ref().and_then(|r| r.as_object());
+        let names = |key: &str| reads.is_some_and(|m| m.contains_key(key));
+
+        for field in contract.required {
+            if !names(field) {
+                self.add_error(ResolveError::MissingReadsInput {
+                    step: id.clone(),
+                    action: step.action,
+                    field,
+                });
+            }
+        }
+
+        for group in contract.exactly_one_of {
+            let present: Vec<&str> = group.iter().copied().filter(|key| names(key)).collect();
+            if present.len() == 1 {
+                continue;
+            }
+            let quote = |keys: &[&str]| {
+                keys.iter()
+                    .map(|key| format!("'{key}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            self.add_error(ResolveError::AmbiguousReadsInput {
+                step: id.clone(),
+                action: step.action,
+                alternatives: quote(group),
+                found: if present.is_empty() {
+                    "none".to_string()
+                } else {
+                    quote(&present)
+                },
+            });
         }
     }
 
@@ -1033,7 +1120,7 @@ mod tests {
         let mut sections = IndexMap::new();
         sections.insert("main".to_string(), empty_section());
         schema::Ceremony {
-            version: "0.2".to_string(),
+            version: "0.3".to_string(),
             name: "Test".to_string(),
             description: None,
             backends: HashMap::new(),
@@ -1136,7 +1223,7 @@ mod tests {
     fn retry_never_parses_from_yaml() {
         // The untagged `RetrySpec` accepts the bare keyword form.
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "T"
 roles:
   p:
@@ -1163,7 +1250,7 @@ sections:
     #[test]
     fn retry_attempts_parses_from_yaml_flow_map() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "T"
 roles:
   p:
@@ -1811,6 +1898,232 @@ sections:
                 .iter()
                 .any(|e| matches!(e, ResolveError::MissingWithField { .. }))
         );
+    }
+
+    /// Resolve a `wrap_key` step reading exactly the given inputs.
+    /// Serde ignores a key it does not know, so an unreported one is dropped
+    /// in silence and the step does something other than what its author
+    /// wrote. A typo and a field that no longer exists fail the same way.
+    #[test]
+    fn errors_on_a_with_key_the_action_does_not_have() {
+        for (action, with) in [
+            // A typo.
+            (
+                ActionType::WrapKey,
+                serde_json::json!({ "expect_recipent": "sha256:00" }),
+            ),
+            // A field that used to exist and now means something else.
+            (
+                ActionType::GenerateKeypair,
+                serde_json::json!({ "key_usage": ["key_cert_sign"] }),
+            ),
+            // A field belonging to a different action.
+            (
+                ActionType::Confirm,
+                serde_json::json!({ "statement": "I observed it" }),
+            ),
+        ] {
+            let mut ceremony = minimal_ceremony();
+            let mut step = make_step_body();
+            step.action = action;
+            step.with = Some(with.clone());
+            ceremony
+                .sections
+                .get_mut("main")
+                .unwrap()
+                .steps
+                .insert("s".to_string(), step);
+
+            let result = resolve_ceremony(ceremony, None);
+            let message = result
+                .errors
+                .iter()
+                .find_map(|e| match e {
+                    ResolveError::UnknownWithField { field, action, .. } => {
+                        Some(format!("{field}|{}", action.known_with_fields().join(", ")))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{action} accepted {with}: {:?}", result.errors));
+            assert!(
+                message.contains('|') && !message.ends_with('|'),
+                "the message lists what the action does accept: {message}"
+            );
+        }
+    }
+
+    /// A key whose value is an expression is still a key, and the projection
+    /// cannot see into it, so the check has to read names rather than values.
+    #[test]
+    fn catches_an_unknown_key_even_where_its_value_is_deferred() {
+        let mut ceremony = minimal_ceremony();
+        let mut step = make_step_body();
+        step.action = ActionType::GenerateKeypair;
+        step.with = Some(serde_json::json!({ "algorythm": "${param.algo}" }));
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("gen".to_string(), step);
+
+        let result = resolve_ceremony(ceremony, None);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::UnknownWithField { .. })),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    /// Values wrong in every build are the resolver's to reject, so that a
+    /// `rite check` and an editor linking no backend both report them.
+    #[test]
+    fn errors_on_a_with_value_outside_the_action_vocabulary() {
+        let mut ceremony = minimal_ceremony();
+        let mut step = make_step_body();
+        step.action = ActionType::GenerateKeypair;
+        step.with = Some(serde_json::json!({ "algorithm": "RSA-9999" }));
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("gen".to_string(), step);
+
+        let result = resolve_ceremony(ceremony, None);
+        assert!(result.is_err());
+        let message = result
+            .errors
+            .iter()
+            .find_map(|e| match e {
+                ResolveError::InvalidWithValue { step, message, .. } if step.as_str() == "gen" => {
+                    Some(message.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected InvalidWithValue, got {:?}", result.errors));
+        assert!(message.contains("unknown key algorithm"), "{message}");
+        assert!(
+            message.contains("algorithm"),
+            "the message names the field it is about: {message}"
+        );
+    }
+
+    /// A field written as an expression is absent from the literal projection,
+    /// and must never be reported as wrong or as missing.
+    #[test]
+    fn accepts_a_with_value_deferred_to_run_time() {
+        let mut ceremony = minimal_ceremony();
+        let mut step = make_step_body();
+        step.action = ActionType::GenerateKeypair;
+        step.with = Some(serde_json::json!({ "algorithm": "${param.algo}" }));
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("gen".to_string(), step);
+
+        let result = resolve_ceremony(ceremony, None);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::InvalidWithValue { .. })),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    fn resolve_wrap_step(reads: serde_json::Value) -> ResolveResult<Ceremony> {
+        let mut ceremony = minimal_ceremony();
+        ceremony.backends.insert(
+            "openssl".to_string(),
+            BackendConfig {
+                provider: "openssl".to_string(),
+                extra: serde_json::json!({}),
+            },
+        );
+        let mut step = make_step_body();
+        step.action = ActionType::WrapKey;
+        step.backend = Some("openssl".to_string());
+        step.reads = Some(reads);
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("wrap".to_string(), step);
+
+        resolve_ceremony(ceremony, None)
+    }
+
+    #[test]
+    fn errors_on_missing_required_reads_input() {
+        let result = resolve_wrap_step(serde_json::json!({ "recipient": "${artifact.pubkey}" }));
+        let missing: Vec<&str> = result
+            .errors
+            .iter()
+            .filter_map(|e| match e {
+                ResolveError::MissingReadsInput { field, .. } => Some(*field),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(missing, vec!["key_to_wrap"]);
+    }
+
+    #[test]
+    fn errors_when_both_alternative_inputs_are_named() {
+        let result = resolve_wrap_step(serde_json::json!({
+            "key_to_wrap": "${artifact.keypair}",
+            "wrapping_key": "${artifact.kek}",
+            "recipient": "${artifact.pubkey}",
+        }));
+        let found: Vec<&str> = result
+            .errors
+            .iter()
+            .filter_map(|e| match e {
+                ResolveError::AmbiguousReadsInput { found, .. } => Some(found.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(found, vec!["'wrapping_key', 'recipient'"]);
+    }
+
+    #[test]
+    fn errors_when_neither_alternative_input_is_named() {
+        let result = resolve_wrap_step(serde_json::json!({ "key_to_wrap": "${artifact.keypair}" }));
+        let found: Vec<&str> = result
+            .errors
+            .iter()
+            .filter_map(|e| match e {
+                ResolveError::AmbiguousReadsInput { found, .. } => Some(found.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(found, vec!["none"]);
+    }
+
+    #[test]
+    fn accepts_either_alternative_input_alone() {
+        for key in ["wrapping_key", "recipient"] {
+            let result = resolve_wrap_step(serde_json::json!({
+                "key_to_wrap": "${artifact.keypair}",
+                key: "${artifact.other}",
+            }));
+            assert!(
+                !result.errors.iter().any(|e| matches!(
+                    e,
+                    ResolveError::AmbiguousReadsInput { .. }
+                        | ResolveError::MissingReadsInput { .. }
+                )),
+                "'{key}' alone must satisfy the contract: {:?}",
+                result.errors
+            );
+        }
     }
 
     #[test]

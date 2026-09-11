@@ -27,9 +27,9 @@ use std::collections::BTreeMap;
 
 use crate::key_material::PublicKeyDer;
 use crate::types::{
-    Attestation, CertRef, KeyId, KeyMetadata, KeySecurityAttributes, KeySpec, PcrValue,
+    Attestation, CertRef, KeyId, KeyMetadata, KeyPolicy, KeySecurityAttributes, KeySpec, PcrValue,
     PivDeviceInfo, PivSlot, PivSlotInfo, Pkcs11Mechanism, Pkcs11TokenInfo, SignAlgorithm, TpmInfo,
-    WrapAlgorithm, WrappedKey, YubikeySlotMetadata,
+    WrapScheme, WrappedKey, YubikeySlotMetadata,
 };
 
 /// Implement the `as_*_mut` upcasting helpers on a backend struct.
@@ -299,21 +299,31 @@ pub trait RandomBackend: Backend {
 }
 
 /// Key transport (wrapping) operations.
+///
+/// Every method returns a [`WrappedKey`] carrying the scheme it was asked for
+/// and a [`WrapDescription`] of what it did, so the caller records an
+/// observation rather than a request.
 pub trait KeyTransportBackend: Backend {
-    /// Wrap `key_id` using `wrapping_key_id` with `algorithm`.
+    /// Wrap `key_id` using `wrapping_key_id` under `scheme`.
     fn wrap(
         &mut self,
         key_id: &KeyId,
         wrapping_key_id: &KeyId,
-        algorithm: WrapAlgorithm,
+        scheme: WrapScheme,
     ) -> Result<WrappedKey, BackendError>;
 
-    /// Unwrap `wrapped` using `unwrapping_key_id`, importing the result with `label`.
+    /// Unwrap `wrapped` using `unwrapping_key_id`, importing the result with
+    /// `label` under `policy`.
+    ///
+    /// The policy is the receiving ceremony's, not the origin's: nothing
+    /// travels with a wrapped key that says what it may do, so the step that
+    /// imports it declares that, exactly as the step that generated it did.
     fn unwrap(
         &mut self,
         wrapped: &WrappedKey,
         unwrapping_key_id: &KeyId,
         label: &str,
+        policy: KeyPolicy,
     ) -> Result<KeyMetadata, BackendError>;
 
     /// Wrap `key_id` to an external recipient's public key.
@@ -323,9 +333,9 @@ pub trait KeyTransportBackend: Backend {
         &mut self,
         key_id: &KeyId,
         recipient_pub_key: &PublicKeyDer,
-        algorithm: WrapAlgorithm,
+        scheme: WrapScheme,
     ) -> Result<WrappedKey, BackendError> {
-        let _ = (key_id, recipient_pub_key, algorithm);
+        let _ = (key_id, recipient_pub_key, scheme);
         Err(BackendError::UnsupportedOperation(
             "wrap_to_public not supported".to_string(),
         ))

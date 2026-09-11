@@ -1,4 +1,4 @@
-version: "0.2"
+version: "0.3"
 name: "Signing Key Ceremony with Retry Guards"
 description: |
   Generate an offline signing key and issue its self-signed certificate, with a

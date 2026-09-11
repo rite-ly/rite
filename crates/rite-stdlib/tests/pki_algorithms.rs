@@ -141,7 +141,7 @@ fn issue_self_signed_root(algorithm: &str) -> Vec<u8> {
 #[test]
 fn every_signing_algorithm_completes_the_pki_chain() {
     let mut algorithms = vec!["RSA-2048", "ECDSA-P256", "ECDSA-P384", "Ed25519"];
-    if rite_openssl::ML_DSA_AVAILABLE {
+    if rite_openssl::POST_QUANTUM_AVAILABLE {
         algorithms.push("ML-DSA-65");
     }
 

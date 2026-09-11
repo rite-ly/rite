@@ -14,11 +14,10 @@
 //! `SignBackend` (software, PKCS#11, `YubiKey`) without per-backend
 //! cert-building code.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::{ActionType, CertProfile, StepFact};
 use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    ParamIssue, Reporter, StepInfo, StepResult, parse_params, resolve_artifact_bytes,
-    resolve_backend_key,
+    Reporter, StepInfo, StepResult, parse_params, resolve_artifact_bytes, resolve_backend_key,
 };
 use rite_sdk::{Backend, CertificateDer, PublicKeyDer};
 use serde_json::json;
@@ -45,7 +44,7 @@ use x509_cert::{
     time::Validity,
 };
 
-use crate::params::{IssueCertificateParams, string_param};
+use crate::params::IssueCertificateParams;
 
 use super::oids::{
     sig_profile_for_algorithm, verifiable_algorithm_names, verifiable_sign_algorithm,
@@ -56,27 +55,6 @@ const ID_KP_SERVER_AUTH: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.
 
 /// id-kp-codeSigning OID (1.3.6.1.5.5.7.3.3)
 const ID_KP_CODE_SIGNING: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.3");
-
-/// Certificate profile, parsed from the `profile` param string.
-enum CertProfile {
-    RootCa,
-    SubCa { path_len: u8 },
-    TlsServer,
-    CodeSigning,
-    EndEntity,
-}
-
-impl CertProfile {
-    fn canonical_name(&self) -> &'static str {
-        match self {
-            CertProfile::RootCa => "root_ca",
-            CertProfile::SubCa { .. } => "sub_ca",
-            CertProfile::TlsServer => "tls_server",
-            CertProfile::CodeSigning => "code_signing",
-            CertProfile::EndEntity => "end_entity",
-        }
-    }
-}
 
 /// Public half of the backend-held issuing key.
 #[derive(Clone)]
@@ -117,6 +95,8 @@ impl DynSignatureAlgorithmIdentifier for BackendIssuingKey {
 /// carrying the run-specific values the extensions are derived from.
 struct ProfileAdapter {
     profile: CertProfile,
+    /// Depth constraint for `sub_ca`, ignored by every other profile.
+    path_len: Option<u8>,
     subject: Name,
     issuer: Name,
     /// Whether an issuer certificate was supplied; gates the
@@ -145,8 +125,14 @@ impl BuilderProfile for ProfileAdapter {
         // `issuer_spk` is derived by the builder from the issuing key
         // adapter, so the AKI matches the signer by construction.
         let issuer_spk = self.has_issuer_cert.then_some(issuer_spk);
-        build_extensions(&self.profile, spk, issuer_spk, self.san.as_ref())
-            .map_err(x509_cert::builder::Error::from)
+        build_extensions(
+            self.profile,
+            self.path_len,
+            spk,
+            issuer_spk,
+            self.san.as_ref(),
+        )
+        .map_err(x509_cert::builder::Error::from)
     }
 }
 
@@ -162,19 +148,6 @@ impl Action for IssueCertificateAction {
         }
     }
 
-    fn validate(&self, params: &serde_json::Value, _step: &StepInfo) -> Vec<ParamIssue> {
-        // `path_len` only shapes the sub_ca profile, and an out-of-range value
-        // is already rejected by the u8 type, so the name is the whole check.
-        match string_param(params, "profile") {
-            Ok(None) => Vec::new(),
-            Ok(Some(name)) => match parse_profile(Some(name), None) {
-                Ok(_) => Vec::new(),
-                Err(e) => vec![ParamIssue::definition(e.to_string())],
-            },
-            Err(message) => vec![ParamIssue::definition(message)],
-        }
-    }
-
     #[allow(clippy::too_many_lines)]
     fn execute(
         &self,
@@ -187,7 +160,7 @@ impl Action for IssueCertificateAction {
         let typed: IssueCertificateParams = parse_params(params)?;
 
         let validity_days = typed.validity_days.unwrap_or(3650);
-        let profile = parse_profile(typed.profile.as_deref(), typed.path_len)?;
+        let profile = parse_profile(typed.profile.as_deref())?;
 
         let signing_key_ref = step.required_named_input("signing_key", "issue_certificate")?;
         let csr_ref = step.required_named_input("csr", "issue_certificate")?;
@@ -285,9 +258,10 @@ impl Action for IssueCertificateAction {
             signature_algorithm: sig_alg,
         };
 
-        let profile_name = profile.canonical_name();
+        let profile_name = profile.to_string();
         let adapter = ProfileAdapter {
             profile,
+            path_len: typed.path_len,
             subject: csr.info.subject.clone(),
             issuer: issuer_name,
             has_issuer_cert,
@@ -380,24 +354,21 @@ impl Action for IssueCertificateAction {
     }
 }
 
-fn parse_profile(profile: Option<&str>, path_len: Option<u8>) -> Result<CertProfile, ActionError> {
-    match profile {
-        None | Some("end_entity") => Ok(CertProfile::EndEntity),
-        Some("root_ca") => Ok(CertProfile::RootCa),
-        Some("sub_ca" | "intermediate_ca") => Ok(CertProfile::SubCa {
-            path_len: path_len.unwrap_or(0),
-        }),
-        Some("tls_server") => Ok(CertProfile::TlsServer),
-        Some("code_signing") => Ok(CertProfile::CodeSigning),
-        Some(other) => Err(ActionError::Failed(format!(
-            "Unknown certificate profile '{other}'. Supported: root_ca, sub_ca, tls_server, \
-             code_signing, end_entity"
-        ))),
-    }
+/// Read the `profile:` name, defaulting to the least privileged shape.
+///
+/// Resolution has already rejected a name outside the vocabulary, so reaching
+/// the error here means the step was built without going through it.
+fn parse_profile(profile: Option<&str>) -> Result<CertProfile, ActionError> {
+    let Some(name) = profile else {
+        return Ok(CertProfile::EndEntity);
+    };
+    name.parse()
+        .map_err(|e| ActionError::Failed(format!("Unknown certificate profile '{name}'. {e}")))
 }
 
 fn build_extensions(
-    profile: &CertProfile,
+    profile: CertProfile,
+    path_len: Option<u8>,
     subject_spki: SubjectPublicKeyInfoRef<'_>,
     issuer_spki: Option<SubjectPublicKeyInfoRef<'_>>,
     san_ext: Option<&x509_cert::ext::Extension>,
@@ -412,8 +383,8 @@ fn build_extensions(
             )?);
             exts.push(build_ski(subject_spki)?);
         }
-        CertProfile::SubCa { path_len } => {
-            exts.push(build_basic_constraints(true, Some(*path_len))?);
+        CertProfile::SubCa => {
+            exts.push(build_basic_constraints(true, Some(path_len.unwrap_or(0)))?);
             exts.push(build_key_usage(
                 KeyUsages::KeyCertSign | KeyUsages::CRLSign | KeyUsages::DigitalSignature,
             )?);
@@ -444,7 +415,11 @@ fn build_extensions(
                 exts.push(build_aki(spki)?);
             }
         }
-        CertProfile::EndEntity => {
+        // `CertProfile` is `#[non_exhaustive]`, so a crate downstream of the
+        // one defining it cannot match exhaustively. A profile with no
+        // extension set of its own gets the least privileged shape rather than
+        // a guess: no CA rights, no extended key usage.
+        CertProfile::EndEntity | _ => {
             exts.push(build_basic_constraints(false, None)?);
             if let Some(spki) = issuer_spki {
                 exts.push(build_aki(spki)?);

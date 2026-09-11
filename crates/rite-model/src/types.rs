@@ -1,6 +1,7 @@
 //! Shared semantic types for the ceremony domain model.
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Ceremony metadata (name and optional description).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,9 +95,12 @@ pub enum ActionType {
     GenerateKeypair,
     /// Encrypt a private key under another key so it can leave the machine.
     ///
-    /// The container follows the wrapping algorithm. The OpenSSL backend
-    /// produces CMS: `AuthEnvelopedData` for `CMS-RSA-GCM`, `EnvelopedData`
-    /// for `CMS-RSA-CBC`.
+    /// The OpenSSL backend produces a CMS `AuthEnvelopedData` under
+    /// AES-256-GCM. Which encapsulation that takes follows the recipient key,
+    /// and the transcript records what the wrap actually did.
+    ///
+    /// Reads `wrapping_key:` to wrap under a key the backend holds, or
+    /// `recipient:` to wrap to a public key held outside the ceremony.
     WrapKey,
     /// Decrypt a wrapped key and import it into a backend under a new label.
     UnwrapKey,
@@ -178,6 +182,103 @@ pub enum BackendUsage {
     Unused,
 }
 
+/// The certificate shape an `issue_certificate` step asks for.
+///
+/// DSL vocabulary rather than a backend concern: the author writes the name,
+/// and the handler turns it into X.509 extensions. `path_len` is a separate
+/// parameter, not part of a profile's identity, so this enum carries no
+/// run-specific values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CertProfile {
+    /// Self-signed CA at the top of a chain.
+    RootCa,
+    /// CA below another, constrained by `path_len`.
+    SubCa,
+    /// TLS server certificate.
+    TlsServer,
+    /// Code-signing certificate.
+    CodeSigning,
+    /// A leaf with no CA rights and no extended key usage.
+    EndEntity,
+}
+
+impl fmt::Display for CertProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CertProfile::RootCa => write!(f, "root_ca"),
+            CertProfile::SubCa => write!(f, "sub_ca"),
+            CertProfile::TlsServer => write!(f, "tls_server"),
+            CertProfile::CodeSigning => write!(f, "code_signing"),
+            CertProfile::EndEntity => write!(f, "end_entity"),
+        }
+    }
+}
+
+impl std::str::FromStr for CertProfile {
+    type Err = UnknownCertProfile;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "root_ca" => Ok(Self::RootCa),
+            // `intermediate_ca` is the same shape under the name the PKI
+            // world more often uses for it.
+            "sub_ca" | "intermediate_ca" => Ok(Self::SubCa),
+            "tls_server" => Ok(Self::TlsServer),
+            "code_signing" => Ok(Self::CodeSigning),
+            "end_entity" => Ok(Self::EndEntity),
+            _ => Err(UnknownCertProfile),
+        }
+    }
+}
+
+/// A `profile:` value naming no certificate shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownCertProfile;
+
+impl fmt::Display for UnknownCertProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "supported profiles: root_ca, sub_ca, tls_server, code_signing, end_entity"
+        )
+    }
+}
+
+/// What an action requires of its step's `reads:` map.
+///
+/// See [`ActionType::reads_contract`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ReadsContract {
+    /// Inputs every step of this action must name.
+    pub required: &'static [&'static str],
+    /// Groups from which exactly one input must be named. Each group holds the
+    /// alternatives in the order they should be listed to the author.
+    pub exactly_one_of: &'static [&'static [&'static str]],
+}
+
+impl ReadsContract {
+    /// The contract of an action that constrains its inputs in neither way.
+    pub const NONE: Self = Self::required(&[]);
+
+    /// The contract of an action that requires these inputs and offers no
+    /// alternatives between them.
+    #[must_use]
+    pub const fn required(fields: &'static [&'static str]) -> Self {
+        Self {
+            required: fields,
+            exactly_one_of: &[],
+        }
+    }
+
+    /// Whether this contract constrains anything at all.
+    pub fn is_empty(&self) -> bool {
+        self.required.is_empty() && self.exactly_one_of.is_empty()
+    }
+}
+
 impl ActionType {
     /// Every action type, for callers that need to enumerate them.
     ///
@@ -250,7 +351,102 @@ impl ActionType {
         match self {
             ActionType::CheckValue => &["actual", "expected"],
             ActionType::GenerateCsr => &["subject"],
-            _ => &[],
+
+            ActionType::ClockCheck
+            | ActionType::Confirm
+            | ActionType::OralReadback
+            | ActionType::MachineInfo
+            | ActionType::GenerateKeypair
+            | ActionType::WrapKey
+            | ActionType::UnwrapKey
+            | ActionType::ExportPublic
+            | ActionType::SignData
+            | ActionType::VerifySignature
+            | ActionType::Attest
+            | ActionType::GatherEntropy
+            | ActionType::TpmAttest
+            | ActionType::PivReadCertificate
+            | ActionType::PivSign
+            | ActionType::YubikeyAttestSlot
+            | ActionType::IssueCertificate => &[],
+        }
+    }
+
+    /// Every `with:` key this action accepts.
+    ///
+    /// Nothing else may appear under `with:`. Serde ignores a key it does not
+    /// know, so without this a misspelled field, or one that used to exist, is
+    /// dropped in silence and the ceremony quietly stops doing what its author
+    /// wrote. That is the failure this list exists to prevent, and it covers
+    /// typos and removed fields alike rather than naming them one at a time.
+    ///
+    /// Required keys are the subset in
+    /// [`required_with_fields`](Self::required_with_fields); the rest are
+    /// optional. Nested keys are not listed: only the top level of the block
+    /// is checked, because a nested shape belongs to the handler's own params
+    /// type.
+    pub fn known_with_fields(self) -> &'static [&'static str] {
+        match self {
+            ActionType::ClockCheck | ActionType::Confirm => &["message"],
+            ActionType::CheckValue => &["actual", "expected", "message", "sensitive"],
+            ActionType::OralReadback => &["value", "format", "characters", "sensitive", "message"],
+            ActionType::MachineInfo => &[
+                "include_machine_id",
+                "include_cpu",
+                "include_os",
+                "include_security_features",
+                "message",
+            ],
+            ActionType::GenerateKeypair => &["algorithm", "policy", "slot"],
+            ActionType::WrapKey => &["scheme", "expect_recipient"],
+            ActionType::UnwrapKey => &["expect_key", "label", "policy"],
+            ActionType::SignData | ActionType::VerifySignature => &["algorithm", "message"],
+            ActionType::Attest => &["statement"],
+            ActionType::GatherEntropy => &["instruction"],
+            ActionType::IssueCertificate => &["profile", "validity_days", "issuer_cn", "path_len"],
+            ActionType::GenerateCsr => &["subject", "san"],
+            ActionType::PivReadCertificate | ActionType::YubikeyAttestSlot => &["slot", "message"],
+            ActionType::PivSign => &["slot", "algorithm", "message"],
+            // `export_public` takes its inputs through `reads:` alone, and
+            // `tpm_attest` has no handler in any build yet, so neither has a
+            // `with:` shape to accept. For the second, `unsupported_actions`
+            // is what reports the step itself.
+            ActionType::ExportPublic | ActionType::TpmAttest => &[],
+        }
+    }
+
+    /// Returns the `reads:` inputs this action requires, and the groups from
+    /// which exactly one input must be named.
+    ///
+    /// A group is how an action offers two paths over the same operation. The
+    /// input the author names selects the path, so naming both is ambiguous and
+    /// naming neither leaves the path undetermined. The resolver reports either
+    /// on the step.
+    pub fn reads_contract(self) -> ReadsContract {
+        match self {
+            ActionType::WrapKey => ReadsContract {
+                required: &["key_to_wrap"],
+                exactly_one_of: &[&["wrapping_key", "recipient"]],
+            },
+            ActionType::UnwrapKey => ReadsContract::required(&["unwrapping_key", "wrapped_data"]),
+            ActionType::SignData => ReadsContract::required(&["key", "data"]),
+            ActionType::VerifySignature => ReadsContract::required(&["key", "data", "signature"]),
+            ActionType::IssueCertificate => ReadsContract::required(&["signing_key", "csr"]),
+            ActionType::GenerateCsr => ReadsContract::required(&["signing_key"]),
+
+            ActionType::ClockCheck
+            | ActionType::Confirm
+            | ActionType::CheckValue
+            | ActionType::OralReadback
+            | ActionType::MachineInfo
+            | ActionType::GenerateKeypair
+            | ActionType::ExportPublic
+            | ActionType::Attest
+            | ActionType::GatherEntropy
+            | ActionType::TpmAttest
+            | ActionType::PivReadCertificate
+            | ActionType::PivSign
+            | ActionType::YubikeyAttestSlot => ReadsContract::NONE,
         }
     }
 
@@ -316,7 +512,7 @@ impl std::fmt::Display for ActionType {
 pub enum OutputType {
     /// Public key in PEM format.
     PublicKey,
-    /// Wrapped (encrypted) key in CMS format.
+    /// A key wrapped for transport, in the container its scheme names.
     WrappedKey,
     /// X.509 certificate.
     Certificate,
@@ -637,6 +833,22 @@ mod tests {
     /// list an author has to extend. The name check then catches a variant
     /// listed twice, and `rite-ls` compares its own catalogue against `ALL`,
     /// which is what catches one left out.
+    /// A required field the action does not accept would be reported as
+    /// unknown, which is the opposite of the message intended, and nothing
+    /// makes the two lists agree on their own.
+    #[test]
+    fn every_required_field_is_also_a_known_field() {
+        for action in ActionType::ALL {
+            let known = action.known_with_fields();
+            for field in action.required_with_fields() {
+                assert!(
+                    known.contains(field),
+                    "{action} requires '{field}' and does not accept it"
+                );
+            }
+        }
+    }
+
     #[test]
     fn all_lists_every_action_type() {
         for action in ActionType::ALL {

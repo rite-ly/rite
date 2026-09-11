@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use crate::backend::BackendError;
 use crate::key_material::PublicKeyDer;
 
 /// Opaque key identifier (backend-specific).
@@ -92,6 +93,15 @@ pub enum KeyAlgorithm {
     MlDsa65,
     /// ML-DSA-87, module-lattice signature at NIST security category 5 (FIPS 204).
     MlDsa87,
+    /// ML-KEM-512, module-lattice KEM at NIST security category 1 (FIPS 203).
+    ///
+    /// A KEM encapsulates, it does not sign. Such a key can receive a wrap and
+    /// nothing else.
+    MlKem512,
+    /// ML-KEM-768, module-lattice KEM at NIST security category 3 (FIPS 203).
+    MlKem768,
+    /// ML-KEM-1024, module-lattice KEM at NIST security category 5 (FIPS 203).
+    MlKem1024,
     /// AES 128-bit symmetric key.
     Aes128,
     /// AES 256-bit symmetric key.
@@ -118,7 +128,40 @@ impl KeyAlgorithm {
             KeyAlgorithm::MlDsa44 => Some(SignAlgorithm::MlDsa44),
             KeyAlgorithm::MlDsa65 => Some(SignAlgorithm::MlDsa65),
             KeyAlgorithm::MlDsa87 => Some(SignAlgorithm::MlDsa87),
-            KeyAlgorithm::Aes128 | KeyAlgorithm::Aes256 => None,
+            KeyAlgorithm::MlKem512
+            | KeyAlgorithm::MlKem768
+            | KeyAlgorithm::MlKem1024
+            | KeyAlgorithm::Aes128
+            | KeyAlgorithm::Aes256 => None,
+        }
+    }
+
+    /// Whether a key of this algorithm can be the recipient of a wrap.
+    ///
+    /// A recipient has to be able to receive a content-encryption key, by key
+    /// transport, key agreement, or encapsulation. A signature algorithm can
+    /// do none of the three, however good a key it otherwise is, and finding
+    /// that out mid-ceremony is how it used to surface.
+    #[must_use]
+    pub fn can_receive_wrap(self) -> bool {
+        match self {
+            KeyAlgorithm::Rsa2048
+            | KeyAlgorithm::Rsa4096
+            | KeyAlgorithm::EcdsaP256
+            | KeyAlgorithm::EcdsaP384
+            | KeyAlgorithm::MlKem512
+            | KeyAlgorithm::MlKem768
+            | KeyAlgorithm::MlKem1024 => true,
+
+            // Ed25519 and ML-DSA sign and nothing else. A symmetric key is a
+            // pre-shared KEK, which is a different recipient form than the
+            // ones Rite produces.
+            KeyAlgorithm::Ed25519
+            | KeyAlgorithm::MlDsa44
+            | KeyAlgorithm::MlDsa65
+            | KeyAlgorithm::MlDsa87
+            | KeyAlgorithm::Aes128
+            | KeyAlgorithm::Aes256 => false,
         }
     }
 }
@@ -134,6 +177,9 @@ impl fmt::Display for KeyAlgorithm {
             KeyAlgorithm::MlDsa44 => write!(f, "ML-DSA-44"),
             KeyAlgorithm::MlDsa65 => write!(f, "ML-DSA-65"),
             KeyAlgorithm::MlDsa87 => write!(f, "ML-DSA-87"),
+            KeyAlgorithm::MlKem512 => write!(f, "ML-KEM-512"),
+            KeyAlgorithm::MlKem768 => write!(f, "ML-KEM-768"),
+            KeyAlgorithm::MlKem1024 => write!(f, "ML-KEM-1024"),
             KeyAlgorithm::Aes128 => write!(f, "AES-128"),
             KeyAlgorithm::Aes256 => write!(f, "AES-256"),
         }
@@ -160,6 +206,9 @@ impl std::str::FromStr for KeyAlgorithm {
             "ML-DSA-44" => Ok(Self::MlDsa44),
             "ML-DSA-65" => Ok(Self::MlDsa65),
             "ML-DSA-87" => Ok(Self::MlDsa87),
+            "ML-KEM-512" => Ok(Self::MlKem512),
+            "ML-KEM-768" => Ok(Self::MlKem768),
+            "ML-KEM-1024" => Ok(Self::MlKem1024),
             "AES-128" => Ok(Self::Aes128),
             "AES-256" => Ok(Self::Aes256),
             _ => Err(ParseError(s.to_owned())),
@@ -206,6 +255,63 @@ bitflags::bitflags! {
     }
 }
 
+impl KeyUsages {
+    /// Every usage, paired with the name a ceremony writes for it.
+    ///
+    /// The names are PKCS#11 vocabulary. They say what a key is permitted to do
+    /// at the token, which is a different question from the `KeyUsage`
+    /// extension a certificate carries.
+    pub const NAMED: [(&'static str, KeyUsages); 7] = [
+        ("sign", KeyUsages::SIGN),
+        ("verify", KeyUsages::VERIFY),
+        ("encrypt", KeyUsages::ENCRYPT),
+        ("decrypt", KeyUsages::DECRYPT),
+        ("wrap", KeyUsages::WRAP),
+        ("unwrap", KeyUsages::UNWRAP),
+        ("derive", KeyUsages::DERIVE),
+    ];
+
+    /// Look up a single usage by its ceremony name.
+    ///
+    /// Named to avoid colliding with the bitflags-generated `from_name`,
+    /// which matches on the `SCREAMING_CASE` constant names instead.
+    #[must_use]
+    pub fn usage_named(name: &str) -> Option<Self> {
+        Self::NAMED
+            .iter()
+            .find(|(candidate, _)| *candidate == name)
+            .map(|(_, usage)| *usage)
+    }
+
+    /// The names of the usages in this set, in declaration order.
+    #[must_use]
+    pub fn names(self) -> Vec<&'static str> {
+        Self::NAMED
+            .iter()
+            .filter(|(_, usage)| self.contains(*usage))
+            .map(|(name, _)| *name)
+            .collect()
+    }
+
+    /// Every usage name a ceremony may write, for a message listing what is
+    /// available.
+    #[must_use]
+    pub fn all_names() -> Vec<&'static str> {
+        Self::NAMED.iter().map(|(name, _)| *name).collect()
+    }
+
+    /// The usages in this set as one phrase, for an error message.
+    #[must_use]
+    pub fn describe(self) -> String {
+        let names = self.names();
+        if names.is_empty() {
+            "nothing".to_string()
+        } else {
+            names.join(", ")
+        }
+    }
+}
+
 /// Security and usage policy for a generated or imported key.
 ///
 /// Backends that cannot honour a requested policy MUST return
@@ -228,6 +334,28 @@ pub struct KeyPolicy {
     pub wrap_with_trusted_only: bool,
     /// What operations this key is permitted to perform.
     pub usages: KeyUsages,
+}
+
+impl KeyPolicy {
+    /// Refuse an operation this policy does not allow.
+    ///
+    /// The policy is what the ceremony asked for at generation. A token
+    /// enforces it itself; a software backend has no token, so it calls this.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::OperationNotPermitted`] when `usage` is absent
+    /// from the policy, naming what the key may do instead.
+    pub fn require(&self, usage: KeyUsages, operation: &str) -> Result<(), BackendError> {
+        if self.usages.contains(usage) {
+            return Ok(());
+        }
+        Err(BackendError::OperationNotPermitted(format!(
+            "this key may not {operation}: its policy allows {}. \
+             Declare the usage under `policy:` on the step that generates it.",
+            self.usages.describe()
+        )))
+    }
 }
 
 impl Default for KeyPolicy {
@@ -407,66 +535,377 @@ impl TryFrom<String> for SignAlgorithm {
     }
 }
 
-/// Wrapping algorithm. Determines both the cryptographic method and the output format.
+/// An ASN.1 object identifier in dotted-decimal form.
 ///
-/// The `Rsa` in the CMS variant names describes the recipient type they were
-/// written for, not a restriction: an RSA recipient takes RSAES-PKCS1-v1.5 key
-/// transport, and an EC recipient takes the RFC 5753 key-agreement path under
-/// the same variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Wrapping evidence is a set of algorithm identifiers read back out of the
+/// produced artifact, so the OID is the value that gets recorded. Held as text
+/// because that is what a transcript reader compares against a registry.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
-#[non_exhaustive]
-pub enum WrapAlgorithm {
-    /// CMS `EnvelopedData` with AES-256-CBC (legacy, unauthenticated).
-    /// Output: CMS `ContentInfo` DER.
-    CmsRsaCbc,
-    /// CMS `AuthEnvelopedData` with AES-256-GCM (recommended).
-    /// Output: CMS `ContentInfo` DER.
-    CmsRsaGcm,
-    /// NIST AES Key Wrap (RFC 3394). Requires a symmetric wrapping key.
-    /// Output: raw wrapped key bytes (8-byte aligned).
-    AesKeyWrap,
-    /// NIST AES Key Wrap with Padding (RFC 5649). Requires a symmetric wrapping key.
-    /// Output: raw wrapped key bytes (arbitrary length input).
-    AesKeyWrapPad,
-    /// RSA-OAEP with SHA-256. Output: raw RSA-OAEP encrypted key bytes.
-    RsaOaepSha256,
+pub struct Oid(String);
+
+impl Oid {
+    /// Parse a dotted-decimal OID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] unless the value is two or more arcs of decimal
+    /// digits separated by dots.
+    pub fn new(value: &str) -> Result<Self, ParseError> {
+        let arcs: Vec<&str> = value.split('.').collect();
+        let well_formed = arcs.len() >= 2
+            && arcs
+                .iter()
+                .all(|arc| !arc.is_empty() && arc.bytes().all(|b| b.is_ascii_digit()));
+        if well_formed {
+            Ok(Self(value.to_owned()))
+        } else {
+            Err(ParseError(value.to_owned()))
+        }
+    }
+
+    /// The dotted-decimal form.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
-impl fmt::Display for WrapAlgorithm {
+impl fmt::Display for Oid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<Oid> for String {
+    fn from(oid: Oid) -> String {
+        oid.0
+    }
+}
+
+impl TryFrom<String> for Oid {
+    type Error = ParseError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Oid::new(&s)
+    }
+}
+
+/// Well-known OIDs the wrapping paths produce or check.
+pub mod oid {
+    /// `rsaEncryption`, RSAES-PKCS1-v1.5 key transport (RFC 8017).
+    pub const RSA_ENCRYPTION: &str = "1.2.840.113549.1.1.1";
+    /// `id-RSAES-OAEP` (RFC 8017).
+    pub const RSAES_OAEP: &str = "1.2.840.113549.1.1.7";
+    /// `dhSinglePass-stdDH-sha1kdf-scheme`, one-pass ECDH with the X9.63 KDF
+    /// over SHA-1 (RFC 5753).
+    pub const DH_SINGLE_PASS_STDDH_SHA1KDF: &str = "1.3.133.16.840.63.0.2";
+    /// `id-aes256-GCM` (RFC 5084).
+    pub const AES_256_GCM: &str = "2.16.840.1.101.3.4.1.46";
+    /// `id-aes256-CBC` (RFC 3565).
+    pub const AES_256_CBC: &str = "2.16.840.1.101.3.4.1.42";
+    /// `id-aes256-wrap`, AES Key Wrap with a 256-bit KEK (RFC 3394).
+    pub const AES_256_WRAP: &str = "2.16.840.1.101.3.4.1.45";
+    /// `id-aes128-wrap`, AES Key Wrap with a 128-bit KEK (RFC 3394).
+    pub const AES_128_WRAP: &str = "2.16.840.1.101.3.4.1.5";
+    /// `id-aes256-wrap-pad`, AES Key Wrap with Padding (RFC 5649).
+    pub const AES_256_WRAP_PAD: &str = "2.16.840.1.101.3.4.1.48";
+}
+
+/// How a CMS structure conveys the content-encryption key to its recipient.
+///
+/// The variants are the `RecipientInfo` CHOICE of RFC 5652 §6.2, plus the
+/// KEM alternative RFC 9629 carries inside `OtherRecipientInfo`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RecipientInfoKind {
+    /// `KeyTransRecipientInfo`: the CEK is encrypted under the recipient's
+    /// public key.
+    Ktri,
+    /// `KeyAgreeRecipientInfo`: a shared secret is agreed with the recipient's
+    /// key, run through a KDF, and used to wrap the CEK.
+    Kari,
+    /// `KEKRecipientInfo`: the CEK is wrapped under a previously shared
+    /// symmetric key.
+    Kekri,
+    /// `KEMRecipientInfo` (RFC 9629), carried as `OtherRecipientInfo`.
+    Kemri,
+    /// `PasswordRecipientInfo`.
+    Pwri,
+    /// An `OtherRecipientInfo` this build does not recognise.
+    Ori,
+}
+
+impl fmt::Display for RecipientInfoKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WrapAlgorithm::CmsRsaCbc => write!(f, "CMS-RSA-CBC"),
-            WrapAlgorithm::CmsRsaGcm => write!(f, "CMS-RSA-GCM"),
-            WrapAlgorithm::AesKeyWrap => write!(f, "AES-KW"),
-            WrapAlgorithm::AesKeyWrapPad => write!(f, "AES-KWP"),
-            WrapAlgorithm::RsaOaepSha256 => write!(f, "RSA-OAEP-SHA256"),
+            RecipientInfoKind::Ktri => write!(f, "ktri"),
+            RecipientInfoKind::Kari => write!(f, "kari"),
+            RecipientInfoKind::Kekri => write!(f, "kekri"),
+            RecipientInfoKind::Kemri => write!(f, "kemri"),
+            RecipientInfoKind::Pwri => write!(f, "pwri"),
+            RecipientInfoKind::Ori => write!(f, "ori"),
         }
     }
 }
 
-impl std::str::FromStr for WrapAlgorithm {
+/// What a wrap actually did.
+///
+/// The scheme a step requests names a family. The algorithms inside it move
+/// independently: the recipient's key type selects the encapsulation, the
+/// content cipher selects the KEK size, and the KDF digest is a library
+/// default rather than a property of any key.
+///
+/// Where the scheme is self-describing this is an observation, re-derivable
+/// from the blob alone, which is what makes it evidence. Where it is not, it
+/// is what the backend invoked. [`WrapScheme::is_self_describing`] is the
+/// difference, and `rite verify` reports the two differently.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct WrapDescription {
+    /// How the CEK reaches the recipient, for a scheme built on CMS.
+    ///
+    /// Absent for a raw mechanism, whose output carries no `RecipientInfo`
+    /// and no other ASN.1 structure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient_info: Option<RecipientInfoKind>,
+    /// The key-encryption algorithm: key transport for `ktri`, the
+    /// key-agreement scheme for `kari`.
+    pub key_encryption_oid: Oid,
+    /// The KDF, where the encapsulation derives a KEK.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kdf_oid: Option<Oid>,
+    /// The algorithm wrapping the CEK under the derived KEK.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kek_wrap_oid: Option<Oid>,
+    /// The content cipher, for schemes that encrypt the key as CMS content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_encryption_oid: Option<Oid>,
+}
+
+impl WrapDescription {
+    /// Describe a CMS wrap by its recipient info and key-encryption algorithm.
+    #[must_use]
+    pub fn new(recipient_info: RecipientInfoKind, key_encryption_oid: Oid) -> Self {
+        Self {
+            recipient_info: Some(recipient_info),
+            key_encryption_oid,
+            kdf_oid: None,
+            kek_wrap_oid: None,
+            content_encryption_oid: None,
+        }
+    }
+
+    /// Describe a raw mechanism, which has no CMS structure around it.
+    #[must_use]
+    pub fn raw(key_encryption_oid: Oid) -> Self {
+        Self {
+            recipient_info: None,
+            key_encryption_oid,
+            kdf_oid: None,
+            kek_wrap_oid: None,
+            content_encryption_oid: None,
+        }
+    }
+
+    /// Record the KDF the encapsulation ran.
+    #[must_use]
+    pub fn with_kdf(mut self, oid: Oid) -> Self {
+        self.kdf_oid = Some(oid);
+        self
+    }
+
+    /// Record the algorithm that wrapped the CEK under the derived KEK.
+    #[must_use]
+    pub fn with_kek_wrap(mut self, oid: Oid) -> Self {
+        self.kek_wrap_oid = Some(oid);
+        self
+    }
+
+    /// Record the content cipher.
+    #[must_use]
+    pub fn with_content_encryption(mut self, oid: Oid) -> Self {
+        self.content_encryption_oid = Some(oid);
+        self
+    }
+
+    /// Whether the CMS content was encrypted under an authenticated cipher.
+    ///
+    /// This asks about a CMS content cipher and nothing else, so it is `false`
+    /// for every raw mechanism, including ones that authenticate by other
+    /// means. [`WrapScheme::is_authenticated`] is the question to ask of a
+    /// scheme.
+    #[must_use]
+    pub fn content_is_authenticated(&self) -> bool {
+        self.content_encryption_oid
+            .as_ref()
+            .is_some_and(|oid| oid.as_str() == oid::AES_256_GCM)
+    }
+}
+
+/// The wrapping scheme a step requests, or a backend reports.
+///
+/// A scheme names a container and the parts of it Rite fixes. What varies
+/// with the recipient is recorded in [`WrapDescription`] instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+#[non_exhaustive]
+pub enum WrapScheme {
+    /// CMS `AuthEnvelopedData` (RFC 5083) with AES-256-GCM content
+    /// encryption. Output: CMS `ContentInfo` DER.
+    ///
+    /// The encapsulation follows the recipient key: RSA takes key transport,
+    /// EC takes the RFC 5753 key-agreement path.
+    ///
+    /// `CMS-RSA-CBC`, the `EnvelopedData` variant with AES-256-CBC, was
+    /// removed. It carried no integrity protection, so unwrapping imported
+    /// whatever decrypted; PCI PIN v3.1 requirement 18-3 bans unauthenticated
+    /// key encryption. Restoring it would take an authenticated construction
+    /// around it, which is what the deployments that do use CBC (X9 TR-34,
+    /// AD CS key archival) wrap it in.
+    CmsAes256Gcm,
+    /// RSAES-OAEP with SHA-256, as raw ciphertext (RFC 8017).
+    ///
+    /// Output is exactly the modulus size and describes nothing about itself.
+    /// The payload ceiling is `k - 2*hLen - 2`: 190 bytes under RSA-2048, 446
+    /// under RSA-4096, which fits a symmetric key or an EC private key and
+    /// never fits an RSA one. [`Self::RsaAesKeyWrapSha256`] exists for that.
+    RsaOaepSha256,
+    /// RSA-AES key wrap with SHA-256 (PKCS#11 `CKM_RSA_AES_KEY_WRAP`).
+    ///
+    /// An ephemeral AES key under RSAES-OAEP, concatenated with the payload
+    /// under AES-KWP (RFC 5649). The OAEP part comes first and is exactly the
+    /// modulus size, which is how a recipient splits the two.
+    ///
+    /// This is the shape cloud KMS import expects, and it carries no size
+    /// ceiling. The digest is in the name because it is not recoverable from
+    /// the bytes and recipients differ: AWS names both `RSA_AES_KEY_WRAP_SHA_256`
+    /// and `RSA_AES_KEY_WRAP_SHA_1`, and Azure BYOK specifies SHA-1.
+    RsaAesKeyWrapSha256,
+}
+
+impl WrapScheme {
+    /// The description this scheme fixes, where it fixes one.
+    ///
+    /// `None` for a self-describing scheme: what a CMS wrap did follows the
+    /// recipient key, so it is read out of the artifact rather than known in
+    /// advance. A raw mechanism has no such freedom, which is the same fact
+    /// that makes its description an assertion.
+    ///
+    /// This is the one place that says what a raw scheme produces. A backend
+    /// builds its description from here rather than restating the OIDs, and
+    /// [`permits`](Self::permits) compares against it, so the two cannot
+    /// disagree.
+    #[must_use]
+    pub fn fixed_description(self) -> Option<WrapDescription> {
+        // Constructed directly rather than through the validating `Oid::new`:
+        // these are this module's own constants, so there is no input to
+        // reject and no error a caller could act on.
+        let known = |value: &str| Oid(value.to_owned());
+        match self {
+            WrapScheme::CmsAes256Gcm => None,
+            WrapScheme::RsaOaepSha256 => Some(WrapDescription::raw(known(oid::RSAES_OAEP))),
+            WrapScheme::RsaAesKeyWrapSha256 => Some(
+                WrapDescription::raw(known(oid::RSAES_OAEP))
+                    .with_kek_wrap(known(oid::AES_256_WRAP_PAD)),
+            ),
+        }
+    }
+
+    /// Whether a key of this algorithm can receive a wrap under this scheme.
+    ///
+    /// Narrower than [`KeyAlgorithm::can_receive_wrap`], which answers for CMS,
+    /// where the recipient key selects the encapsulation. The raw mechanisms
+    /// are RSA constructions and accept nothing else.
+    #[must_use]
+    pub fn accepts_recipient(self, algorithm: KeyAlgorithm) -> bool {
+        match self {
+            WrapScheme::CmsAes256Gcm => algorithm.can_receive_wrap(),
+            WrapScheme::RsaOaepSha256 | WrapScheme::RsaAesKeyWrapSha256 => match algorithm {
+                KeyAlgorithm::Rsa2048 | KeyAlgorithm::Rsa4096 => true,
+                KeyAlgorithm::EcdsaP256
+                | KeyAlgorithm::EcdsaP384
+                | KeyAlgorithm::Ed25519
+                | KeyAlgorithm::MlDsa44
+                | KeyAlgorithm::MlDsa65
+                | KeyAlgorithm::MlDsa87
+                | KeyAlgorithm::MlKem512
+                | KeyAlgorithm::MlKem768
+                | KeyAlgorithm::MlKem1024
+                | KeyAlgorithm::Aes128
+                | KeyAlgorithm::Aes256 => false,
+            },
+        }
+    }
+
+    /// Whether `description` is one this scheme admits.
+    ///
+    /// The check is what keeps a recorded scheme from contradicting the
+    /// artifact it labels. For a self-describing scheme it is a structural
+    /// test against what was read out of the bytes; for a raw mechanism the
+    /// description is fixed, so equality is the whole test.
+    #[must_use]
+    pub fn permits(self, description: &WrapDescription) -> bool {
+        if let Some(fixed) = self.fixed_description() {
+            return *description == fixed;
+        }
+        let encapsulation_fits = matches!(
+            description.recipient_info,
+            Some(RecipientInfoKind::Ktri | RecipientInfoKind::Kari | RecipientInfoKind::Kemri)
+        );
+        description.content_is_authenticated() && encapsulation_fits
+    }
+
+    /// Whether a verifier can re-derive the wrap's algorithms from the bytes.
+    ///
+    /// This is the line between evidence and assertion. A CMS artifact carries
+    /// its own algorithm identifiers, so `rite verify` reads them back and
+    /// compares them against the transcript; raw mechanism output carries
+    /// nothing, so the recorded algorithms are what the backend reports having
+    /// invoked and no offline check can confirm them.
+    ///
+    /// Matched exhaustively on purpose: a scheme added without answering this
+    /// would otherwise default into being treated as evidence.
+    #[must_use]
+    pub fn is_self_describing(self) -> bool {
+        match self {
+            WrapScheme::CmsAes256Gcm => true,
+            WrapScheme::RsaOaepSha256 | WrapScheme::RsaAesKeyWrapSha256 => false,
+        }
+    }
+}
+
+impl fmt::Display for WrapScheme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WrapScheme::CmsAes256Gcm => write!(f, "CMS-AES-256-GCM"),
+            WrapScheme::RsaOaepSha256 => write!(f, "RSA-OAEP-SHA256"),
+            WrapScheme::RsaAesKeyWrapSha256 => write!(f, "RSA-AES-KEY-WRAP-SHA256"),
+        }
+    }
+}
+
+impl std::str::FromStr for WrapScheme {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "CMS-RSA-CBC" => Ok(Self::CmsRsaCbc),
-            "CMS-RSA-GCM" => Ok(Self::CmsRsaGcm),
-            "AES-KW" => Ok(Self::AesKeyWrap),
-            "AES-KWP" => Ok(Self::AesKeyWrapPad),
+            "CMS-AES-256-GCM" => Ok(Self::CmsAes256Gcm),
             "RSA-OAEP-SHA256" => Ok(Self::RsaOaepSha256),
+            "RSA-AES-KEY-WRAP-SHA256" => Ok(Self::RsaAesKeyWrapSha256),
             _ => Err(ParseError(s.to_owned())),
         }
     }
 }
 
-impl From<WrapAlgorithm> for String {
-    fn from(a: WrapAlgorithm) -> String {
+impl From<WrapScheme> for String {
+    fn from(a: WrapScheme) -> String {
         a.to_string()
     }
 }
 
-impl TryFrom<String> for WrapAlgorithm {
+impl TryFrom<String> for WrapScheme {
     type Error = ParseError;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
@@ -474,15 +913,88 @@ impl TryFrom<String> for WrapAlgorithm {
     }
 }
 
-/// A wrapped (encrypted) key with its algorithm and metadata.
+/// A wrapped key, the scheme that produced it, and what that wrap did.
+///
+/// The three are constructed together and read together: a scheme that does
+/// not admit the description would label the bytes with something the bytes
+/// contradict.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "WrappedKeyRepr")]
 pub struct WrappedKey {
-    /// Algorithm used to wrap the key.
-    pub algorithm: WrapAlgorithm,
-    /// Wrapped key data (format depends on algorithm).
-    pub data: Vec<u8>,
-    /// Human-readable hint identifying the intended unwrapping key (for audit).
-    pub recipient_hint: Option<String>,
+    scheme: WrapScheme,
+    description: WrapDescription,
+    data: Vec<u8>,
+}
+
+/// Deserialization shape for [`WrappedKey`], re-checked on the way in.
+#[derive(Deserialize)]
+struct WrappedKeyRepr {
+    scheme: WrapScheme,
+    description: WrapDescription,
+    data: Vec<u8>,
+}
+
+impl TryFrom<WrappedKeyRepr> for WrappedKey {
+    type Error = IncoherentWrap;
+
+    fn try_from(repr: WrappedKeyRepr) -> Result<Self, Self::Error> {
+        WrappedKey::new(repr.scheme, repr.description, repr.data)
+    }
+}
+
+/// A wrapped key was labelled with a scheme its own description contradicts.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("scheme {scheme} does not admit this wrap: {description:?}")]
+pub struct IncoherentWrap {
+    /// The scheme the wrap was labelled with.
+    pub scheme: WrapScheme,
+    /// What the artifact says was done.
+    pub description: WrapDescription,
+}
+
+impl WrappedKey {
+    /// Pair wrapped bytes with the scheme and the description of the wrap.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IncoherentWrap`] if the scheme does not admit the
+    /// description.
+    pub fn new(
+        scheme: WrapScheme,
+        description: WrapDescription,
+        data: Vec<u8>,
+    ) -> Result<Self, IncoherentWrap> {
+        if scheme.permits(&description) {
+            Ok(Self {
+                scheme,
+                description,
+                data,
+            })
+        } else {
+            Err(IncoherentWrap {
+                scheme,
+                description,
+            })
+        }
+    }
+
+    /// The scheme this key was wrapped under.
+    #[must_use]
+    pub fn scheme(&self) -> WrapScheme {
+        self.scheme
+    }
+
+    /// What the wrap did, read back from the artifact.
+    #[must_use]
+    pub fn description(&self) -> &WrapDescription {
+        &self.description
+    }
+
+    /// The wrapped bytes.
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
 }
 
 /// The kind of attestation evidence a backend can produce.
@@ -821,6 +1333,9 @@ mod tests {
             (KeyAlgorithm::MlDsa44, "\"ML-DSA-44\""),
             (KeyAlgorithm::MlDsa65, "\"ML-DSA-65\""),
             (KeyAlgorithm::MlDsa87, "\"ML-DSA-87\""),
+            (KeyAlgorithm::MlKem512, "\"ML-KEM-512\""),
+            (KeyAlgorithm::MlKem768, "\"ML-KEM-768\""),
+            (KeyAlgorithm::MlKem1024, "\"ML-KEM-1024\""),
             (KeyAlgorithm::Aes128, "\"AES-128\""),
             (KeyAlgorithm::Aes256, "\"AES-256\""),
         ];
@@ -919,32 +1434,123 @@ mod tests {
     }
 
     #[test]
-    fn wrap_algorithm_serde_roundtrip() {
-        // Serde uses Display strings via `serde(into/try_from)`. These strings appear
-        // in ceremony YAML `algorithm:` fields and transcripts.
-        let cases: &[(WrapAlgorithm, &str)] = &[
-            (WrapAlgorithm::CmsRsaCbc, "\"CMS-RSA-CBC\""),
-            (WrapAlgorithm::CmsRsaGcm, "\"CMS-RSA-GCM\""),
-            (WrapAlgorithm::AesKeyWrap, "\"AES-KW\""),
-            (WrapAlgorithm::AesKeyWrapPad, "\"AES-KWP\""),
-            (WrapAlgorithm::RsaOaepSha256, "\"RSA-OAEP-SHA256\""),
+    fn wrap_scheme_serde_roundtrip() {
+        // Serde uses Display strings via `serde(into/try_from)`. These strings
+        // appear in transcripts.
+        let cases: &[(WrapScheme, &str)] = &[
+            (WrapScheme::CmsAes256Gcm, "\"CMS-AES-256-GCM\""),
+            (WrapScheme::RsaOaepSha256, "\"RSA-OAEP-SHA256\""),
+            (
+                WrapScheme::RsaAesKeyWrapSha256,
+                "\"RSA-AES-KEY-WRAP-SHA256\"",
+            ),
         ];
         for &(variant, expected) in cases {
             let serialized = serde_json::to_string(&variant).unwrap();
             assert_eq!(serialized, expected, "serialize {variant:?}");
-            let deserialized: WrapAlgorithm = serde_json::from_str(expected).unwrap();
+            let deserialized: WrapScheme = serde_json::from_str(expected).unwrap();
             assert_eq!(deserialized, variant, "deserialize {expected}");
         }
     }
 
     #[test]
-    fn wrap_algorithm_from_str_rejects_unknown() {
-        assert!("CMS-RSA-XTS".parse::<WrapAlgorithm>().is_err());
-        assert!("".parse::<WrapAlgorithm>().is_err());
+    fn wrap_scheme_from_str_rejects_unknown() {
+        assert!("CMS-RSA-XTS".parse::<WrapScheme>().is_err());
+        assert!("".parse::<WrapScheme>().is_err());
         assert!(
-            "cms-rsa-gcm".parse::<WrapAlgorithm>().is_err(),
+            "cms-aes-256-gcm".parse::<WrapScheme>().is_err(),
             "must be case-sensitive"
         );
+        assert!(
+            "CMS-RSA-CBC".parse::<WrapScheme>().is_err(),
+            "the unauthenticated CBC scheme is gone, not merely undocumented"
+        );
+    }
+
+    /// A CMS wrap to an RSA recipient, as OpenSSL 3.6 produces it.
+    fn cms_ktri_gcm() -> WrapDescription {
+        WrapDescription::new(
+            RecipientInfoKind::Ktri,
+            Oid::new(oid::RSA_ENCRYPTION).unwrap(),
+        )
+        .with_content_encryption(Oid::new(oid::AES_256_GCM).unwrap())
+    }
+
+    #[test]
+    fn oid_rejects_values_that_are_not_dotted_decimal() {
+        assert!(Oid::new("2.16.840.1.101.3.4.1.46").is_ok());
+        assert!(Oid::new("1.2").is_ok());
+        assert!(Oid::new("1").is_err(), "a single arc is not an OID");
+        assert!(
+            Oid::new("1.2.").is_err(),
+            "trailing dot leaves an empty arc"
+        );
+        assert!(Oid::new("1.2.a").is_err());
+        assert!(Oid::new("").is_err());
+    }
+
+    #[test]
+    fn scheme_admits_only_a_matching_description() {
+        assert!(WrapScheme::CmsAes256Gcm.permits(&cms_ktri_gcm()));
+
+        // Same container, CBC content: the scheme fixes GCM, so this is not it.
+        let cbc = WrapDescription::new(
+            RecipientInfoKind::Ktri,
+            Oid::new(oid::RSA_ENCRYPTION).unwrap(),
+        )
+        .with_content_encryption(Oid::new(oid::AES_256_CBC).unwrap());
+        assert!(!WrapScheme::CmsAes256Gcm.permits(&cbc));
+
+        // A symmetric KEK is the KEKRI encapsulation, which this scheme does
+        // not produce.
+        let kekri = WrapDescription::new(
+            RecipientInfoKind::Kekri,
+            Oid::new(oid::AES_256_WRAP).unwrap(),
+        )
+        .with_content_encryption(Oid::new(oid::AES_256_GCM).unwrap());
+        assert!(!WrapScheme::CmsAes256Gcm.permits(&kekri));
+    }
+
+    #[test]
+    fn wrapped_key_rejects_a_scheme_its_description_contradicts() {
+        let coherent = WrappedKey::new(WrapScheme::CmsAes256Gcm, cms_ktri_gcm(), vec![1, 2, 3]);
+        assert!(coherent.is_ok());
+
+        let unauthenticated = WrapDescription::new(
+            RecipientInfoKind::Ktri,
+            Oid::new(oid::RSA_ENCRYPTION).unwrap(),
+        )
+        .with_content_encryption(Oid::new(oid::AES_256_CBC).unwrap());
+        let mislabelled = WrappedKey::new(WrapScheme::CmsAes256Gcm, unauthenticated, vec![1, 2, 3]);
+        assert!(
+            mislabelled.is_err(),
+            "bytes must not carry a label they contradict"
+        );
+    }
+
+    #[test]
+    fn wrapped_key_recheck_survives_deserialization() {
+        let wrapped =
+            WrappedKey::new(WrapScheme::CmsAes256Gcm, cms_ktri_gcm(), vec![9, 9]).unwrap();
+        let json = serde_json::to_string(&wrapped).unwrap();
+        let back: WrappedKey = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.scheme(), WrapScheme::CmsAes256Gcm);
+        assert_eq!(back.data(), &[9, 9]);
+
+        // An artifact edited to disagree with itself does not deserialize.
+        let tampered = json.replace(oid::AES_256_GCM, oid::AES_256_CBC);
+        assert!(serde_json::from_str::<WrappedKey>(&tampered).is_err());
+    }
+
+    #[test]
+    fn gcm_content_is_the_authenticated_case() {
+        assert!(cms_ktri_gcm().content_is_authenticated());
+        let cbc = WrapDescription::new(
+            RecipientInfoKind::Ktri,
+            Oid::new(oid::RSA_ENCRYPTION).unwrap(),
+        )
+        .with_content_encryption(Oid::new(oid::AES_256_CBC).unwrap());
+        assert!(!cbc.content_is_authenticated());
     }
 
     #[test]

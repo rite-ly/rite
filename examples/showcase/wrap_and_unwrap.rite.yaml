@@ -1,0 +1,140 @@
+version: "0.3"
+name: "Wrapping a Key for Transport"
+description: |
+  Wrap a key twice, under two different custody arrangements, and unwrap one of
+  them back.
+
+  Demonstrates wrap_key and unwrap_key. The input a wrap step reads is what
+  decides who can undo it: wrapping_key: names a key this backend holds, so the
+  ceremony keeps the means to unwrap, while recipient: names a public key held
+  by someone else, so only they can open the result.
+
+backends:
+  openssl:
+    provider: openssl
+
+parameters:
+  escrow_fingerprint:
+    type: string
+    default: "sha256:0de3cef37d95cd5137ef49d1812e0d012699fd34ea71f3be80161201f68c888a"
+    description: |
+      SHA-256 of the escrow public key's SPKI DER, which a real ceremony would
+      obtain from the escrow holder out of band rather than read off the key
+      file it was handed.
+
+materials:
+  escrow_pubkey:
+    type: digital
+    path: "test_keys/escrow_public.pem"
+    title: "Escrow transport public key"
+    description: "Public key of a party outside this ceremony."
+
+output:
+  wrapped_demo_key:
+    type: wrapped_key
+    description: "The demo key wrapped under the ceremony's own transport key."
+  escrowed_demo_key:
+    type: wrapped_key
+    description: "The demo key wrapped to the escrow holder's public key."
+
+roles:
+  operator:
+    name: "Operator"
+    person: "Alice Rivera"
+
+sections:
+  prepare:
+    name: "Generate the Keys"
+    role: ${role.operator}
+    steps:
+      generate_demo_key:
+        action: generate_keypair
+        backend: openssl
+        with:
+          algorithm: ECDSA-P256
+          policy:
+            extractable: true
+        creates: demo_keypair
+        description: |
+          The key that will be wrapped. Any key type will do.
+
+          policy: is what the key is allowed to be, in PKCS#11 terms. The
+          default is the restrictive one, a key that signs and never leaves,
+          so a key meant to be wrapped has to say extractable: true. Without
+          it the wrap step refuses, which is the point: a key does not quietly
+          become exportable because a later step wants it to be.
+
+      generate_transport_key:
+        action: generate_keypair
+        backend: openssl
+        with:
+          algorithm: RSA-2048
+          policy:
+            usages: [wrap, unwrap]
+        creates: transport_keypair
+        description: |
+          A second key, held by this backend, that will wrap the first. An EC
+          or ML-KEM key would work equally well: the recipient's key type
+          selects the encapsulation, and the transcript records which one was
+          used.
+
+          Its usages say wrap and unwrap rather than the default sign and
+          verify, so this key can do the job below and cannot sign anything.
+
+  wrap:
+    name: "Wrap Under Two Custodies"
+    role: ${role.operator}
+    steps:
+      wrap_under_ceremony_key:
+        action: wrap_key
+        backend: openssl
+        reads:
+          key_to_wrap: ${artifact.demo_keypair}
+          wrapping_key: ${artifact.transport_keypair}
+        creates: wrapped_demo_key
+        description: |
+          Wrap under a key this backend holds. Both keys must live on the same
+          backend, and the ceremony can unwrap the result itself, which the
+          next act does.
+
+      wrap_to_escrow:
+        action: wrap_key
+        backend: openssl
+        reads:
+          key_to_wrap: ${artifact.demo_keypair}
+          recipient: ${artifact.escrow_pubkey}
+        with:
+          expect_recipient: ${param.escrow_fingerprint}
+        creates: escrowed_demo_key
+        description: |
+          Wrap the same key to a public key held elsewhere. Nobody here can
+          open this one.
+
+          expect_recipient makes the step refuse a key that does not match the
+          fingerprint the ceremony declares. Without it the run would wrap to
+          whatever key it was handed and record that faithfully, which is not
+          the same as being right.
+
+  restore:
+    name: "Unwrap It Back"
+    role: ${role.operator}
+    steps:
+      unwrap_demo_key:
+        action: unwrap_key
+        backend: openssl
+        reads:
+          unwrapping_key: ${artifact.transport_keypair}
+          wrapped_data: ${artifact.wrapped_demo_key}
+        with:
+          label: "restored-demo-key"
+          expect_key: "sha256:${artifact.demo_keypair.public | sha256 | hex}"
+        creates: restored_keypair
+        description: |
+          Unwrap and import under a new label. No algorithm field: the scheme
+          comes from the wrapped artifact, so it cannot disagree with the bytes
+          being decrypted.
+
+          expect_key names the key that must come out. Here it is written as an
+          expression over the key that went in, so the step asserts the round
+          trip. In a restore ceremony, where the original key is not present,
+          the same field carries the fingerprint the origin ceremony recorded.

@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn single_act_uses_flat_numbering() {
         let text = r#"
-version: "0.2"
+version: "0.3"
 name: "T"
 roles:
   alice:
@@ -100,7 +100,7 @@ sections:
     #[test]
     fn multiple_acts_use_dotted_numbering() {
         let text = r#"
-version: "0.2"
+version: "0.3"
 name: "T"
 roles:
   alice:
@@ -139,7 +139,7 @@ sections:
         // is at column 12. LSP positions are 0-indexed; the hint anchors
         // one column past the colon → character == 12.
         let text = r#"
-version: "0.2"
+version: "0.3"
 name: "T"
 roles:
   alice:

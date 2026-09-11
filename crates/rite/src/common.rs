@@ -313,14 +313,14 @@ fn registry() -> &'static rite_runtime::ActionRegistry {
     REGISTRY.get_or_init(rite_stdlib::default_registry)
 }
 
-/// Ask each step's handler what is wrong with its `with:` block.
+/// Ask each step's handler what this build cannot carry out.
 ///
-/// Each finding carries a [`rite_runtime::ParamIssueKind`] saying whether it
-/// condemns the document or only this build, which is the same split
-/// [`unsupported_action_names`] rests on.
+/// A value wrong in any build is rejected during resolution, so what comes
+/// back here is build-relative, the same footing [`unsupported_action_names`]
+/// rests on.
 #[must_use]
-pub fn step_param_issues(resolved: &Ceremony) -> Vec<rite_runtime::StepParamIssue> {
-    registry().validate_steps(&resolved.execution_plan)
+pub fn unsupported_step_params(resolved: &Ceremony) -> Vec<rite_runtime::StepUnsupportedParam> {
+    registry().unsupported_step_params(&resolved.execution_plan)
 }
 
 /// Prompt the user for any required parameters that have no value yet.

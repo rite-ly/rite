@@ -165,11 +165,11 @@ fn check_value_passes_on_match_and_fails_on_mismatch() {
 
 // ── backend crypto ──────────────────────────────────────────────────────────
 
-fn key_spec(label: &str, algorithm: KeyAlgorithm) -> KeySpec {
+fn key_spec_with(label: &str, algorithm: KeyAlgorithm, policy: KeyPolicy) -> KeySpec {
     KeySpec {
         algorithm,
         label: label.to_string(),
-        policy: KeyPolicy::default(),
+        policy,
         location_hint: None,
     }
 }
@@ -181,7 +181,19 @@ fn backend_key(
     id: &str,
     algorithm: KeyAlgorithm,
 ) -> (ArtifactId, ArtifactValue) {
-    let meta = backend.generate_key(key_spec(id, algorithm)).unwrap();
+    backend_key_with(backend, id, algorithm, KeyPolicy::default())
+}
+
+/// The same, for a key whose policy has to allow what the test does with it.
+fn backend_key_with(
+    backend: &mut MockBackend,
+    id: &str,
+    algorithm: KeyAlgorithm,
+    policy: KeyPolicy,
+) -> (ArtifactId, ArtifactValue) {
+    let meta = backend
+        .generate_key(key_spec_with(id, algorithm, policy))
+        .unwrap();
     (
         ArtifactId::new(id),
         ArtifactValue::BackendKey {
@@ -270,9 +282,25 @@ fn export_public_produces_a_public_key_artifact() {
 #[test]
 fn wrap_then_unwrap_round_trips_through_the_actions() {
     let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
-    // CMS-RSA-GCM (the action default) wraps to an RSA recipient.
-    let (recipient_id, recipient) = backend_key(&mut backend, "recipient", KeyAlgorithm::Rsa4096);
-    let (secret_id, secret) = backend_key(&mut backend, "secret_key", KeyAlgorithm::Rsa4096);
+    // The scheme is fixed; an RSA recipient makes it a key-transport wrap.
+    let (recipient_id, recipient) = backend_key_with(
+        &mut backend,
+        "recipient",
+        KeyAlgorithm::Rsa4096,
+        KeyPolicy {
+            usages: rite_sdk::KeyUsages::WRAP | rite_sdk::KeyUsages::UNWRAP,
+            ..KeyPolicy::default()
+        },
+    );
+    let (secret_id, secret) = backend_key_with(
+        &mut backend,
+        "secret_key",
+        KeyAlgorithm::Rsa4096,
+        KeyPolicy {
+            extractable: true,
+            ..KeyPolicy::default()
+        },
+    );
     let state = make_state()
         .with_material(recipient_id.clone(), recipient)
         .with_material(secret_id.clone(), secret);

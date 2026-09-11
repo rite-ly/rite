@@ -1,12 +1,12 @@
 //! `rite check`: validate a ceremony definition file.
 
 use crate::common::{
-    InputArgs, build_inputs_or_exit, resolve_with_spans_or_exit, step_param_issues,
-    unsupported_action_names,
+    InputArgs, build_inputs_or_exit, resolve_with_spans_or_exit, unsupported_action_names,
+    unsupported_step_params,
 };
 use clap::Args as ClapArgs;
 use rite_resolver::{Diagnostic, Severity, SpanMap};
-use rite_runtime::{ParamIssueKind, StepParamIssue};
+use rite_runtime::StepUnsupportedParam;
 use std::path::{Path, PathBuf};
 
 #[derive(ClapArgs, Debug)]
@@ -23,22 +23,9 @@ pub fn run(args: &Args) {
     let (resolved, spans) =
         resolve_with_spans_or_exit(&args.file, (!inputs.is_empty()).then_some(&inputs));
 
-    // Resolution cannot reach these: the resolver keeps `with:` opaque, since
-    // only the handler knows what its parameters mean.
-    let issues = step_param_issues(&resolved);
-    let (definition, unsupported_params): (Vec<_>, Vec<_>) = issues
-        .iter()
-        .partition(|i| i.kind == ParamIssueKind::Definition);
-
-    for issue in &definition {
-        eprintln!(
-            "{}",
-            param_diagnostic(&args.file, &spans, issue, Severity::Error)
-        );
-    }
-    if !definition.is_empty() {
-        std::process::exit(1);
-    }
+    // A value wrong in any build already failed resolution above. What is
+    // left is what this binary in particular cannot carry out.
+    let unsupported_params = unsupported_step_params(&resolved);
 
     println!("Valid ceremony: {}", resolved.metadata.name);
     println!("  Roles: {}", resolved.roles.len());
@@ -61,10 +48,7 @@ pub fn run(args: &Args) {
     // executes may be a fuller build, so warn rather than fail. `rite run`
     // makes both checks fatal.
     for issue in &unsupported_params {
-        eprintln!(
-            "{}",
-            param_diagnostic(&args.file, &spans, issue, Severity::Warning)
-        );
+        eprintln!("{}", param_diagnostic(&args.file, &spans, issue));
     }
 
     let unsupported = unsupported_action_names(&resolved);
@@ -84,16 +68,11 @@ pub fn run(args: &Args) {
 ///
 /// The span map records step declarations, not individual `with:` keys, so the
 /// caret lands on the step name and the message carries the field.
-fn param_diagnostic(
-    path: &Path,
-    spans: &SpanMap,
-    issue: &StepParamIssue,
-    severity: Severity,
-) -> Diagnostic {
+fn param_diagnostic(path: &Path, spans: &SpanMap, issue: &StepUnsupportedParam) -> Diagnostic {
     Diagnostic {
         path: Some(path.to_owned()),
         span: spans.steps.get(&issue.step).copied(),
-        severity,
+        severity: Severity::Warning,
         message: format!("step '{}': {}", issue.step.as_str(), issue.message),
     }
 }

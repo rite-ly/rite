@@ -32,7 +32,7 @@ use rite_openssl::OpenSslBackend;
 #[cfg(feature = "openssl")]
 use rite_sdk::{
     KeyMetadata, KeyPolicy, KeySpec, KeyStoreBackend, KeyTransportBackend, RandomBackend,
-    SignAlgorithm, SignBackend, VerifyBackend, WrapAlgorithm, WrappedKey,
+    SignAlgorithm, SignBackend, VerifyBackend, WrapScheme, WrappedKey,
 };
 
 /// The private half of the key a mock PIV slot holds, in PKCS#8 DER.
@@ -282,9 +282,9 @@ impl KeyTransportBackend for MockBackend {
         &mut self,
         key_id: &KeyId,
         wrapping_key_id: &KeyId,
-        algorithm: WrapAlgorithm,
+        scheme: WrapScheme,
     ) -> Result<WrappedKey, BackendError> {
-        self.crypto.wrap(key_id, wrapping_key_id, algorithm)
+        self.crypto.wrap(key_id, wrapping_key_id, scheme)
     }
 
     fn unwrap(
@@ -292,18 +292,20 @@ impl KeyTransportBackend for MockBackend {
         wrapped: &WrappedKey,
         unwrapping_key_id: &KeyId,
         label: &str,
+        policy: KeyPolicy,
     ) -> Result<KeyMetadata, BackendError> {
-        self.crypto.unwrap(wrapped, unwrapping_key_id, label)
+        self.crypto
+            .unwrap(wrapped, unwrapping_key_id, label, policy)
     }
 
     fn wrap_to_public(
         &mut self,
         key_id: &KeyId,
         recipient_pub_key: &PublicKeyDer,
-        algorithm: WrapAlgorithm,
+        scheme: WrapScheme,
     ) -> Result<WrappedKey, BackendError> {
         self.crypto
-            .wrap_to_public(key_id, recipient_pub_key, algorithm)
+            .wrap_to_public(key_id, recipient_pub_key, scheme)
     }
 }
 
@@ -564,18 +566,37 @@ mod tests {
         #[test]
         fn wrap_then_unwrap_roundtrips() {
             let mut backend = MockBackend::new("test".to_string(), "seed".to_string());
+            // The mock delegates to OpenSSL, policy enforcement included, so
+            // a rehearsal refuses exactly what the real run would.
             let kek = backend
-                .generate_key(spec(KeyAlgorithm::Rsa4096, "wrapping-key"))
+                .generate_key(KeySpec {
+                    policy: KeyPolicy {
+                        usages: rite_sdk::KeyUsages::WRAP | rite_sdk::KeyUsages::UNWRAP,
+                        ..KeyPolicy::default()
+                    },
+                    ..spec(KeyAlgorithm::Rsa4096, "wrapping-key")
+                })
                 .unwrap();
             let target = backend
-                .generate_key(spec(KeyAlgorithm::Rsa4096, "data-key"))
+                .generate_key(KeySpec {
+                    policy: KeyPolicy {
+                        extractable: true,
+                        ..KeyPolicy::default()
+                    },
+                    ..spec(KeyAlgorithm::Rsa4096, "data-key")
+                })
                 .unwrap();
 
             let wrapped = backend
-                .wrap(&target.key_id, &kek.key_id, WrapAlgorithm::CmsRsaGcm)
+                .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
                 .unwrap();
             let unwrapped = backend
-                .unwrap(&wrapped, &kek.key_id, "unwrapped-key")
+                .unwrap(
+                    &wrapped,
+                    &kek.key_id,
+                    "unwrapped-key",
+                    crate::params::unwrapped_key_default_policy(),
+                )
                 .unwrap();
             assert_eq!(unwrapped.label, "unwrapped-key");
         }

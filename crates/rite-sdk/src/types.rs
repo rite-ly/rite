@@ -732,10 +732,10 @@ impl WrapDescription {
 
     /// Whether the CMS content was encrypted under an authenticated cipher.
     ///
-    /// This asks about a CMS content cipher and nothing else, so it is `false`
-    /// for every raw mechanism, including ones that authenticate by other
-    /// means. [`WrapScheme::is_authenticated`] is the question to ask of a
-    /// scheme.
+    /// True only for AES-256-GCM, the one authenticated cipher Rite writes, so
+    /// a foreign blob under another AEAD reads as unauthenticated here. It asks
+    /// about a CMS content cipher and nothing else, so it is `false` for every
+    /// raw mechanism, including ones that authenticate by other means.
     #[must_use]
     pub fn content_is_authenticated(&self) -> bool {
         self.content_encryption_oid
@@ -756,7 +756,8 @@ pub enum WrapScheme {
     /// encryption. Output: CMS `ContentInfo` DER.
     ///
     /// The encapsulation follows the recipient key: RSA takes key transport,
-    /// EC takes the RFC 5753 key-agreement path.
+    /// EC takes the RFC 5753 key-agreement path, and a KEM recipient takes the
+    /// RFC 9629 key-encapsulation path.
     ///
     /// `CMS-RSA-CBC`, the `EnvelopedData` variant with AES-256-CBC, was
     /// removed. It carried no integrity protection, so unwrapping imported

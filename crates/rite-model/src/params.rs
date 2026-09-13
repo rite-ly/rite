@@ -138,16 +138,18 @@ fn key_usages(with: &serde_json::Value) -> Vec<ParamError> {
 /// A fingerprint the ceremony declares in advance, `sha256:<64 hex digits>`.
 ///
 /// A value in any other shape can never equal what the runtime computes, so
-/// the step would fail in the room, after the keys exist.
+/// the step would fail in the room, after the keys exist. The runtime renders
+/// every fingerprint in lowercase, so uppercase hex is one such shape and is
+/// rejected here rather than at the step.
 fn fingerprint(with: &serde_json::Value, field: &'static str) -> Vec<ParamError> {
     named_value(with, field, |value| {
         let hex = value.strip_prefix("sha256:").unwrap_or_default();
-        if hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if hex.len() == 64 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
             Ok(())
         } else {
             Err(format!(
-                "'{field}' must be a fingerprint of the form 'sha256:<64 hex digits>', \
-                 found '{value}'"
+                "'{field}' must be a fingerprint of the form \
+                 'sha256:<64 lowercase hex digits>', found '{value}'"
             ))
         }
     })
@@ -191,7 +193,23 @@ mod tests {
                 ActionType::WrapKey,
                 &json!({"expect_recipient": "deadbeef"})
             )
-            .contains("sha256:<64 hex digits>")
+            .contains("sha256:<64 lowercase hex digits>")
+        );
+    }
+
+    /// The runtime renders every fingerprint in lowercase, so an uppercase one
+    /// would pass resolution and then never match, failing in the room against
+    /// the very key it names.
+    #[test]
+    fn rejects_a_fingerprint_that_is_not_lowercase() {
+        let upper = format!("sha256:{}", "AB".repeat(32));
+        let message = sole(ActionType::WrapKey, &json!({ "expect_recipient": upper }));
+        assert!(message.contains("lowercase"), "{message}");
+
+        let lower = format!("sha256:{}", "ab".repeat(32));
+        assert!(
+            check(ActionType::WrapKey, &json!({ "expect_recipient": lower })).is_empty(),
+            "the shape the runtime produces is the shape that passes"
         );
     }
 

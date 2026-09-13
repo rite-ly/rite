@@ -148,6 +148,10 @@ impl Action for UnwrapKeyAction {
                 "wrapped_data": wrapped_data_ref.display_name(),
                 "wrapped_data_fingerprint": wrapped_fingerprint,
                 "label": label,
+                // What the ceremony committed to before the key came out,
+                // null where it committed to nothing. Without it the record
+                // says which key was recovered but not which was expected.
+                "expect_key": typed.expect_key,
                 // Recorded whether or not the ceremony declared one: what a
                 // recovered key may do is the receiving ceremony's claim, and
                 // an auditor should not have to know the defaults.

@@ -621,6 +621,19 @@ impl ResolveContext {
                 });
             }
         }
+
+        // A parameter that belongs to one branch of an `exactly_one_of` group
+        // is inert on the other, where it would be parsed and never read.
+        for &(field, requires) in step.action.reads_contract().with_field_requires {
+            if with_obj.is_some_and(|m| m.contains_key(field)) && !reads_names(step, requires) {
+                self.add_error(ResolveError::WithFieldNeedsInput {
+                    step: id.clone(),
+                    action: step.action,
+                    field,
+                    requires,
+                });
+            }
+        }
     }
 
     /// Check the literal `with:` values against the rules that hold in every
@@ -656,8 +669,7 @@ impl ResolveContext {
         if contract.is_empty() {
             return;
         }
-        let reads = step.reads.as_ref().and_then(|r| r.as_object());
-        let names = |key: &str| reads.is_some_and(|m| m.contains_key(key));
+        let names = |key: &str| reads_names(step, key);
 
         for field in contract.required {
             if !names(field) {
@@ -1043,6 +1055,17 @@ impl ResolveContext {
             None
         }
     }
+}
+
+/// Whether a step's `reads:` map names this input.
+///
+/// A step that names a single positional input has no keys, so it names none
+/// of them.
+fn reads_names(step: &schema::StepBody, key: &str) -> bool {
+    step.reads
+        .as_ref()
+        .and_then(|r| r.as_object())
+        .is_some_and(|m| m.contains_key(key))
 }
 
 /// Interpret a scalar that must hold exactly one reference.

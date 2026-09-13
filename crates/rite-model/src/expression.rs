@@ -1075,8 +1075,9 @@ pub fn find_invalid_expressions(s: &str) -> Vec<InvalidExpression> {
 /// while array elements are addressed by position, and silently dropping one
 /// renumbers the rest.
 ///
-/// The result is therefore a subset of the block [`evaluate_expr_value`] will
-/// build. A caller must not read an absent field as unset.
+/// The result is therefore a subset of the block the runtime's
+/// `evaluate_expr_value` will build. A caller must not read an absent field as
+/// unset.
 #[must_use]
 pub fn literal_expr_value(value: &ExprValue) -> Option<serde_json::Value> {
     match value {

@@ -169,6 +169,14 @@ thing from the X.509 `KeyUsage` extension in a certificate, which comes from
 `generate_keypair`, and naming it fails the check like any other key the action
 does not have.
 
+Which of them bite depends on who holds the key. A token enforces the whole
+policy itself, because each field is an attribute the key is created with. The
+software backend has no token, so it enforces the two that describe operations
+it performs: `extractable` gates both wrap paths, and `usages` gates signing,
+wrapping, and unwrapping. `persistent`, `sensitive`, and `wrap_with_trusted_only`
+describe a token that is not there, so in software they are recorded in the
+transcript and nothing more.
+
 `unwrap_key` takes the same `policy:` block for the key it recovers. Nothing
 travels with a wrapped key that says what it may do, so the receiving ceremony
 declares it: without one the key may sign, verify, and be wrapped again, and a

@@ -301,8 +301,8 @@ pub trait RandomBackend: Backend {
 /// Key transport (wrapping) operations.
 ///
 /// Every method returns a [`WrappedKey`] carrying the scheme it was asked for
-/// and a [`WrapDescription`] of what it did, so the caller records an
-/// observation rather than a request.
+/// and a [`WrapDescription`](crate::types::WrapDescription) of what it did, so
+/// the caller records an observation rather than a request.
 pub trait KeyTransportBackend: Backend {
     /// Wrap `key_id` using `wrapping_key_id` under `scheme`.
     fn wrap(

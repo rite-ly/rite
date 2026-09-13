@@ -161,7 +161,7 @@ pub fn check_wraps(dir: Option<&Path>, facts: &[&StepFact]) -> Vec<WrapCheck> {
                 ..
             } if kind == "wrap_key" => Some(WrapCheck {
                 step: step.as_str().to_string(),
-                status: check_one(dir, &index, inputs, outputs),
+                status: check_one(dir, &index, step.as_str(), inputs, outputs),
             }),
             _ => None,
         })
@@ -175,8 +175,12 @@ pub fn check_wraps(dir: Option<&Path>, facts: &[&StepFact]) -> Vec<WrapCheck> {
 struct Index<'a> {
     /// Public keys this ceremony generated, by fingerprint.
     generated: HashSet<&'a str>,
-    /// Recipient a wrap was given, by the input name that named it, with
+    /// Recipient a wrap was given, by the step that wrapped to it, with
     /// whether the ceremony declared it in advance.
+    ///
+    /// Keyed by step because both facts come from one step. Keying by the
+    /// input name instead would let two steps reading the same input share an
+    /// entry, and the first `declared` would then stand for both.
     recipients: HashMap<&'a str, (&'a str, bool)>,
     /// Artifact file names by the digest recorded for their contents.
     artifacts: HashMap<&'a str, &'a std::ffi::OsStr>,
@@ -197,14 +201,14 @@ impl<'a> Index<'a> {
                     }
                 }
                 StepFact::WrapRecipientRecorded {
-                    source,
+                    step,
                     fingerprint,
                     declared,
                     ..
                 } => {
                     index
                         .recipients
-                        .entry(source.as_str())
+                        .entry(step.as_str())
                         .or_insert((fingerprint.as_str(), *declared));
                 }
                 StepFact::ArtifactWritten { path, sha256, .. } => {
@@ -234,6 +238,7 @@ impl<'a> Index<'a> {
 fn check_one(
     dir: Option<&Path>,
     index: &Index<'_>,
+    step: &str,
     inputs: &serde_json::Value,
     outputs: &serde_json::Value,
 ) -> WrapStatus {
@@ -258,7 +263,7 @@ fn check_one(
             // touch the blob, so they hold here exactly as they do for CMS.
             // Only `GeneratedHere`, which reads the blob's own identifier, is
             // out of reach.
-            recipient: declared_recipient(index, inputs),
+            recipient: declared_recipient(index, step),
             origin_confirmed,
         };
     }
@@ -302,8 +307,7 @@ fn check_one(
         None => RecipientEvidence::None,
         Some(identifier) => {
             let named = format!("sha256:{}", base16ct::lower::encode_string(identifier));
-            let source = string_field(inputs, "wrapping_key");
-            match source.and_then(|source| index.recipients.get(source)) {
+            match index.recipients.get(step) {
                 Some(&(recorded, declared)) if recorded == named => {
                     if declared {
                         RecipientEvidence::Declared
@@ -343,8 +347,8 @@ fn check_one(
 /// no identifier or because it was not read. `Declared` and `Recorded` come
 /// from comparing two facts, so they need no artifact; `GeneratedHere` does,
 /// and is absent here for that reason.
-fn declared_recipient(index: &Index<'_>, inputs: &serde_json::Value) -> RecipientEvidence {
-    match string_field(inputs, "wrapping_key").and_then(|source| index.recipients.get(source)) {
+fn declared_recipient(index: &Index<'_>, step: &str) -> RecipientEvidence {
+    match index.recipients.get(step) {
         Some(&(_, true)) => RecipientEvidence::Declared,
         Some(&(_, false)) => RecipientEvidence::Recorded,
         None => RecipientEvidence::None,

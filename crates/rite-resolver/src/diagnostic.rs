@@ -327,6 +327,7 @@ impl SpanMap {
             | ResolveError::MissingRequiredBackend { step, .. }
             | ResolveError::MissingWithField { step, .. }
             | ResolveError::UnknownWithField { step, .. }
+            | ResolveError::WithFieldNeedsInput { step, .. }
             | ResolveError::InvalidWithValue { step, .. }
             | ResolveError::MissingReadsInput { step, .. }
             | ResolveError::AmbiguousReadsInput { step, .. }

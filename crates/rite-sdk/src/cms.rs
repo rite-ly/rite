@@ -6,6 +6,10 @@
 //! what an independent verifier has. This module walks that DER far enough to
 //! name the algorithm identifiers and the recipient, and no further; it never
 //! decrypts and never touches key material.
+//!
+//! Rite writes one recipient per wrap, so a `RecipientInfo` set is described by
+//! its first member. A foreign blob addressed to several recipients is
+//! described by the first of them, and the others are not reported.
 
 use crate::types::{Oid, RecipientInfoKind, WrapDescription};
 

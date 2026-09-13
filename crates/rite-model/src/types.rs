@@ -257,6 +257,14 @@ pub struct ReadsContract {
     /// Groups from which exactly one input must be named. Each group holds the
     /// alternatives in the order they should be listed to the author.
     pub exactly_one_of: &'static [&'static [&'static str]],
+    /// `with:` fields that mean nothing unless the step also names a given
+    /// input, as `(field, input)` pairs.
+    ///
+    /// Where an action offers two paths over one operation, a parameter can
+    /// belong to only one of them. On the other path it would be parsed and
+    /// never read, so the step would run without whatever the parameter asked
+    /// for. This says which parameter needs which input.
+    pub with_field_requires: &'static [(&'static str, &'static str)],
 }
 
 impl ReadsContract {
@@ -270,10 +278,13 @@ impl ReadsContract {
         Self {
             required: fields,
             exactly_one_of: &[],
+            with_field_requires: &[],
         }
     }
 
-    /// Whether this contract constrains anything at all.
+    /// Whether this contract constrains the `reads:` map at all.
+    ///
+    /// `with_field_requires` is a rule over `with:`, so it is not counted here.
     pub fn is_empty(&self) -> bool {
         self.required.is_empty() && self.exactly_one_of.is_empty()
     }
@@ -427,6 +438,9 @@ impl ActionType {
             ActionType::WrapKey => ReadsContract {
                 required: &["key_to_wrap"],
                 exactly_one_of: &[&["wrapping_key", "recipient"]],
+                // `expect_recipient` is compared against the recipient a wrap
+                // is given, and only the external path has one.
+                with_field_requires: &[("expect_recipient", "recipient")],
             },
             ActionType::UnwrapKey => ReadsContract::required(&["unwrapping_key", "wrapped_data"]),
             ActionType::SignData => ReadsContract::required(&["key", "data"]),

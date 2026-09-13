@@ -141,6 +141,26 @@ parameters:
     assert_eq!(param.value, serde_json::json!("Production"));
 }
 
+/// Resolve a ceremony expected to hold exactly one error, and return it.
+///
+/// The span is asserted here because every one of these diagnostics has to
+/// reach an editor, which it cannot do without one.
+fn sole_error(yaml: &str) -> String {
+    let (_resolved, _spans, diags) = rite_resolver::analyze_str(None, yaml);
+    let errors: Vec<&rite_resolver::Diagnostic> = diags
+        .iter()
+        .filter(|d| d.severity == rite_resolver::Severity::Error)
+        .collect();
+    let [error] = errors.as_slice() else {
+        panic!("expected exactly one error, got {errors:?}");
+    };
+    assert!(
+        error.span.is_some(),
+        "a diagnostic without a span cannot be shown in an editor"
+    );
+    error.message.clone()
+}
+
 /// A `with:` value outside an action's vocabulary is a resolver diagnostic,
 /// which is what puts it in front of an editor as well as `rite check`.
 #[test]
@@ -169,27 +189,58 @@ sections:
         backend: openssl
         reads:
           key_to_wrap: ${artifact.key}
-          wrapping_key: ${artifact.key}
+          recipient: ${artifact.key}
         with:
           expect_recipient: "deadbeef"
         creates: wrapped
 "#;
-    let (_resolved, _spans, diags) = rite_resolver::analyze_str(None, yaml);
-    let errors: Vec<&rite_resolver::Diagnostic> = diags
-        .iter()
-        .filter(|d| d.severity == rite_resolver::Severity::Error)
-        .collect();
-    let [error] = errors.as_slice() else {
-        panic!("expected exactly one error, got {errors:?}");
-    };
+    let message = sole_error(yaml);
     assert!(
-        error.message.contains("sha256:<64 hex digits>"),
-        "unexpected message: {}",
-        error.message
+        message.contains("sha256:<64 lowercase hex digits>"),
+        "unexpected message: {message}"
     );
+}
+
+/// `expect_recipient:` is compared against the recipient a wrap is given, and
+/// a wrap under a backend-held key has none. Left to the runtime the declared
+/// value would be parsed and never read, so the step would wrap without the
+/// guard its author wrote and nothing would say so.
+#[test]
+fn a_declared_recipient_without_a_recipient_input_is_reported() {
+    let yaml = r#"
+version: "0.3"
+name: "Declared recipient on the wrong custody path"
+roles:
+  officer:
+    person: "Alice"
+backends:
+  openssl:
+    provider: openssl
+sections:
+  main:
+    role: ${role.officer}
+    steps:
+      gen:
+        action: generate_keypair
+        backend: openssl
+        with:
+          algorithm: RSA-2048
+        creates: key
+      wrap:
+        action: wrap_key
+        backend: openssl
+        reads:
+          key_to_wrap: ${artifact.key}
+          wrapping_key: ${artifact.key}
+        with:
+          expect_recipient: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        creates: wrapped
+"#;
+    let message = sole_error(yaml);
     assert!(
-        error.span.is_some(),
-        "a diagnostic without a span cannot be shown in an editor"
+        message.contains("'expect_recipient' applies only when")
+            && message.contains("reads 'recipient'"),
+        "unexpected message: {message}"
     );
 }
 

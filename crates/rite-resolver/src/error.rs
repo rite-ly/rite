@@ -213,6 +213,26 @@ pub enum ResolveError {
         field: String,
     },
 
+    /// Step `with:` block holds a field that only means something alongside a
+    /// `reads:` input the step does not name.
+    ///
+    /// The field would be parsed and then never consulted, so a guard the
+    /// author asked for would be absent with nothing saying so.
+    #[error(
+        "Step '{step}': '{field}' applies only when '{action}' reads '{requires}', \
+         which this step does not"
+    )]
+    WithFieldNeedsInput {
+        /// The step ID.
+        step: StepId,
+        /// The action whose block holds the field.
+        action: ActionType,
+        /// The `with:` field that needs an input.
+        field: &'static str,
+        /// The `reads:` input it needs.
+        requires: &'static str,
+    },
+
     /// Step `with:` block holds a value the action cannot accept.
     ///
     /// Only values wrong in every build reach here. Whether the running binary

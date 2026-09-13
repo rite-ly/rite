@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::wrap_checks::{WrapCheck, check_wraps};
 use clap::Args as ClapArgs;
 use rite_model::StepFact;
 use rite_runtime::{
@@ -26,33 +27,8 @@ pub struct Args {
     pub allow_truncated: bool,
 }
 
-pub fn run(args: Args) {
-    let (transcript_path, source_dir) = if args.file.is_dir() {
-        let candidate = args.file.join("transcript.jsonl");
-        (candidate, Some(args.file))
-    } else {
-        (args.file, None)
-    };
-
-    let loaded = match read_verified_transcript(&transcript_path) {
-        Ok(loaded) => loaded,
-        Err(VerifyError::Io(e)) => {
-            match (&source_dir, e.kind()) {
-                (Some(dir), std::io::ErrorKind::NotFound) => {
-                    eprintln!("No transcript found in folder: {}", dir.display());
-                    eprintln!("Expected: {}", transcript_path.display());
-                }
-                _ => {
-                    eprintln!("Failed to read transcript: {e}");
-                }
-            }
-            std::process::exit(1);
-        }
-        Err(err) => {
-            eprintln!("Verification failed: {err}");
-            std::process::exit(1);
-        }
-    };
+pub fn run(args: &Args) {
+    let (loaded, source_dir) = load_or_exit(&args.file);
 
     // The hash chain is intact. Now re-derive the entropy source so every
     // recorded random value is proven to come from the recorded seed, not
@@ -71,22 +47,20 @@ pub fn run(args: Args) {
         .as_deref()
         .map(|dir| check_artifacts(dir, loaded.facts.iter().map(|t| &t.fact)));
 
-    println!("Transcript verified.");
-    println!("  Facts:       {}", loaded.facts.len());
-    if let Some(scheme) = &entropy.derivation {
-        println!(
-            "  Entropy:     {} value(s) re-derived, {} contribution(s) folded ({scheme})",
-            entropy.values_verified, entropy.contributions,
-        );
-    }
-    if let Some(source) = &entropy.source {
-        println!("  Seed source: {source}");
-    }
+    // A wrap fact states what algorithms were used and who the recipient was.
+    // The artifact it produced says the same things independently, so where
+    // the artifact is at hand the two are compared.
+    let facts: Vec<&StepFact> = loaded.facts.iter().map(|t| &t.fact).collect();
+    let wrap_checks = check_wraps(source_dir.as_deref(), &facts);
+
+    print_counts(loaded.facts.len(), &entropy);
 
     let (artifacts_failed, artifacts_missing) = match &artifact_checks {
         Some(checks) => summarize_artifacts(checks),
         None => (false, false),
     };
+
+    let wraps_failed = summarize_wraps(&wrap_checks);
 
     // The chain check proves internal consistency only: a complete substitute
     // transcript verifies just as cleanly. Tying it to the witnessed ceremony
@@ -130,6 +104,15 @@ pub fn run(args: Args) {
         failed = true;
     }
 
+    if wraps_failed {
+        eprintln!();
+        eprintln!(
+            "Verification failed: a wrapped artifact contradicts what the transcript\n\
+             records about the wrap that produced it."
+        );
+        failed = true;
+    }
+
     if !loaded.terminated {
         eprintln!();
         if args.allow_truncated {
@@ -149,6 +132,72 @@ pub fn run(args: Args) {
     }
 
     std::process::exit(i32::from(failed));
+}
+
+/// Chain-verify the transcript the argument points at, exiting on failure.
+///
+/// The argument may name the transcript itself or the run directory holding
+/// it; only the directory form gives the later checks artifacts to read, so it
+/// is returned alongside.
+fn load_or_exit(file: &Path) -> (rite_runtime::LoadedTranscript, Option<PathBuf>) {
+    let (transcript_path, source_dir) = if file.is_dir() {
+        (file.join("transcript.jsonl"), Some(file.to_owned()))
+    } else {
+        (file.to_owned(), None)
+    };
+
+    match read_verified_transcript(&transcript_path) {
+        Ok(loaded) => (loaded, source_dir),
+        Err(VerifyError::Io(e)) => {
+            match (&source_dir, e.kind()) {
+                (Some(dir), std::io::ErrorKind::NotFound) => {
+                    eprintln!("No transcript found in folder: {}", dir.display());
+                    eprintln!("Expected: {}", transcript_path.display());
+                }
+                _ => {
+                    eprintln!("Failed to read transcript: {e}");
+                }
+            }
+            std::process::exit(1);
+        }
+        Err(err) => {
+            eprintln!("Verification failed: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Print what the transcript contained and what the entropy re-derivation
+/// covered.
+fn print_counts(facts: usize, entropy: &rite_runtime::EntropyVerified) {
+    println!("Transcript verified.");
+    println!("  Facts:       {facts}");
+    if let Some(scheme) = &entropy.derivation {
+        println!(
+            "  Entropy:     {} value(s) re-derived, {} contribution(s) folded ({scheme})",
+            entropy.values_verified, entropy.contributions,
+        );
+    }
+    if let Some(source) = &entropy.source {
+        println!("  Seed source: {source}");
+    }
+}
+
+/// Print the per-wrap result lines, and report whether any artifact
+/// contradicts what the transcript says was done to it.
+///
+/// A wrap nothing could check prints as unchecked and fails nothing: an
+/// artifact carried off to its destination is the normal case, and absence is
+/// not evidence either way.
+fn summarize_wraps(checks: &[WrapCheck]) -> bool {
+    if checks.is_empty() {
+        return false;
+    }
+    println!("  Wraps:");
+    for check in checks {
+        println!("    {}", check.describe());
+    }
+    checks.iter().any(WrapCheck::failed)
 }
 
 /// Print the per-artifact result lines and fold the statuses into
@@ -219,11 +268,6 @@ impl ArtifactCheck {
 }
 
 /// Re-hash every artifact the transcript records against the run directory.
-///
-/// The transcript is untrusted input, so the recorded path is never followed.
-/// Only its final component names the file, anchored under the run
-/// directory's `artifacts/` subdirectory; a crafted transcript therefore
-/// cannot point the verifier at files outside the directory being verified.
 fn check_artifacts<'a>(
     dir: &Path,
     facts: impl IntoIterator<Item = &'a StepFact>,
@@ -260,7 +304,7 @@ fn check_one_artifact(
             },
         };
     };
-    let location = Path::new("artifacts").join(file_name);
+    let location = artifact_location(file_name);
     let on_disk = dir.join(&location);
     let status = if on_disk.is_file() {
         match compute_file_fingerprint(&on_disk) {
@@ -282,8 +326,18 @@ fn check_one_artifact(
     }
 }
 
+/// Where an artifact recorded under `file_name` is looked for.
+///
+/// The transcript is untrusted input, so the recorded path is never followed.
+/// Only its final component names the file, anchored under the run
+/// directory's `artifacts/` subdirectory; a crafted transcript therefore
+/// cannot point the verifier at files outside the directory being verified.
+pub(crate) fn artifact_location(file_name: &std::ffi::OsStr) -> PathBuf {
+    Path::new("artifacts").join(file_name)
+}
+
 /// Bare hex digest, tolerant of the `sha256:` prefix the runtime records.
-fn digest_hex(s: &str) -> &str {
+pub(crate) fn digest_hex(s: &str) -> &str {
     s.strip_prefix("sha256:").unwrap_or(s)
 }
 

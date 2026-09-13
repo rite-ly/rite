@@ -10,7 +10,7 @@
 //! use rite_resolver::resolve;
 //!
 //! let ceremony_yaml = r#"
-//! version: "0.2"
+//! version: "0.3"
 //! name: "Example Ceremony"
 //! roles: {}
 //! sections: {}
@@ -281,7 +281,7 @@ mod tests {
         std::fs::write(
             &ceremony_path,
             r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections: {}
@@ -312,7 +312,7 @@ materials:
         std::fs::write(
             &ceremony_path,
             r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections: {}
@@ -331,7 +331,7 @@ materials:
     #[test]
     fn resolve_minimal_ceremony() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test Ceremony"
 roles: {}
 sections: {}
@@ -347,7 +347,7 @@ sections: {}
     #[test]
     fn resolve_with_roles_and_steps() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles:
   admin:
@@ -381,7 +381,7 @@ sections:
     #[test]
     fn resolve_with_input_parameters() {
         let ceremony = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections:
@@ -418,7 +418,7 @@ parameters:
     #[test]
     fn fails_on_missing_required_parameter() {
         let ceremony = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections: {}
@@ -438,7 +438,7 @@ parameters:
     #[test]
     fn allows_missing_required_parameter_without_inputs() {
         let ceremony = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections: {}
@@ -453,7 +453,7 @@ parameters:
     #[test]
     fn fails_on_unknown_role_reference() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections:
@@ -477,7 +477,7 @@ sections:
         // diagnostic must underline "${xxxx}" — the expression that is wrong —
         // not the step key "my_step" where the reference happens to live.
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles:
   alice: {}
@@ -508,7 +508,7 @@ sections:
         // When `role: "${role.ghost}"` references a role that does not exist,
         // the diagnostic must underline the entire "${role.ghost}" expression.
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles:
   alice: {}
@@ -540,7 +540,7 @@ sections:
         // the step key ("my_step") with its full length, so editors can underline
         // the identifier rather than showing a zero-width squiggly.
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections:
@@ -567,7 +567,7 @@ sections:
     #[test]
     fn missing_required_backend_diagnostic_spans_step_id() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections:
@@ -591,7 +591,7 @@ sections:
         // generic value-span lookup must find the entry pushed by the
         // `reads:` walk and underline the expression — not the step key.
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles:
   alice: {}
@@ -652,7 +652,7 @@ sections:
     }
 
     const DISPATCH_YAML: &str = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles:
   alice: {}
@@ -842,7 +842,7 @@ output:
         fn ceremony_with(step_fields: &str) -> String {
             format!(
                 r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles:
   op:
@@ -936,9 +936,9 @@ backends:
             let (field, reason) = only_reference_error(
                 r#"        action: confirm
         with:
-          prompt: "write to ${paramm.outdir}""#,
+          message: "write to ${paramm.outdir}""#,
             );
-            assert_eq!(field, "with.prompt");
+            assert_eq!(field, "with.message");
             assert!(reason.contains("unknown namespace 'paramm'"), "{reason}");
         }
 
@@ -948,7 +948,7 @@ backends:
                 r#"        action: confirm
         description: "check ${material.manifest} first"
         with:
-          prompt: "ok?""#,
+          message: "ok?""#,
             );
             assert_eq!(field, "description");
             assert!(reason.contains("no 'material' namespace"), "{reason}");
@@ -1002,7 +1002,7 @@ backends:
         role: "${role.op}"
         description: "hash is ${artifact.k | sha256 | hex}"
         with:
-          prompt: "write to ${param.outdir}, reading ${artifact.manifest}""#,
+          message: "write to ${param.outdir}, reading ${artifact.manifest}""#,
             );
             let result = resolve(&yaml, None);
             assert!(!result.is_err(), "unexpected errors: {:?}", result.errors);
@@ -1013,7 +1013,7 @@ backends:
             let yaml = ceremony_with(
                 r#"        action: confirm
         with:
-          prompt: "write to ${paramm.outdir} now""#,
+          message: "write to ${paramm.outdir} now""#,
             );
             let (_, _, diags) = analyze_str(None, &yaml);
             let diag = diags

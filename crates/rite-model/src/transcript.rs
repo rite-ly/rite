@@ -228,6 +228,29 @@ pub enum StepFact {
         /// Optional fingerprint of the produced material.
         fingerprint: Option<String>,
     },
+    /// A key held outside the ceremony was used as the recipient of a wrap.
+    ///
+    /// Its own fact rather than a field on the wrap operation: the method of a
+    /// wrap is publishable and the identity of a custodian may not be, and a
+    /// fact carries one confidentiality level.
+    ///
+    /// The fingerprint records the bytes that were present. Nothing in the
+    /// ceremony corroborates that they belong to the intended recipient, and
+    /// nothing shows the recipient can open the result. The fact states an
+    /// assumption the ceremony rests on, not something Rite proved.
+    WrapRecipientRecorded {
+        /// Step that wrapped to this recipient.
+        step: StepId,
+        /// The artifact or material the recipient key came from, as named in
+        /// the ceremony.
+        source: String,
+        /// `sha256:<hex>` over the recipient's SPKI DER.
+        fingerprint: String,
+        /// Whether the ceremony declared this fingerprint in advance, so the
+        /// runtime checked the key it received against the definition rather
+        /// than recording whatever arrived.
+        declared: bool,
+    },
     /// A human attestation was recorded.
     AttestationRecorded {
         /// Step under which the attestation was recorded.
@@ -360,6 +383,8 @@ impl StepFact {
             | StepFact::ActStarted { .. }
             | StepFact::StepStarted { .. }
             | StepFact::PromptAnswered { .. }
+            // Records an input the step read, not work it performed.
+            | StepFact::WrapRecipientRecorded { .. }
             | StepFact::DeviationRecorded { .. }
             | StepFact::StepAttemptFailed { .. }
             | StepFact::StepCompleted { .. }
@@ -613,6 +638,25 @@ mod schema_snapshot_tests {
                 "inputs": { "algorithm": "rsa", "bits": 4096 },
                 "outputs": { "key_id": "k1" },
                 "fingerprint": "sha256:deadbeef",
+            }),
+        );
+    }
+
+    #[test]
+    fn wrap_recipient_recorded() {
+        assert_json(
+            &StepFact::WrapRecipientRecorded {
+                step: StepId::new("s1"),
+                source: "escrow_pubkey".to_string(),
+                fingerprint: "sha256:deadbeef".to_string(),
+                declared: true,
+            },
+            &json!({
+                "type": "wrap_recipient_recorded",
+                "step": "s1",
+                "source": "escrow_pubkey",
+                "fingerprint": "sha256:deadbeef",
+                "declared": true,
             }),
         );
     }

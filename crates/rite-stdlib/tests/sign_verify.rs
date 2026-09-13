@@ -173,7 +173,7 @@ fn verifies_a_signature_it_just_produced() {
 /// that the signature equals a fixed value.
 #[test]
 fn verifies_a_post_quantum_signature() {
-    if !rite_openssl::ML_DSA_AVAILABLE {
+    if !rite_openssl::POST_QUANTUM_AVAILABLE {
         return;
     }
     let mut signed = sign_with("ML-DSA-65", &serde_json::json!({}));

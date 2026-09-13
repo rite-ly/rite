@@ -44,6 +44,19 @@ OpenSSL is the most widely deployed implementation to agree with.
 
 The cost is a C dependency and its build requirements.
 
+## Device bindings are not providers
+
+`cryptoki` in `rite-pkcs11`, and `yubikey` in `rite-piv`, sit outside the
+one-provider rule. Neither implements an algorithm: they speak a protocol to a
+device that does. `cryptoki` in particular is a binding to whatever vendor
+module the operator loads at run time, and Rite links none of those modules.
+
+The consequence is that a claim about what a token does cannot be settled by
+reading Rite's source. `crates/rite-pkcs11/tests/token_questions.rs` asks a
+real token instead, under `#[ignore]` and `SOFTHSM2_MODULE`, and CI runs it
+against SoftHSM. SoftHSM answers for the specification rather than for any
+particular vendor; where a device differs, it differs from that baseline.
+
 ## Where the seam is
 
 `rite-stdlib/src/signatures.rs`.
@@ -70,9 +83,10 @@ the provider because it may be a smart card.
 ## Build-time capability
 
 Algorithm availability is fixed when `rite-openssl` compiles, not when it runs.
-ML-DSA arrived in OpenSSL 3.5, and its bindings sit behind a `cfg` resolved from
-the OpenSSL headers present at build time. A binary linked against OpenSSL 3.0
-contains no ML-DSA code, so no runtime check can recover the capability.
+ML-DSA and ML-KEM both arrived in OpenSSL 3.5, and their bindings sit behind a
+`cfg` resolved from the OpenSSL headers present at build time. A binary linked
+against OpenSSL 3.0 contains none of that code, so no runtime check can recover
+the capability.
 
 Two pieces make this visible:
 
@@ -80,11 +94,15 @@ Two pieces make this visible:
   `openssl-sys` publishes through its `links` metadata. (`openssl-sys` is a
   direct dependency of `rite-openssl` for this reason alone, since `links`
   metadata reaches only direct dependents.)
-- `rite_openssl::ML_DSA_AVAILABLE` exposes the result. Branch on it wherever a
-  useful alternative exists, such as skipping a test, rather than waiting for
-  an `UnsupportedAlgorithm` error mid-ceremony.
+- `rite_openssl::supports(algorithm)` answers whether this build can produce a
+  given key, and `rite_openssl::POST_QUANTUM_AVAILABLE` exposes the raw cfg
+  behind it. Ask `supports` wherever a useful alternative exists, such as
+  skipping a test or warning during `rite check`, rather than waiting for an
+  `UnsupportedAlgorithm` error mid-ceremony. Keeping the per-algorithm answer
+  in this crate is deliberate: it is the one that compiles the bindings, and
+  matching exhaustively means a new algorithm cannot skip the question.
 
-Building with ML-DSA support requires OpenSSL 3.5 or newer. Distributions still
+Building with post-quantum support requires OpenSSL 3.5 or newer. Distributions still
 shipping 3.0, including Ubuntu 24.04, produce a working build with the
 post-quantum algorithms absent. `--features openssl-vendored` bundles a current
 OpenSSL and always includes them.

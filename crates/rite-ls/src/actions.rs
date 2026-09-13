@@ -48,12 +48,12 @@ pub static ALL: &[ActionMeta] = &[
     ActionMeta {
         name: "wrap_key",
         short: "Encrypt a key under another key for transport",
-        long: "Encrypt a private key under another key so it can leave the machine. The container follows the wrapping algorithm. The OpenSSL backend produces CMS: AuthEnvelopedData for CMS-RSA-GCM, EnvelopedData for CMS-RSA-CBC.",
+        long: "Encrypt a private key under another key so it can leave the machine. `scheme:` names the container, defaulting to CMS AuthEnvelopedData under AES-256-GCM; the raw RSA mechanisms are what a cloud KMS import accepts. Which encapsulation a scheme takes follows the recipient key, and the transcript records what the wrap actually did. Reads `wrapping_key:` to wrap under a key the backend holds, or `recipient:` to wrap to a public key held outside the ceremony.",
     },
     ActionMeta {
         name: "unwrap_key",
         short: "Decrypt a wrapped key and import it into a backend",
-        long: "Decrypt a wrapped key and import it into a backend under a new label.",
+        long: "Decrypt a wrapped key and import it into a backend under a new label. The scheme comes from the wrapped artifact rather than the ceremony, so it cannot disagree with the bytes being decrypted.",
     },
     ActionMeta {
         name: "export_public",

@@ -642,7 +642,7 @@ mod tests {
         // This test verifies that every declaration span carries the token length so
         // that editors underline the full identifier, not just the first character.
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles:
   alice: {}
@@ -701,7 +701,7 @@ sections:
     #[test]
     fn unknown_top_level_key_warning_covers_full_key() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections: {}
@@ -723,7 +723,7 @@ unknown_key: value
     #[test]
     fn expression_param_ref_span_covers_full_expression() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 parameters:
@@ -755,7 +755,7 @@ sections:
     #[test]
     fn material_declaration_span_covers_full_identifier() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections: {}
@@ -778,7 +778,7 @@ materials:
     #[test]
     fn backend_declaration_span_covers_full_identifier() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections: {}
@@ -798,7 +798,7 @@ backends:
     #[test]
     fn output_declaration_span_covers_full_identifier() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections: {}
@@ -845,7 +845,7 @@ sections: {}
     #[test]
     fn role_field_unquoted_value_records_reference_with_full_span() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles:
   alice: {}
@@ -872,7 +872,7 @@ sections:
         // The occurrence points at no declaration, so it is kept for the
         // resolver's diagnostic to underline rather than as a reference.
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 materials:
@@ -904,7 +904,7 @@ sections:
     #[test]
     fn an_expression_that_parses_is_not_recorded_as_unparsed() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 parameters:
@@ -929,7 +929,7 @@ sections:
     #[test]
     fn unterminated_expression_does_not_panic() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections:
@@ -952,7 +952,7 @@ sections:
     #[test]
     fn creates_field_records_artifact_reference_and_artifact_span() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections:
@@ -985,7 +985,7 @@ sections:
     #[test]
     fn reads_named_inputs_record_artifact_references() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections:
@@ -1013,7 +1013,7 @@ sections:
     #[test]
     fn reads_string_form_records_artifact_reference() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections:
@@ -1035,7 +1035,7 @@ sections:
     #[test]
     fn expression_artifact_ref_in_description_is_recorded() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections:
@@ -1055,7 +1055,7 @@ sections:
     }
 
     const MINIMAL_CEREMONY: &str = r#"
-version: "0.2"
+version: "0.3"
 name: "Test Ceremony"
 roles: {}
 sections: {}
@@ -1065,7 +1065,7 @@ sections: {}
     fn parses_minimal_ceremony() {
         let (ceremony, _, diags) = lower_ceremony(None, MINIMAL_CEREMONY);
         let ceremony = ceremony.expect("should parse");
-        assert_eq!(ceremony.version, "0.2");
+        assert_eq!(ceremony.version, "0.3");
         assert_eq!(ceremony.name, "Test Ceremony");
         assert!(diags.iter().all(|d| d.severity != Severity::Error));
     }
@@ -1073,7 +1073,7 @@ sections: {}
     #[test]
     fn parses_step_with_params() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections:
@@ -1106,7 +1106,7 @@ sections:
     #[test]
     fn reports_yaml_errors_with_location() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
   bad_indent
 "#;
@@ -1121,7 +1121,7 @@ name: "Test"
     #[test]
     fn extracts_step_spans() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections:
@@ -1217,7 +1217,7 @@ sections:
     #[test]
     fn warns_on_unknown_top_level_key() {
         let yaml = r#"
-version: "0.2"
+version: "0.3"
 name: "Test"
 roles: {}
 sections: {}

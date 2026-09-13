@@ -2,23 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Read a `with:` field that must hold a string, for `Action::validate`.
-///
-/// `Ok(None)` covers both an unset field and one deferred to run time, which
-/// the literal projection leaves absent. Neither is an error before execution.
-pub(crate) fn string_param<'a>(
-    params: &'a serde_json::Value,
-    field: &str,
-) -> Result<Option<&'a str>, String> {
-    match params.get(field) {
-        None => Ok(None),
-        Some(value) => value
-            .as_str()
-            .map(Some)
-            .ok_or_else(|| format!("{field} must be a string, got {value}")),
-    }
-}
-
 /// Params for `clock_check` action.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClockCheckParams {
@@ -64,6 +47,10 @@ impl ReadbackFormat {
 /// Params for `oral_readback` action.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OralReadbackParams {
+    /// Instruction shown before the readback, as on the other verification
+    /// actions.
+    #[serde(default)]
+    pub message: Option<String>,
     /// Value to read aloud. Can be a literal string or artifact reference.
     #[serde(default)]
     pub value: Option<String>,
@@ -159,12 +146,90 @@ pub struct GenerateKeypairParams {
     /// Cryptographic algorithm (e.g., `"RSA-4096"`, `"ECDSA-P256"`).
     #[serde(default = "default_algorithm")]
     pub algorithm: String,
-    /// Key usage flags.
+    /// What the key is permitted to do, and whether it may leave the backend.
     #[serde(default)]
-    pub key_usage: Option<Vec<String>>,
+    pub policy: Option<KeyPolicyParams>,
     /// Backend-specific slot hint.
     #[serde(default)]
     pub slot: Option<String>,
+}
+
+/// The `policy:` block, mirroring [`KeyPolicy`] field for field.
+///
+/// Every field is optional and falls back to [`KeyPolicy::default`], which is
+/// the restrictive choice: a persistent, sensitive, non-extractable key that
+/// may sign and verify. A ceremony that wraps a key it generated has to say
+/// `extractable: true`, because otherwise the key cannot leave the backend and
+/// the wrap step will refuse.
+///
+/// This is PKCS#11 vocabulary: what the token permits. The `KeyUsage`
+/// extension in a certificate is a different thing, settled by `profile:` on
+/// `issue_certificate`.
+#[cfg(feature = "crypto")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KeyPolicyParams {
+    /// Key survives the session. `CKA_TOKEN`.
+    #[serde(default)]
+    pub persistent: Option<bool>,
+    /// Key material is never revealed in plaintext. `CKA_SENSITIVE`.
+    #[serde(default)]
+    pub sensitive: Option<bool>,
+    /// Key may be wrapped and leave the backend. `CKA_EXTRACTABLE`.
+    #[serde(default)]
+    pub extractable: Option<bool>,
+    /// Key may only be wrapped by a trusted wrapping key.
+    /// `CKA_WRAP_WITH_TRUSTED`.
+    #[serde(default)]
+    pub wrap_with_trusted_only: Option<bool>,
+    /// Operations the key is permitted to perform: `sign`, `verify`,
+    /// `encrypt`, `decrypt`, `wrap`, `unwrap`, `derive`.
+    #[serde(default)]
+    pub usages: Option<Vec<String>>,
+}
+
+#[cfg(feature = "crypto")]
+impl KeyPolicyParams {
+    /// Resolve the declared policy against the defaults.
+    ///
+    /// # Errors
+    ///
+    /// Returns the offending name if `usages` holds one that is not a PKCS#11
+    /// usage. Resolution rejects those first, so reaching this means the step
+    /// was built without going through it.
+    pub fn resolve(&self) -> Result<rite_sdk::KeyPolicy, String> {
+        self.resolve_from(&rite_sdk::KeyPolicy::default())
+    }
+
+    /// Resolve the declared policy against a base other than the default.
+    ///
+    /// # Errors
+    ///
+    /// As [`resolve`](Self::resolve).
+    pub fn resolve_from(
+        &self,
+        defaults: &rite_sdk::KeyPolicy,
+    ) -> Result<rite_sdk::KeyPolicy, String> {
+        let usages = match &self.usages {
+            None => defaults.usages,
+            Some(names) => {
+                let mut usages = rite_sdk::KeyUsages::empty();
+                for name in names {
+                    usages |= rite_sdk::KeyUsages::usage_named(name)
+                        .ok_or_else(|| format!("unknown key usage '{name}'"))?;
+                }
+                usages
+            }
+        };
+        Ok(rite_sdk::KeyPolicy {
+            persistent: self.persistent.unwrap_or(defaults.persistent),
+            sensitive: self.sensitive.unwrap_or(defaults.sensitive),
+            extractable: self.extractable.unwrap_or(defaults.extractable),
+            wrap_with_trusted_only: self
+                .wrap_with_trusted_only
+                .unwrap_or(defaults.wrap_with_trusted_only),
+            usages,
+        })
+    }
 }
 
 #[cfg(feature = "crypto")]
@@ -177,7 +242,7 @@ impl Default for GenerateKeypairParams {
     fn default() -> Self {
         Self {
             algorithm: default_algorithm(),
-            key_usage: None,
+            policy: None,
             slot: None,
         }
     }
@@ -187,13 +252,28 @@ impl Default for GenerateKeypairParams {
 #[cfg(feature = "crypto")]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WrapKeyParams {
-    /// Wrapping algorithm. Defaults to `"CMS-RSA-GCM"`.
+    /// The wrapping scheme, defaulting to `"CMS-AES-256-GCM"`.
     ///
-    /// The OpenSSL backend accepts `"CMS-RSA-GCM"` and `"CMS-RSA-CBC"`. The
-    /// other names `WrapAlgorithm` parses, `"AES-KW"`, `"AES-KWP"` and
-    /// `"RSA-OAEP-SHA256"`, have no backend and fail when the step runs.
+    /// Which encapsulation a scheme takes still follows the recipient key and
+    /// is never an author's choice. What the author does choose is where the
+    /// blob is going: CMS carries its own algorithm identifiers and is what a
+    /// ceremony archives, while the raw mechanisms are what a cloud KMS import
+    /// accepts and describe nothing about themselves.
+    ///
+    /// A raw scheme is a weaker record: `rite verify` cannot re-derive its
+    /// algorithms from the artifact, and says so rather than reporting the
+    /// wrap as checked.
     #[serde(default)]
-    pub algorithm: Option<String>,
+    pub scheme: Option<rite_sdk::WrapScheme>,
+    /// The recipient's expected fingerprint, `"sha256:<hex>"` over its SPKI
+    /// DER, for a step that reads `recipient:`.
+    ///
+    /// Declaring it is what turns the recorded recipient from "whatever key
+    /// was present" into a value the ceremony committed to in advance. On
+    /// mismatch the step fails: a key wrapped to the wrong recipient cannot be
+    /// unwrapped again.
+    #[serde(default)]
+    pub expect_recipient: Option<String>,
 }
 
 /// Params for `sign_data` action.
@@ -232,12 +312,40 @@ pub struct VerifySignatureParams {
 #[cfg(feature = "crypto")]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UnwrapKeyParams {
-    /// Wrapping algorithm. Should match the algorithm used for wrapping.
+    /// The expected fingerprint of the recovered key, `"sha256:<hex>"` over
+    /// its SPKI DER.
+    ///
+    /// Usually the value the origin ceremony's `generate_keypair` step
+    /// recorded. On mismatch the step fails rather than importing a key the
+    /// ceremony did not mean to restore.
     #[serde(default)]
-    pub algorithm: Option<String>,
+    pub expect_key: Option<String>,
     /// Label for the unwrapped key (defaults to `"unwrapped-key"`).
     #[serde(default)]
     pub label: Option<String>,
+    /// What the recovered key is permitted to do, and whether it may leave
+    /// the backend again.
+    ///
+    /// Nothing travels with a wrapped key that says what it may do, so the
+    /// receiving ceremony declares that. Without a `policy:` the key may sign,
+    /// verify and be wrapped again; a key restored to serve as a wrapping key
+    /// has to say `usages: [wrap, unwrap]`.
+    #[serde(default)]
+    pub policy: Option<KeyPolicyParams>,
+}
+
+/// The policy a recovered key gets when the step declares none.
+///
+/// `extractable` is true because this backend has just held the key in the
+/// clear, so claiming otherwise would be a claim the run cannot support. The
+/// usages are the restrictive default, as they are at generation.
+#[cfg(feature = "crypto")]
+#[must_use]
+pub fn unwrapped_key_default_policy() -> rite_sdk::KeyPolicy {
+    rite_sdk::KeyPolicy {
+        extractable: true,
+        ..rite_sdk::KeyPolicy::default()
+    }
 }
 
 /// Params for `generate_csr` action.
@@ -271,4 +379,106 @@ pub struct IssueCertificateParams {
     /// `pathLenConstraint` for `sub_ca` profile (default: 0).
     #[serde(default)]
     pub path_len: Option<u8>,
+}
+
+#[cfg(test)]
+mod schema_drift_tests {
+    use super::*;
+    use rite_model::ActionType;
+    use std::collections::BTreeSet;
+
+    /// The keys a params struct actually accepts.
+    ///
+    /// Every struct here derives `Default` and `Serialize` and none uses
+    /// `skip_serializing_if`, so serializing a default value names every field
+    /// serde will read.
+    fn serde_keys<T: serde::Serialize>(value: T) -> BTreeSet<String> {
+        serde_json::to_value(value)
+            .expect("params structs serialize")
+            .as_object()
+            .expect("params structs are objects")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    fn declared(action: ActionType) -> BTreeSet<String> {
+        action
+            .known_with_fields()
+            .iter()
+            .map(|field| (*field).to_string())
+            .collect()
+    }
+
+    /// `known_with_fields` stands in for these structs across a crate boundary
+    /// the resolver cannot see over, so nothing but this test makes the two
+    /// agree. The dangerous direction is silent: a field added here and not
+    /// there is rejected as unknown, and one removed here and left there goes
+    /// back to being dropped without a word.
+    #[test]
+    fn every_params_struct_matches_the_fields_the_model_declares() {
+        for (action, keys) in [
+            (
+                ActionType::ClockCheck,
+                serde_keys(ClockCheckParams::default()),
+            ),
+            (ActionType::Confirm, serde_keys(ConfirmParams::default())),
+            (
+                ActionType::CheckValue,
+                serde_keys(CheckValueParams {
+                    actual: String::new(),
+                    expected: String::new(),
+                    message: None,
+                    sensitive: false,
+                }),
+            ),
+            (
+                ActionType::OralReadback,
+                serde_keys(OralReadbackParams::default()),
+            ),
+            (
+                ActionType::MachineInfo,
+                serde_keys(MachineInfoParams::default()),
+            ),
+            (ActionType::Attest, serde_keys(AttestParams::default())),
+            (
+                ActionType::GatherEntropy,
+                serde_keys(GatherEntropyParams::default()),
+            ),
+            #[cfg(feature = "crypto")]
+            (
+                ActionType::GenerateKeypair,
+                serde_keys(GenerateKeypairParams::default()),
+            ),
+            #[cfg(feature = "crypto")]
+            (ActionType::WrapKey, serde_keys(WrapKeyParams::default())),
+            #[cfg(feature = "crypto")]
+            (
+                ActionType::UnwrapKey,
+                serde_keys(UnwrapKeyParams::default()),
+            ),
+            #[cfg(feature = "crypto")]
+            (ActionType::SignData, serde_keys(SignDataParams::default())),
+            #[cfg(feature = "crypto")]
+            (
+                ActionType::VerifySignature,
+                serde_keys(VerifySignatureParams::default()),
+            ),
+            #[cfg(feature = "pki")]
+            (
+                ActionType::GenerateCsr,
+                serde_keys(GenerateCsrParams {
+                    subject: String::new(),
+                    san: None,
+                }),
+            ),
+            #[cfg(feature = "pki")]
+            (
+                ActionType::IssueCertificate,
+                serde_keys(IssueCertificateParams::default()),
+            ),
+        ] {
+            assert_eq!(keys, declared(action), "{action}");
+        }
+    }
 }

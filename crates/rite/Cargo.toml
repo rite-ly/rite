@@ -34,10 +34,14 @@ tui = ["dep:rite-tui"]
 rite-model = { workspace = true }
 rite-resolver = { workspace = true }
 rite-runtime = { workspace = true }
+# For reading a wrapped artifact back during `rite verify`. Structure only:
+# the CMS reader walks DER and performs no cryptography.
+rite-sdk = { workspace = true }
 rite-render = { workspace = true, optional = true }
 rite-stdlib = { workspace = true }
 rite-tui = { workspace = true, optional = true }
 openssl = { workspace = true, optional = true }
+base16ct = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 serde_json = { workspace = true }
@@ -53,7 +57,7 @@ insta = { workspace = true }
 tempfile = { workspace = true }
 chrono = { workspace = true }
 assert_cmd = { workspace = true }
-# Only for `ML_DSA_AVAILABLE` in the example smoke tests: whether the binary
+# Only for `POST_QUANTUM_AVAILABLE` in the example smoke tests: whether the binary
 # under test can run the post-quantum ceremony is decided by the OpenSSL this
 # workspace links, and no Cargo feature records that.
 rite-openssl = { workspace = true }

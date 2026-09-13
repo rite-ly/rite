@@ -326,6 +326,11 @@ impl SpanMap {
             | ResolveError::UnknownArtifact { step, .. }
             | ResolveError::MissingRequiredBackend { step, .. }
             | ResolveError::MissingWithField { step, .. }
+            | ResolveError::UnknownWithField { step, .. }
+            | ResolveError::WithFieldNeedsInput { step, .. }
+            | ResolveError::InvalidWithValue { step, .. }
+            | ResolveError::MissingReadsInput { step, .. }
+            | ResolveError::AmbiguousReadsInput { step, .. }
             | ResolveError::InvalidRetryAttempts { step }
             | ResolveError::ArtifactNeverProduced { step, .. } => self.steps.get(step).copied(),
             ResolveError::UndeclaredBackend { step, backend } => self

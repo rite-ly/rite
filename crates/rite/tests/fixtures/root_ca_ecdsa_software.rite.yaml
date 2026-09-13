@@ -1,4 +1,4 @@
-version: "0.2"
+version: "0.3"
 name: "Test Root CA (ECDSA)"
 
 backends:
@@ -43,7 +43,8 @@ sections:
         backend: openssl
         with:
           algorithm: ECDSA-P256
-          key_usage: [key_cert_sign, crl_sign]
+          policy:
+            extractable: true
         creates: root_ca_keypair
       export_public_key:
         action: export_public
@@ -73,9 +74,7 @@ sections:
         backend: openssl
         reads:
           key_to_wrap: "${artifact.root_ca_keypair}"
-          wrapping_key: "${artifact.transport_pubkey}"
-        with:
-          algorithm: CMS-RSA-CBC
+          recipient: "${artifact.transport_pubkey}"
         creates: wrapped_root_ca_key
 
   attestation:

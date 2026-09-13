@@ -31,7 +31,7 @@ A ceremony unfolds in phases. The same YAML drives all of them:
 ## Example
 
 ```yaml
-version: "0.2"
+version: "0.3"
 name: "Root CA Key Generation"
 
 backends:
@@ -139,8 +139,9 @@ Both bundle the `rite-ls` language server. For other LSP-aware editors, run `rit
     - [ ] Teardown act on abort or failure
 - [x] **Cryptographic backends**
   - [x] OpenSSL: RSA, ECDSA-P256/P384, Ed25519, signing, wrapping, PKI
+    - [x] Key wrapping: CMS AuthEnvelopedData, RSA-OAEP, RSA-AES-KEY-WRAP (cloud KMS import)
     - [x] Post-quantum: ML-DSA-44/65/87 signatures and certificates (needs OpenSSL 3.5+)
-    - [ ] Post-quantum: ML-KEM key encapsulation
+    - [x] Post-quantum: ML-KEM-512/768/1024 key encapsulation for wrapping (needs OpenSSL 3.5+)
   - [x] Hardware backends
     - [x] YubiKey PIV: key generation, signing, certificate read, on-device attestation
       - [ ] Write operations (key import, PIN/PUK and management-key changes)

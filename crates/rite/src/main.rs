@@ -14,6 +14,7 @@ mod script;
 mod system_info;
 mod verify;
 mod version;
+mod wrap_checks;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
@@ -74,7 +75,8 @@ enum Commands {
     ///
     /// Re-checks the append-only hash chain, re-derives the recorded entropy,
     /// and, for a run directory, re-hashes the artifacts against their recorded
-    /// digests.
+    /// digests and reads each wrapped key back to confirm it was produced the
+    /// way the transcript says.
     Verify(verify::Args),
     /// Render a ceremony as a printable protocol
     ///
@@ -102,7 +104,7 @@ fn main() {
     match Cli::parse().command {
         Commands::Check(args) => check::run(&args),
         Commands::Run(args) => run::run(args),
-        Commands::Verify(args) => verify::run(args),
+        Commands::Verify(args) => verify::run(&args),
         #[cfg(feature = "render")]
         Commands::Script(args) => script::run(&args),
         #[cfg(feature = "render")]

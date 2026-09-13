@@ -71,7 +71,7 @@ pub fn resolve_artifact_bytes<S: BuildHasher>(
         (ArtifactValue::PublicKey(key), None) => Ok(key.as_bytes().to_vec()),
 
         // Real wrapped key
-        (ArtifactValue::WrappedKey { data, .. }, None) => Ok(data.clone()),
+        (ArtifactValue::WrappedKey(wrapped), None) => Ok(wrapped.data().to_vec()),
 
         // Materials (loaded from files or inline)
         (ArtifactValue::Bytes(bytes), None) => Ok(bytes.clone()),

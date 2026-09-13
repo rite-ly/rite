@@ -1,4 +1,4 @@
-version: "0.2"
+version: "0.3"
 name: "Release Signing with YubiKey PIV"
 description: |
   Sign a release manifest with an on-device YubiKey PIV key (slot 9C).

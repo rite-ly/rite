@@ -21,6 +21,7 @@
 pub mod expression;
 pub mod ir;
 mod material;
+pub mod params;
 pub mod safe_path;
 pub mod transcript;
 mod types;
@@ -32,8 +33,8 @@ pub use material::MaterialSource;
 pub use safe_path::{PathSafetyError, confine, is_safe_component, safe_join, validate_component};
 
 pub use types::{
-    ActionType, BackendUsage, DutyType, Metadata, OutputType, ParameterType, derive_role_name,
-    derive_step_name, role_type,
+    ActionType, BackendUsage, CertProfile, DutyType, Metadata, OutputType, ParameterType,
+    ReadsContract, UnknownCertProfile, derive_role_name, derive_step_name, role_type,
 };
 
 pub use ir::{

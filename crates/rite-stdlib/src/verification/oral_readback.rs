@@ -118,6 +118,10 @@ impl Action for OralReadbackAction {
             ReadbackFormat::Raw => display_value.clone(),
         };
 
+        if let Some(message) = &typed.message {
+            reporter.log(Icon::Info, message.clone())?;
+        }
+
         reporter.log(Icon::Info, "READER: Please read aloud the following value:")?;
         reporter.log(Icon::Info, format!("    Raw value: {display_value}"))?;
         reporter.log(Icon::Info, format!("    {}: {formatted}", format.label()))?;

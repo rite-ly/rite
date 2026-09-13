@@ -10,18 +10,19 @@ intermediate CA keypairs, issuing certificates, and protecting key material for 
 Generates an offline root CA keypair using the OpenSSL backend. Demonstrates:
 
 - Environment verification before touching key material (clock, machine identity, air gap)
-- RSA-4096 keypair generation with `key_cert_sign` / `crl_sign` key usage
+- RSA-4096 keypair generation, declared extractable so the backup wrap can run
 - Self-signed root CA certificate issuance
-- Private key wrapping with a transport public key (CMS-RSA-GCM)
+- Private key wrapping to a transport public key (CMS `AuthEnvelopedData`, AES-256-GCM)
 - Multi-role attestation: two witnesses and the crypto officer attest in the closing act
 
 The ceremony produces a self-signed root CA certificate and an encrypted key backup.
 The backup can only be recovered by the holder of the transport private key, which is
 the input to the intermediate CA signing ceremony.
 
-### `root_ca_post_quantum.rite.yaml` — Root CA Key Generation (ML-DSA)
+### `root_ca_post_quantum.rite.yaml` — Root CA Key Generation (ML-DSA + ML-KEM)
 
-The same ceremony with an ML-DSA-87 root key (FIPS 204) instead of RSA-4096.
+The same ceremony with an ML-DSA-87 root key (FIPS 204) instead of RSA-4096, and an
+ML-KEM-768 transport key (FIPS 203) instead of RSA-4096.
 
 A root CA issued today with a 20-year validity is still a trust anchor in the window
 where a cryptographically relevant quantum computer is plausible, and a root key cannot
@@ -33,8 +34,11 @@ ML-DSA-87 is the NIST category 5 parameter set and the CNSA 2.0 requirement. `ML
 resulting certificate is around 10 KB against 2 KB for RSA-4096, which is immaterial for
 a root that issues a handful of certificates over its life.
 
-The transport key protecting the backup stays RSA-4096: it guards the wrapped key only
-until restore, so it does not carry the root key's multi-decade exposure.
+The transport key is the other half, and signature and confidentiality fail
+differently. A signature has to hold only while it is trusted; a wrapped key copied off
+the media today can be kept until there is something to open it with, which is exactly
+the shape harvest-now-decrypt-later takes. An archived backup therefore carries the
+longer horizon of the two, so it is wrapped to a lattice KEM rather than to RSA.
 
 **Requires OpenSSL 3.5 or newer.** Support is decided when `rite` is built, not when it
 runs: a binary linked against an older OpenSSL has no ML-DSA code compiled in and fails
@@ -60,12 +64,23 @@ vendor's own cloning or backup procedure, outside PKCS#11.
 ## Test Keys
 
 ```
-test_keys/transport_public.pem    transport key used by the ceremonies
-test_keys/transport_private.pem   used to decrypt wrapped ceremony output
+test_keys/transport_public.pem        RSA-4096 transport key, classical ceremonies
+test_keys/transport_private.pem       used to decrypt their wrapped output
+test_keys/kem_transport_public.pem    ML-KEM-768 transport key, post-quantum ceremony
+test_keys/kem_transport_private.pem   used to decrypt its wrapped output
 ```
 
 > **Test keys only.** Never use these in a real ceremony. Generate your own:
-> `openssl genrsa -out transport_private.pem 4096 && openssl rsa -in transport_private.pem -pubout -out transport_public.pem`
+>
+> ```sh
+> openssl genrsa -out transport_private.pem 4096
+> openssl rsa -in transport_private.pem -pubout -out transport_public.pem
+>
+> openssl genpkey -algorithm ML-KEM-768 -out kem_transport_private.pem
+> openssl pkey -in kem_transport_private.pem -pubout -out kem_transport_public.pem
+> ```
+>
+> ML-KEM needs OpenSSL 3.5 or newer.
 
 ## Running
 
@@ -84,3 +99,8 @@ openssl cms -decrypt -inform DER -in wrapped_root_ca_key.p7c \
   -inkey examples/pki/test_keys/transport_private.pem | \
   openssl pkey -inform DER -text -noout
 ```
+
+The post-quantum ceremony wraps to the ML-KEM key, so use
+`kem_transport_private.pem` there. The command is otherwise identical: the
+recipient form differs inside the blob, and `openssl cms -decrypt` picks it up
+from the key it is given.

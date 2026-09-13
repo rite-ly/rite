@@ -2,7 +2,7 @@
 
 use base64ct::{Base64, Encoding};
 
-use rite_sdk::{CertificateDer, KeyAlgorithm, KeyId, PublicKeyDer, WrapAlgorithm};
+use rite_sdk::{CertificateDer, KeyAlgorithm, KeyId, PublicKeyDer, WrapScheme, WrappedKey};
 
 /// Runtime representation of an artifact.
 #[derive(Debug)]
@@ -19,14 +19,10 @@ pub enum ArtifactValue {
         /// Public key (None for non-exportable HSM keys).
         public_key: Option<PublicKeyDer>,
     },
-    /// Wrapped key. The container follows `algorithm`; the OpenSSL backend
-    /// produces a CMS `ContentInfo`.
-    WrappedKey {
-        /// Wrapped key bytes (format depends on algorithm).
-        data: Vec<u8>,
-        /// Wrapping algorithm used.
-        algorithm: WrapAlgorithm,
-    },
+    /// Wrapped key, with the scheme it was wrapped under and the algorithms
+    /// the wrap actually used. The container follows the scheme; the OpenSSL
+    /// backend produces a CMS `ContentInfo`.
+    WrappedKey(WrappedKey),
     /// Exported public key.
     PublicKey(PublicKeyDer),
     /// Binary content from files or inline data (documents, crypto materials).
@@ -68,14 +64,17 @@ impl std::fmt::Display for ArtifactValue {
                     )
                 }
             }
-            ArtifactValue::WrappedKey { data, algorithm } => {
-                let label = match algorithm {
-                    WrapAlgorithm::CmsRsaCbc | WrapAlgorithm::CmsRsaGcm => "CMS",
-                    _ => "WRAPPED KEY",
-                };
-                let pem = encode_pem(label, data);
-                write!(f, "{pem}")
-            }
+            ArtifactValue::WrappedKey(wrapped) => match pem_label(wrapped.scheme()) {
+                Some(label) => write!(f, "{}", encode_pem(label, wrapped.data())),
+                // Raw mechanism output has no PEM form; say what it is and how
+                // big rather than printing bytes that look like a document.
+                None => write!(
+                    f,
+                    "WrappedKey({}, {} bytes)",
+                    wrapped.scheme(),
+                    wrapped.data().len()
+                ),
+            },
             ArtifactValue::PublicKey(key) => {
                 let pem = encode_pem("PUBLIC KEY", key.as_bytes());
                 write!(f, "{pem}")
@@ -101,6 +100,18 @@ impl std::fmt::Display for ArtifactValue {
 /// Uses constant-time encoding from `RustCrypto` `base64ct`.
 pub(crate) fn base64_encode(data: &[u8]) -> String {
     Base64::encode_string(data)
+}
+
+/// The PEM label for a wrapped key, where the container has one.
+///
+/// `None` for a raw mechanism: its output is bare ciphertext with no structure
+/// and no registered PEM type, and inventing a label would produce a file that
+/// looks like something a tool can read and is not.
+fn pem_label(scheme: WrapScheme) -> Option<&'static str> {
+    match scheme {
+        WrapScheme::CmsAes256Gcm => Some("CMS"),
+        _ => None,
+    }
 }
 
 /// Encode DER bytes as PEM with given label.
@@ -159,27 +170,28 @@ impl ArtifactValue {
     /// Returns an error if an unsupported format is specified.
     pub fn serialize(&self, format: Option<&str>) -> Result<SerializedArtifact, String> {
         match self {
-            ArtifactValue::WrappedKey { data, algorithm } => {
+            ArtifactValue::WrappedKey(wrapped) => {
                 let fmt = format.unwrap_or("der");
-                let (mime, ext) = match algorithm {
-                    WrapAlgorithm::CmsRsaCbc | WrapAlgorithm::CmsRsaGcm => {
-                        ("application/pkcs7-mime", "p7c")
-                    }
+                let (mime, ext) = match wrapped.scheme() {
+                    WrapScheme::CmsAes256Gcm => ("application/pkcs7-mime", "p7c"),
                     _ => ("application/octet-stream", "bin"),
                 };
                 match fmt {
                     "der" => Ok(SerializedArtifact {
-                        bytes: data.clone(),
+                        bytes: wrapped.data().to_vec(),
                         mime_type: Some(mime.to_string()),
                         extension: ext,
                     }),
                     "pem" => {
-                        let label = match algorithm {
-                            WrapAlgorithm::CmsRsaCbc | WrapAlgorithm::CmsRsaGcm => "CMS",
-                            _ => "WRAPPED KEY",
-                        };
+                        let label = pem_label(wrapped.scheme()).ok_or_else(|| {
+                            format!(
+                                "{} produces raw bytes, which have no PEM form. Write it as \
+                                 'der', which is what a recipient imports.",
+                                wrapped.scheme()
+                            )
+                        })?;
                         Ok(SerializedArtifact {
-                            bytes: encode_pem(label, data).into_bytes(),
+                            bytes: encode_pem(label, wrapped.data()).into_bytes(),
                             mime_type: Some("application/x-pem-file".to_string()),
                             extension: "pem",
                         })
@@ -331,10 +343,14 @@ mod tests {
     #[test]
     fn test_wrapped_key_format_validation() {
         let cms_data = b"CMS_DATA".to_vec();
-        let wrapped = ArtifactValue::WrappedKey {
-            data: cms_data.clone(),
-            algorithm: WrapAlgorithm::CmsRsaGcm,
-        };
+        let description = rite_sdk::WrapDescription::new(
+            rite_sdk::RecipientInfoKind::Ktri,
+            rite_sdk::Oid::new(rite_sdk::oid::RSA_ENCRYPTION).unwrap(),
+        )
+        .with_content_encryption(rite_sdk::Oid::new(rite_sdk::oid::AES_256_GCM).unwrap());
+        let wrapped = ArtifactValue::WrappedKey(
+            WrappedKey::new(WrapScheme::CmsAes256Gcm, description, cms_data.clone()).unwrap(),
+        );
 
         // Test default format (DER)
         let serialized = wrapped.serialize(None).unwrap();

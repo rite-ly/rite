@@ -1,4 +1,4 @@
-version: "0.2"
+version: "0.3"
 name: "Offline Backup Key Ceremony"
 description: |
   Generate an offline backup-wrapping key on an air-gapped workstation, escrow
@@ -23,6 +23,13 @@ parameters:
     type: integer
     default: 2
     description: "Number of sealed backup copies to produce and distribute."
+  escrow_fingerprint:
+    type: string
+    default: "sha256:0de3cef37d95cd5137ef49d1812e0d012699fd34ea71f3be80161201f68c888a"
+    description: |
+      SHA-256 of the escrow public key's SPKI DER, obtained from the escrow
+      service out of band and printed on the worksheet. The wrap step checks
+      the key it is given against this value and refuses to run on a mismatch.
 
 materials:
   ceremony_media:
@@ -161,6 +168,10 @@ sections:
         backend: openssl
         with:
           algorithm: ECDSA-P256
+          policy:
+            # This key is escrowed below, and a key may not leave the backend
+            # unless the step that generated it said it could.
+            extractable: true
         creates: backup_keypair
         description: |
           Generate the backup-wrapping keypair. Watch the screen with both
@@ -202,9 +213,9 @@ sections:
         backend: openssl
         reads:
           key_to_wrap: ${artifact.backup_keypair}
-          wrapping_key: ${artifact.escrow_pubkey}
+          recipient: ${artifact.escrow_pubkey}
         with:
-          algorithm: CMS-RSA-GCM
+          expect_recipient: ${param.escrow_fingerprint}
         creates: wrapped_backup_key
         description: |
           Encrypt the backup private key to the escrow transport public key.

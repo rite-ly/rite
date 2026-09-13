@@ -80,3 +80,50 @@ pub fn to_lsp_diagnostic(d: &Diagnostic) -> LspDiagnostic {
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::to_lsp_diagnostic;
+    use tower_lsp_server::ls_types::DiagnosticSeverity;
+
+    /// A bad `with:` value has to reach the editor, not only `rite check`.
+    ///
+    /// The server links the resolver and no backend, so this holds only while
+    /// the rules that decide it live in the model rather than in an action
+    /// handler.
+    #[test]
+    fn an_invalid_with_value_becomes_an_editor_diagnostic() {
+        let yaml = r#"
+version: "0.3"
+name: "Bad algorithm"
+roles:
+  officer:
+    person: "Alice"
+backends:
+  openssl:
+    provider: openssl
+sections:
+  main:
+    role: ${role.officer}
+    steps:
+      gen:
+        action: generate_keypair
+        backend: openssl
+        with:
+          algorithm: RSA-9999
+        creates: key
+"#;
+        let (_resolved, _spans, diags) = rite_resolver::analyze_str(None, yaml);
+        let published: Vec<_> = diags.iter().map(to_lsp_diagnostic).collect();
+        let found = published
+            .iter()
+            .find(|d| d.message.contains("unknown key algorithm"))
+            .expect("the editor is told about the bad algorithm");
+
+        assert_eq!(found.severity, Some(DiagnosticSeverity::ERROR));
+        assert!(
+            found.range.end > found.range.start,
+            "an empty range gives the editor nothing to underline"
+        );
+    }
+}

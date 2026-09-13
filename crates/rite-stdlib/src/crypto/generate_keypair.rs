@@ -3,12 +3,12 @@
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    ParamIssue, Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
+    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
 };
 use rite_sdk::{Backend, KeyAlgorithm, KeyPolicy, KeySpec};
 use serde_json::json;
 
-use crate::params::{GenerateKeypairParams, string_param};
+use crate::params::GenerateKeypairParams;
 
 /// Generate an asymmetric cryptographic keypair via the configured backend.
 pub struct GenerateKeypairAction;
@@ -22,17 +22,16 @@ impl Action for GenerateKeypairAction {
         }
     }
 
-    fn validate(&self, params: &serde_json::Value, _step: &StepInfo) -> Vec<ParamIssue> {
-        // `algorithm` is required, but an absent value means it is deferred to
-        // run time rather than missing, so only a present value is checked.
-        match string_param(params, "algorithm") {
-            Ok(None) => Vec::new(),
-            Ok(Some(name)) if name.parse::<KeyAlgorithm>().is_ok() => Vec::new(),
-            Ok(Some(name)) => vec![ParamIssue::definition(format!(
-                "unknown key algorithm '{name}'"
-            ))],
-            Err(message) => vec![ParamIssue::definition(message)],
-        }
+    fn unsupported_params(&self, params: &serde_json::Value, _step: &StepInfo) -> Vec<String> {
+        // Whether the name is a key algorithm at all is settled during
+        // resolution. What is left is whether this build can generate one.
+        let Ok(typed) = parse_params::<GenerateKeypairParams>(params) else {
+            return Vec::new();
+        };
+        let Ok(algorithm) = typed.algorithm.parse::<KeyAlgorithm>() else {
+            return Vec::new();
+        };
+        unavailable_here(algorithm).into_iter().collect()
     }
 
     fn execute(
@@ -71,10 +70,14 @@ impl Action for GenerateKeypairAction {
             ActionError::Failed(format!("Unsupported algorithm: '{}'", typed.algorithm))
         })?;
 
+        let policy = match &typed.policy {
+            None => KeyPolicy::default(),
+            Some(declared) => declared.resolve().map_err(ActionError::Failed)?,
+        };
         let spec = KeySpec {
             algorithm: key_algorithm,
             label: format!("key-{}", step.id_str()),
-            policy: KeyPolicy::default(),
+            policy: policy.clone(),
             location_hint: typed.slot.clone(),
         };
         let metadata = keystore.generate_key(spec)?;
@@ -96,6 +99,18 @@ impl Action for GenerateKeypairAction {
         if let Some(slot) = &typed.slot {
             inputs.insert("slot".to_string(), slot.clone().into());
         }
+        // The policy is recorded whether or not the ceremony declared one: an
+        // auditor reading the transcript should not have to know the defaults.
+        inputs.insert(
+            "policy".to_string(),
+            json!({
+                "persistent": policy.persistent,
+                "sensitive": policy.sensitive,
+                "extractable": policy.extractable,
+                "wrap_with_trusted_only": policy.wrap_with_trusted_only,
+                "usages": policy.usages.names(),
+            }),
+        );
 
         let mut outputs = serde_json::Map::new();
         outputs.insert("backend".to_string(), backend_name.clone().into());
@@ -134,4 +149,21 @@ impl Action for GenerateKeypairAction {
             Ok(StepResult::completed(message))
         }
     }
+}
+
+/// Whether this build can generate keys of this algorithm at all.
+///
+/// Saying so at check time is worth more than the mid-run failure it replaces,
+/// and it is build-relative rather than a defect in the ceremony: another
+/// machine's build may run the same document.
+#[cfg(feature = "openssl")]
+fn unavailable_here(algorithm: KeyAlgorithm) -> Option<String> {
+    rite_openssl::build_limitation(algorithm)
+        .map(|reason| format!("key algorithm '{algorithm}' {reason}"))
+}
+
+/// With no software backend compiled in, there is no library to ask.
+#[cfg(not(feature = "openssl"))]
+fn unavailable_here(_algorithm: KeyAlgorithm) -> Option<String> {
+    None
 }

@@ -1,4 +1,4 @@
-version: "0.2"
+version: "0.3"
 name: "Dice Entropy"
 description: |
   Showcase verifiable ceremony randomness. A participant folds a physical dice
@@ -35,8 +35,6 @@ sections:
         backend: openssl
         with:
           algorithm: ECDSA-P256
-          key_usage:
-            - key_cert_sign
         creates: keypair
       generate_request:
         action: generate_csr

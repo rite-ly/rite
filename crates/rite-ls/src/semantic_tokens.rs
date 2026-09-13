@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn expression_splits_into_three_tokens() {
         let text = r#"
-version: "0.2"
+version: "0.3"
 name: "T"
 roles:
   alice:
@@ -189,7 +189,7 @@ sections:
     #[test]
     fn bare_reference_is_a_single_ident_token() {
         let text = r#"
-version: "0.2"
+version: "0.3"
 name: "T"
 backends:
   openssl:
@@ -219,7 +219,7 @@ sections:
     #[test]
     fn action_and_provider_values_get_enum_tokens() {
         let text = r#"
-version: "0.2"
+version: "0.3"
 name: "T"
 backends:
   openssl:
@@ -250,7 +250,7 @@ sections:
         // An `action:` line embedded inside a block scalar must not produce
         // an enum token. The resolver only records spans for real YAML keys.
         let text = r#"
-version: "0.2"
+version: "0.3"
 name: "T"
 roles:
   alice:

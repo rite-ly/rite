@@ -1,4 +1,4 @@
-version: "0.2"
+version: "0.3"
 name: "Detached Signature over a Release Manifest"
 description: |
   Sign a document with a ceremony key, then verify the signature back.
@@ -78,4 +78,4 @@ sections:
       witness_confirms:
         action: confirm
         with:
-          statement: "I observed the signature being produced and verified."
+          message: "Witness: did you observe the signature being produced and verified?"

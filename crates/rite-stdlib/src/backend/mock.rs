@@ -293,9 +293,10 @@ impl KeyTransportBackend for MockBackend {
         unwrapping_key_id: &KeyId,
         label: &str,
         policy: KeyPolicy,
+        expected: Option<KeyAlgorithm>,
     ) -> Result<KeyMetadata, BackendError> {
         self.crypto
-            .unwrap(wrapped, unwrapping_key_id, label, policy)
+            .unwrap(wrapped, unwrapping_key_id, label, policy, expected)
     }
 
     fn wrap_to_public(
@@ -595,7 +596,8 @@ mod tests {
                     &wrapped,
                     &kek.key_id,
                     "unwrapped-key",
-                    crate::params::unwrapped_key_default_policy(),
+                    crate::params::unwrapped_key_default_policy(None),
+                    None,
                 )
                 .unwrap();
             assert_eq!(unwrapped.label, "unwrapped-key");

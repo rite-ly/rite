@@ -14,7 +14,7 @@ use rite_openssl::OpenSslBackend;
 use rite_runtime::{
     Action, ArtifactValue, ExecutionState, StepInfo, test_support::ReporterHarness,
 };
-use rite_stdlib::{GenerateCsrAction, GenerateKeypairAction, IssueCertificateAction};
+use rite_stdlib::{GenerateCsrAction, GenerateKeyAction, IssueCertificateAction};
 use std::collections::HashMap;
 
 fn named_inputs(pairs: &[(&str, ArtifactId)]) -> StepInputs {
@@ -54,7 +54,7 @@ fn issue_self_signed_root(algorithm: &str) -> Vec<u8> {
     let keygen_result = {
         let ctx = state.handler_context();
         let mut reporter = harness.reporter(keygen_step.id.clone());
-        GenerateKeypairAction
+        GenerateKeyAction
             .execute(
                 &keygen_step,
                 &ctx,
@@ -62,7 +62,7 @@ fn issue_self_signed_root(algorithm: &str) -> Vec<u8> {
                 &mut reporter,
                 Some(&mut backend),
             )
-            .unwrap_or_else(|e| panic!("generate_keypair {algorithm}: {e}"))
+            .unwrap_or_else(|e| panic!("generate_key {algorithm}: {e}"))
     };
     state = state.with_material(
         keypair_id.clone(),

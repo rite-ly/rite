@@ -26,6 +26,7 @@
 
 mod backend;
 pub mod cms;
+mod der;
 mod key_material;
 mod types;
 
@@ -39,8 +40,8 @@ pub use backend::{
 
 pub use types::{
     Attestation, AttestationKind, BackendConfig, CertRef, DeviceInfo, IncoherentWrap, KeyAlgorithm,
-    KeyId, KeyMetadata, KeyPolicy, KeySecurityAttributes, KeySpec, KeyUsages, Oid, ParseError,
-    PcrValue, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy,
-    Pkcs11Mechanism, Pkcs11TokenFlags, Pkcs11TokenInfo, RecipientInfoKind, SignAlgorithm, TpmInfo,
-    WrapDescription, WrapScheme, WrappedKey, YubikeySlotMetadata, oid,
+    KeyCheckValue, KeyId, KeyMetadata, KeyPolicy, KeySecurityAttributes, KeySpec, KeyUsages, Oid,
+    ParseError, PcrValue, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo,
+    PivTouchPolicy, Pkcs11Mechanism, Pkcs11TokenFlags, Pkcs11TokenInfo, RecipientInfoKind,
+    SignAlgorithm, TpmInfo, WrapDescription, WrapScheme, WrappedKey, YubikeySlotMetadata, oid,
 };

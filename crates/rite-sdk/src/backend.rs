@@ -27,9 +27,9 @@ use std::collections::BTreeMap;
 
 use crate::key_material::PublicKeyDer;
 use crate::types::{
-    Attestation, CertRef, KeyId, KeyMetadata, KeyPolicy, KeySecurityAttributes, KeySpec, PcrValue,
-    PivDeviceInfo, PivSlot, PivSlotInfo, Pkcs11Mechanism, Pkcs11TokenInfo, SignAlgorithm, TpmInfo,
-    WrapScheme, WrappedKey, YubikeySlotMetadata,
+    Attestation, CertRef, KeyAlgorithm, KeyId, KeyMetadata, KeyPolicy, KeySecurityAttributes,
+    KeySpec, PcrValue, PivDeviceInfo, PivSlot, PivSlotInfo, Pkcs11Mechanism, Pkcs11TokenInfo,
+    SignAlgorithm, TpmInfo, WrapScheme, WrappedKey, YubikeySlotMetadata,
 };
 
 /// Implement the `as_*_mut` upcasting helpers on a backend struct.
@@ -318,12 +318,22 @@ pub trait KeyTransportBackend: Backend {
     /// The policy is the receiving ceremony's, not the origin's: nothing
     /// travels with a wrapped key that says what it may do, so the step that
     /// imports it declares that, exactly as the step that generated it did.
+    ///
+    /// `expected` is that same declaration one level down, because nothing
+    /// travels with a wrapped key saying what it *is* either. Recovered bytes
+    /// are a private key or a bare secret depending on what was wrapped, and
+    /// the two are told apart by what the receiving ceremony says it is
+    /// restoring rather than by what the bytes happen to parse as. `None` is a
+    /// ceremony that declared nothing, which an implementation may serve only
+    /// where the recovered form is unambiguous. A declaration that disagrees
+    /// with what came out is a failure, not something to reconcile.
     fn unwrap(
         &mut self,
         wrapped: &WrappedKey,
         unwrapping_key_id: &KeyId,
         label: &str,
         policy: KeyPolicy,
+        expected: Option<KeyAlgorithm>,
     ) -> Result<KeyMetadata, BackendError>;
 
     /// Wrap `key_id` to an external recipient's public key.

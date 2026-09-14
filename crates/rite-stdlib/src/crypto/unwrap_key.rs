@@ -5,7 +5,7 @@ use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
     Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_backend_key,
 };
-use rite_sdk::Backend;
+use rite_sdk::{Backend, KeyAlgorithm};
 use serde_json::json;
 
 use crate::params::{UnwrapKeyParams, unwrapped_key_default_policy};
@@ -36,6 +36,16 @@ impl Action for UnwrapKeyAction {
         backend: Option<&mut dyn Backend>,
     ) -> Result<StepResult, ActionError> {
         let typed: UnwrapKeyParams = parse_params(params)?;
+
+        // What the ceremony says it is restoring. `rite check` has already
+        // refused an unknown name, so a parse failure here is a run reaching
+        // the backend with something that never passed the resolver.
+        let expected = typed
+            .algorithm
+            .as_deref()
+            .map(str::parse::<KeyAlgorithm>)
+            .transpose()
+            .map_err(|e| ActionError::Failed(format!("Unknown key algorithm: {e}")))?;
 
         let label = typed
             .label
@@ -102,16 +112,22 @@ impl Action for UnwrapKeyAction {
             ))
         })?;
 
+        let default_policy = unwrapped_key_default_policy(expected);
         let policy = match &typed.policy {
-            None => unwrapped_key_default_policy(),
+            None => default_policy,
             Some(declared) => declared
-                .resolve_from(&unwrapped_key_default_policy())
+                .resolve_from(&default_policy)
                 .map_err(ActionError::Failed)?,
         };
 
         reporter.log(Icon::Spinner, "Unwrapping key using backend...")?;
-        let key_metadata =
-            unwrap_backend.unwrap(wrapped, unwrapping_key.key_id, &label, policy.clone())?;
+        let key_metadata = unwrap_backend.unwrap(
+            wrapped,
+            unwrapping_key.key_id,
+            &label,
+            policy.clone(),
+            expected,
+        )?;
 
         // The public half of what came out. With the wrap step's record from
         // the origin ceremony, this is what shows the key recovered here is the
@@ -121,8 +137,16 @@ impl Action for UnwrapKeyAction {
             .as_ref()
             .map(|key| compute_fingerprint(key.as_bytes()));
 
+        // A symmetric key has no public half, so what names it is its check
+        // value, which is also what a custodian reads off the token. One
+        // `expect_key` serves both, discriminated by the prefix the value
+        // carries rather than by a second field.
+        let recovered_identity = recovered_fingerprint
+            .clone()
+            .or_else(|| key_metadata.check_value.as_ref().map(ToString::to_string));
+
         if let Some(declared) = &typed.expect_key {
-            match &recovered_fingerprint {
+            match &recovered_identity {
                 Some(recovered) if recovered == declared => {}
                 Some(recovered) => {
                     return Err(ActionError::Failed(format!(
@@ -132,8 +156,8 @@ impl Action for UnwrapKeyAction {
                 }
                 None => {
                     return Err(ActionError::Failed(format!(
-                        "Backend '{backend_name}' does not export the unwrapped public key, \
-                         so the declared fingerprint {declared} cannot be checked."
+                        "Backend '{backend_name}' names the unwrapped key neither by a public \
+                         key nor by a check value, so the declared {declared} cannot be checked."
                     )));
                 }
             }
@@ -149,8 +173,9 @@ impl Action for UnwrapKeyAction {
                 "wrapped_data_fingerprint": wrapped_fingerprint,
                 "label": label,
                 // What the ceremony committed to before the key came out,
-                // null where it committed to nothing. Without it the record
+                // null where it committed to nothing. Without them the record
                 // says which key was recovered but not which was expected.
+                "algorithm": typed.algorithm,
                 "expect_key": typed.expect_key,
                 // Recorded whether or not the ceremony declared one: what a
                 // recovered key may do is the receiving ceremony's claim, and
@@ -169,6 +194,9 @@ impl Action for UnwrapKeyAction {
                 "unwrapped_key_id": key_metadata.key_id.as_str(),
                 "unwrapped_key_algorithm": key_metadata.algorithm.to_string(),
                 "unwrapped_key_fingerprint": recovered_fingerprint,
+                // The symmetric counterpart, and null for a keypair, so the
+                // record names the recovered key in whichever form it has one.
+                "unwrapped_key_check_value": key_metadata.check_value.as_ref().map(ToString::to_string),
             }),
             fingerprint: recovered_fingerprint,
         })?;
@@ -178,6 +206,7 @@ impl Action for UnwrapKeyAction {
             key_id: key_metadata.key_id,
             algorithm: key_metadata.algorithm,
             public_key: key_metadata.public_key,
+            check_value: key_metadata.check_value,
         };
 
         let message = format!("Key unwrapped using {scheme}");

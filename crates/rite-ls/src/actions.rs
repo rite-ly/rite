@@ -41,19 +41,19 @@ pub static ALL: &[ActionMeta] = &[
         long: "Capture machine information (hostname, CPU, OS) as evidence. Records device identity to prove which machine ran the ceremony.",
     },
     ActionMeta {
-        name: "generate_keypair",
-        short: "Generate RSA or EC keypair",
-        long: "Generate RSA or EC keypair.",
+        name: "generate_key",
+        short: "Generate a key through a backend",
+        long: "Generate a key through a backend. `algorithm:` selects what kind: a keypair for RSA, EC, Ed25519, ML-DSA or ML-KEM, one secret for AES. A symmetric key has no public half, so it can only ever be a wrapping key, and the transcript records it by a key check value rather than by a fingerprint. `policy:` says what the key is permitted to do in PKCS#11 terms, defaulting to sign and verify for a keypair and to wrap and unwrap for a symmetric key.",
     },
     ActionMeta {
         name: "wrap_key",
         short: "Encrypt a key under another key for transport",
-        long: "Encrypt a private key under another key so it can leave the machine. `scheme:` names the container, defaulting to CMS AuthEnvelopedData under AES-256-GCM; the raw RSA mechanisms are what a cloud KMS import accepts. Which encapsulation a scheme takes follows the recipient key, and the transcript records what the wrap actually did. Reads `wrapping_key:` to wrap under a key the backend holds, or `recipient:` to wrap to a public key held outside the ceremony.",
+        long: "Encrypt a private key under another key so it can leave the machine. `scheme:` names the container, defaulting to CMS AuthEnvelopedData under AES-256-GCM; the raw RSA mechanisms are what a cloud KMS import accepts, and the AES mechanisms wrap under a symmetric key the backend holds. Which encapsulation a CMS wrap takes follows the recipient key, and the transcript records what the wrap actually did. Reads `wrapping_key:` to wrap under a key the backend holds, or `recipient:` to wrap to a public key held outside the ceremony.",
     },
     ActionMeta {
         name: "unwrap_key",
         short: "Decrypt a wrapped key and import it into a backend",
-        long: "Decrypt a wrapped key and import it into a backend under a new label. The scheme comes from the wrapped artifact rather than the ceremony, so it cannot disagree with the bytes being decrypted.",
+        long: "Decrypt a wrapped key and import it into a backend under a new label. The scheme comes from the wrapped artifact rather than the ceremony, so it cannot disagree with the bytes being decrypted. Nothing travels with a wrapped key saying what it is, so `algorithm:` declares that: it is required to recover a symmetric key, whose bytes look like any others of the same length, and checked against what came out for a keypair. `expect_key:` names the key the ceremony means to restore, as a `sha256:` fingerprint for a keypair or a `cmac-aes:` check value for a symmetric key.",
     },
     ActionMeta {
         name: "export_public",

@@ -11,7 +11,7 @@ use rite_runtime::{
     Action, ArtifactValue, ExecutionState, StepInfo, test_support::ReporterHarness,
 };
 use rite_stdlib::{
-    GenerateCsrAction, GenerateKeypairAction, IssueCertificateAction, SignDataAction,
+    GenerateCsrAction, GenerateKeyAction, IssueCertificateAction, SignDataAction,
     VerifySignatureAction,
 };
 use std::collections::HashMap;
@@ -77,7 +77,7 @@ fn sign_with(algorithm: &str, sign_params: &serde_json::Value) -> Signed {
     let keygen = {
         let ctx = state.handler_context();
         let mut reporter = harness.reporter(keygen_step.id.clone());
-        GenerateKeypairAction
+        GenerateKeyAction
             .execute(
                 &keygen_step,
                 &ctx,
@@ -85,7 +85,7 @@ fn sign_with(algorithm: &str, sign_params: &serde_json::Value) -> Signed {
                 &mut reporter,
                 Some(&mut backend),
             )
-            .unwrap_or_else(|e| panic!("generate_keypair {algorithm}: {e}"))
+            .unwrap_or_else(|e| panic!("generate_key {algorithm}: {e}"))
     };
     for (id, value) in keygen.artifacts {
         state = state.with_material(id, value);
@@ -287,6 +287,7 @@ fn refuses_a_backend_key_that_exports_no_public_half() {
                 key_id: key_id.clone(),
                 algorithm: *algorithm,
                 public_key: None,
+                check_value: None,
             },
             other => panic!("expected a backend key, got {other:?}"),
         }

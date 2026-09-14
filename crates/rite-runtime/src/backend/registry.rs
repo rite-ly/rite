@@ -315,6 +315,7 @@ mod tests {
                 algorithm: spec.algorithm,
                 label: spec.label,
                 public_key: None,
+                check_value: None,
                 attestation: None,
             })
         }
@@ -328,6 +329,7 @@ mod tests {
                 algorithm: spec.algorithm,
                 label: spec.label,
                 public_key: None,
+                check_value: None,
                 attestation: None,
             })
         }

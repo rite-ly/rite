@@ -201,6 +201,7 @@ fn backend_key_with(
             key_id: meta.key_id,
             algorithm: meta.algorithm,
             public_key: meta.public_key,
+            check_value: meta.check_value,
         },
     )
 }

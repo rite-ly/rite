@@ -219,7 +219,7 @@ pub enum StepFact {
     BackendOperation {
         /// Step under which the operation ran.
         step: StepId,
-        /// Stable operation kind (e.g. `generate_keypair`, `sign_data`).
+        /// Stable operation kind (e.g. `generate_key`, `sign_data`).
         kind: String,
         /// Structured inputs to the operation (parameters, references).
         inputs: serde_json::Value,
@@ -626,7 +626,7 @@ mod schema_snapshot_tests {
         assert_json(
             &StepFact::BackendOperation {
                 step: StepId::new("s1"),
-                kind: "generate_keypair".to_string(),
+                kind: "generate_key".to_string(),
                 inputs: json!({ "algorithm": "rsa", "bits": 4096 }),
                 outputs: json!({ "key_id": "k1" }),
                 fingerprint: Some("sha256:deadbeef".to_string()),
@@ -634,7 +634,7 @@ mod schema_snapshot_tests {
             &json!({
                 "type": "backend_operation",
                 "step": "s1",
-                "kind": "generate_keypair",
+                "kind": "generate_key",
                 "inputs": { "algorithm": "rsa", "bits": 4096 },
                 "outputs": { "key_id": "k1" },
                 "fingerprint": "sha256:deadbeef",

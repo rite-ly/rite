@@ -11,6 +11,7 @@
 //! its first member. A foreign blob addressed to several recipients is
 //! described by the first of them, and the others are not reported.
 
+use crate::der;
 use crate::types::{Oid, RecipientInfoKind, WrapDescription};
 
 /// `id-envelopedData` (RFC 5652 §6).
@@ -101,9 +102,13 @@ fn read_recipient(info: &Tlv<'_>) -> Result<Recipient, CmsReadError> {
     match info.tag {
         TAG_SEQUENCE => read_ktri(info.value),
         TAG_CONTEXT_1_CONSTRUCTED => read_kari(info.value),
-        TAG_CONTEXT_2_CONSTRUCTED => Err(err(
-            "KEKRecipientInfo: the recipient is a pre-shared symmetric key",
-        )),
+        TAG_CONTEXT_2_CONSTRUCTED => {
+            let kekri = read_kekri(info.value)?;
+            Ok(Recipient {
+                description: WrapDescription::new(RecipientInfoKind::Kekri, kekri.algorithm),
+                key_identifier: Some(kekri.key_identifier.to_vec()),
+            })
+        }
         TAG_CONTEXT_3_CONSTRUCTED => Err(err("PasswordRecipientInfo is not a key wrap")),
         TAG_CONTEXT_4_CONSTRUCTED => read_ori(info.value),
         other => Err(err(format!("unknown RecipientInfo tag 0x{other:02x}"))),
@@ -125,6 +130,39 @@ fn read_ktri(body: &[u8]) -> Result<Recipient, CmsReadError> {
             algorithm_oid(&algorithm, "keyEncryptionAlgorithm")?,
         ),
         key_identifier,
+    })
+}
+
+/// The fields of a `KEKRecipientInfo` (RFC 5652 §6.2.3).
+struct Kekri<'a> {
+    key_identifier: &'a [u8],
+    algorithm: Oid,
+    encrypted_key: &'a [u8],
+}
+
+/// Walk a `KEKRecipientInfo`: version, kekid, keyEncryptionAlgorithm,
+/// encryptedKey.
+///
+/// The recipient is a key both sides already hold, so there is no public key
+/// and nothing to name one by. `kekid.keyIdentifier` is what identifies it,
+/// and Rite puts the key's check value there, which is the same value the
+/// transcript records and a token displays.
+///
+/// One walker for both readers: describing a wrap needs the identifier and the
+/// algorithm, opening one needs the identifier and the encrypted key, and two
+/// functions stepping through the same structure would be two places to get
+/// the field order wrong.
+fn read_kekri(body: &[u8]) -> Result<Kekri<'_>, CmsReadError> {
+    let (_version, after_version) = read_tlv(body)?;
+    let (kekid, after_kekid) = read_tlv(after_version)?;
+    let (algorithm, after_algorithm) = read_tlv(after_kekid)?;
+    let (encrypted_key, _) = read_tlv(after_algorithm)?;
+
+    let (key_identifier, _) = read_tlv(kekid.expect_tag(TAG_SEQUENCE, "KEKIdentifier")?)?;
+    Ok(Kekri {
+        key_identifier: key_identifier.expect_tag(TAG_OCTET_STRING, "kekid.keyIdentifier")?,
+        algorithm: algorithm_oid(&algorithm, "keyEncryptionAlgorithm")?,
+        encrypted_key: encrypted_key.expect_tag(TAG_OCTET_STRING, "encryptedKey")?,
     })
 }
 
@@ -255,6 +293,7 @@ fn algorithm_parts<'a>(
     Ok((oid, parameters))
 }
 
+const TAG_INTEGER: u8 = 0x02;
 const TAG_OCTET_STRING: u8 = 0x04;
 const TAG_OID: u8 = 0x06;
 const TAG_SEQUENCE: u8 = 0x30;
@@ -367,6 +406,259 @@ fn err(message: impl Into<String>) -> CmsReadError {
     CmsReadError(message.into())
 }
 
+/// `id-data` (RFC 5652 §4), the content type of a wrapped key.
+const DATA: &str = "1.2.840.113549.1.7.1";
+
+/// The authentication tag lengths `GCMParameters.aes-ICVlen` may name, in
+/// bytes (RFC 5084 §3.2: `AES-GCM-ICVlen ::= INTEGER (12 | 13 | 14 | 15 | 16)`).
+const GCM_ICV_LENGTHS: std::ops::RangeInclusive<usize> = 12..=16;
+
+/// The tag length Rite writes.
+///
+/// The longest the profile allows, and the one OpenSSL itself writes, so a
+/// blob of ours and a blob of theirs differ in no field.
+pub const GCM_ICV_LEN: usize = 16;
+
+/// The parts of an `AuthEnvelopedData` addressed to one symmetric key.
+///
+/// Carried as a struct rather than assembled in place because the same fields
+/// are written on the way out and read on the way back, and a field the two
+/// sides disagree about is the defect this shape makes impossible.
+///
+/// The crypto is the caller's: this module puts bytes in a structure and takes
+/// them out again, and never holds a key.
+///
+/// ```
+/// use rite_sdk::cms::{self, KekEnvelope};
+///
+/// // Values a backend produces: the CEK wrapped under the KEK, and the
+/// // content under that CEK.
+/// let envelope = KekEnvelope {
+///     key_identifier: vec![0x76, 0x3c, 0xbc],
+///     wrapped_cek: vec![0x11; 40],
+///     nonce: vec![0x22; 12],
+///     ciphertext: vec![0x33; 64],
+///     tag: vec![0x44; cms::GCM_ICV_LEN],
+/// };
+///
+/// let der = cms::write_kek_enveloped(&envelope)?;
+/// assert_eq!(cms::read_kek_enveloped(&der)?, envelope);
+///
+/// // And the same bytes describe the wrap that produced them.
+/// let facts = cms::describe(&der)?;
+/// assert_eq!(
+///     facts.recipient_key_identifier.as_deref(),
+///     Some(&[0x76, 0x3c, 0xbc][..])
+/// );
+/// # Ok::<(), rite_sdk::cms::CmsReadError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KekEnvelope {
+    /// What names the key-encryption key, going in `kekid.keyIdentifier`.
+    pub key_identifier: Vec<u8>,
+    /// The content-encryption key, wrapped under the KEK with AES-KW.
+    pub wrapped_cek: Vec<u8>,
+    /// The 12-byte AES-GCM nonce.
+    pub nonce: Vec<u8>,
+    /// The content under AES-256-GCM.
+    pub ciphertext: Vec<u8>,
+    /// The AES-GCM authentication tag. Its length is what
+    /// `GCMParameters.aes-ICVlen` names, so the two cannot disagree.
+    pub tag: Vec<u8>,
+}
+
+/// Write an `AuthEnvelopedData` addressed to one symmetric key.
+///
+/// RFC 5083 for the structure, RFC 5652 §6.2.3 for the recipient, RFC 5084 for
+/// the `GCMParameters` the content algorithm carries. The key-encryption
+/// algorithm is `id-aes256-wrap`, matching the 256-bit KEK Rite writes.
+///
+/// # Errors
+///
+/// Returns [`CmsReadError`] if the tag is not a length RFC 5084 admits, or if
+/// one of this module's own object identifiers fails to encode, which is
+/// unreachable.
+pub fn write_kek_enveloped(envelope: &KekEnvelope) -> Result<Vec<u8>, CmsReadError> {
+    if !GCM_ICV_LENGTHS.contains(&envelope.tag.len()) {
+        return Err(err(format!(
+            "a {}-byte authentication tag is not one RFC 5084 admits",
+            envelope.tag.len()
+        )));
+    }
+    let oid = |dotted: &str| {
+        crate::der::object_identifier(dotted)
+            .ok_or_else(|| err(format!("{dotted} is not an object identifier")))
+    };
+
+    // KEKRecipientInfo, tagged [2] in the RecipientInfo CHOICE. Version is
+    // always 4 (RFC 5652 §6.2.3).
+    let kekri = der::tlv(
+        TAG_CONTEXT_2_CONSTRUCTED,
+        &[
+            der::small_integer(4),
+            der::sequence(&[der::octet_string(&envelope.key_identifier)]),
+            der::sequence(&[oid(crate::types::oid::AES_256_WRAP)?]),
+            der::octet_string(&envelope.wrapped_cek),
+        ]
+        .concat(),
+    );
+
+    // EncryptedContentInfo. The content is implicit [0], not an OCTET STRING,
+    // which is the tag a reader of this structure has to expect.
+    let content = der::sequence(&[
+        oid(DATA)?,
+        der::sequence(&[
+            oid(crate::types::oid::AES_256_GCM)?,
+            der::sequence(&[
+                der::octet_string(&envelope.nonce),
+                der::small_integer(u8::try_from(envelope.tag.len()).unwrap_or(0)),
+            ]),
+        ]),
+        der::tlv(TAG_CONTEXT_0_PRIMITIVE, &envelope.ciphertext),
+    ]);
+
+    // AuthEnvelopedData: version 0, no originatorInfo, no authAttrs, no
+    // unauthAttrs. Version is 0 because nothing here is a structure that
+    // RFC 5083 requires a higher one for.
+    let auth_enveloped = der::sequence(&[
+        der::small_integer(0),
+        der::set_of(&[kekri]),
+        content,
+        der::octet_string(&envelope.tag),
+    ]);
+
+    Ok(der::sequence(&[
+        oid(AUTH_ENVELOPED_DATA)?,
+        der::tlv(TAG_CONTEXT_0_CONSTRUCTED, &auth_enveloped),
+    ]))
+}
+
+/// Read back what [`write_kek_enveloped`] wrote.
+///
+/// Accepts any `AuthEnvelopedData` whose single recipient is a
+/// `KEKRecipientInfo` under `id-aes256-wrap` with AES-256-GCM content, whether
+/// Rite wrote it or another implementation did.
+///
+/// # Errors
+///
+/// Returns [`CmsReadError`] if the bytes are not that structure. The
+/// algorithms are checked here rather than assumed, because the caller is
+/// about to decrypt with whatever this returns.
+pub fn read_kek_enveloped(der_bytes: &[u8]) -> Result<KekEnvelope, CmsReadError> {
+    let (content_info, rest) = read_tlv(der_bytes)?;
+    if !rest.is_empty() {
+        return Err(err("trailing bytes after ContentInfo"));
+    }
+    let body = content_info.expect_tag(TAG_SEQUENCE, "ContentInfo")?;
+    let (content_type, after_type) = read_tlv(body)?;
+    if oid_of(&content_type, "ContentInfo.contentType")?.as_str() != AUTH_ENVELOPED_DATA {
+        return Err(err("not an AuthEnvelopedData"));
+    }
+
+    let (explicit, _) = read_tlv(after_type)?;
+    let (auth_enveloped, _) =
+        read_tlv(explicit.expect_tag(TAG_CONTEXT_0_CONSTRUCTED, "ContentInfo.content")?)?;
+    let auth_enveloped = auth_enveloped.expect_tag(TAG_SEQUENCE, "AuthEnvelopedData")?;
+
+    // version, then the optional implicit [0] originatorInfo, which `describe`
+    // also steps over. Rite writes none, and a foreign blob carrying one is
+    // still one this can open.
+    let (_version, after_version) = read_tlv(auth_enveloped)?;
+    let (next, after_next) = read_tlv(after_version)?;
+    let (recipients, after_recipients) = if next.tag == TAG_CONTEXT_0_CONSTRUCTED {
+        read_tlv(after_next)?
+    } else {
+        (next, after_next)
+    };
+    let recipients = recipients.expect_tag(TAG_SET, "recipientInfos")?;
+
+    let (recipient, more) = read_tlv(recipients)?;
+    if !more.is_empty() {
+        // Rite writes one. Several would mean choosing which key to try, and
+        // silently taking the first is how a blob opens with the wrong one.
+        return Err(err("more than one recipient"));
+    }
+    let kekri = read_kekri(recipient.expect_tag(TAG_CONTEXT_2_CONSTRUCTED, "KEKRecipientInfo")?)?;
+    if kekri.algorithm.as_str() != crate::types::oid::AES_256_WRAP {
+        // Checked here rather than in the walker, because describing a foreign
+        // blob should report the algorithm it names, and only opening one has
+        // to insist on the algorithm this crate can run.
+        return Err(err(format!(
+            "key encryption algorithm {} is not id-aes256-wrap",
+            kekri.algorithm
+        )));
+    }
+
+    let (content_info, after_content) = read_tlv(after_recipients)?;
+    let (nonce, icv_len, ciphertext) =
+        read_gcm_content(content_info.expect_tag(TAG_SEQUENCE, "authEncryptedContentInfo")?)?;
+
+    let (mac, _) = read_tlv(after_content)?;
+    let tag = mac.expect_tag(TAG_OCTET_STRING, "mac")?;
+    if tag.len() != icv_len {
+        // The structure would then describe a tag other than the one it
+        // carries, and the decrypt would run against whichever the caller
+        // happened to use.
+        return Err(err(format!(
+            "GCMParameters names a {icv_len}-byte tag and the mac is {} bytes",
+            tag.len()
+        )));
+    }
+
+    Ok(KekEnvelope {
+        key_identifier: kekri.key_identifier.to_vec(),
+        wrapped_cek: kekri.encrypted_key.to_vec(),
+        nonce,
+        ciphertext,
+        tag: tag.to_vec(),
+    })
+}
+
+/// The nonce, the declared tag length, and the ciphertext out of an AES-GCM
+/// `EncryptedContentInfo`.
+fn read_gcm_content(body: &[u8]) -> Result<(Vec<u8>, usize, Vec<u8>), CmsReadError> {
+    let (_content_type, after_type) = read_tlv(body)?;
+    let (algorithm, after_algorithm) = read_tlv(after_type)?;
+
+    let (algorithm_body, parameters) = algorithm_parts(&algorithm, "contentEncryptionAlgorithm")?;
+    if algorithm_body.as_str() != crate::types::oid::AES_256_GCM {
+        return Err(err(format!(
+            "content encryption algorithm {algorithm_body} is not id-aes256-GCM"
+        )));
+    }
+    let parameters = parameters.ok_or_else(|| err("AES-GCM content carries no GCMParameters"))?;
+    let (nonce, after_nonce) = read_tlv(parameters.expect_tag(TAG_SEQUENCE, "GCMParameters")?)?;
+    let nonce = nonce.expect_tag(TAG_OCTET_STRING, "GCMParameters.aes-nonce")?;
+
+    // aes-ICVlen carries a DEFAULT of 12, so an absent field means 12 rather
+    // than an unspecified length. OpenSSL writes 16 explicitly.
+    let icv_len = match read_tlv(after_nonce) {
+        Ok((field, _)) => usize::from(
+            *field
+                .expect_tag(TAG_INTEGER, "GCMParameters.aes-ICVlen")?
+                .first()
+                .ok_or_else(|| err("GCMParameters.aes-ICVlen is empty"))?,
+        ),
+        Err(_) => 12,
+    };
+    if !GCM_ICV_LENGTHS.contains(&icv_len) {
+        // A shorter tag is a weaker one, and a decrypt would accept it without
+        // noticing, so the profile's floor is enforced here.
+        return Err(err(format!(
+            "GCMParameters names a {icv_len}-byte tag, which RFC 5084 does not admit"
+        )));
+    }
+
+    let (content, _) = read_tlv(after_algorithm)?;
+    Ok((
+        nonce.to_vec(),
+        icv_len,
+        content
+            .expect_tag(TAG_CONTEXT_0_PRIMITIVE, "encryptedContent")?
+            .to_vec(),
+    ))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -431,6 +723,132 @@ mod tests {
         "LFf02hosdR8wQwYJKoZIhvcNAQcBMBQGCCqGSIb3DQMHBAgtaMXpRwZRNYAgDsiSf8Z9P43",
         "LrY4OxUk660cu1lXeCSFOSOpOJ7FuVyU=",
     );
+
+    fn sample_envelope() -> KekEnvelope {
+        KekEnvelope {
+            key_identifier: vec![0x76, 0x3c, 0xbc],
+            wrapped_cek: vec![0x11; 40],
+            nonce: vec![0x22; 12],
+            ciphertext: vec![0x33; 64],
+            tag: vec![0x44; 16],
+        }
+    }
+
+    /// The writer and the reader are one contract, so what goes in comes out.
+    #[test]
+    fn a_kek_envelope_round_trips() {
+        let envelope = sample_envelope();
+        let der = write_kek_enveloped(&envelope).unwrap();
+        assert_eq!(read_kek_enveloped(&der).unwrap(), envelope);
+    }
+
+    /// And `describe` reads the same bytes as a wrap, which is what puts the
+    /// algorithms in the transcript and in front of `rite verify`.
+    #[test]
+    fn a_kek_envelope_describes_itself() {
+        let der = write_kek_enveloped(&sample_envelope()).unwrap();
+        let facts = describe(&der).unwrap();
+
+        assert_eq!(
+            facts.description.recipient_info,
+            Some(RecipientInfoKind::Kekri)
+        );
+        assert_eq!(
+            facts.description.key_encryption_oid.as_str(),
+            crate::types::oid::AES_256_WRAP
+        );
+        assert_eq!(
+            facts
+                .description
+                .content_encryption_oid
+                .as_ref()
+                .map(Oid::as_str),
+            Some(crate::types::oid::AES_256_GCM)
+        );
+        assert_eq!(
+            facts.recipient_key_identifier,
+            Some(vec![0x76, 0x3c, 0xbc]),
+            "the recipient is named by the key's check value"
+        );
+    }
+
+    /// The content type is `id-data`, the generic one, so the container is
+    /// not key-specific: what it carries is bytes.
+    #[test]
+    fn a_kek_envelope_carries_bytes_under_the_generic_content_type() {
+        let der = write_kek_enveloped(&sample_envelope()).unwrap();
+        let data_oid = crate::der::object_identifier(DATA).unwrap();
+        assert!(
+            der.windows(data_oid.len()).any(|w| w == data_oid),
+            "the encrypted content is id-data, not a key-specific type"
+        );
+    }
+
+    /// A long body crosses the boundary where DER switches to the long-form
+    /// length, which is where a hand-written encoder stops agreeing with a
+    /// reader.
+    #[test]
+    fn a_kek_envelope_round_trips_across_the_length_boundary() {
+        for size in [0, 1, 127, 128, 129, 255, 256, 1024, 65_536] {
+            let envelope = KekEnvelope {
+                ciphertext: vec![0x5a; size],
+                ..sample_envelope()
+            };
+            let der = write_kek_enveloped(&envelope).unwrap();
+            assert_eq!(
+                read_kek_enveloped(&der).unwrap(),
+                envelope,
+                "a {size}-byte content did not survive the round trip"
+            );
+        }
+    }
+
+    /// The tag length is written from the tag, so the two cannot disagree, and
+    /// a length outside the profile is refused rather than written.
+    #[test]
+    fn a_kek_envelope_carries_the_tag_length_it_declares() {
+        for length in [12usize, 13, 14, 15, 16] {
+            let envelope = KekEnvelope {
+                tag: vec![0x44; length],
+                ..sample_envelope()
+            };
+            let der = write_kek_enveloped(&envelope).unwrap();
+            assert_eq!(read_kek_enveloped(&der).unwrap().tag.len(), length);
+        }
+        for length in [0usize, 8, 11, 17] {
+            let envelope = KekEnvelope {
+                tag: vec![0x44; length],
+                ..sample_envelope()
+            };
+            assert!(
+                write_kek_enveloped(&envelope).is_err(),
+                "a {length}-byte tag is not one RFC 5084 admits"
+            );
+        }
+    }
+
+    /// Reading is the half that takes untrusted bytes, so it refuses what it
+    /// cannot vouch for rather than guessing.
+    #[test]
+    fn reading_refuses_what_is_not_this_structure() {
+        let der = write_kek_enveloped(&sample_envelope()).unwrap();
+
+        assert!(read_kek_enveloped(&[]).is_err(), "empty input");
+        assert!(
+            read_kek_enveloped(&der[..der.len() - 1]).is_err(),
+            "truncated input"
+        );
+        let mut trailing = der.clone();
+        trailing.push(0x00);
+        assert!(read_kek_enveloped(&trailing).is_err(), "trailing bytes");
+
+        // The RFC 4134 example is a real CMS artifact of a different shape.
+        let other = base64ct::Base64::decode_vec(RFC4134_ENVELOPED_DATA).unwrap();
+        assert!(
+            read_kek_enveloped(&other).is_err(),
+            "an EnvelopedData with a key transport recipient is not this"
+        );
+    }
 
     /// Read a published CMS artifact this codebase had no hand in producing.
     ///

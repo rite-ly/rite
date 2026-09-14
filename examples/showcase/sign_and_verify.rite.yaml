@@ -36,7 +36,7 @@ sections:
     role: ${role.signer}
     steps:
       generate_signing_key:
-        action: generate_keypair
+        action: generate_key
         backend: openssl
         with:
           algorithm: ECDSA-P256

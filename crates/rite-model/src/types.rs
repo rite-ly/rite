@@ -91,8 +91,9 @@ pub enum ActionType {
     /// Should be placed early in ceremony to establish machine context.
     MachineInfo,
 
-    /// Generate RSA or EC keypair.
-    GenerateKeypair,
+    /// Generate a key: a keypair for an asymmetric algorithm, one secret for
+    /// a symmetric one.
+    GenerateKey,
     /// Encrypt a private key under another key so it can leave the machine.
     ///
     /// The OpenSSL backend produces a CMS `AuthEnvelopedData` under
@@ -303,7 +304,7 @@ impl ActionType {
         ActionType::CheckValue,
         ActionType::OralReadback,
         ActionType::MachineInfo,
-        ActionType::GenerateKeypair,
+        ActionType::GenerateKey,
         ActionType::WrapKey,
         ActionType::UnwrapKey,
         ActionType::ExportPublic,
@@ -326,7 +327,7 @@ impl ActionType {
     /// neither. This is a breaking change to every match on `ActionType` variants.
     pub fn backend_usage(self) -> BackendUsage {
         match self {
-            ActionType::GenerateKeypair
+            ActionType::GenerateKey
             | ActionType::SignData
             | ActionType::WrapKey
             | ActionType::UnwrapKey
@@ -367,7 +368,7 @@ impl ActionType {
             | ActionType::Confirm
             | ActionType::OralReadback
             | ActionType::MachineInfo
-            | ActionType::GenerateKeypair
+            | ActionType::GenerateKey
             | ActionType::WrapKey
             | ActionType::UnwrapKey
             | ActionType::ExportPublic
@@ -408,9 +409,9 @@ impl ActionType {
                 "include_security_features",
                 "message",
             ],
-            ActionType::GenerateKeypair => &["algorithm", "policy", "slot"],
+            ActionType::GenerateKey => &["algorithm", "policy", "slot"],
             ActionType::WrapKey => &["scheme", "expect_recipient"],
-            ActionType::UnwrapKey => &["expect_key", "label", "policy"],
+            ActionType::UnwrapKey => &["algorithm", "expect_key", "label", "policy"],
             ActionType::SignData | ActionType::VerifySignature => &["algorithm", "message"],
             ActionType::Attest => &["statement"],
             ActionType::GatherEntropy => &["instruction"],
@@ -453,7 +454,7 @@ impl ActionType {
             | ActionType::CheckValue
             | ActionType::OralReadback
             | ActionType::MachineInfo
-            | ActionType::GenerateKeypair
+            | ActionType::GenerateKey
             | ActionType::ExportPublic
             | ActionType::Attest
             | ActionType::GatherEntropy
@@ -478,7 +479,7 @@ impl ActionType {
             ActionType::Attest => "Record a signed attestation from a participant.",
             ActionType::GatherEntropy => "Fold human-supplied entropy into the ceremony seed.",
             ActionType::TpmAttest => "Record TPM platform attestation (PCR values).",
-            ActionType::GenerateKeypair => "Generate an asymmetric keypair.",
+            ActionType::GenerateKey => "Generate a cryptographic key.",
             ActionType::ExportPublic => "Export the public component of a keypair.",
             ActionType::SignData => "Sign data with a ceremony key.",
             ActionType::VerifySignature => "Verify a signature against a public key.",
@@ -501,7 +502,7 @@ impl std::fmt::Display for ActionType {
             ActionType::CheckValue => write!(f, "check_value"),
             ActionType::OralReadback => write!(f, "oral_readback"),
             ActionType::MachineInfo => write!(f, "machine_info"),
-            ActionType::GenerateKeypair => write!(f, "generate_keypair"),
+            ActionType::GenerateKey => write!(f, "generate_key"),
             ActionType::WrapKey => write!(f, "wrap_key"),
             ActionType::UnwrapKey => write!(f, "unwrap_key"),
             ActionType::ExportPublic => write!(f, "export_public"),
@@ -700,7 +701,7 @@ mod tests {
             (ActionType::CheckValue, "\"check_value\""),
             (ActionType::OralReadback, "\"oral_readback\""),
             (ActionType::MachineInfo, "\"machine_info\""),
-            (ActionType::GenerateKeypair, "\"generate_keypair\""),
+            (ActionType::GenerateKey, "\"generate_key\""),
             (ActionType::WrapKey, "\"wrap_key\""),
             (ActionType::UnwrapKey, "\"unwrap_key\""),
             (ActionType::ExportPublic, "\"export_public\""),
@@ -730,7 +731,7 @@ mod tests {
             ActionType::CheckValue,
             ActionType::OralReadback,
             ActionType::MachineInfo,
-            ActionType::GenerateKeypair,
+            ActionType::GenerateKey,
             ActionType::WrapKey,
             ActionType::UnwrapKey,
             ActionType::ExportPublic,
@@ -872,7 +873,7 @@ mod tests {
                 | ActionType::CheckValue
                 | ActionType::OralReadback
                 | ActionType::MachineInfo
-                | ActionType::GenerateKeypair
+                | ActionType::GenerateKey
                 | ActionType::WrapKey
                 | ActionType::UnwrapKey
                 | ActionType::ExportPublic

@@ -20,7 +20,7 @@ sections:
     role: ${role.crypto_officer}
     steps:
       generate_signing_key:
-        action: generate_keypair
+        action: generate_key
         backend: openssl
         retry:
           attempts: 3

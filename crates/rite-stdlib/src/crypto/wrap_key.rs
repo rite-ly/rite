@@ -63,11 +63,14 @@ impl Action for WrapKeyAction {
             ))
         })?;
 
-        // The public half of what is being wrapped, so the record names the key
-        // that went in rather than only the label the author chose for it.
+        // What names the key being wrapped, so the record names the key that
+        // went in rather than only the label the author chose for it. A keypair
+        // is named by its public half and a symmetric key by its check value,
+        // and exactly one of the two is present.
         let target_fingerprint = key_to_wrap
             .public_key
             .map(|key| compute_fingerprint(key.as_bytes()));
+        let target_check_value = key_to_wrap.check_value.map(ToString::to_string);
 
         let key_backend = key_to_wrap.backend_name;
         let (wrapped_key, backend_fingerprint) = match custody {
@@ -149,6 +152,7 @@ impl Action for WrapKeyAction {
                     Custody::External => "external_recipient",
                 },
                 "key_to_wrap_fingerprint": target_fingerprint,
+                "key_to_wrap_check_value": target_check_value,
             }),
             outputs: json!({
                 "wrapped_key_fingerprint": fingerprint,

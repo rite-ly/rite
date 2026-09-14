@@ -282,3 +282,182 @@ fn openssl_cli_reassembles_an_rsa_aes_key_wrap() {
 fn openssl_cli_decrypts_a_wrap_to_an_external_recipient() {
     run_interop_test(WrapScheme::CmsAes256Gcm);
 }
+
+/// The blob Rite writes for a symmetric KEK is one the `openssl` CLI opens.
+///
+/// This is the direction that matters for archival: a custodian holding the
+/// key and a copy of the blob, years later, with no Rite binary.
+#[test]
+fn openssl_cli_decrypts_a_wrap_under_a_symmetric_key() {
+    if !openssl_binary_available() {
+        eprintln!("skipping: openssl binary not available");
+        return;
+    }
+
+    // The KEK is imported rather than generated, so this test knows its bytes
+    // and can hand them to the CLI.
+    let mut secret = vec![0u8; 32];
+    openssl::rand::rand_bytes(&mut secret).unwrap();
+
+    let mut backend = OpenSslBackend::try_new("interop-test").unwrap();
+    let kek = backend
+        .import_private_key(
+            KeySpec {
+                algorithm: KeyAlgorithm::Aes256,
+                label: "kek".to_string(),
+                policy: KeyPolicy::default_for(KeyAlgorithm::Aes256),
+                location_hint: None,
+            },
+            &secret,
+        )
+        .unwrap();
+    let payload = backend
+        .generate_key(KeySpec {
+            algorithm: KeyAlgorithm::EcdsaP256,
+            label: "payload".to_string(),
+            policy: KeyPolicy {
+                extractable: true,
+                ..KeyPolicy::default()
+            },
+            location_hint: None,
+        })
+        .unwrap();
+    let payload_pub = backend.export_public_key(&payload.key_id).unwrap();
+    let wrapped = backend
+        .wrap(&payload.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
+        .expect("a symmetric KEK takes the CMS container");
+
+    let dir = tempfile::tempdir().unwrap();
+    let blob = dir.path().join("wrapped.der");
+    let out = dir.path().join("recovered.der");
+    std::fs::write(&blob, wrapped.data()).unwrap();
+
+    let kcv = kek.check_value.as_ref().expect("a symmetric key has one");
+    let kcv_hex = base16ct::lower::encode_string(kcv.as_bytes());
+    let decrypt = Command::new("openssl")
+        .args([
+            "cms",
+            "-decrypt",
+            "-binary",
+            "-inform",
+            "DER",
+            "-in",
+            blob.to_str().unwrap(),
+            "-secretkey",
+            &base16ct::lower::encode_string(&secret),
+            "-secretkeyid",
+            &kcv_hex,
+            "-out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to spawn openssl cms");
+    assert!(
+        decrypt.status.success(),
+        "openssl cms -decrypt -secretkey failed:\nstderr: {}",
+        String::from_utf8_lossy(&decrypt.stderr),
+    );
+
+    let recovered = PKey::private_key_from_pkcs8(&std::fs::read(&out).unwrap())
+        .expect("the content is the PKCS#8 payload");
+    assert_eq!(
+        payload_pub.as_bytes(),
+        recovered.public_key_to_der().unwrap(),
+        "the key the command line recovered is not the key that went in"
+    );
+
+    secret.fill(0);
+}
+
+/// And the other direction: a blob OpenSSL wrote, unwrapped by Rite.
+///
+/// One direction alone would pass with a structure both sides got wrong in the
+/// same way. This is the half that a hand-written encoder most needs.
+#[test]
+fn rite_unwraps_what_the_openssl_cli_wrote() {
+    if !openssl_binary_available() {
+        eprintln!("skipping: openssl binary not available");
+        return;
+    }
+
+    let mut backend = OpenSslBackend::try_new("interop-test").unwrap();
+    let mut secret = vec![0u8; 32];
+    openssl::rand::rand_bytes(&mut secret).unwrap();
+    let kek = backend
+        .import_private_key(
+            KeySpec {
+                algorithm: KeyAlgorithm::Aes256,
+                label: "kek".to_string(),
+                policy: KeyPolicy::default_for(KeyAlgorithm::Aes256),
+                location_hint: None,
+            },
+            &secret,
+        )
+        .unwrap();
+
+    // A real private key as the payload, so the unwrap path imports it the way
+    // it would any recovered key.
+    let payload = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+    let pkcs8 = payload.private_key_to_pkcs8().unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join("payload.der");
+    let blob = dir.path().join("theirs.der");
+    std::fs::write(&plain, &pkcs8).unwrap();
+
+    let kcv = kek.check_value.as_ref().expect("a symmetric key has one");
+    let encrypt = Command::new("openssl")
+        .args([
+            "cms",
+            "-encrypt",
+            "-binary",
+            "-aes-256-gcm",
+            "-in",
+            plain.to_str().unwrap(),
+            "-outform",
+            "DER",
+            "-out",
+            blob.to_str().unwrap(),
+            "-secretkey",
+            &base16ct::lower::encode_string(&secret),
+            "-secretkeyid",
+            &base16ct::lower::encode_string(kcv.as_bytes()),
+        ])
+        .output()
+        .expect("Failed to spawn openssl cms");
+    assert!(
+        encrypt.status.success(),
+        "openssl cms -encrypt -secretkey failed:\nstderr: {}",
+        String::from_utf8_lossy(&encrypt.stderr),
+    );
+
+    let their_der = std::fs::read(&blob).unwrap();
+    let facts = rite_sdk::cms::describe(&their_der).expect("Rite describes their blob");
+    assert_eq!(
+        facts.description.recipient_info,
+        Some(rite_sdk::RecipientInfoKind::Kekri)
+    );
+
+    let wrapped = rite_sdk::WrappedKey::new(WrapScheme::CmsAes256Gcm, facts.description, their_der)
+        .expect("the scheme admits what their blob says it did");
+    let restored = backend
+        .unwrap(
+            &wrapped,
+            &kek.key_id,
+            "restored",
+            KeyPolicy {
+                extractable: true,
+                ..KeyPolicy::default()
+            },
+            None,
+        )
+        .expect("Rite unwraps a blob the CLI wrote");
+
+    assert_eq!(
+        restored.public_key.as_ref().map(PublicKeyDer::as_bytes),
+        Some(payload.public_key_to_der().unwrap().as_slice()),
+        "the key Rite recovered is not the key the CLI wrapped"
+    );
+
+    secret.fill(0);
+}

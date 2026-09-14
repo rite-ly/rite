@@ -4,7 +4,7 @@
 //!
 //! - **Verification**: `clock_check`, `confirm`, `check_value`, `oral_readback`, `machine_info`
 //! - **Attestation**: `attest`
-//! - **Crypto**: `generate_keypair`, `export_public`, `wrap_key`, `unwrap_key`,
+//! - **Crypto**: `generate_key`, `export_public`, `wrap_key`, `unwrap_key`,
 //!   `sign_data`, `verify_signature`
 //! - **PKI**: `generate_csr`, `issue_certificate`
 //!
@@ -18,7 +18,7 @@
 //!
 //! - `verification`: verification actions (requires `subtle`, `sysinfo`)
 //! - `attestation`: attestation recording
-//! - `crypto`: crypto actions (`generate_keypair`, `export_public`, `wrap_key`, `unwrap_key`,
+//! - `crypto`: crypto actions (`generate_key`, `export_public`, `wrap_key`, `unwrap_key`,
 //!   `sign_data`, `verify_signature`)
 //! - `pki`: PKI actions (`generate_csr`, `issue_certificate`; requires `x509-cert`, `signature`)
 //! - `piv`: PIV smart-card actions (`piv_read_certificate`, `piv_sign`; requires PC/SC)
@@ -67,8 +67,8 @@ pub use backend::{MockBackend, create_backend, default_backend_factory};
 pub use attestation::AttestAction;
 #[cfg(feature = "crypto")]
 pub use crypto::{
-    ExportPublicAction, GenerateKeypairAction, SignDataAction, UnwrapKeyAction,
-    VerifySignatureAction, WrapKeyAction,
+    ExportPublicAction, GenerateKeyAction, SignDataAction, UnwrapKeyAction, VerifySignatureAction,
+    WrapKeyAction,
 };
 pub use entropy::GatherEntropyAction;
 #[cfg(feature = "yubikey")]
@@ -114,7 +114,7 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
 
     #[cfg(feature = "crypto")]
     {
-        registry.register(Arc::new(GenerateKeypairAction));
+        registry.register(Arc::new(GenerateKeyAction));
         registry.register(Arc::new(ExportPublicAction));
         registry.register(Arc::new(WrapKeyAction));
         registry.register(Arc::new(UnwrapKeyAction));

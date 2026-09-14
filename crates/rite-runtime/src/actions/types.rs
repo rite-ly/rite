@@ -2,7 +2,9 @@
 
 use base64ct::{Base64, Encoding};
 
-use rite_sdk::{CertificateDer, KeyAlgorithm, KeyId, PublicKeyDer, WrapScheme, WrappedKey};
+use rite_sdk::{
+    CertificateDer, KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer, WrapScheme, WrappedKey,
+};
 
 /// Runtime representation of an artifact.
 #[derive(Debug)]
@@ -18,6 +20,12 @@ pub enum ArtifactValue {
         algorithm: KeyAlgorithm,
         /// Public key (None for non-exportable HSM keys).
         public_key: Option<PublicKeyDer>,
+        /// Key check value, for a symmetric key.
+        ///
+        /// What the key answers to where a keypair is answered for by its
+        /// public half. A ceremony reaches it as `${artifact.kek.kcv | hex}`,
+        /// which is how a custodian compares it against what the token shows.
+        check_value: Option<KeyCheckValue>,
     },
     /// Wrapped key, with the scheme it was wrapped under and the algorithms
     /// the wrap actually used. The container follows the scheme; the OpenSSL

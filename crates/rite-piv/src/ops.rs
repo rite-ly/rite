@@ -263,6 +263,7 @@ pub fn generate_key(
         algorithm,
         label: label.to_string(),
         public_key: Some(encode_public_key(&spki)?),
+        check_value: None,
         attestation: None,
     })
 }
@@ -326,6 +327,7 @@ pub fn list_keys(yk: &mut YubiKey) -> Result<Vec<KeyMetadata>, BackendError> {
                 algorithm,
                 label: String::new(),
                 public_key,
+                check_value: None,
                 attestation: None,
             });
         }

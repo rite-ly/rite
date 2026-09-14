@@ -574,7 +574,7 @@ sections:
   main:
     steps:
       gen:
-        action: generate_keypair
+        action: generate_key
 "#;
         let (_, _, diags) = analyze_str(None, yaml);
         let diag = diags
@@ -862,7 +862,7 @@ sections:
     act: setup
     steps:
       gen:
-        action: generate_keypair
+        action: generate_key
         backend: openssl
         creates: k
         with:
@@ -957,7 +957,7 @@ backends:
         #[test]
         fn a_creates_value_is_reported_rather_than_becoming_a_filename() {
             let (field, reason) = only_reference_error(
-                r#"        action: generate_keypair
+                r#"        action: generate_key
         backend: openssl
         creates: "${artifac.other}"
         with:

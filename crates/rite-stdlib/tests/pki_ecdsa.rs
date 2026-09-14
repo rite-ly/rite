@@ -7,7 +7,7 @@ use rite_openssl::OpenSslBackend;
 use rite_runtime::{
     Action, ArtifactValue, ExecutionState, StepInfo, test_support::ReporterHarness,
 };
-use rite_stdlib::{GenerateCsrAction, GenerateKeypairAction, IssueCertificateAction};
+use rite_stdlib::{GenerateCsrAction, GenerateKeyAction, IssueCertificateAction};
 use std::collections::HashMap;
 
 fn make_state() -> ExecutionState {
@@ -56,7 +56,7 @@ fn test_ecdsa_p256_pki_flow() {
     let mut backend = OpenSslBackend::try_new("test").unwrap();
     let mut harness = ReporterHarness::new();
 
-    // ── generate_keypair ────────────────────────────────────────────────────
+    // ── generate_key ────────────────────────────────────────────────────
     let keypair_id = ArtifactId::new("root_ca_keypair");
     let keygen_step = step("generate_root_ca", "root_ca_keypair");
     let keygen_params = serde_json::json!({ "algorithm": "ECDSA-P256" });
@@ -65,7 +65,7 @@ fn test_ecdsa_p256_pki_flow() {
     let keygen_result = {
         let ctx = state.handler_context();
         let mut reporter = harness.reporter(keygen_step.id.clone());
-        GenerateKeypairAction
+        GenerateKeyAction
             .execute(
                 &keygen_step,
                 &ctx,
@@ -73,7 +73,7 @@ fn test_ecdsa_p256_pki_flow() {
                 &mut reporter,
                 Some(&mut backend),
             )
-            .expect("generate_keypair ECDSA-P256 must succeed")
+            .expect("generate_key ECDSA-P256 must succeed")
     };
 
     let keypair_artifact = keygen_result
@@ -219,7 +219,7 @@ fn test_csr_san_roundtrip() {
     let keygen_result = {
         let ctx = state.handler_context();
         let mut reporter = harness.reporter(keygen_step.id.clone());
-        GenerateKeypairAction
+        GenerateKeyAction
             .execute(
                 &keygen_step,
                 &ctx,
@@ -227,7 +227,7 @@ fn test_csr_san_roundtrip() {
                 &mut reporter,
                 Some(&mut backend),
             )
-            .expect("generate_keypair must succeed")
+            .expect("generate_key must succeed")
     };
     let keypair_artifact = keygen_result
         .artifacts

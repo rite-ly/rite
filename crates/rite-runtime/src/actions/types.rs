@@ -54,7 +54,7 @@ impl std::fmt::Display for ArtifactValue {
                 key_id,
                 algorithm,
                 public_key,
-                ..
+                check_value,
             } => {
                 // Output backend key metadata and public key if available
                 if let Some(pub_key) = public_key {
@@ -63,6 +63,16 @@ impl std::fmt::Display for ArtifactValue {
                         "BackendKey(backend={backend_name}, key_id={}, algorithm={algorithm:?})\n{}",
                         key_id.as_str(),
                         encode_pem("PUBLIC KEY", pub_key.as_bytes())
+                    )
+                } else if let Some(check_value) = check_value {
+                    // A symmetric key has no public half to be missing, and the
+                    // check value is what names it everywhere else. Saying
+                    // `not_exportable` here would read as a backend refusing an
+                    // export that was never possible.
+                    write!(
+                        f,
+                        "BackendKey(backend={backend_name}, key_id={}, algorithm={algorithm:?}, kcv={check_value})",
+                        key_id.as_str()
                     )
                 } else {
                     write!(

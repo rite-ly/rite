@@ -156,11 +156,13 @@ pub struct GenerateKeyParams {
 
 /// The `policy:` block, mirroring [`KeyPolicy`] field for field.
 ///
-/// Every field is optional and falls back to [`KeyPolicy::default`], which is
-/// the restrictive choice: a persistent, sensitive, non-extractable key that
-/// may sign and verify. A ceremony that wraps a key it generated has to say
-/// `extractable: true`, because otherwise the key cannot leave the backend and
-/// the wrap step will refuse.
+/// Every field is optional and falls back to the restrictive choice: a
+/// persistent, sensitive, non-extractable key. The usages fall back to what the
+/// algorithm permits, by
+/// [`KeyPolicy::default_for`](rite_sdk::KeyPolicy::default_for), so a keypair
+/// may sign and verify and a symmetric key may wrap and unwrap. A ceremony that
+/// wraps a key it generated has to say `extractable: true`, because otherwise
+/// the key cannot leave the backend and the wrap step will refuse.
 ///
 /// This is PKCS#11 vocabulary: what the token permits. The `KeyUsage`
 /// extension in a certificate is a different thing, settled by `profile:` on

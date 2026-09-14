@@ -95,8 +95,6 @@ wrap_under_kek:
   reads:
     key_to_wrap: ${artifact.ca_key}
     wrapping_key: ${artifact.kek}
-  with:
-    scheme: AES-256-KWP
   creates: wrapped_ca_key
 ```
 

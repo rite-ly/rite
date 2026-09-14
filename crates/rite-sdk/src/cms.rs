@@ -535,9 +535,15 @@ pub fn write_kek_enveloped(envelope: &KekEnvelope) -> Result<Vec<u8>, CmsReadErr
 
 /// Read back what [`write_kek_enveloped`] wrote.
 ///
-/// Accepts any `AuthEnvelopedData` whose single recipient is a
-/// `KEKRecipientInfo` under `id-aes256-wrap` with AES-256-GCM content, whether
-/// Rite wrote it or another implementation did.
+/// Accepts an `AuthEnvelopedData` whose single recipient is a
+/// `KEKRecipientInfo` under `id-aes256-wrap` with AES-256-GCM content and no
+/// `authAttrs`, which is what the OpenSSL CLI writes for the same inputs.
+///
+/// `authAttrs` is refused rather than skipped. RFC 5083 makes it the AEAD's
+/// additional authenticated data, so a blob carrying it authenticates bytes
+/// this decrypt would not feed to the tag, and opening one by ignoring the
+/// field would either fail confusingly or, worse, treat attributes as
+/// unauthenticated that the producer meant to bind.
 ///
 /// # Errors
 ///
@@ -594,6 +600,17 @@ pub fn read_kek_enveloped(der_bytes: &[u8]) -> Result<KekEnvelope, CmsReadError>
         read_gcm_content(content_info.expect_tag(TAG_SEQUENCE, "authEncryptedContentInfo")?)?;
 
     let (mac, _) = read_tlv(after_content)?;
+    if mac.tag == TAG_CONTEXT_1_CONSTRUCTED {
+        // authAttrs. RFC 5083 makes these the AEAD's additional authenticated
+        // data, which this decrypt leaves empty, so opening such a blob would
+        // compute the tag over different bytes than the producer did. Named
+        // here, since `expected mac` would send a reader looking at the wrong
+        // field.
+        return Err(err(
+            "this AuthEnvelopedData carries authAttrs, which are part of what its \
+             tag authenticates and which this reader does not cover",
+        ));
+    }
     let tag = mac.expect_tag(TAG_OCTET_STRING, "mac")?;
     if tag.len() != icv_len {
         // The structure would then describe a tag other than the one it
@@ -941,6 +958,40 @@ mod tests {
         assert!(
             facts.recipient_key_identifier.is_some(),
             "the blob names its recipient by key id"
+        );
+    }
+
+    /// A blob carrying `authAttrs` is refused, by name.
+    ///
+    /// RFC 5083 makes those attributes the AEAD's additional authenticated
+    /// data, which this reader leaves empty, so opening one would compute the
+    /// tag over different bytes than its producer did. The fixture is a
+    /// conforming structure: `openssl cms -decrypt -secretkey` returns its
+    /// payload, and flipping one byte inside the attribute makes OpenSSL refuse
+    /// it, so the field really is covered by the tag.
+    #[test]
+    fn refuses_an_auth_enveloped_data_carrying_auth_attrs() {
+        let der = base64ct::Base64::decode_vec(concat!(
+            "MIHGBgsqhkiG9w0BCRABF6CBtjCBswIBADFEokICAQQwBgQEAQIDBDALBglg",
+            "hkgBZQMEAS0EKHQahB32AHvkD3mve3AQWdpTNQ/d825fM9NJOwFCxtF9DZJ4",
+            "PXsjRgcwOgYJKoZIhvcNAQcBMB4GCWCGSAFlAwQBLjARBAwDAwMDAwMDAwMD",
+            "AwMCARCADbWcgkV4nh1cv9wwVfGhGjAYBgkqhkiG9w0BCQMxCwYJKoZIhvcN",
+            "AQcBBBCiz7sY6w+LFX3mIoJbWngX",
+        ))
+        .unwrap();
+
+        let error = read_kek_enveloped(&der).unwrap_err();
+        assert!(
+            error.to_string().contains("authAttrs"),
+            "the refusal should name the field: {error}"
+        );
+
+        // `describe` reads only the recipient, which this structure has, so it
+        // still reports the wrap rather than refusing it.
+        let facts = describe(&der).expect("the recipient is readable either way");
+        assert_eq!(
+            facts.description.recipient_info,
+            Some(RecipientInfoKind::Kekri)
         );
     }
 

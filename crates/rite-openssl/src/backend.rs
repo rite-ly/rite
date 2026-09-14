@@ -1278,6 +1278,17 @@ fn cms_open_from_kek(
     check_value: &KeyCheckValue,
     der: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+    // The reader insists the blob declare `id-aes256-wrap`, and the cipher
+    // below follows the local secret's length, so without this a blob naming
+    // one algorithm could be opened under another and the run would record the
+    // name rather than what it did. The seal side refuses the same size.
+    if secret.len() != 32 {
+        return Err(BackendError::UnsupportedAlgorithm(format!(
+            "this container names id-aes256-wrap, which needs a 256-bit key, \
+             and the key held here is {} bytes",
+            secret.len()
+        )));
+    }
     let envelope =
         cms::read_kek_enveloped(der).map_err(|e| BackendError::InvalidData(e.to_string()))?;
 
@@ -1515,6 +1526,20 @@ impl KeyTransportBackend for OpenSslBackend {
                     )
                 }
                 scheme if scheme.required_kek().is_some() => {
+                    // `aes_key_wrap` picks its cipher from the secret's length,
+                    // so without this an AES-256-KWP blob opened under a
+                    // 128-bit key would run AES-128-KWP while the scheme, and
+                    // the transcript, say otherwise. `symmetric_wrap` refuses
+                    // the same mismatch on the way out.
+                    let required = scheme.required_kek();
+                    if required != Some(kek.algorithm) {
+                        return Err(BackendError::UnsupportedAlgorithm(format!(
+                            "{scheme} unwraps under a {} key, and '{}' is {}",
+                            required.map_or_else(|| "symmetric".to_string(), |a| a.to_string()),
+                            kek.label,
+                            kek.algorithm
+                        )));
+                    }
                     let (secret, _) = kek.secret()?;
                     Zeroizing::new(aes_key_wrap(
                         secret,
@@ -2686,6 +2711,66 @@ mod tests {
                 "{scheme}: {message}"
             );
         }
+    }
+
+    /// A raw AES scheme unwraps only under the size its name carries.
+    ///
+    /// The cipher follows the secret's length, so a 128-bit key opening an
+    /// AES-256-KWP blob would run AES-128-KWP while the scheme, and the
+    /// transcript with it, said otherwise. The wrap side refuses the same
+    /// mismatch, and the two have to agree or the record is a claim about an
+    /// operation that did not happen.
+    #[test]
+    fn a_raw_scheme_refuses_a_kek_of_the_other_size() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let (_, _, wrapped) =
+            a_wrapped_secret(&mut backend, KeyAlgorithm::Aes256, WrapScheme::Aes256Kwp);
+        let small = backend
+            .generate_key(spec(KeyAlgorithm::Aes128, "small-kek"))
+            .unwrap();
+
+        let message = backend
+            .unwrap(
+                &wrapped,
+                &small.key_id,
+                "restored",
+                KeyPolicy::default_for(KeyAlgorithm::Aes256),
+                Some(KeyAlgorithm::Aes256),
+            )
+            .expect_err("the scheme names a size the key does not have")
+            .to_string();
+        assert!(
+            message.contains("AES-256") && message.contains("AES-128"),
+            "{message}"
+        );
+    }
+
+    /// The CMS path refuses the same mismatch.
+    ///
+    /// `read_kek_enveloped` insists the blob declare id-aes256-wrap, and the
+    /// CEK is then unwrapped with a cipher chosen from the local secret, so
+    /// without this guard a container could name one algorithm and be opened
+    /// under another.
+    #[test]
+    fn a_cms_wrap_refuses_a_kek_of_the_other_size() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let (_, _, wrapped) =
+            a_wrapped_secret(&mut backend, KeyAlgorithm::Aes256, WrapScheme::CmsAes256Gcm);
+        let small = backend
+            .generate_key(spec(KeyAlgorithm::Aes128, "small-kek"))
+            .unwrap();
+
+        let message = backend
+            .unwrap(
+                &wrapped,
+                &small.key_id,
+                "restored",
+                KeyPolicy::default_for(KeyAlgorithm::Aes256),
+                Some(KeyAlgorithm::Aes256),
+            )
+            .expect_err("a 128-bit key cannot open an id-aes256-wrap container")
+            .to_string();
+        assert!(message.contains("id-aes256-wrap"), "{message}");
     }
 
     /// A declaration that disagrees with what came out fails, in both

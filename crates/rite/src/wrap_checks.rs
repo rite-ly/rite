@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use rite_model::StepFact;
-use rite_sdk::{WrapDescription, WrapScheme};
+use rite_sdk::{KeyCheckValue, RecipientInfoKind, WrapDescription, WrapScheme};
 
 use crate::verify::{artifact_location, digest_hex};
 
@@ -72,7 +72,7 @@ pub enum AlgorithmEvidence {
 
 /// What the bundle can say about the key a wrap was addressed to.
 ///
-/// The blob names its recipient by a digest of that recipient's public key, so
+/// The blob names its recipient by whatever identifies that key, so
 /// the question is what else in the transcript carries the same value.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RecipientEvidence {
@@ -173,7 +173,8 @@ pub fn check_wraps(dir: Option<&Path>, facts: &[&StepFact]) -> Vec<WrapCheck> {
 /// Each wrap otherwise re-walks the whole transcript several times, once per
 /// question it asks of it.
 struct Index<'a> {
-    /// Public keys this ceremony generated, by fingerprint.
+    /// Keys this ceremony generated, by whatever names them: a fingerprint
+    /// for a keypair, a check value for a symmetric key.
     generated: HashSet<&'a str>,
     /// Recipient a wrap was given, by the step that wrapped to it, with
     /// whether the ceremony declared it in advance.
@@ -195,9 +196,15 @@ impl<'a> Index<'a> {
         };
         for fact in facts {
             match fact {
-                StepFact::BackendOperation { kind, outputs, .. } if kind == "generate_keypair" => {
+                StepFact::BackendOperation { kind, outputs, .. } if kind == "generate_key" => {
+                    // A keypair is named by its public half and a symmetric
+                    // key by its check value. Both go in one set, because both
+                    // are what a blob's recipient identifier renders to.
                     if let Some(fingerprint) = string_field(outputs, "public_key_fingerprint") {
                         index.generated.insert(fingerprint);
+                    }
+                    if let Some(check_value) = string_field(outputs, "key_check_value") {
+                        index.generated.insert(check_value);
                     }
                 }
                 StepFact::WrapRecipientRecorded {
@@ -249,8 +256,12 @@ fn check_one(
         return unchecked("the wrap fact records no scheme");
     };
 
-    let origin_confirmed = string_field(inputs, "key_to_wrap_fingerprint")
-        .is_some_and(|target| index.generated.contains(target));
+    // Whichever form names the wrapped key. Both land in one set, so a
+    // symmetric payload traces to its generate step the way a keypair does.
+    let origin_confirmed = ["key_to_wrap_fingerprint", "key_to_wrap_check_value"]
+        .iter()
+        .filter_map(|field| string_field(inputs, field))
+        .any(|target| index.generated.contains(target));
 
     // A raw mechanism is not a failed CMS parse, and must not report as one.
     // The scheme in the record is what says which this is, so a verifier needs
@@ -300,13 +311,13 @@ fn check_one(
         };
     }
 
-    // The recipient identifier in the blob is a digest of the recipient's
-    // public key, which is the form both the recipient fact and a
-    // generate_keypair fact record, so they compare without holding any key.
+    // The recipient identifier in the blob is what names the recipient key,
+    // which is the form both the recipient fact and a generate_key fact
+    // record, so they compare without holding any key.
     let recipient = match from_blob.recipient_key_identifier.as_deref() {
         None => RecipientEvidence::None,
         Some(identifier) => {
-            let named = format!("sha256:{}", base16ct::lower::encode_string(identifier));
+            let named = names_recipient(&from_blob.description, identifier);
             match index.recipients.get(step) {
                 Some(&(recorded, declared)) if recorded == named => {
                     if declared {
@@ -338,6 +349,21 @@ fn check_one(
         algorithms: AlgorithmEvidence::Derived,
         recipient,
         origin_confirmed,
+    }
+}
+
+/// Render a blob's recipient identifier the way the transcript names that key.
+///
+/// A public-key recipient is identified by a digest of its SPKI, which the
+/// transcript writes as a `sha256:` fingerprint. A symmetric recipient has no
+/// public half, so `KEKRecipientInfo` carries the key's check value instead,
+/// which the transcript writes with its own method prefix. Rendering here is
+/// what lets one comparison serve both.
+fn names_recipient(description: &WrapDescription, identifier: &[u8]) -> String {
+    let hex = base16ct::lower::encode_string(identifier);
+    match description.recipient_info {
+        Some(RecipientInfoKind::Kekri) => format!("{}:{hex}", KeyCheckValue::METHOD),
+        _ => format!("sha256:{hex}"),
     }
 }
 
@@ -462,7 +488,7 @@ mod tests {
         vec![
             StepFact::BackendOperation {
                 step: StepId::new("gen"),
-                kind: "generate_keypair".to_string(),
+                kind: "generate_key".to_string(),
                 inputs: json!({}),
                 outputs: json!({ "public_key_fingerprint": wrap.target_fingerprint }),
                 fingerprint: None,
@@ -553,7 +579,7 @@ mod tests {
         facts.retain(|fact| !matches!(fact, StepFact::WrapRecipientRecorded { .. }));
         facts.push(StepFact::BackendOperation {
             step: StepId::new("gen_kek"),
-            kind: "generate_keypair".to_string(),
+            kind: "generate_key".to_string(),
             inputs: json!({}),
             outputs: json!({ "public_key_fingerprint": wrap.recipient_fingerprint }),
             fingerprint: None,
@@ -573,6 +599,189 @@ mod tests {
             "{}",
             check.describe()
         );
+    }
+
+    /// A wrap under a symmetric key carries the same evidence as one under a
+    /// keypair, and links to its generate step the same way.
+    ///
+    /// The blob names the KEK by check value rather than by fingerprint, so
+    /// the comparison only holds if the identifier is rendered the way the
+    /// transcript writes that key. A `sha256:` prefix over a check value would
+    /// match nothing and quietly report no recipient evidence at all.
+    #[test]
+    fn a_wrap_under_a_symmetric_key_traces_to_its_generate_step() {
+        let mut backend = rite_openssl::OpenSslBackend::try_new("test").unwrap();
+        let kek = backend
+            .generate_key(KeySpec {
+                algorithm: KeyAlgorithm::Aes256,
+                label: "kek".to_string(),
+                policy: KeyPolicy::default_for(KeyAlgorithm::Aes256),
+                location_hint: None,
+            })
+            .unwrap();
+        let target = backend
+            .generate_key(KeySpec {
+                algorithm: KeyAlgorithm::Rsa2048,
+                label: "target".to_string(),
+                policy: KeyPolicy {
+                    extractable: true,
+                    ..KeyPolicy::default()
+                },
+                location_hint: None,
+            })
+            .unwrap();
+        let wrapped = backend
+            .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
+            .unwrap();
+
+        let target_fingerprint = rite_runtime::compute_fingerprint(
+            backend
+                .export_public_key(&target.key_id)
+                .unwrap()
+                .as_bytes(),
+        );
+        let check_value = kek.check_value.as_ref().unwrap().to_string();
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("artifacts")).unwrap();
+        std::fs::write(tmp.path().join("artifacts/wrapped.p7c"), wrapped.data()).unwrap();
+
+        let facts = vec![
+            StepFact::BackendOperation {
+                step: StepId::new("gen_target"),
+                kind: "generate_key".to_string(),
+                inputs: json!({}),
+                outputs: json!({ "public_key_fingerprint": target_fingerprint }),
+                fingerprint: None,
+            },
+            StepFact::BackendOperation {
+                step: StepId::new("gen_kek"),
+                kind: "generate_key".to_string(),
+                inputs: json!({}),
+                outputs: json!({ "key_check_value": check_value }),
+                fingerprint: None,
+            },
+            StepFact::BackendOperation {
+                step: StepId::new("wrap"),
+                kind: "wrap_key".to_string(),
+                inputs: json!({
+                    "scheme": "CMS-AES-256-GCM",
+                    "key_to_wrap_fingerprint": target_fingerprint,
+                    "wrapping_key": "kek",
+                }),
+                outputs: json!({
+                    "wrapped_key_fingerprint": rite_runtime::compute_fingerprint(wrapped.data()),
+                    "wrap": wrapped.description(),
+                }),
+                fingerprint: None,
+            },
+            StepFact::ArtifactWritten {
+                step: StepId::new("wrap"),
+                name: "wrapped".to_string(),
+                path: tmp.path().join("artifacts/wrapped.p7c"),
+                sha256: rite_runtime::compute_fingerprint(wrapped.data()),
+            },
+        ];
+
+        let checks = check_wraps(Some(tmp.path()), &borrow(&facts));
+        let [check] = checks.as_slice() else {
+            panic!("expected one wrap check, got {checks:?}");
+        };
+        assert_eq!(
+            check.status,
+            WrapStatus::Checked {
+                algorithms: AlgorithmEvidence::Derived,
+                recipient: RecipientEvidence::GeneratedHere,
+                origin_confirmed: true,
+            },
+            "{}",
+            check.describe()
+        );
+    }
+
+    /// A symmetric key as the payload rather than as the recipient, which is
+    /// what carrying a KEK to a second backend produces.
+    ///
+    /// The wrapped key is named by a check value here, so the transcript
+    /// records one instead of a fingerprint, and the origin claim has to read
+    /// whichever the step wrote. Reading only the fingerprint would report a
+    /// key this ceremony generated as one it did not.
+    #[test]
+    fn a_wrapped_symmetric_key_traces_to_its_generate_step() {
+        let mut backend = rite_openssl::OpenSslBackend::try_new("test").unwrap();
+        let transport = backend
+            .generate_key(KeySpec {
+                algorithm: KeyAlgorithm::Rsa2048,
+                label: "transport".to_string(),
+                policy: KeyPolicy {
+                    usages: rite_sdk::KeyUsages::WRAP | rite_sdk::KeyUsages::UNWRAP,
+                    ..KeyPolicy::default()
+                },
+                location_hint: None,
+            })
+            .unwrap();
+        let kek = backend
+            .generate_key(KeySpec {
+                algorithm: KeyAlgorithm::Aes256,
+                label: "kek".to_string(),
+                policy: KeyPolicy {
+                    extractable: true,
+                    ..KeyPolicy::default_for(KeyAlgorithm::Aes256)
+                },
+                location_hint: None,
+            })
+            .unwrap();
+        let wrapped = backend
+            .wrap(&kek.key_id, &transport.key_id, WrapScheme::CmsAes256Gcm)
+            .unwrap();
+
+        let check_value = kek.check_value.as_ref().unwrap().to_string();
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("artifacts")).unwrap();
+        std::fs::write(tmp.path().join("artifacts/wrapped.p7c"), wrapped.data()).unwrap();
+
+        let facts = vec![
+            StepFact::BackendOperation {
+                step: StepId::new("gen_kek"),
+                kind: "generate_key".to_string(),
+                inputs: json!({}),
+                outputs: json!({ "key_check_value": check_value }),
+                fingerprint: None,
+            },
+            StepFact::BackendOperation {
+                step: StepId::new("wrap"),
+                kind: "wrap_key".to_string(),
+                inputs: json!({
+                    "scheme": "CMS-AES-256-GCM",
+                    "key_to_wrap_fingerprint": serde_json::Value::Null,
+                    "key_to_wrap_check_value": check_value,
+                    "wrapping_key": "transport",
+                }),
+                outputs: json!({
+                    "wrapped_key_fingerprint": rite_runtime::compute_fingerprint(wrapped.data()),
+                    "wrap": wrapped.description(),
+                }),
+                fingerprint: None,
+            },
+            StepFact::ArtifactWritten {
+                step: StepId::new("wrap"),
+                name: "wrapped".to_string(),
+                path: tmp.path().join("artifacts/wrapped.p7c"),
+                sha256: rite_runtime::compute_fingerprint(wrapped.data()),
+            },
+        ];
+
+        let checks = check_wraps(Some(tmp.path()), &borrow(&facts));
+        let [check] = checks.as_slice() else {
+            panic!("expected one wrap check, got {checks:?}");
+        };
+        let WrapStatus::Checked {
+            origin_confirmed, ..
+        } = check.status
+        else {
+            panic!("{}", check.describe());
+        };
+        assert!(origin_confirmed, "{}", check.describe());
     }
 
     /// With neither a recipient fact nor a matching generate step, the

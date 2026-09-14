@@ -202,7 +202,7 @@ sections:
     role: ${role.op}
     steps:
       gen:
-        action: generate_keypair
+        action: generate_key
         backend: openssl
         with:
           algorithm: RSA-4096

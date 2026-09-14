@@ -2,7 +2,9 @@
 
 use base64ct::{Base64, Encoding};
 
-use rite_sdk::{CertificateDer, KeyAlgorithm, KeyId, PublicKeyDer, WrapScheme, WrappedKey};
+use rite_sdk::{
+    CertificateDer, KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer, WrapScheme, WrappedKey,
+};
 
 /// Runtime representation of an artifact.
 #[derive(Debug)]
@@ -18,6 +20,12 @@ pub enum ArtifactValue {
         algorithm: KeyAlgorithm,
         /// Public key (None for non-exportable HSM keys).
         public_key: Option<PublicKeyDer>,
+        /// Key check value, for a symmetric key.
+        ///
+        /// What the key answers to where a keypair is answered for by its
+        /// public half. A ceremony reaches it as `${artifact.kek.kcv | hex}`,
+        /// which is how a custodian compares it against what the token shows.
+        check_value: Option<KeyCheckValue>,
     },
     /// Wrapped key, with the scheme it was wrapped under and the algorithms
     /// the wrap actually used. The container follows the scheme; the OpenSSL
@@ -46,7 +54,7 @@ impl std::fmt::Display for ArtifactValue {
                 key_id,
                 algorithm,
                 public_key,
-                ..
+                check_value,
             } => {
                 // Output backend key metadata and public key if available
                 if let Some(pub_key) = public_key {
@@ -55,6 +63,16 @@ impl std::fmt::Display for ArtifactValue {
                         "BackendKey(backend={backend_name}, key_id={}, algorithm={algorithm:?})\n{}",
                         key_id.as_str(),
                         encode_pem("PUBLIC KEY", pub_key.as_bytes())
+                    )
+                } else if let Some(check_value) = check_value {
+                    // A symmetric key has no public half to be missing, and the
+                    // check value is what names it everywhere else. Saying
+                    // `not_exportable` here would read as a backend refusing an
+                    // export that was never possible.
+                    write!(
+                        f,
+                        "BackendKey(backend={backend_name}, key_id={}, algorithm={algorithm:?}, kcv={check_value})",
+                        key_id.as_str()
                     )
                 } else {
                     write!(

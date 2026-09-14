@@ -54,7 +54,7 @@ sections:
     role: ${role.crypto_officer}
     steps:
       generate_root_ca:
-        action: generate_keypair
+        action: generate_key
         backend: openssl
         with:
           algorithm: RSA-4096

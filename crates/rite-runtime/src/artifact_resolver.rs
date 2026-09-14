@@ -13,7 +13,7 @@
 use crate::actions::ArtifactValue;
 use crate::executor::ExecutionError;
 use rite_model::ArtifactId;
-use rite_sdk::{KeyAlgorithm, KeyId, PublicKeyDer};
+use rite_sdk::{KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer};
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
@@ -31,6 +31,7 @@ use std::hash::BuildHasher;
 /// - `artifact_id` → full artifact content
 /// - `artifact_id` + "private" → private key from keypair
 /// - `artifact_id` + "public" → public key from keypair
+/// - `artifact_id` + "kcv" → key check value of a symmetric key
 pub fn resolve_artifact_bytes<S: BuildHasher>(
     artifacts: &HashMap<ArtifactId, ArtifactValue, S>,
     artifact_id: &ArtifactId,
@@ -64,6 +65,30 @@ pub fn resolve_artifact_bytes<S: BuildHasher>(
             let id = artifact_id.as_str();
             Err(ExecutionError::InvalidParams(format!(
                 "Cannot access private key from backend-managed key '{id}'"
+            )))
+        }
+
+        // The check value of a symmetric key, as its three raw bytes, so
+        // `${artifact.kek.kcv | hex}` reads the way an operator says it.
+        (
+            ArtifactValue::BackendKey {
+                check_value: Some(kcv),
+                ..
+            },
+            Some("kcv"),
+        ) => Ok(kcv.as_bytes().to_vec()),
+        (
+            ArtifactValue::BackendKey {
+                check_value: None,
+                algorithm,
+                ..
+            },
+            Some("kcv"),
+        ) => {
+            let id = artifact_id.as_str();
+            Err(ExecutionError::InvalidParams(format!(
+                "'{id}' is a {algorithm} key, which is named by its public half \
+                 rather than by a check value"
             )))
         }
 
@@ -103,6 +128,11 @@ pub struct BackendKeyMeta<'a> {
     pub algorithm: KeyAlgorithm,
     /// Public half, absent for a key the backend does not export.
     pub public_key: Option<&'a PublicKeyDer>,
+    /// Check value, present for a symmetric key and absent for a keypair.
+    ///
+    /// What names a key with no public half, so a step recording which key it
+    /// operated on has something to record for either form.
+    pub check_value: Option<&'a KeyCheckValue>,
 }
 
 /// Resolve an artifact to a backend-managed key reference.
@@ -129,11 +159,13 @@ pub fn resolve_backend_key<'a, S: BuildHasher>(
             key_id,
             algorithm,
             public_key,
+            check_value,
         } => Ok(BackendKeyMeta {
             backend_name: backend_name.as_str(),
             key_id,
             algorithm: *algorithm,
             public_key: public_key.as_ref(),
+            check_value: check_value.as_ref(),
         }),
         _ => Err(ExecutionError::InvalidParams(format!(
             "Artifact '{id}' is not a backend-managed key"

@@ -36,7 +36,7 @@ pub struct ParamError {
 #[must_use]
 pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
     match action {
-        ActionType::GenerateKeypair => {
+        ActionType::GenerateKey => {
             let mut errors = named_value(with, "algorithm", |name| {
                 name.parse::<KeyAlgorithm>()
                     .map_err(|_| format!("unknown key algorithm '{name}'"))
@@ -62,7 +62,14 @@ pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
             }));
             errors
         }
-        ActionType::UnwrapKey => fingerprint(with, "expect_key"),
+        ActionType::UnwrapKey => {
+            let mut errors = key_identity(with, "expect_key");
+            errors.extend(named_value(with, "algorithm", |name| {
+                name.parse::<KeyAlgorithm>()
+                    .map_err(|_| format!("unknown key algorithm '{name}'"))
+            }));
+            errors
+        }
 
         ActionType::ClockCheck
         | ActionType::Confirm
@@ -155,6 +162,35 @@ fn fingerprint(with: &serde_json::Value, field: &'static str) -> Vec<ParamError>
     })
 }
 
+/// A key's identity the ceremony declares in advance, in whichever form the
+/// key has one: `sha256:<64 hex digits>` over the public half of a keypair, or
+/// `cmac-aes:<6 hex digits>` for a symmetric key, which has no public half.
+///
+/// Same argument as [`fingerprint`]: a value in neither shape can never equal
+/// what the runtime computes, so the mismatch is worth reporting before the
+/// room rather than during it.
+fn key_identity(with: &serde_json::Value, field: &'static str) -> Vec<ParamError> {
+    named_value(with, field, |value| {
+        let lower_hex = |s: &str, len: usize| {
+            s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        };
+        let matches_form = match value.split_once(':') {
+            Some(("sha256", hex)) => lower_hex(hex, 64),
+            Some(("cmac-aes", hex)) => lower_hex(hex, 6),
+            _ => false,
+        };
+        if matches_form {
+            Ok(())
+        } else {
+            Err(format!(
+                "'{field}' must name the key either as 'sha256:<64 lowercase hex digits>', \
+                 the fingerprint of a public key, or as 'cmac-aes:<6 lowercase hex digits>', \
+                 the check value of a symmetric key. Found '{value}'"
+            ))
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,11 +207,8 @@ mod tests {
     #[test]
     fn rejects_a_value_outside_the_vocabulary() {
         assert!(
-            sole(
-                ActionType::GenerateKeypair,
-                &json!({"algorithm": "RSA-9999"})
-            )
-            .contains("unknown key algorithm")
+            sole(ActionType::GenerateKey, &json!({"algorithm": "RSA-9999"}))
+                .contains("unknown key algorithm")
         );
         assert!(
             sole(ActionType::SignData, &json!({"algorithm": "RSA-PSS-SHA1"}))
@@ -236,33 +269,68 @@ mod tests {
     #[test]
     fn accepts_the_vocabulary() {
         for (action, with) in [
-            (
-                ActionType::GenerateKeypair,
-                json!({"algorithm": "RSA-4096"}),
-            ),
+            (ActionType::GenerateKey, json!({"algorithm": "RSA-4096"})),
             (ActionType::SignData, json!({"algorithm": "RSA-PSS-SHA256"})),
             (ActionType::IssueCertificate, json!({"profile": "root_ca"})),
             (
                 ActionType::UnwrapKey,
                 json!({"expect_key": format!("sha256:{}", "ab".repeat(32))}),
             ),
+            (
+                ActionType::UnwrapKey,
+                json!({"algorithm": "AES-256", "expect_key": "cmac-aes:763cbc"}),
+            ),
         ] {
             assert!(check(action, &with).is_empty(), "{action} rejected {with}");
         }
+    }
+
+    /// `expect_key` names the recovered key in whichever form it has one, so
+    /// both are accepted and anything else is refused before the room.
+    #[test]
+    fn expect_key_takes_a_fingerprint_or_a_check_value() {
+        let message = sole(
+            ActionType::UnwrapKey,
+            &json!({"expect_key": "cmac-aes:763CBC"}),
+        );
+        assert!(message.contains("lowercase"), "{message}");
+
+        // A check value is three bytes, so a fingerprint's length under the
+        // check value's prefix is not a check value.
+        let message = sole(
+            ActionType::UnwrapKey,
+            &json!({"expect_key": format!("cmac-aes:{}", "ab".repeat(32))}),
+        );
+        assert!(message.contains("6 lowercase hex digits"), "{message}");
+
+        let message = sole(ActionType::UnwrapKey, &json!({"expect_key": "763cbc"}));
+        assert!(
+            message.contains("sha256:") && message.contains("cmac-aes:"),
+            "{message}"
+        );
+    }
+
+    /// Nothing travels with a wrapped key saying what it is, so `algorithm:`
+    /// declares it, and a name outside the vocabulary fails here rather than
+    /// after the blob has been decrypted.
+    #[test]
+    fn rejects_an_unwrap_algorithm_outside_the_vocabulary() {
+        let message = sole(ActionType::UnwrapKey, &json!({"algorithm": "AES-192"}));
+        assert!(message.contains("unknown key algorithm"), "{message}");
     }
 
     #[test]
     fn an_absent_field_is_deferred_not_missing() {
         // The projection drops `algorithm: ${param.algo}`, and a required
         // field written as an expression must not be reported here.
-        assert!(check(ActionType::GenerateKeypair, &json!({})).is_empty());
+        assert!(check(ActionType::GenerateKey, &json!({})).is_empty());
         assert!(check(ActionType::IssueCertificate, &json!({})).is_empty());
     }
 
     #[test]
     fn rejects_an_unknown_key_usage() {
         let message = sole(
-            ActionType::GenerateKeypair,
+            ActionType::GenerateKey,
             &json!({"policy": {"usages": ["sign", "key_cert_sign"]}}),
         );
         assert!(message.contains("unknown key usage"), "{message}");
@@ -275,14 +343,13 @@ mod tests {
     #[test]
     fn accepts_the_pkcs11_usages() {
         let with = json!({"policy": {"usages": ["sign", "verify", "wrap", "unwrap", "derive"]}});
-        assert!(check(ActionType::GenerateKeypair, &with).is_empty());
+        assert!(check(ActionType::GenerateKey, &with).is_empty());
     }
 
     #[test]
     fn a_non_string_value_is_rejected_whatever_it_would_have_meant() {
         assert!(
-            sole(ActionType::GenerateKeypair, &json!({"algorithm": 4096}))
-                .contains("must be a string")
+            sole(ActionType::GenerateKey, &json!({"algorithm": 4096})).contains("must be a string")
         );
     }
 }

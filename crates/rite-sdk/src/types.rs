@@ -68,8 +68,126 @@ pub struct KeyMetadata {
     pub label: String,
     /// Public key, if the backend exports one.
     pub public_key: Option<PublicKeyDer>,
+    /// Key check value, for a symmetric key.
+    ///
+    /// The counterpart of `public_key`: what the key answers to in the
+    /// transcript and in the room. `None` for an asymmetric key, which is
+    /// named by its public half.
+    pub check_value: Option<KeyCheckValue>,
     /// Attestation evidence (if backend supports attestation).
     pub attestation: Option<Attestation>,
+}
+
+/// What a symmetric key answers to, in place of a public key.
+///
+/// AES-CMAC over a 16-byte zero block under the key, leftmost three bytes, as
+/// specified for AES keys in ANSI X9.24-1 Annex A and used by TR-31. It is
+/// what an HSM displays and what custodians read back, so a transcript
+/// carrying it records the value the room checked rather than a parallel one
+/// only Rite can compute.
+///
+/// Three bytes, not a digest of the key. A full-length hash of a secret is
+/// what rite#126 removed from the transcript, and a reader cannot tell by
+/// looking whether such a value came from a 256-bit key or a 4-digit PIN. The
+/// truncation here is the part that makes it evident.
+///
+/// Renders as `cmac-aes:763cbc`. The method is in the string because the
+/// older convention of encrypting a zero block in ECB is still in use and
+/// gives a different answer for the same key.
+///
+/// ```
+/// use rite_sdk::KeyCheckValue;
+///
+/// // A backend computes the CMAC; this keeps the leftmost bytes of it.
+/// let cmac = [0x76, 0x3c, 0xbc, 0xde, 0x81, 0xdf, 0x91, 0x31];
+/// let kcv = KeyCheckValue::from_cmac(&cmac)?;
+///
+/// assert_eq!(kcv.to_string(), "cmac-aes:763cbc");
+/// assert_eq!(kcv.as_bytes(), &[0x76, 0x3c, 0xbc]);
+///
+/// // It round-trips through the string a transcript records.
+/// assert_eq!("cmac-aes:763cbc".parse::<KeyCheckValue>()?, kcv);
+/// // Uppercase hex is a different string for the same bytes, so it is not one.
+/// assert!("cmac-aes:763CBC".parse::<KeyCheckValue>().is_err());
+/// # Ok::<(), rite_sdk::ParseError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+pub struct KeyCheckValue([u8; Self::LEN]);
+
+impl KeyCheckValue {
+    /// Bytes kept from the CMAC output.
+    pub const LEN: usize = 3;
+
+    /// The name this construction goes by, and the string's prefix.
+    pub const METHOD: &'static str = "cmac-aes";
+
+    /// Keep the leftmost bytes of a CMAC output.
+    ///
+    /// # Errors
+    ///
+    /// If `cmac` is shorter than [`Self::LEN`], which no AES-CMAC is.
+    pub fn from_cmac(cmac: &[u8]) -> Result<Self, ParseError> {
+        cmac.get(..Self::LEN)
+            .and_then(|head| head.try_into().ok())
+            .map(Self)
+            .ok_or_else(|| ParseError(format!("a CMAC of {} bytes", cmac.len())))
+    }
+
+    /// The kept bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; Self::LEN] {
+        &self.0
+    }
+}
+
+impl fmt::Display for KeyCheckValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:", Self::METHOD)?;
+        for byte in self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::str::FromStr for KeyCheckValue {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let hex = s
+            .strip_prefix(Self::METHOD)
+            .and_then(|rest| rest.strip_prefix(':'))
+            // Lowercase only, so the string a `KeyCheckValue` parses from is
+            // the string it renders back to and two records of one key
+            // compare as text.
+            .filter(|hex| {
+                hex.len() == 2 * Self::LEN
+                    && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            })
+            .ok_or_else(|| ParseError(s.to_owned()))?;
+        let (pairs, _) = hex.as_bytes().as_chunks::<2>();
+        let mut bytes = [0u8; Self::LEN];
+        for (byte, pair) in bytes.iter_mut().zip(pairs) {
+            let pair = std::str::from_utf8(pair).map_err(|_| ParseError(s.to_owned()))?;
+            *byte = u8::from_str_radix(pair, 16).map_err(|_| ParseError(s.to_owned()))?;
+        }
+        Ok(Self(bytes))
+    }
+}
+
+impl From<KeyCheckValue> for String {
+    fn from(kcv: KeyCheckValue) -> String {
+        kcv.to_string()
+    }
+}
+
+impl TryFrom<String> for KeyCheckValue {
+    type Error = ParseError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
 }
 
 /// Key algorithm.
@@ -162,6 +280,50 @@ impl KeyAlgorithm {
             | KeyAlgorithm::MlDsa87
             | KeyAlgorithm::Aes128
             | KeyAlgorithm::Aes256 => false,
+        }
+    }
+
+    /// Whether a key of this algorithm is one secret with no public half.
+    ///
+    /// ```
+    /// use rite_sdk::KeyAlgorithm;
+    ///
+    /// assert!(KeyAlgorithm::Aes256.is_symmetric());
+    /// assert_eq!(KeyAlgorithm::Aes256.key_bytes(), Some(32));
+    ///
+    /// assert!(!KeyAlgorithm::EcdsaP256.is_symmetric());
+    /// assert_eq!(KeyAlgorithm::EcdsaP256.key_bytes(), None);
+    /// ```
+    ///
+    /// This is the discriminator for everything that assumes a keypair: there
+    /// is no public key to export, no SPKI to fingerprint, and no certificate
+    /// to issue. A backend answers for such a key with a
+    /// [`KeyCheckValue`](crate::KeyCheckValue) instead.
+    #[must_use]
+    pub fn is_symmetric(self) -> bool {
+        self.key_bytes().is_some()
+    }
+
+    /// The length of the secret, for an algorithm whose key is raw bytes.
+    ///
+    /// `None` for an asymmetric algorithm, whose key has no single length a
+    /// caller could ask for.
+    #[must_use]
+    pub fn key_bytes(self) -> Option<usize> {
+        match self {
+            KeyAlgorithm::Aes128 => Some(16),
+            KeyAlgorithm::Aes256 => Some(32),
+            KeyAlgorithm::Rsa2048
+            | KeyAlgorithm::Rsa4096
+            | KeyAlgorithm::EcdsaP256
+            | KeyAlgorithm::EcdsaP384
+            | KeyAlgorithm::Ed25519
+            | KeyAlgorithm::MlDsa44
+            | KeyAlgorithm::MlDsa65
+            | KeyAlgorithm::MlDsa87
+            | KeyAlgorithm::MlKem512
+            | KeyAlgorithm::MlKem768
+            | KeyAlgorithm::MlKem1024 => None,
         }
     }
 }
@@ -355,6 +517,39 @@ impl KeyPolicy {
              Declare the usage under `policy:` on the step that generates it.",
             self.usages.describe()
         )))
+    }
+}
+
+impl KeyPolicy {
+    /// What a key of this algorithm may do when the ceremony says nothing.
+    ///
+    /// A generation step should call this rather than [`Default`], which is
+    /// the signing default and gives a symmetric key two usages it can never
+    /// have. Rite holds a symmetric key as a key-encryption key and nothing
+    /// else, so wrap and unwrap is the whole of what one is for here.
+    ///
+    /// ```
+    /// use rite_sdk::{KeyAlgorithm, KeyPolicy, KeyUsages};
+    ///
+    /// let signing = KeyPolicy::default_for(KeyAlgorithm::EcdsaP256);
+    /// assert_eq!(signing.usages, KeyUsages::SIGN | KeyUsages::VERIFY);
+    ///
+    /// let kek = KeyPolicy::default_for(KeyAlgorithm::Aes256);
+    /// assert_eq!(kek.usages, KeyUsages::WRAP | KeyUsages::UNWRAP);
+    ///
+    /// // Everything else is the restrictive default either way.
+    /// assert!(!kek.extractable);
+    /// ```
+    #[must_use]
+    pub fn default_for(algorithm: KeyAlgorithm) -> Self {
+        if algorithm.is_symmetric() {
+            Self {
+                usages: KeyUsages::WRAP | KeyUsages::UNWRAP,
+                ..Self::default()
+            }
+        } else {
+            Self::default()
+        }
     }
 }
 
@@ -610,6 +805,8 @@ pub mod oid {
     pub const AES_128_WRAP: &str = "2.16.840.1.101.3.4.1.5";
     /// `id-aes256-wrap-pad`, AES Key Wrap with Padding (RFC 5649).
     pub const AES_256_WRAP_PAD: &str = "2.16.840.1.101.3.4.1.48";
+    /// `id-aes128-wrap-pad`, AES Key Wrap with Padding (RFC 5649).
+    pub const AES_128_WRAP_PAD: &str = "2.16.840.1.101.3.4.1.8";
 }
 
 /// How a CMS structure conveys the content-encryption key to its recipient.
@@ -784,6 +981,25 @@ pub enum WrapScheme {
     /// the bytes and recipients differ: AWS names both `RSA_AES_KEY_WRAP_SHA_256`
     /// and `RSA_AES_KEY_WRAP_SHA_1`, and Azure BYOK specifies SHA-1.
     RsaAesKeyWrapSha256,
+    /// AES Key Wrap under a 128-bit KEK (RFC 3394, PKCS#11
+    /// `CKM_AES_KEY_WRAP`).
+    ///
+    /// The payload must be a multiple of 8 bytes and at least 16, which a
+    /// PKCS#8 private key is not, so this carries another symmetric key and
+    /// little else. [`Self::Aes128Kwp`] has no such rule.
+    Aes128Kw,
+    /// AES Key Wrap under a 256-bit KEK (RFC 3394).
+    Aes256Kw,
+    /// AES Key Wrap with Padding under a 128-bit KEK (RFC 5649, PKCS#11
+    /// `CKM_AES_KEY_WRAP_KWP`).
+    ///
+    /// Carries a payload of any length. This is what Thales recommends over
+    /// CBC for wrapping, and what `OpenStack` Barbican moved to in 2024 after
+    /// its hardcoded `CKM_AES_CBC_PAD` broke against Luna firmware in FIPS
+    /// mode.
+    Aes128Kwp,
+    /// AES Key Wrap with Padding under a 256-bit KEK (RFC 5649).
+    Aes256Kwp,
 }
 
 impl WrapScheme {
@@ -807,6 +1023,10 @@ impl WrapScheme {
         match self {
             WrapScheme::CmsAes256Gcm => None,
             WrapScheme::RsaOaepSha256 => Some(WrapDescription::raw(known(oid::RSAES_OAEP))),
+            WrapScheme::Aes128Kw => Some(WrapDescription::raw(known(oid::AES_128_WRAP))),
+            WrapScheme::Aes256Kw => Some(WrapDescription::raw(known(oid::AES_256_WRAP))),
+            WrapScheme::Aes128Kwp => Some(WrapDescription::raw(known(oid::AES_128_WRAP_PAD))),
+            WrapScheme::Aes256Kwp => Some(WrapDescription::raw(known(oid::AES_256_WRAP_PAD))),
             WrapScheme::RsaAesKeyWrapSha256 => Some(
                 WrapDescription::raw(known(oid::RSAES_OAEP))
                     .with_kek_wrap(known(oid::AES_256_WRAP_PAD)),
@@ -814,11 +1034,43 @@ impl WrapScheme {
         }
     }
 
+    /// The one key algorithm this scheme wraps under, where it names one.
+    ///
+    /// ```
+    /// use rite_sdk::{KeyAlgorithm, WrapScheme};
+    ///
+    /// assert_eq!(WrapScheme::Aes256Kwp.required_kek(), Some(KeyAlgorithm::Aes256));
+    /// // CMS admits a family, so it names none.
+    /// assert_eq!(WrapScheme::CmsAes256Gcm.required_kek(), None);
+    /// ```
+    ///
+    /// `None` where the scheme admits a family rather than a single algorithm.
+    /// The AES schemes name a KEK size, because the RFC 3394 and RFC 5649
+    /// object identifiers are per-size and [`fixed_description`](Self::fixed_description)
+    /// has only the scheme to go on. Naming it is also what makes a ceremony
+    /// that expects a 256-bit KEK refuse a 128-bit one instead of wrapping
+    /// under it in silence.
+    #[must_use]
+    pub fn required_kek(self) -> Option<KeyAlgorithm> {
+        match self {
+            WrapScheme::CmsAes256Gcm
+            | WrapScheme::RsaOaepSha256
+            | WrapScheme::RsaAesKeyWrapSha256 => None,
+            WrapScheme::Aes128Kw | WrapScheme::Aes128Kwp => Some(KeyAlgorithm::Aes128),
+            WrapScheme::Aes256Kw | WrapScheme::Aes256Kwp => Some(KeyAlgorithm::Aes256),
+        }
+    }
+
     /// Whether a key of this algorithm can receive a wrap under this scheme.
     ///
     /// Narrower than [`KeyAlgorithm::can_receive_wrap`], which answers for CMS,
-    /// where the recipient key selects the encapsulation. The raw mechanisms
-    /// are RSA constructions and accept nothing else.
+    /// where the recipient key selects the encapsulation. The RSA mechanisms
+    /// accept nothing but RSA, and the AES mechanisms nothing but the KEK size
+    /// in their name.
+    ///
+    /// A symmetric key passes here and still cannot arrive as `recipient:`,
+    /// since that path takes a public key and a symmetric key has none. An
+    /// AES scheme is reachable only under `wrapping_key:`.
     #[must_use]
     pub fn accepts_recipient(self, algorithm: KeyAlgorithm) -> bool {
         match self {
@@ -837,6 +1089,10 @@ impl WrapScheme {
                 | KeyAlgorithm::Aes128
                 | KeyAlgorithm::Aes256 => false,
             },
+            WrapScheme::Aes128Kw
+            | WrapScheme::Aes256Kw
+            | WrapScheme::Aes128Kwp
+            | WrapScheme::Aes256Kwp => self.required_kek() == Some(algorithm),
         }
     }
 
@@ -851,9 +1107,17 @@ impl WrapScheme {
         if let Some(fixed) = self.fixed_description() {
             return *description == fixed;
         }
+        // `kekri` joins the three public-key encapsulations: the recipient is
+        // a key both sides hold rather than one the wrap reaches by public
+        // key, and the container and its guarantees are the same either way.
         let encapsulation_fits = matches!(
             description.recipient_info,
-            Some(RecipientInfoKind::Ktri | RecipientInfoKind::Kari | RecipientInfoKind::Kemri)
+            Some(
+                RecipientInfoKind::Ktri
+                    | RecipientInfoKind::Kari
+                    | RecipientInfoKind::Kemri
+                    | RecipientInfoKind::Kekri
+            )
         );
         description.content_is_authenticated() && encapsulation_fits
     }
@@ -872,7 +1136,12 @@ impl WrapScheme {
     pub fn is_self_describing(self) -> bool {
         match self {
             WrapScheme::CmsAes256Gcm => true,
-            WrapScheme::RsaOaepSha256 | WrapScheme::RsaAesKeyWrapSha256 => false,
+            WrapScheme::RsaOaepSha256
+            | WrapScheme::RsaAesKeyWrapSha256
+            | WrapScheme::Aes128Kw
+            | WrapScheme::Aes256Kw
+            | WrapScheme::Aes128Kwp
+            | WrapScheme::Aes256Kwp => false,
         }
     }
 }
@@ -883,6 +1152,10 @@ impl fmt::Display for WrapScheme {
             WrapScheme::CmsAes256Gcm => write!(f, "CMS-AES-256-GCM"),
             WrapScheme::RsaOaepSha256 => write!(f, "RSA-OAEP-SHA256"),
             WrapScheme::RsaAesKeyWrapSha256 => write!(f, "RSA-AES-KEY-WRAP-SHA256"),
+            WrapScheme::Aes128Kw => write!(f, "AES-128-KW"),
+            WrapScheme::Aes256Kw => write!(f, "AES-256-KW"),
+            WrapScheme::Aes128Kwp => write!(f, "AES-128-KWP"),
+            WrapScheme::Aes256Kwp => write!(f, "AES-256-KWP"),
         }
     }
 }
@@ -895,6 +1168,10 @@ impl std::str::FromStr for WrapScheme {
             "CMS-AES-256-GCM" => Ok(Self::CmsAes256Gcm),
             "RSA-OAEP-SHA256" => Ok(Self::RsaOaepSha256),
             "RSA-AES-KEY-WRAP-SHA256" => Ok(Self::RsaAesKeyWrapSha256),
+            "AES-128-KW" => Ok(Self::Aes128Kw),
+            "AES-256-KW" => Ok(Self::Aes256Kw),
+            "AES-128-KWP" => Ok(Self::Aes128Kwp),
+            "AES-256-KWP" => Ok(Self::Aes256Kwp),
             _ => Err(ParseError(s.to_owned())),
         }
     }
@@ -1445,6 +1722,10 @@ mod tests {
                 WrapScheme::RsaAesKeyWrapSha256,
                 "\"RSA-AES-KEY-WRAP-SHA256\"",
             ),
+            (WrapScheme::Aes128Kw, "\"AES-128-KW\""),
+            (WrapScheme::Aes256Kw, "\"AES-256-KW\""),
+            (WrapScheme::Aes128Kwp, "\"AES-128-KWP\""),
+            (WrapScheme::Aes256Kwp, "\"AES-256-KWP\""),
         ];
         for &(variant, expected) in cases {
             let serialized = serde_json::to_string(&variant).unwrap();
@@ -1503,13 +1784,32 @@ mod tests {
         assert!(!WrapScheme::CmsAes256Gcm.permits(&cbc));
 
         // A symmetric KEK is the KEKRI encapsulation, which this scheme does
-        // not produce.
+        // produce: the recipient is a key both sides hold rather than one
+        // reached by public key, and the container is the same.
         let kekri = WrapDescription::new(
             RecipientInfoKind::Kekri,
             Oid::new(oid::AES_256_WRAP).unwrap(),
         )
         .with_content_encryption(Oid::new(oid::AES_256_GCM).unwrap());
-        assert!(!WrapScheme::CmsAes256Gcm.permits(&kekri));
+        assert!(WrapScheme::CmsAes256Gcm.permits(&kekri));
+
+        // The content cipher still has to be authenticated, whichever
+        // encapsulation carried the key to it.
+        let kekri_cbc = WrapDescription::new(
+            RecipientInfoKind::Kekri,
+            Oid::new(oid::AES_256_WRAP).unwrap(),
+        )
+        .with_content_encryption(Oid::new(oid::AES_256_CBC).unwrap());
+        assert!(!WrapScheme::CmsAes256Gcm.permits(&kekri_cbc));
+
+        // A password recipient is not one Rite writes, and admitting it would
+        // mean a passphrase had silently stood in for a key.
+        let pwri = WrapDescription::new(
+            RecipientInfoKind::Pwri,
+            Oid::new(oid::AES_256_WRAP).unwrap(),
+        )
+        .with_content_encryption(Oid::new(oid::AES_256_GCM).unwrap());
+        assert!(!WrapScheme::CmsAes256Gcm.permits(&pwri));
     }
 
     #[test]

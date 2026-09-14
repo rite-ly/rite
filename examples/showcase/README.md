@@ -31,7 +31,7 @@ where wrapping itself is explained.
 ### `retry_guards.rite.yaml` — Signing Key Ceremony with Retry Guards
 
 A compact signing-key ceremony that demonstrates the `retry:` field. The device
-steps carry a per-step retry policy: `generate_keypair` caps retries with
+steps carry a per-step retry policy: `generate_key` caps retries with
 `retry: { attempts: 3 }`, certificate issuance forbids them with `retry: never`,
 and the CSR step omits the field to show the prompt-on-transient-failure default.
 It runs end to end on OpenSSL but reads as a template you could retarget to a
@@ -70,9 +70,16 @@ The escrow wrap declares `expect_recipient:`, so the step refuses a key whose
 fingerprint does not match what the ceremony committed to in advance. The
 unwrap declares `expect_key:` as an expression over the key that went in, which
 makes the step assert the round trip; a restore ceremony would put the origin
-ceremony's recorded fingerprint there instead. Neither step names a scheme:
+ceremony's recorded fingerprint there instead. No step names a scheme:
 `unwrap_key` reads it from the wrapped artifact, so it cannot disagree with the
 bytes being decrypted.
+
+The ceremony also wraps its symmetric key-encryption key and recovers it, which
+is what carrying a KEK to a second HSM looks like. That unwrap declares
+`algorithm: AES-256`, because nothing travels with a wrapped key saying what it
+is and a secret's bytes look like any others of the same length, and its
+`expect_key:` is a `cmac-aes:` check value rather than a fingerprint, since a
+symmetric key has no public half to fingerprint.
 
 Run it and then `rite verify` on the output directory to see the wrap checks:
 each blob is read back and compared against what the transcript says was done

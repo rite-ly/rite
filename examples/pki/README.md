@@ -30,7 +30,7 @@ be rotated without redistributing the trust anchor everywhere it is pinned. That
 is the reason to pick a lattice signature now.
 
 ML-DSA-87 is the NIST category 5 parameter set and the CNSA 2.0 requirement. `ML-DSA-65`
-(category 3) and `ML-DSA-44` (category 2) are also accepted by `generate_keypair`. The
+(category 3) and `ML-DSA-44` (category 2) are also accepted by `generate_key`. The
 resulting certificate is around 10 KB against 2 KB for RSA-4096, which is immaterial for
 a root that issues a handful of certificates over its life.
 

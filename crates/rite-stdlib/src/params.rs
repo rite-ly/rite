@@ -139,10 +139,10 @@ pub struct GatherEntropyParams {
     pub instruction: Option<String>,
 }
 
-/// Params for `generate_keypair` action.
+/// Params for `generate_key` action.
 #[cfg(feature = "crypto")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GenerateKeypairParams {
+pub struct GenerateKeyParams {
     /// Cryptographic algorithm (e.g., `"RSA-4096"`, `"ECDSA-P256"`).
     #[serde(default = "default_algorithm")]
     pub algorithm: String,
@@ -156,11 +156,13 @@ pub struct GenerateKeypairParams {
 
 /// The `policy:` block, mirroring [`KeyPolicy`] field for field.
 ///
-/// Every field is optional and falls back to [`KeyPolicy::default`], which is
-/// the restrictive choice: a persistent, sensitive, non-extractable key that
-/// may sign and verify. A ceremony that wraps a key it generated has to say
-/// `extractable: true`, because otherwise the key cannot leave the backend and
-/// the wrap step will refuse.
+/// Every field is optional and falls back to the restrictive choice: a
+/// persistent, sensitive, non-extractable key. The usages fall back to what the
+/// algorithm permits, by
+/// [`KeyPolicy::default_for`](rite_sdk::KeyPolicy::default_for), so a keypair
+/// may sign and verify and a symmetric key may wrap and unwrap. A ceremony that
+/// wraps a key it generated has to say `extractable: true`, because otherwise
+/// the key cannot leave the backend and the wrap step will refuse.
 ///
 /// This is PKCS#11 vocabulary: what the token permits. The `KeyUsage`
 /// extension in a certificate is a different thing, settled by `profile:` on
@@ -189,22 +191,17 @@ pub struct KeyPolicyParams {
 
 #[cfg(feature = "crypto")]
 impl KeyPolicyParams {
-    /// Resolve the declared policy against the defaults.
+    /// Resolve the declared policy against a base.
+    ///
+    /// The base is the caller's to choose, because what a key may do when the
+    /// ceremony says nothing follows from its algorithm: see
+    /// [`KeyPolicy::default_for`](rite_sdk::KeyPolicy::default_for).
     ///
     /// # Errors
     ///
     /// Returns the offending name if `usages` holds one that is not a PKCS#11
     /// usage. Resolution rejects those first, so reaching this means the step
     /// was built without going through it.
-    pub fn resolve(&self) -> Result<rite_sdk::KeyPolicy, String> {
-        self.resolve_from(&rite_sdk::KeyPolicy::default())
-    }
-
-    /// Resolve the declared policy against a base other than the default.
-    ///
-    /// # Errors
-    ///
-    /// As [`resolve`](Self::resolve).
     pub fn resolve_from(
         &self,
         defaults: &rite_sdk::KeyPolicy,
@@ -238,7 +235,7 @@ fn default_algorithm() -> String {
 }
 
 #[cfg(feature = "crypto")]
-impl Default for GenerateKeypairParams {
+impl Default for GenerateKeyParams {
     fn default() -> Self {
         Self {
             algorithm: default_algorithm(),
@@ -263,6 +260,11 @@ pub struct WrapKeyParams {
     /// A raw scheme is a weaker record: `rite verify` cannot re-derive its
     /// algorithms from the artifact, and says so rather than reporting the
     /// wrap as checked.
+    ///
+    /// The AES schemes wrap under a symmetric key the backend holds, so they
+    /// are reachable only from a step reading `wrapping_key:`. They name the
+    /// KEK size, because the RFC 3394 and RFC 5649 object identifiers are
+    /// per-size and the output carries neither.
     #[serde(default)]
     pub scheme: Option<rite_sdk::WrapScheme>,
     /// The recipient's expected fingerprint, `"sha256:<hex>"` over its SPKI
@@ -312,10 +314,19 @@ pub struct VerifySignatureParams {
 #[cfg(feature = "crypto")]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UnwrapKeyParams {
-    /// The expected fingerprint of the recovered key, `"sha256:<hex>"` over
-    /// its SPKI DER.
+    /// What the ceremony is restoring, as a key algorithm name.
     ///
-    /// Usually the value the origin ceremony's `generate_keypair` step
+    /// Nothing travels with a wrapped key saying what it is, so a recovered
+    /// blob is read as whatever this names. Required to recover a symmetric
+    /// key, whose bytes are indistinguishable from any other bytes of the same
+    /// length. Optional for a keypair, which names itself once its DER parses,
+    /// and checked against what came out when given.
+    #[serde(default)]
+    pub algorithm: Option<String>,
+    /// The expected identity of the recovered key: `"sha256:<hex>"` over its
+    /// SPKI DER for a keypair, `"cmac-aes:<hex>"` for a symmetric key.
+    ///
+    /// Usually the value the origin ceremony's `generate_key` step
     /// recorded. On mismatch the step fails rather than importing a key the
     /// ceremony did not mean to restore.
     #[serde(default)]
@@ -338,12 +349,24 @@ pub struct UnwrapKeyParams {
 ///
 /// `extractable` is true because this backend has just held the key in the
 /// clear, so claiming otherwise would be a claim the run cannot support. The
-/// usages are the restrictive default, as they are at generation.
+/// usages are the restrictive default, as they are at generation, and they
+/// follow the declared algorithm for the same reason they do there: sign and
+/// verify is right for a keypair and impossible for a symmetric key.
+///
+/// `None` is a ceremony that declared no algorithm, which only a keypair can
+/// reach, since a symmetric key cannot be recovered without the declaration.
 #[cfg(feature = "crypto")]
 #[must_use]
-pub fn unwrapped_key_default_policy() -> rite_sdk::KeyPolicy {
+pub fn unwrapped_key_default_policy(
+    algorithm: Option<rite_sdk::KeyAlgorithm>,
+) -> rite_sdk::KeyPolicy {
+    let usages = algorithm.map_or_else(
+        || rite_sdk::KeyPolicy::default().usages,
+        |algorithm| rite_sdk::KeyPolicy::default_for(algorithm).usages,
+    );
     rite_sdk::KeyPolicy {
         extractable: true,
+        usages,
         ..rite_sdk::KeyPolicy::default()
     }
 }
@@ -447,8 +470,8 @@ mod schema_drift_tests {
             ),
             #[cfg(feature = "crypto")]
             (
-                ActionType::GenerateKeypair,
-                serde_keys(GenerateKeypairParams::default()),
+                ActionType::GenerateKey,
+                serde_keys(GenerateKeyParams::default()),
             ),
             #[cfg(feature = "crypto")]
             (ActionType::WrapKey, serde_keys(WrapKeyParams::default())),
@@ -480,5 +503,31 @@ mod schema_drift_tests {
         ] {
             assert_eq!(keys, declared(action), "{action}");
         }
+    }
+
+    /// A recovered key's default usages follow what the ceremony declared it
+    /// is, because sign and verify is right for a keypair and impossible for a
+    /// symmetric key, which exists only to wrap.
+    #[cfg(feature = "crypto")]
+    #[test]
+    fn the_default_policy_for_a_recovered_key_follows_its_algorithm() {
+        use rite_sdk::{KeyAlgorithm, KeyUsages};
+
+        let keypair = unwrapped_key_default_policy(Some(KeyAlgorithm::Rsa4096));
+        assert_eq!(keypair.usages, KeyUsages::SIGN | KeyUsages::VERIFY);
+
+        let secret = unwrapped_key_default_policy(Some(KeyAlgorithm::Aes256));
+        assert_eq!(secret.usages, KeyUsages::WRAP | KeyUsages::UNWRAP);
+
+        // Undeclared is a keypair: a symmetric key cannot be recovered at all
+        // without the declaration.
+        assert_eq!(
+            unwrapped_key_default_policy(None).usages,
+            unwrapped_key_default_policy(Some(KeyAlgorithm::Rsa4096)).usages
+        );
+
+        // The key was held in the clear here whatever it is, so claiming it
+        // cannot leave would be a claim the run does not support.
+        assert!(secret.extractable && keypair.extractable);
     }
 }

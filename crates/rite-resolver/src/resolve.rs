@@ -1816,7 +1816,7 @@ sections:
     fn errors_on_missing_required_backend() {
         let mut ceremony = minimal_ceremony();
         let mut step = make_step_body();
-        step.action = ActionType::GenerateKeypair;
+        step.action = ActionType::GenerateKey;
         // No backend set
         ceremony
             .sections
@@ -1830,7 +1830,7 @@ sections:
         assert!(result.errors.iter().any(|e| matches!(
             e,
             ResolveError::MissingRequiredBackend { step, action }
-                if step.as_str() == "gen" && *action == ActionType::GenerateKeypair
+                if step.as_str() == "gen" && *action == ActionType::GenerateKey
         )));
     }
 
@@ -1845,7 +1845,7 @@ sections:
             },
         );
         let mut step = make_step_body();
-        step.action = ActionType::GenerateKeypair;
+        step.action = ActionType::GenerateKey;
         step.backend = Some("ssl".to_string());
         ceremony
             .sections
@@ -1937,7 +1937,7 @@ sections:
             ),
             // A field that used to exist and now means something else.
             (
-                ActionType::GenerateKeypair,
+                ActionType::GenerateKey,
                 serde_json::json!({ "key_usage": ["key_cert_sign"] }),
             ),
             // A field belonging to a different action.
@@ -1981,7 +1981,7 @@ sections:
     fn catches_an_unknown_key_even_where_its_value_is_deferred() {
         let mut ceremony = minimal_ceremony();
         let mut step = make_step_body();
-        step.action = ActionType::GenerateKeypair;
+        step.action = ActionType::GenerateKey;
         step.with = Some(serde_json::json!({ "algorythm": "${param.algo}" }));
         ceremony
             .sections
@@ -2007,7 +2007,7 @@ sections:
     fn errors_on_a_with_value_outside_the_action_vocabulary() {
         let mut ceremony = minimal_ceremony();
         let mut step = make_step_body();
-        step.action = ActionType::GenerateKeypair;
+        step.action = ActionType::GenerateKey;
         step.with = Some(serde_json::json!({ "algorithm": "RSA-9999" }));
         ceremony
             .sections
@@ -2041,7 +2041,7 @@ sections:
     fn accepts_a_with_value_deferred_to_run_time() {
         let mut ceremony = minimal_ceremony();
         let mut step = make_step_body();
-        step.action = ActionType::GenerateKeypair;
+        step.action = ActionType::GenerateKey;
         step.with = Some(serde_json::json!({ "algorithm": "${param.algo}" }));
         ceremony
             .sections
@@ -2153,7 +2153,7 @@ sections:
     fn detects_undeclared_backend() {
         let mut ceremony = minimal_ceremony();
         let mut step = make_step_body();
-        step.action = ActionType::GenerateKeypair;
+        step.action = ActionType::GenerateKey;
         step.backend = Some("nonexistent".to_string());
         ceremony
             .sections
@@ -2182,7 +2182,7 @@ sections:
             },
         );
         let mut step = make_step_body();
-        step.action = ActionType::GenerateKeypair;
+        step.action = ActionType::GenerateKey;
         step.backend = Some("ssl".to_string());
         ceremony
             .sections

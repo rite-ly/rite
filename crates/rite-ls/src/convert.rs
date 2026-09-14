@@ -107,7 +107,7 @@ sections:
     role: ${role.officer}
     steps:
       gen:
-        action: generate_keypair
+        action: generate_key
         backend: openssl
         with:
           algorithm: RSA-9999

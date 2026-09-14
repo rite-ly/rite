@@ -21,10 +21,11 @@ use openssl::rsa::{Padding, Rsa};
 use openssl::sign::{Signer, Verifier};
 use openssl::symm::Cipher;
 use openssl::x509::{X509Builder, X509Extension, X509NameBuilder};
+use rite_sdk::cms;
 use rite_sdk::{
-    Backend, BackendError, KeyAlgorithm, KeyId, KeyMetadata, KeyPolicy, KeySpec, KeyStoreBackend,
-    KeyTransportBackend, KeyUsages, PublicKeyDer, RandomBackend, SignAlgorithm, SignBackend,
-    VerifyBackend, WrapScheme, WrappedKey,
+    Backend, BackendError, KeyAlgorithm, KeyCheckValue, KeyId, KeyMetadata, KeyPolicy, KeySpec,
+    KeyStoreBackend, KeyTransportBackend, KeyUsages, PublicKeyDer, RandomBackend, SignAlgorithm,
+    SignBackend, VerifyBackend, WrapScheme, WrappedKey,
 };
 use std::collections::HashMap;
 use zeroize::Zeroizing;
@@ -44,16 +45,78 @@ pub struct OpenSslBackend {
 struct StoredKey {
     algorithm: KeyAlgorithm,
     label: String,
-    /// OpenSSL private key (manages its own memory).
-    pkey: PKey<Private>,
-    /// Cached public key for export.
-    public_der: PublicKeyDer,
+    /// The key itself, in whichever of the two forms it has.
+    material: KeyMaterial,
     /// What this key was generated to be allowed to do.
     ///
     /// A software backend has no token to enforce this for it, so the checks
     /// live in the operations below. Storing the policy is what makes them
     /// possible at all: without it, a declared policy would be a comment.
     policy: KeyPolicy,
+}
+
+/// What the backend holds for a key.
+///
+/// Two forms rather than one with optional halves, because almost every
+/// operation belongs to exactly one of them and the compiler is what should
+/// ask which.
+enum KeyMaterial {
+    /// A keypair. OpenSSL owns the private half and frees it on drop; the
+    /// public half is cached in the form every export wants.
+    Asymmetric {
+        pkey: PKey<Private>,
+        public_der: PublicKeyDer,
+    },
+    /// One secret with no public half. OpenSSL has no `EVP_PKEY` type for AES,
+    /// so these bytes are held here and wiped on drop.
+    Symmetric {
+        secret: Zeroizing<Vec<u8>>,
+        /// Cached check value, the counterpart of `public_der` above.
+        ///
+        /// What names this key wherever it is named: in the transcript, in a
+        /// wrap's recipient identifier, and on a token's display. Derived from
+        /// the secret, so it is computed where the secret arrives rather than
+        /// at each of the places that need it.
+        check_value: KeyCheckValue,
+    },
+}
+
+impl StoredKey {
+    /// The keypair, for an operation that needs one.
+    fn pkey(&self) -> Result<&PKey<Private>, BackendError> {
+        match &self.material {
+            KeyMaterial::Asymmetric { pkey, .. } => Ok(pkey),
+            KeyMaterial::Symmetric { .. } => Err(BackendError::UnsupportedAlgorithm(format!(
+                "'{}' is a {} key, which has no keypair. This operation needs one.",
+                self.label, self.algorithm
+            ))),
+        }
+    }
+
+    /// The public half, for an operation that needs one.
+    fn public_der(&self) -> Result<&PublicKeyDer, BackendError> {
+        match &self.material {
+            KeyMaterial::Asymmetric { public_der, .. } => Ok(public_der),
+            KeyMaterial::Symmetric { .. } => Err(BackendError::UnsupportedAlgorithm(format!(
+                "'{}' is a {} key, which has no public half to export",
+                self.label, self.algorithm
+            ))),
+        }
+    }
+
+    /// The secret and what names it, for an operation under a symmetric key.
+    fn secret(&self) -> Result<(&[u8], &KeyCheckValue), BackendError> {
+        match &self.material {
+            KeyMaterial::Symmetric {
+                secret,
+                check_value,
+            } => Ok((secret, check_value)),
+            KeyMaterial::Asymmetric { .. } => Err(BackendError::UnsupportedAlgorithm(format!(
+                "'{}' is a {} key, and this scheme wraps under a symmetric one",
+                self.label, self.algorithm
+            ))),
+        }
+    }
 }
 
 impl OpenSslBackend {
@@ -89,28 +152,104 @@ impl OpenSslBackend {
             pkey.public_key_to_der()
                 .map_err(|e| ossl_err("Public key DER encoding", &e))?,
         )?;
-        let mut id_bytes = [0u8; 16];
-        openssl::rand::rand_bytes(&mut id_bytes).map_err(|e| ossl_err("Generate key ID", &e))?;
-        let key_id = KeyId::new(base16ct::lower::encode_string(&id_bytes));
         let public_key = public_der.clone();
-        self.keys.insert(
-            key_id.clone(),
-            StoredKey {
-                algorithm,
-                label: label.clone(),
-                pkey,
-                public_der,
-                policy,
-            },
-        );
+        let key_id = self.insert(
+            algorithm,
+            label.clone(),
+            KeyMaterial::Asymmetric { pkey, public_der },
+            policy,
+        )?;
         Ok(KeyMetadata {
             key_id,
             algorithm,
             label,
             public_key: Some(public_key),
+            check_value: None,
             attestation: None,
         })
     }
+
+    /// Store a symmetric key and return its metadata.
+    ///
+    /// The check value stands where the public key stands for a keypair: it is
+    /// what the key answers to in the transcript and what a custodian compares
+    /// against the token's own display.
+    fn store_secret(
+        &mut self,
+        algorithm: KeyAlgorithm,
+        label: String,
+        secret: Zeroizing<Vec<u8>>,
+        policy: KeyPolicy,
+    ) -> Result<KeyMetadata, BackendError> {
+        let check_value = key_check_value(&secret)?;
+        let key_id = self.insert(
+            algorithm,
+            label.clone(),
+            KeyMaterial::Symmetric {
+                secret,
+                check_value: check_value.clone(),
+            },
+            policy,
+        )?;
+        Ok(KeyMetadata {
+            key_id,
+            algorithm,
+            label,
+            public_key: None,
+            check_value: Some(check_value),
+            attestation: None,
+        })
+    }
+
+    /// Assign an identifier and take ownership of the material.
+    fn insert(
+        &mut self,
+        algorithm: KeyAlgorithm,
+        label: String,
+        material: KeyMaterial,
+        policy: KeyPolicy,
+    ) -> Result<KeyId, BackendError> {
+        let mut id_bytes = [0u8; 16];
+        openssl::rand::rand_bytes(&mut id_bytes).map_err(|e| ossl_err("Generate key ID", &e))?;
+        let key_id = KeyId::new(base16ct::lower::encode_string(&id_bytes));
+        self.keys.insert(
+            key_id.clone(),
+            StoredKey {
+                algorithm,
+                label,
+                material,
+                policy,
+            },
+        );
+        Ok(key_id)
+    }
+}
+
+/// The key check value of a symmetric key.
+///
+/// AES-CMAC over a 16-byte zero block, truncated by
+/// [`KeyCheckValue::from_cmac`]. Specified for AES keys in ANSI X9.24-1 Annex
+/// A and used by TR-31.
+fn key_check_value(secret: &[u8]) -> Result<KeyCheckValue, BackendError> {
+    let cipher = match secret.len() {
+        16 => Cipher::aes_128_cbc(),
+        24 => Cipher::aes_192_cbc(),
+        32 => Cipher::aes_256_cbc(),
+        other => {
+            return Err(BackendError::InvalidData(format!(
+                "a key check value needs a 16, 24 or 32 byte key, not {other}"
+            )));
+        }
+    };
+    let pkey = PKey::cmac(&cipher, secret).map_err(|e| ossl_err("CMAC key", &e))?;
+    let mut signer = Signer::new_without_digest(&pkey).map_err(|e| ossl_err("CMAC context", &e))?;
+    signer
+        .update(&[0u8; 16])
+        .map_err(|e| ossl_err("CMAC update", &e))?;
+    let mac = signer
+        .sign_to_vec()
+        .map_err(|e| ossl_err("CMAC finalize", &e))?;
+    KeyCheckValue::from_cmac(&mac).map_err(|e| BackendError::InvalidData(e.to_string()))
 }
 
 impl Backend for OpenSslBackend {
@@ -136,8 +275,9 @@ impl Backend for OpenSslBackend {
     }
 
     rite_sdk::backend_capabilities!(
-        /// Supports RSA-2048, RSA-4096, ECDSA-P256, ECDSA-P384, Ed25519, and
-        /// (with OpenSSL 3.5+) ML-DSA-44/65/87 key generation and storage.
+        /// Supports RSA-2048, RSA-4096, ECDSA-P256, ECDSA-P384, Ed25519,
+        /// AES-128, AES-256, and (with OpenSSL 3.5+) ML-DSA-44/65/87 key
+        /// generation and storage.
         as_keystore_mut: KeyStoreBackend,
         /// Supports RSA-PKCS1-v1.5 (SHA-256), RSA-PSS (SHA-256), ECDSA
         /// (SHA-256/SHA-384), Ed25519, and (with OpenSSL 3.5+) ML-DSA-44/65/87
@@ -145,8 +285,10 @@ impl Backend for OpenSslBackend {
         as_sign_mut: SignBackend,
         /// Verifies signatures for every algorithm this build can sign with.
         as_verify_mut: VerifyBackend,
-        /// Wraps and unwraps under CMS-AES-256-GCM, to an RSA or EC recipient.
-        /// Both paths export the target key to DER in process memory before
+        /// Wraps and unwraps under CMS-AES-256-GCM to an RSA, EC or ML-KEM
+        /// recipient, under the raw RSA mechanisms to an RSA recipient, and
+        /// under AES-KW or AES-KWP to a symmetric key this backend holds.
+        /// Every path exports the target key to DER in process memory before
         /// encrypting it, so they suit software keys rather than keys held
         /// inside a hardware boundary.
         as_transport_mut: KeyTransportBackend,
@@ -509,6 +651,15 @@ fn parse_private_key_der(bytes: &[u8]) -> Result<PKey<Private>, BackendError> {
 
 impl KeyStoreBackend for OpenSslBackend {
     fn generate_key(&mut self, spec: KeySpec) -> Result<KeyMetadata, BackendError> {
+        // Selected by the algorithm's own property rather than by listing the
+        // symmetric variants here, so a symmetric algorithm added to the SDK
+        // is generated by this backend without an edit.
+        if let Some(length) = spec.algorithm.key_bytes() {
+            let mut secret = Zeroizing::new(vec![0u8; length]);
+            openssl::rand::rand_bytes(&mut secret)
+                .map_err(|e| ossl_err("Generate symmetric key", &e))?;
+            return self.store_secret(spec.algorithm, spec.label, secret, spec.policy);
+        }
         let pkey = match spec.algorithm {
             KeyAlgorithm::Rsa2048 => {
                 let rsa = Rsa::generate(2048).map_err(|e| ossl_err("RSA-2048 keygen", &e))?;
@@ -553,27 +704,50 @@ impl KeyStoreBackend for OpenSslBackend {
         spec: KeySpec,
         key_bytes: &[u8],
     ) -> Result<KeyMetadata, BackendError> {
+        // A symmetric key is its own bytes. Selected by the algorithm because
+        // nothing in the bytes distinguishes a 32-byte secret from anything
+        // else of that length, so the caller has to say which it means.
+        if let Some(length) = spec.algorithm.key_bytes() {
+            if key_bytes.len() != length {
+                return Err(BackendError::InvalidData(format!(
+                    "{} is a {length}-byte key, and this is {}",
+                    spec.algorithm,
+                    key_bytes.len()
+                )));
+            }
+            return self.store_secret(
+                spec.algorithm,
+                spec.label,
+                Zeroizing::new(key_bytes.to_vec()),
+                spec.policy,
+            );
+        }
         let pkey = parse_private_key_der(key_bytes)?;
         self.store_key(spec.algorithm, spec.label, pkey, spec.policy)
     }
 
     fn export_public_key(&self, key_id: &KeyId) -> Result<PublicKeyDer, BackendError> {
-        let key = self.get_key(key_id)?;
-        Ok(key.public_der.clone())
+        Ok(self.get_key(key_id)?.public_der()?.clone())
     }
 
     fn list_keys(&self) -> Result<Vec<KeyMetadata>, BackendError> {
-        Ok(self
-            .keys
+        self.keys
             .iter()
-            .map(|(key_id, stored_key)| KeyMetadata {
-                key_id: key_id.clone(),
-                algorithm: stored_key.algorithm,
-                label: stored_key.label.clone(),
-                public_key: Some(stored_key.public_der.clone()),
-                attestation: None,
+            .map(|(key_id, stored)| {
+                let (public_key, check_value) = match &stored.material {
+                    KeyMaterial::Asymmetric { public_der, .. } => (Some(public_der.clone()), None),
+                    KeyMaterial::Symmetric { check_value, .. } => (None, Some(check_value.clone())),
+                };
+                Ok(KeyMetadata {
+                    key_id: key_id.clone(),
+                    algorithm: stored.algorithm,
+                    label: stored.label.clone(),
+                    public_key,
+                    check_value,
+                    attestation: None,
+                })
             })
-            .collect())
+            .collect()
     }
 
     fn delete_key(&mut self, key_id: &KeyId) -> Result<(), BackendError> {
@@ -594,7 +768,7 @@ impl SignBackend for OpenSslBackend {
         let key = self.get_key(key_id)?;
         key.policy.require(KeyUsages::SIGN, "sign")?;
         check_key_accepted("Sign", algorithm, key.algorithm)?;
-        sign_with_key(&key.pkey, message, algorithm)
+        sign_with_key(key.pkey()?, message, algorithm)
     }
 }
 
@@ -830,9 +1004,16 @@ fn cms_encrypt(cert: openssl::x509::X509, key_material: &[u8]) -> Result<Wrapped
 /// Zeroizing: this buffer holds the plaintext private key; wipe it on drop
 /// rather than leaving it in freed heap memory.
 fn wrappable_key_material(target: &StoredKey) -> Result<Zeroizing<Vec<u8>>, BackendError> {
-    Ok(Zeroizing::new(target.pkey.private_key_to_pkcs8().map_err(
-        |e| ossl_err("Export key material for wrapping", &e),
-    )?))
+    match &target.material {
+        KeyMaterial::Asymmetric { pkey, .. } => Ok(Zeroizing::new(
+            pkey.private_key_to_pkcs8()
+                .map_err(|e| ossl_err("Export key material for wrapping", &e))?,
+        )),
+        // A symmetric key travels as its own bytes. That is what PKCS#11 key
+        // wrap produces and what a cloud KMS symmetric import accepts; PKCS#8
+        // has no settled encoding for one.
+        KeyMaterial::Symmetric { secret, .. } => Ok(secret.clone()),
+    }
 }
 
 /// RSAES-OAEP with SHA-256 over `payload`, as raw ciphertext.
@@ -910,19 +1091,57 @@ fn oaep_capacity(key: &PKeyRef<impl openssl::pkey::HasPublic>) -> Result<usize, 
         })
 }
 
-/// AES Key Wrap with Padding (RFC 5649), under a KEK of any AES size.
+/// Which of the two AES key wrap constructions to run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KeyWrap {
+    /// RFC 3394. The input must be a multiple of 8 bytes and at least 16.
+    Plain,
+    /// RFC 5649. Any input length.
+    Padded,
+}
+
+impl KeyWrap {
+    /// The name this construction goes by in an error message.
+    fn label(self) -> &'static str {
+        match self {
+            KeyWrap::Plain => "AES-KW",
+            KeyWrap::Padded => "AES-KWP",
+        }
+    }
+}
+
+/// AES Key Wrap under a KEK of any AES size.
 ///
 /// `FLAG_WRAP_ALLOW` is set because OpenSSL's legacy path refuses a wrap
 /// cipher without it. The provider path in 3.x does not need it, and setting
 /// it changes nothing there.
-fn aes_kwp(kek: &[u8], input: &[u8], encrypting: bool) -> Result<Vec<u8>, BackendError> {
-    let mut ctx = CipherCtx::new().map_err(|e| ossl_err("AES-KWP context", &e))?;
+fn aes_key_wrap(
+    kek: &[u8],
+    input: &[u8],
+    kind: KeyWrap,
+    encrypting: bool,
+) -> Result<Vec<u8>, BackendError> {
+    let label = kind.label();
+    // RFC 3394 §2.2.1. OpenSSL refuses this too, with "invalid input length",
+    // which does not say what the rule is or what to reach for instead.
+    if kind == KeyWrap::Plain && encrypting && (input.len() < 16 || !input.len().is_multiple_of(8))
+    {
+        return Err(BackendError::InvalidData(format!(
+            "AES-KW carries a payload that is a multiple of 8 bytes and at least 16, \
+             and this one is {}. Wrap it with AES-KWP instead, which has no such rule.",
+            input.len()
+        )));
+    }
+    let mut ctx = CipherCtx::new().map_err(|e| ossl_err(&format!("{label} context"), &e))?;
     ctx.set_flags(CipherCtxFlags::FLAG_WRAP_ALLOW);
-    let cipher = match kek.len() {
-        16 => WrapCipher::aes_128_wrap_pad(),
-        24 => WrapCipher::aes_192_wrap_pad(),
-        32 => WrapCipher::aes_256_wrap_pad(),
-        other => {
+    let cipher = match (kek.len(), kind) {
+        (16, KeyWrap::Plain) => WrapCipher::aes_128_wrap(),
+        (24, KeyWrap::Plain) => WrapCipher::aes_192_wrap(),
+        (32, KeyWrap::Plain) => WrapCipher::aes_256_wrap(),
+        (16, KeyWrap::Padded) => WrapCipher::aes_128_wrap_pad(),
+        (24, KeyWrap::Padded) => WrapCipher::aes_192_wrap_pad(),
+        (32, KeyWrap::Padded) => WrapCipher::aes_256_wrap_pad(),
+        (other, _) => {
             return Err(BackendError::InvalidData(format!(
                 "an AES key wrap needs a 16, 24 or 32 byte KEK, not {other}"
             )));
@@ -930,17 +1149,222 @@ fn aes_kwp(kek: &[u8], input: &[u8], encrypting: bool) -> Result<Vec<u8>, Backen
     };
     if encrypting {
         ctx.encrypt_init(Some(cipher), Some(kek), None)
-            .map_err(|e| ossl_err("AES-KWP wrap init", &e))?;
+            .map_err(|e| ossl_err(&format!("{label} wrap init"), &e))?;
     } else {
         ctx.decrypt_init(Some(cipher), Some(kek), None)
-            .map_err(|e| ossl_err("AES-KWP unwrap init", &e))?;
+            .map_err(|e| ossl_err(&format!("{label} unwrap init"), &e))?;
     }
     let mut out = Vec::new();
     ctx.cipher_update_vec(input, &mut out)
-        .map_err(|e| ossl_err("AES-KWP update", &e))?;
+        .map_err(|e| ossl_err(&format!("{label} update"), &e))?;
     ctx.cipher_final_vec(&mut out)
-        .map_err(|e| ossl_err("AES-KWP final", &e))?;
+        .map_err(|e| ossl_err(&format!("{label} final"), &e))?;
     Ok(out)
+}
+
+/// Wrap `payload` under a symmetric KEK.
+///
+/// The scheme names the KEK size, because the RFC 3394 and RFC 5649 object
+/// identifiers are per-size and the output carries neither. A KEK of the wrong
+/// size is refused here rather than silently producing a wrap the transcript
+/// describes wrongly.
+fn symmetric_wrap(
+    kek: &StoredKey,
+    payload: &[u8],
+    scheme: WrapScheme,
+) -> Result<WrappedKey, BackendError> {
+    let Some(required) = scheme.required_kek() else {
+        return Err(BackendError::UnsupportedAlgorithm(format!(
+            "{scheme} does not wrap under a symmetric key"
+        )));
+    };
+    if kek.algorithm != required {
+        return Err(BackendError::UnsupportedAlgorithm(format!(
+            "{scheme} wraps under a {required} key, and '{}' is {}",
+            kek.label, kek.algorithm
+        )));
+    }
+    let description = scheme.fixed_description().ok_or_else(|| {
+        BackendError::UnsupportedAlgorithm(format!(
+            "{scheme} is not a raw mechanism this backend produces"
+        ))
+    })?;
+    let (secret, _) = kek.secret()?;
+    let data = aes_key_wrap(secret, payload, key_wrap_kind(scheme)?, true)?;
+    WrappedKey::new(scheme, description, data).map_err(|e| BackendError::InvalidData(e.to_string()))
+}
+
+/// Wrap `payload` into a CMS `AuthEnvelopedData` addressed to a symmetric KEK.
+///
+/// The same container the public-key path produces, with the
+/// `KEKRecipientInfo` of RFC 5652 §6.2.3 in place of a key transport or
+/// agreement recipient. So a wrap under a key both sides already hold is
+/// evidence on the same terms as any other CMS wrap: the algorithms are in the
+/// artifact, and `rite verify` re-derives them rather than trusting the record.
+///
+/// The recipient identifier is the KEK's check value, which is what the
+/// transcript records and what a token displays, so a blob and a transcript
+/// compare without either side holding the key.
+fn cms_encrypt_kek(kek: &StoredKey, payload: &[u8]) -> Result<WrappedKey, BackendError> {
+    let (secret, check_value) = kek.secret()?;
+    if secret.len() != 32 {
+        return Err(BackendError::UnsupportedAlgorithm(format!(
+            "a CMS wrap under a symmetric key needs a 256-bit KEK, and '{}' is {}",
+            kek.label, kek.algorithm
+        )));
+    }
+    let data = cms_seal_to_kek(secret, check_value.as_bytes(), payload)?;
+
+    // Described by reading the artifact back, not by restating what was just
+    // written. A description that disagreed with the bytes is exactly what
+    // this path exists to make impossible.
+    let facts = cms::describe(&data).map_err(|e| BackendError::InvalidData(e.to_string()))?;
+    WrappedKey::new(WrapScheme::CmsAes256Gcm, facts.description, data)
+        .map_err(|e| BackendError::InvalidData(e.to_string()))
+}
+
+/// Seal `payload` into a CMS `AuthEnvelopedData` addressed to one symmetric
+/// key, returning the DER.
+///
+/// The payload is bytes. CMS encrypts the content under a fresh
+/// content-encryption key and encrypts only that key to the recipient, so
+/// nothing here depends on what the content is: the same structure carries a
+/// private key, a document, or a bundle. The key-shaped concerns, which key
+/// the backend holds and what artifact type comes out, belong to the caller.
+fn cms_seal_to_kek(
+    secret: &[u8],
+    key_identifier: &[u8],
+    payload: &[u8],
+) -> Result<Vec<u8>, BackendError> {
+    // A fresh content-encryption key per message, as RFC 5652 requires: the
+    // KEK encrypts this, and this encrypts the content.
+    let mut cek = Zeroizing::new(vec![0u8; 32]);
+    openssl::rand::rand_bytes(&mut cek).map_err(|e| ossl_err("Generate CEK", &e))?;
+    let mut nonce = vec![0u8; 12];
+    openssl::rand::rand_bytes(&mut nonce).map_err(|e| ossl_err("Generate GCM nonce", &e))?;
+
+    let (ciphertext, tag) = aes_256_gcm_seal(&cek, &nonce, payload)?;
+    let envelope = cms::KekEnvelope {
+        key_identifier: key_identifier.to_vec(),
+        wrapped_cek: aes_key_wrap(secret, &cek, KeyWrap::Plain, true)?,
+        nonce,
+        ciphertext,
+        tag,
+    };
+    cms::write_kek_enveloped(&envelope).map_err(|e| BackendError::InvalidData(e.to_string()))
+}
+
+/// Undo [`cms_encrypt_kek`].
+fn cms_decrypt_kek(
+    kek: &StoredKey,
+    wrapped: &WrappedKey,
+) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+    let (secret, check_value) = kek.secret()?;
+    cms_open_from_kek(secret, check_value, wrapped.data()).map_err(|e| match e {
+        // Name the key the ceremony gave, which the crypto core cannot.
+        BackendError::InvalidData(detail) if detail.starts_with("this blob is addressed") => {
+            BackendError::InvalidData(format!("{detail}, and '{}' has {check_value}", kek.label))
+        }
+        other => other,
+    })
+}
+
+/// Undo [`cms_seal_to_kek`], returning the content.
+///
+/// Payload-agnostic in the same way: what comes out is bytes, and whether
+/// those bytes are a key is the caller's question.
+fn cms_open_from_kek(
+    secret: &[u8],
+    check_value: &KeyCheckValue,
+    der: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+    // The reader insists the blob declare `id-aes256-wrap`, and the cipher
+    // below follows the local secret's length, so without this a blob naming
+    // one algorithm could be opened under another and the run would record the
+    // name rather than what it did. The seal side refuses the same size.
+    if secret.len() != 32 {
+        return Err(BackendError::UnsupportedAlgorithm(format!(
+            "this container names id-aes256-wrap, which needs a 256-bit key, \
+             and the key held here is {} bytes",
+            secret.len()
+        )));
+    }
+    let envelope =
+        cms::read_kek_enveloped(der).map_err(|e| BackendError::InvalidData(e.to_string()))?;
+
+    // Not covered by the content tag, which authenticates the content and
+    // nothing around it, so this comparison is what refuses a blob addressed
+    // elsewhere. Both values render the same way, or the message invites the
+    // reader to compare two things that are not alike.
+    if envelope.key_identifier != check_value.as_bytes() {
+        let named = KeyCheckValue::from_cmac(&envelope.key_identifier).map_or_else(
+            |_| base16ct::lower::encode_string(&envelope.key_identifier),
+            |kcv| kcv.to_string(),
+        );
+        return Err(BackendError::InvalidData(format!(
+            "this blob is addressed to the key with check value {named}"
+        )));
+    }
+
+    let cek = Zeroizing::new(aes_key_wrap(
+        secret,
+        &envelope.wrapped_cek,
+        KeyWrap::Plain,
+        false,
+    )?);
+    aes_256_gcm_open(&cek, &envelope.nonce, &envelope.ciphertext, &envelope.tag)
+}
+
+/// AES-256-GCM, returning the ciphertext and the tag.
+fn aes_256_gcm_seal(
+    cek: &[u8],
+    nonce: &[u8],
+    plaintext: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), BackendError> {
+    let mut tag = vec![0u8; cms::GCM_ICV_LEN];
+    let ciphertext = openssl::symm::encrypt_aead(
+        Cipher::aes_256_gcm(),
+        cek,
+        Some(nonce),
+        &[],
+        plaintext,
+        &mut tag,
+    )
+    .map_err(|e| ossl_err("AES-256-GCM seal", &e))?;
+    Ok((ciphertext, tag))
+}
+
+/// Undo [`aes_256_gcm_seal`], refusing a tag that does not authenticate.
+fn aes_256_gcm_open(
+    cek: &[u8],
+    nonce: &[u8],
+    ciphertext: &[u8],
+    tag: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+    openssl::symm::decrypt_aead(
+        Cipher::aes_256_gcm(),
+        cek,
+        Some(nonce),
+        &[],
+        ciphertext,
+        tag,
+    )
+    .map(Zeroizing::new)
+    .map_err(|e| ossl_err("AES-256-GCM open", &e))
+}
+
+/// The construction a symmetric scheme runs.
+fn key_wrap_kind(scheme: WrapScheme) -> Result<KeyWrap, BackendError> {
+    match scheme {
+        WrapScheme::Aes128Kw | WrapScheme::Aes256Kw => Ok(KeyWrap::Plain),
+        WrapScheme::Aes128Kwp | WrapScheme::Aes256Kwp => Ok(KeyWrap::Padded),
+        // `WrapScheme` is non-exhaustive outside its own crate, so this arm is
+        // required. It is also the right answer for a scheme this backend has
+        // not been taught.
+        _ => Err(BackendError::UnsupportedAlgorithm(format!(
+            "{scheme} does not wrap under a symmetric key"
+        ))),
+    }
 }
 
 /// Wrap `payload` under `recipient` with the scheme's raw mechanism.
@@ -976,7 +1400,7 @@ fn raw_wrap(
         openssl::rand::rand_bytes(&mut ephemeral)
             .map_err(|e| ossl_err("Generate ephemeral AES key", &e))?;
         let mut data = rsa_oaep_encrypt(recipient, &ephemeral)?;
-        data.extend_from_slice(&aes_kwp(&ephemeral, payload, true)?);
+        data.extend_from_slice(&aes_key_wrap(&ephemeral, payload, KeyWrap::Padded, true)?);
         data
     };
 
@@ -1024,7 +1448,12 @@ fn raw_unwrap(
                     ))
                 })?;
             let ephemeral = rsa_oaep_decrypt(recipient, encapsulated)?;
-            Ok(Zeroizing::new(aes_kwp(&ephemeral, wrapped_payload, false)?))
+            Ok(Zeroizing::new(aes_key_wrap(
+                &ephemeral,
+                wrapped_payload,
+                KeyWrap::Padded,
+                false,
+            )?))
         }
         other => Err(BackendError::UnsupportedAlgorithm(format!(
             "{other} is not a raw mechanism this backend unwraps"
@@ -1046,11 +1475,22 @@ impl KeyTransportBackend for OpenSslBackend {
 
         let key_material = wrappable_key_material(target)?;
 
+        if scheme.required_kek().is_some() {
+            return symmetric_wrap(kek, &key_material, scheme);
+        }
+        // A symmetric KEK takes the same container by a different recipient,
+        // selected here by what the key is rather than by what the scheme
+        // names, because the scheme names a container and both paths produce
+        // it.
+        if kek.algorithm.is_symmetric() && scheme == WrapScheme::CmsAes256Gcm {
+            return cms_encrypt_kek(kek, &key_material);
+        }
+
         // Under CMS the certificate carrying the KEK's public half is what
         // lets OpenSSL select the encapsulation from the key type: RSA takes
         // RSAES-PKCS1-v1.5, EC P-256 takes RFC 5753 ECDH, ML-KEM takes RFC
         // 9629 KEMRecipientInfo.
-        wrap_under(&kek.pkey, &key_material, scheme)
+        wrap_under(kek.pkey()?, &key_material, scheme)
     }
 
     fn unwrap(
@@ -1059,6 +1499,7 @@ impl KeyTransportBackend for OpenSslBackend {
         unwrapping_key_id: &KeyId,
         label: &str,
         policy: KeyPolicy,
+        expected: Option<KeyAlgorithm>,
     ) -> Result<KeyMetadata, BackendError> {
         // Scope the immutable borrow of `kek` so it ends before `store_key` needs `&mut self`.
         // Zeroizing: the decrypted output is the plaintext private key in DER
@@ -1067,26 +1508,97 @@ impl KeyTransportBackend for OpenSslBackend {
             let kek = self.get_key(unwrapping_key_id)?;
             kek.policy.require(KeyUsages::UNWRAP, "unwrap a key")?;
             match wrapped.scheme() {
+                WrapScheme::CmsAes256Gcm if kek.algorithm.is_symmetric() => {
+                    cms_decrypt_kek(kek, wrapped)?
+                }
                 WrapScheme::CmsAes256Gcm => {
                     // Re-create the ephemeral cert from the same key; CMS
                     // decrypt needs it to find the matching recipient, which it
                     // does by the subject key identifier rather than by any
                     // signature.
-                    let cert = cert_for_public_key(&kek.pkey)?;
+                    let kek_pkey = kek.pkey()?;
+                    let cert = cert_for_public_key(kek_pkey)?;
                     let cms = CmsContentInfo::from_der(wrapped.data())
                         .map_err(|e| ossl_err("Parse CMS DER", &e))?;
                     Zeroizing::new(
-                        cms.decrypt(&kek.pkey, &cert)
+                        cms.decrypt(kek_pkey, &cert)
                             .map_err(|e| ossl_err("CMS decrypt", &e))?,
                     )
                 }
-                _ => raw_unwrap(&kek.pkey, wrapped)?,
+                scheme if scheme.required_kek().is_some() => {
+                    // `aes_key_wrap` picks its cipher from the secret's length,
+                    // so without this an AES-256-KWP blob opened under a
+                    // 128-bit key would run AES-128-KWP while the scheme, and
+                    // the transcript, say otherwise. `symmetric_wrap` refuses
+                    // the same mismatch on the way out.
+                    let required = scheme.required_kek();
+                    if required != Some(kek.algorithm) {
+                        return Err(BackendError::UnsupportedAlgorithm(format!(
+                            "{scheme} unwraps under a {} key, and '{}' is {}",
+                            required.map_or_else(|| "symmetric".to_string(), |a| a.to_string()),
+                            kek.label,
+                            kek.algorithm
+                        )));
+                    }
+                    let (secret, _) = kek.secret()?;
+                    Zeroizing::new(aes_key_wrap(
+                        secret,
+                        wrapped.data(),
+                        key_wrap_kind(scheme)?,
+                        false,
+                    )?)
+                }
+                _ => raw_unwrap(kek.pkey()?, wrapped)?,
             }
         };
 
-        let pkey = parse_private_key_der(&key_material)?;
+        // What the bytes are read as follows the ceremony's declaration, not
+        // the other way round. A 32-byte secret and a 32-byte anything else are
+        // the same bytes, so there is nothing here to discriminate on.
+        if let Some(algorithm) = expected.filter(|declared| declared.is_symmetric()) {
+            let declared = algorithm.key_bytes().ok_or_else(|| {
+                BackendError::UnsupportedAlgorithm(format!(
+                    "'{algorithm}' has no key size this backend knows, so it \
+                     cannot say whether the recovered bytes are one"
+                ))
+            })?;
+            if key_material.len() != declared {
+                return Err(BackendError::InvalidData(format!(
+                    "the ceremony declares '{label}' is {algorithm}, which is \
+                     {declared} bytes, but {} were recovered. Either the wrong \
+                     blob was unwrapped or the declaration names the wrong \
+                     algorithm.",
+                    key_material.len()
+                )));
+            }
+            return self.store_secret(algorithm, label.to_string(), key_material, policy);
+        }
+
+        // A symmetric key reaching here has not been declared. Left to OpenSSL
+        // the operator reads an ASN.1 dump ending in `Type=EC_PRIVATEKEY`,
+        // which names a key type that has nothing to do with what happened, so
+        // the refusal names the missing declaration instead.
+        let pkey = parse_private_key_der(&key_material).map_err(|_| {
+            BackendError::UnsupportedAlgorithm(format!(
+                "the {} bytes recovered under '{label}' are not a private key. \
+                 If they are a symmetric key, say so with 'algorithm:': nothing \
+                 travels with a wrapped key saying what it is, so the receiving \
+                 ceremony declares that the way it declares the policy.",
+                key_material.len()
+            ))
+        })?;
 
         let key_algorithm = key_algorithm_of(&pkey)?;
+        // A declaration that disagrees with what came out is the same error as
+        // the size mismatch above, caught one branch later because an
+        // asymmetric key names itself once it parses.
+        if let Some(algorithm) = expected.filter(|declared| *declared != key_algorithm) {
+            return Err(BackendError::InvalidData(format!(
+                "the ceremony declares '{label}' is {algorithm}, but the \
+                 recovered key is {key_algorithm}. Either the wrong blob was \
+                 unwrapped or the declaration names the wrong algorithm."
+            )));
+        }
         self.store_key(key_algorithm, label.to_string(), pkey, policy)
     }
 
@@ -1117,7 +1629,7 @@ mod tests {
         KeySpec {
             algorithm,
             label: label.to_string(),
-            policy: KeyPolicy::default(),
+            policy: KeyPolicy::default_for(algorithm),
             location_hint: None,
         }
     }
@@ -1394,7 +1906,7 @@ mod tests {
             .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
             .unwrap();
         let unwrapped = backend
-            .unwrap(&wrapped, &kek.key_id, "unwrapped", restored())
+            .unwrap(&wrapped, &kek.key_id, "unwrapped", restored(), None)
             .unwrap();
 
         let unwrapped_pub = backend.export_public_key(&unwrapped.key_id).unwrap();
@@ -1416,7 +1928,7 @@ mod tests {
             .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
             .unwrap();
         let unwrapped = backend
-            .unwrap(&wrapped, &kek.key_id, "unwrapped-2048", restored())
+            .unwrap(&wrapped, &kek.key_id, "unwrapped-2048", restored(), None)
             .unwrap();
 
         assert_eq!(
@@ -1446,7 +1958,7 @@ mod tests {
         assert!(!wrapped.data().is_empty());
 
         let unwrapped = backend
-            .unwrap(&wrapped, &recipient.key_id, "unwrapped", restored())
+            .unwrap(&wrapped, &recipient.key_id, "unwrapped", restored(), None)
             .unwrap();
         let unwrapped_pub = backend.export_public_key(&unwrapped.key_id).unwrap();
         assert_eq!(original_pub, unwrapped_pub);
@@ -1474,7 +1986,7 @@ mod tests {
             .unwrap();
 
         // Attempt to unwrap with key_b (wrong key); must fail.
-        let result = backend.unwrap(&wrapped, &key_b.key_id, "unwrapped", restored());
+        let result = backend.unwrap(&wrapped, &key_b.key_id, "unwrapped", restored(), None);
         assert!(
             result.is_err(),
             "Expected error when unwrapping with wrong key"
@@ -1647,7 +2159,7 @@ mod tests {
         let wrapped =
             WrappedKey::new(wrapped.scheme(), wrapped.description().clone(), data).unwrap();
 
-        let result = backend.unwrap(&wrapped, &kek.key_id, "unwrapped", restored());
+        let result = backend.unwrap(&wrapped, &kek.key_id, "unwrapped", restored(), None);
         assert!(
             result.is_err(),
             "Expected error when unwrapping corrupted CMS"
@@ -1705,7 +2217,7 @@ mod tests {
             .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
             .unwrap();
         let unwrapped = backend
-            .unwrap(&wrapped, &kek.key_id, "unwrapped", restored())
+            .unwrap(&wrapped, &kek.key_id, "unwrapped", restored(), None)
             .unwrap();
 
         assert_eq!(unwrapped.algorithm, KeyAlgorithm::Rsa2048);
@@ -1730,7 +2242,7 @@ mod tests {
             .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
             .unwrap();
         let unwrapped = backend
-            .unwrap(&wrapped, &kek.key_id, "unwrapped", restored())
+            .unwrap(&wrapped, &kek.key_id, "unwrapped", restored(), None)
             .unwrap();
 
         assert_eq!(unwrapped.algorithm, KeyAlgorithm::EcdsaP256);
@@ -1754,7 +2266,7 @@ mod tests {
             .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
             .unwrap();
         let unwrapped = backend
-            .unwrap(&wrapped, &kek.key_id, "unwrapped", restored())
+            .unwrap(&wrapped, &kek.key_id, "unwrapped", restored(), None)
             .unwrap();
 
         assert_eq!(unwrapped.algorithm, KeyAlgorithm::EcdsaP256);
@@ -1781,7 +2293,7 @@ mod tests {
             .wrap_to_public(&target.key_id, &recipient_pub, WrapScheme::CmsAes256Gcm)
             .unwrap();
         let unwrapped = backend
-            .unwrap(&wrapped, &recipient.key_id, "unwrapped", restored())
+            .unwrap(&wrapped, &recipient.key_id, "unwrapped", restored(), None)
             .unwrap();
 
         assert_eq!(unwrapped.algorithm, KeyAlgorithm::EcdsaP256);
@@ -1967,7 +2479,13 @@ mod tests {
             .unwrap();
 
         let default_policy = backend
-            .unwrap(&wrapped, &transport.key_id, "restored-default", restored())
+            .unwrap(
+                &wrapped,
+                &transport.key_id,
+                "restored-default",
+                restored(),
+                None,
+            )
             .unwrap();
         let refused = backend
             .wrap(
@@ -1990,11 +2508,655 @@ mod tests {
                     usages: KeyUsages::WRAP | KeyUsages::UNWRAP,
                     ..restored()
                 },
+                None,
             )
             .unwrap();
         backend
             .wrap(&payload.key_id, &declared.key_id, WrapScheme::CmsAes256Gcm)
             .expect("a key restored as a wrapping key wraps");
+    }
+
+    /// The AES-256-GCM vector of Appendix B, Test Case 15, of the GCM
+    /// specification NIST published alongside the mode.
+    ///
+    /// The content cipher of every CMS wrap Rite writes. A published vector is
+    /// what separates "our seal and our open agree" from "both are right".
+    #[test]
+    fn aes_gcm_matches_the_published_test_case() {
+        let key = base16ct::lower::decode_vec(
+            "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308",
+        )
+        .unwrap();
+        let nonce = base16ct::lower::decode_vec("cafebabefacedbaddecaf888").unwrap();
+        let plaintext = base16ct::lower::decode_vec(concat!(
+            "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a72",
+            "1c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255",
+        ))
+        .unwrap();
+        let expected_ciphertext = base16ct::lower::decode_vec(concat!(
+            "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa",
+            "8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662898015ad",
+        ))
+        .unwrap();
+        // Test Case 15 publishes the full 16-byte tag, which is the length
+        // Rite writes.
+        let expected_tag = base16ct::lower::decode_vec("b094dac5d93471bdec1a502270e3cc6c").unwrap();
+
+        let (ciphertext, tag) = aes_256_gcm_seal(&key, &nonce, &plaintext).unwrap();
+        assert_eq!(ciphertext, expected_ciphertext);
+        assert_eq!(tag, expected_tag);
+
+        let recovered = aes_256_gcm_open(&key, &nonce, &ciphertext, &tag).unwrap();
+        assert_eq!(recovered.as_slice(), plaintext.as_slice());
+    }
+
+    /// A tampered tag or ciphertext gives an error, not plaintext. This is the
+    /// property the CMS container rests on, and the reason `CMS-RSA-CBC` went.
+    #[test]
+    fn aes_gcm_refuses_a_tampered_blob() {
+        let key = [4u8; 32];
+        let nonce = [9u8; 12];
+        let (ciphertext, tag) = aes_256_gcm_seal(&key, &nonce, b"a key that matters").unwrap();
+
+        let mut flipped = ciphertext.clone();
+        flipped[0] ^= 0x01;
+        assert!(aes_256_gcm_open(&key, &nonce, &flipped, &tag).is_err());
+
+        let mut bad_tag = tag.clone();
+        bad_tag[0] ^= 0x01;
+        assert!(aes_256_gcm_open(&key, &nonce, &ciphertext, &bad_tag).is_err());
+    }
+
+    /// A symmetric KEK takes the same container the public-key paths take, so
+    /// the wrap is evidence rather than an assertion: the algorithms are read
+    /// back out of the artifact and the scheme admits what they say.
+    #[test]
+    fn a_symmetric_kek_produces_a_readable_cms_wrap() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let kek = backend
+            .generate_key(spec(KeyAlgorithm::Aes256, "kek"))
+            .unwrap();
+        let target = backend
+            .generate_key(extractable(KeyAlgorithm::EcdsaP256, "target"))
+            .unwrap();
+
+        let wrapped = backend
+            .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
+            .expect("a symmetric KEK takes the CMS container");
+
+        let facts = rite_sdk::cms::describe(wrapped.data()).unwrap();
+        assert_eq!(
+            facts.description.recipient_info,
+            Some(RecipientInfoKind::Kekri)
+        );
+        assert_eq!(
+            facts.description.key_encryption_oid.as_str(),
+            rite_sdk::oid::AES_256_WRAP
+        );
+        assert_eq!(
+            facts
+                .description
+                .content_encryption_oid
+                .as_ref()
+                .map(rite_sdk::Oid::as_str),
+            Some(rite_sdk::oid::AES_256_GCM),
+            "the content is authenticated, which is what the scheme promises"
+        );
+        assert!(
+            WrapScheme::CmsAes256Gcm.permits(&facts.description),
+            "the scheme has to admit what its own artifact says it did"
+        );
+
+        // The blob names the KEK by its check value, so a transcript and an
+        // artifact compare without either side holding the key.
+        assert_eq!(
+            facts.recipient_key_identifier.as_deref(),
+            Some(kek.check_value.as_ref().unwrap().as_bytes().as_slice())
+        );
+
+        let restored = backend
+            .unwrap(
+                &wrapped,
+                &kek.key_id,
+                "restored",
+                KeyPolicy::default(),
+                None,
+            )
+            .expect("the same KEK recovers it");
+        assert_eq!(restored.public_key, target.public_key);
+    }
+
+    /// A symmetric KEK and an extractable symmetric payload, for the tests
+    /// that wrap one under the other.
+    fn a_wrapped_secret(
+        backend: &mut OpenSslBackend,
+        algorithm: KeyAlgorithm,
+        scheme: WrapScheme,
+    ) -> (KeyId, KeyCheckValue, WrappedKey) {
+        let kek = backend
+            .generate_key(spec(KeyAlgorithm::Aes256, "kek"))
+            .unwrap();
+        let payload = backend
+            .generate_key(KeySpec {
+                policy: KeyPolicy {
+                    extractable: true,
+                    ..KeyPolicy::default_for(algorithm)
+                },
+                ..spec(algorithm, "payload")
+            })
+            .unwrap();
+        let wrapped = backend.wrap(&payload.key_id, &kek.key_id, scheme).unwrap();
+        (
+            kek.key_id,
+            payload.check_value.expect("a symmetric key has one"),
+            wrapped,
+        )
+    }
+
+    /// A declared symmetric key is recovered, and it is the key that went in.
+    ///
+    /// The check value is what says so: a symmetric key has no public half, so
+    /// it is the only thing the two sides can compare without either holding
+    /// the secret.
+    #[test]
+    fn a_declared_symmetric_key_round_trips() {
+        for scheme in [
+            WrapScheme::Aes256Kw,
+            WrapScheme::Aes256Kwp,
+            WrapScheme::CmsAes256Gcm,
+        ] {
+            for algorithm in [KeyAlgorithm::Aes128, KeyAlgorithm::Aes256] {
+                let mut backend = OpenSslBackend::try_new("software").unwrap();
+                let (kek, original, wrapped) = a_wrapped_secret(&mut backend, algorithm, scheme);
+
+                let restored = backend
+                    .unwrap(
+                        &wrapped,
+                        &kek,
+                        "restored",
+                        KeyPolicy::default_for(algorithm),
+                        Some(algorithm),
+                    )
+                    .unwrap_or_else(|e| panic!("{scheme} under {algorithm}: {e}"));
+
+                assert_eq!(restored.algorithm, algorithm);
+                assert_eq!(restored.public_key, None, "a secret has no public half");
+                assert_eq!(
+                    restored.check_value,
+                    Some(original),
+                    "{scheme} did not return the key that went in"
+                );
+            }
+        }
+    }
+
+    /// Without the declaration the recovered bytes are refused by name.
+    ///
+    /// Nothing travels with a wrapped key saying what it is, and a 32-byte
+    /// secret is indistinguishable from any other 32 bytes. Left to OpenSSL the
+    /// operator would read an ASN.1 dump naming a key type unrelated to the
+    /// operation, in the middle of a ceremony.
+    #[test]
+    fn recovering_an_undeclared_symmetric_key_is_refused_by_name() {
+        for scheme in [WrapScheme::Aes256Kwp, WrapScheme::CmsAes256Gcm] {
+            let mut backend = OpenSslBackend::try_new("software").unwrap();
+            let (kek, _, wrapped) = a_wrapped_secret(&mut backend, KeyAlgorithm::Aes256, scheme);
+
+            let message = backend
+                .unwrap(&wrapped, &kek, "restored", KeyPolicy::default(), None)
+                .expect_err("an undeclared symmetric key cannot be imported")
+                .to_string();
+            assert!(
+                message.contains("not a private key") && message.contains("algorithm:"),
+                "{scheme}: {message}"
+            );
+        }
+    }
+
+    /// A raw AES scheme unwraps only under the size its name carries.
+    ///
+    /// The cipher follows the secret's length, so a 128-bit key opening an
+    /// AES-256-KWP blob would run AES-128-KWP while the scheme, and the
+    /// transcript with it, said otherwise. The wrap side refuses the same
+    /// mismatch, and the two have to agree or the record is a claim about an
+    /// operation that did not happen.
+    #[test]
+    fn a_raw_scheme_refuses_a_kek_of_the_other_size() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let (_, _, wrapped) =
+            a_wrapped_secret(&mut backend, KeyAlgorithm::Aes256, WrapScheme::Aes256Kwp);
+        let small = backend
+            .generate_key(spec(KeyAlgorithm::Aes128, "small-kek"))
+            .unwrap();
+
+        let message = backend
+            .unwrap(
+                &wrapped,
+                &small.key_id,
+                "restored",
+                KeyPolicy::default_for(KeyAlgorithm::Aes256),
+                Some(KeyAlgorithm::Aes256),
+            )
+            .expect_err("the scheme names a size the key does not have")
+            .to_string();
+        assert!(
+            message.contains("AES-256") && message.contains("AES-128"),
+            "{message}"
+        );
+    }
+
+    /// The CMS path refuses the same mismatch.
+    ///
+    /// `read_kek_enveloped` insists the blob declare id-aes256-wrap, and the
+    /// CEK is then unwrapped with a cipher chosen from the local secret, so
+    /// without this guard a container could name one algorithm and be opened
+    /// under another.
+    #[test]
+    fn a_cms_wrap_refuses_a_kek_of_the_other_size() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let (_, _, wrapped) =
+            a_wrapped_secret(&mut backend, KeyAlgorithm::Aes256, WrapScheme::CmsAes256Gcm);
+        let small = backend
+            .generate_key(spec(KeyAlgorithm::Aes128, "small-kek"))
+            .unwrap();
+
+        let message = backend
+            .unwrap(
+                &wrapped,
+                &small.key_id,
+                "restored",
+                KeyPolicy::default_for(KeyAlgorithm::Aes256),
+                Some(KeyAlgorithm::Aes256),
+            )
+            .expect_err("a 128-bit key cannot open an id-aes256-wrap container")
+            .to_string();
+        assert!(message.contains("id-aes256-wrap"), "{message}");
+    }
+
+    /// A declaration that disagrees with what came out fails, in both
+    /// directions: the wrong symmetric size, and a keypair declared as a
+    /// secret's algorithm or the other way round.
+    #[test]
+    fn a_declaration_that_disagrees_with_the_bytes_fails() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let (wrapping_key, _, wrapped) =
+            a_wrapped_secret(&mut backend, KeyAlgorithm::Aes256, WrapScheme::Aes256Kwp);
+
+        // 32 bytes recovered, 16 declared.
+        let message = backend
+            .unwrap(
+                &wrapped,
+                &wrapping_key,
+                "restored",
+                KeyPolicy::default_for(KeyAlgorithm::Aes128),
+                Some(KeyAlgorithm::Aes128),
+            )
+            .expect_err("the sizes disagree")
+            .to_string();
+        assert!(
+            message.contains("16 bytes") && message.contains("32 were recovered"),
+            "{message}"
+        );
+
+        // A keypair declared as something it is not.
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let transport = backend
+            .generate_key(kek(KeyAlgorithm::Rsa2048, "transport"))
+            .unwrap();
+        let target = backend
+            .generate_key(extractable(KeyAlgorithm::EcdsaP256, "target"))
+            .unwrap();
+        let wrapped = backend
+            .wrap(&target.key_id, &transport.key_id, WrapScheme::CmsAes256Gcm)
+            .unwrap();
+        let message = backend
+            .unwrap(
+                &wrapped,
+                &transport.key_id,
+                "restored",
+                restored(),
+                Some(KeyAlgorithm::Rsa2048),
+            )
+            .expect_err("the algorithms disagree")
+            .to_string();
+        assert!(
+            message.contains("RSA-2048") && message.contains("ECDSA-P256"),
+            "{message}"
+        );
+    }
+
+    /// Every region of a CMS wrap is tamper-evident, though not all by the
+    /// same mechanism.
+    ///
+    /// AES-GCM authenticates the content and nothing around it, which is what
+    /// RFC 5083 specifies when `authAttrs` is absent. The other regions are
+    /// covered anyway: the wrapped key by AES-KW's own integrity check, the
+    /// nonce by being an input to the tag, and the recipient identifier by the
+    /// check-value comparison, which is a Rite-level check rather than a
+    /// cryptographic one. That last one is the reason this test names the
+    /// regions separately.
+    #[test]
+    fn a_tampered_cms_wrap_is_refused_in_every_region() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let kek = backend
+            .generate_key(spec(KeyAlgorithm::Aes256, "kek"))
+            .unwrap();
+        let target = backend
+            .generate_key(extractable(KeyAlgorithm::EcdsaP256, "target"))
+            .unwrap();
+        let wrapped = backend
+            .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
+            .unwrap();
+        let good = cms::read_kek_enveloped(wrapped.data()).unwrap();
+
+        let flip = |bytes: &[u8]| {
+            let mut bytes = bytes.to_vec();
+            if let Some(first) = bytes.first_mut() {
+                *first ^= 0x01;
+            }
+            bytes
+        };
+        let variants = [
+            (
+                "ciphertext",
+                cms::KekEnvelope {
+                    ciphertext: flip(&good.ciphertext),
+                    ..good.clone()
+                },
+            ),
+            (
+                "tag",
+                cms::KekEnvelope {
+                    tag: flip(&good.tag),
+                    ..good.clone()
+                },
+            ),
+            (
+                "nonce",
+                cms::KekEnvelope {
+                    nonce: flip(&good.nonce),
+                    ..good.clone()
+                },
+            ),
+            (
+                "wrapped key",
+                cms::KekEnvelope {
+                    wrapped_cek: flip(&good.wrapped_cek),
+                    ..good.clone()
+                },
+            ),
+            (
+                "recipient identifier",
+                cms::KekEnvelope {
+                    key_identifier: flip(&good.key_identifier),
+                    ..good.clone()
+                },
+            ),
+        ];
+
+        for (region, envelope) in variants {
+            let der = cms::write_kek_enveloped(&envelope).unwrap();
+            let facts = cms::describe(&der).unwrap();
+            // Each variant is still a well-formed CMS wrap the scheme admits,
+            // so nothing before the decrypt would notice.
+            assert!(
+                WrapScheme::CmsAes256Gcm.permits(&facts.description),
+                "{region}: the structure should still parse as one"
+            );
+
+            let tampered =
+                WrappedKey::new(WrapScheme::CmsAes256Gcm, facts.description, der).unwrap();
+            assert!(
+                backend
+                    .unwrap(
+                        &tampered,
+                        &kek.key_id,
+                        "restored",
+                        KeyPolicy::default(),
+                        None
+                    )
+                    .is_err(),
+                "a flipped bit in the {region} was accepted"
+            );
+        }
+    }
+
+    /// A blob addressed to one key must not open under another, and the
+    /// refusal has to name the mismatch rather than surface as a decrypt
+    /// error.
+    #[test]
+    fn a_cms_wrap_refuses_the_wrong_symmetric_key() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let kek = backend
+            .generate_key(spec(KeyAlgorithm::Aes256, "kek"))
+            .unwrap();
+        let other = backend
+            .generate_key(spec(KeyAlgorithm::Aes256, "other"))
+            .unwrap();
+        let target = backend
+            .generate_key(extractable(KeyAlgorithm::EcdsaP256, "target"))
+            .unwrap();
+
+        let wrapped = backend
+            .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
+            .unwrap();
+        let message = backend
+            .unwrap(
+                &wrapped,
+                &other.key_id,
+                "restored",
+                KeyPolicy::default(),
+                None,
+            )
+            .expect_err("a different key is not the recipient")
+            .to_string();
+        assert!(message.contains("check value"), "{message}");
+    }
+
+    /// A 128-bit KEK cannot take the CMS path, whose key-encryption algorithm
+    /// is fixed at `id-aes256-wrap`. The refusal says so before any wrapping.
+    #[test]
+    fn a_cms_wrap_needs_a_256_bit_symmetric_key() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let kek = backend
+            .generate_key(spec(KeyAlgorithm::Aes128, "kek"))
+            .unwrap();
+        let target = backend
+            .generate_key(extractable(KeyAlgorithm::EcdsaP256, "target"))
+            .unwrap();
+
+        let message = backend
+            .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
+            .expect_err("a 128-bit KEK is not a 256-bit one")
+            .to_string();
+        assert!(message.contains("256-bit"), "{message}");
+    }
+
+    /// RFC 3394 sections 4.1, 4.4 and 4.6, byte for byte.
+    ///
+    /// One vector per KEK size, since the size selects the cipher and a
+    /// mis-selected one still round-trips against itself.
+    #[test]
+    fn aes_kw_matches_the_rfc_3394_vectors() {
+        let cases = [
+            (
+                "000102030405060708090a0b0c0d0e0f",
+                "00112233445566778899aabbccddeeff",
+                "1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5",
+            ),
+            (
+                "000102030405060708090a0b0c0d0e0f1011121314151617",
+                "00112233445566778899aabbccddeeff0001020304050607",
+                "031d33264e15d33268f24ec260743edce1c6c7ddee725a936ba814915c6762d2",
+            ),
+            (
+                "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+                "00112233445566778899aabbccddeeff000102030405060708090a0b0c0d0e0f",
+                "28c9f404c4b810f4cbccb35cfb87f8263f5786e2d80ed326cbc7f0e71a99f43bfb988b9b7a02dd21",
+            ),
+        ];
+        for (kek, payload, expected) in cases {
+            let kek = base16ct::lower::decode_vec(kek).unwrap();
+            let payload = base16ct::lower::decode_vec(payload).unwrap();
+            let expected = base16ct::lower::decode_vec(expected).unwrap();
+            assert_eq!(
+                aes_key_wrap(&kek, &payload, KeyWrap::Plain, true).unwrap(),
+                expected
+            );
+            assert_eq!(
+                aes_key_wrap(&kek, &expected, KeyWrap::Plain, false).unwrap(),
+                payload
+            );
+        }
+    }
+
+    /// AES-KW carries a multiple of 8 bytes and at least 16, so it cannot
+    /// carry a PKCS#8 private key. OpenSSL's own refusal says "invalid input
+    /// length" and neither names the rule nor what to reach for.
+    #[test]
+    fn aes_kw_refuses_a_payload_it_cannot_carry() {
+        let kek = [3u8; 32];
+        for unusable in [vec![7u8; 121], vec![7u8; 8]] {
+            let message = aes_key_wrap(&kek, &unusable, KeyWrap::Plain, true)
+                .expect_err("AES-KW takes 8-byte blocks of at least 16 bytes")
+                .to_string();
+            assert!(message.contains("AES-KWP"), "{message}");
+        }
+        assert!(aes_key_wrap(&kek, &[7u8; 32], KeyWrap::Plain, true).is_ok());
+    }
+
+    /// The value a custodian reads off the token, cross-checked against
+    /// `openssl mac -macopt cipher:AES-256-CBC ... CMAC` over a zero block.
+    #[test]
+    fn a_key_check_value_matches_the_cmac_of_a_zero_block() {
+        assert_eq!(
+            key_check_value(&[0u8; 16]).unwrap().to_string(),
+            "cmac-aes:763cbc"
+        );
+        assert_eq!(
+            key_check_value(&[0u8; 32]).unwrap().to_string(),
+            "cmac-aes:921105"
+        );
+        // RFC 4493's own key, so the full CMAC is checkable against the
+        // document before truncation.
+        let rfc4493 = base16ct::lower::decode_vec("2b7e151628aed2a6abf7158809cf4f3c").unwrap();
+        assert_eq!(
+            key_check_value(&rfc4493).unwrap().to_string(),
+            "cmac-aes:7ad386"
+        );
+    }
+
+    /// A generated AES key is a backend key with a check value and no public
+    /// half, and it wraps another key under the scheme naming its size.
+    #[test]
+    fn a_symmetric_key_wraps_under_the_scheme_naming_its_size() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let kek = backend
+            .generate_key(spec(KeyAlgorithm::Aes256, "kek"))
+            .unwrap();
+        assert!(kek.public_key.is_none(), "a secret has no public half");
+        let check_value = kek.check_value.expect("a symmetric key answers to a KCV");
+
+        assert!(
+            backend.export_public_key(&kek.key_id).is_err(),
+            "there is nothing to export"
+        );
+        let listed = backend.list_keys().unwrap();
+        assert_eq!(listed[0].check_value.as_ref(), Some(&check_value));
+
+        let target = backend
+            .generate_key(extractable(KeyAlgorithm::EcdsaP256, "target"))
+            .unwrap();
+        let wrapped = backend
+            .wrap(&target.key_id, &kek.key_id, WrapScheme::Aes256Kwp)
+            .expect("AES-256-KWP wraps under a 256-bit KEK");
+        assert_eq!(
+            wrapped.description().key_encryption_oid.as_str(),
+            rite_sdk::oid::AES_256_WRAP_PAD
+        );
+
+        let restored = backend
+            .unwrap(
+                &wrapped,
+                &kek.key_id,
+                "restored",
+                KeyPolicy::default(),
+                None,
+            )
+            .expect("the same KEK recovers it");
+        assert_eq!(restored.algorithm, KeyAlgorithm::EcdsaP256);
+        assert_eq!(restored.public_key, target.public_key);
+    }
+
+    /// The scheme names a KEK size because the object identifiers are
+    /// per-size and the output carries neither. A KEK of the other size is
+    /// refused rather than recorded as something it is not.
+    #[test]
+    fn a_symmetric_scheme_refuses_a_kek_of_the_wrong_size() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let kek = backend
+            .generate_key(spec(KeyAlgorithm::Aes128, "kek"))
+            .unwrap();
+        let target = backend
+            .generate_key(extractable(KeyAlgorithm::EcdsaP256, "target"))
+            .unwrap();
+
+        let message = backend
+            .wrap(&target.key_id, &kek.key_id, WrapScheme::Aes256Kwp)
+            .expect_err("a 128-bit KEK is not a 256-bit one")
+            .to_string();
+        assert!(message.contains("AES-256"), "{message}");
+
+        let wrapped = backend
+            .wrap(&target.key_id, &kek.key_id, WrapScheme::Aes128Kwp)
+            .expect("the scheme naming its own size wraps");
+        assert_eq!(
+            wrapped.description().key_encryption_oid.as_str(),
+            rite_sdk::oid::AES_128_WRAP_PAD
+        );
+    }
+
+    /// An AES scheme wraps under a symmetric key and nothing else, so a
+    /// keypair given to one is refused rather than used some other way.
+    ///
+    /// The reverse pairing is not an error: a symmetric key under
+    /// `CMS-AES-256-GCM` is the `KEKRecipientInfo` path.
+    #[test]
+    fn an_aes_scheme_refuses_a_keypair() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let keypair = backend
+            .generate_key(kek(KeyAlgorithm::Rsa2048, "keypair"))
+            .unwrap();
+        let target = backend
+            .generate_key(extractable(KeyAlgorithm::EcdsaP256, "target"))
+            .unwrap();
+
+        let message = backend
+            .wrap(&target.key_id, &keypair.key_id, WrapScheme::Aes256Kwp)
+            .expect_err("an RSA key is not an AES KEK")
+            .to_string();
+        assert!(message.contains("RSA-2048"), "{message}");
+    }
+
+    /// A symmetric key signs nothing, and the refusal says so rather than
+    /// failing inside OpenSSL.
+    #[test]
+    fn a_symmetric_key_does_not_sign() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let key = backend
+            .generate_key(KeySpec {
+                policy: KeyPolicy {
+                    usages: KeyUsages::SIGN,
+                    ..KeyPolicy::default()
+                },
+                ..spec(KeyAlgorithm::Aes256, "kek")
+            })
+            .unwrap();
+        let message = backend
+            .sign(&key.key_id, b"anything", SignAlgorithm::EcdsaSha256)
+            .expect_err("a symmetric key has no keypair")
+            .to_string();
+        assert!(message.contains("AES-256"), "{message}");
     }
 
     /// RFC 5649 section 6, both published vectors, byte for byte.
@@ -2013,14 +3175,26 @@ mod tests {
             "138bdeaa9b8fa7fc61f97742e72248ee5ae6ae5360d1ae6a5f54f373fa543b6a",
         )
         .unwrap();
-        assert_eq!(aes_kwp(&kek, &payload, true).unwrap(), expected);
-        assert_eq!(aes_kwp(&kek, &expected, false).unwrap(), payload);
+        assert_eq!(
+            aes_key_wrap(&kek, &payload, KeyWrap::Padded, true).unwrap(),
+            expected
+        );
+        assert_eq!(
+            aes_key_wrap(&kek, &expected, KeyWrap::Padded, false).unwrap(),
+            payload
+        );
 
         // Section 6.2: the same KEK, a 7-octet payload, so padding dominates.
         let payload = base16ct::lower::decode_vec("466f7250617369").unwrap();
         let expected = base16ct::lower::decode_vec("afbeb0f07dfbf5419200f2ccb50bb24f").unwrap();
-        assert_eq!(aes_kwp(&kek, &payload, true).unwrap(), expected);
-        assert_eq!(aes_kwp(&kek, &expected, false).unwrap(), payload);
+        assert_eq!(
+            aes_key_wrap(&kek, &payload, KeyWrap::Padded, true).unwrap(),
+            expected
+        );
+        assert_eq!(
+            aes_key_wrap(&kek, &expected, KeyWrap::Padded, false).unwrap(),
+            payload
+        );
     }
 
     /// AES-KWP rejects a tampered blob rather than returning plaintext, which
@@ -2029,9 +3203,9 @@ mod tests {
     #[test]
     fn aes_kwp_refuses_a_tampered_blob() {
         let kek = [7u8; 32];
-        let mut wrapped = aes_kwp(&kek, b"a key that matters", true).unwrap();
+        let mut wrapped = aes_key_wrap(&kek, b"a key that matters", KeyWrap::Padded, true).unwrap();
         wrapped[4] ^= 0x01;
-        assert!(aes_kwp(&kek, &wrapped, false).is_err());
+        assert!(aes_key_wrap(&kek, &wrapped, KeyWrap::Padded, false).is_err());
     }
 
     /// The ceiling is a property of the modulus, and an over-size payload has
@@ -2097,7 +3271,7 @@ mod tests {
             let wrapped = backend.wrap(&target.key_id, &kek.key_id, scheme).unwrap();
 
             let restored = backend
-                .unwrap(&wrapped, &kek.key_id, "restored", restored())
+                .unwrap(&wrapped, &kek.key_id, "restored", restored(), None)
                 .unwrap();
             assert_eq!(
                 original,
@@ -2149,7 +3323,7 @@ mod tests {
             .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
             .unwrap();
         let unwrapped = backend
-            .unwrap(&wrapped, &kek.key_id, "restored", restored())
+            .unwrap(&wrapped, &kek.key_id, "restored", restored(), None)
             .unwrap();
 
         assert_eq!(

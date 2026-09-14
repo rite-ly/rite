@@ -164,7 +164,7 @@ sections:
     role: ${role.crypto_officer}
     steps:
       generate_backup_key:
-        action: generate_keypair
+        action: generate_key
         backend: openssl
         with:
           algorithm: ECDSA-P256

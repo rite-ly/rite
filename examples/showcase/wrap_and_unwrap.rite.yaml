@@ -5,8 +5,8 @@ description: |
   them back.
 
   Demonstrates wrap_key and unwrap_key. The input a wrap step reads is what
-  decides who can undo it: wrapping_key: names a key this backend holds, so the
-  ceremony keeps the means to unwrap, while recipient: names a public key held
+  decides who can undo it: wrapping_key names a key this backend holds, so the
+  ceremony keeps the means to unwrap, while recipient names a public key held
   by someone else, so only they can open the result.
 
 backends:
@@ -97,7 +97,7 @@ sections:
         creates: kek
         description: |
           A symmetric key-encryption key. It has no public half, so it can
-          never appear as recipient:, and its usages need no declaring: a
+          never appear as recipient, and its usages need no declaring: a
           symmetric key defaults to wrap and unwrap, which is the only thing
           Rite holds one for.
 
@@ -168,7 +168,7 @@ sections:
           wrapping_key: ${artifact.kek}
         creates: kek_wrapped_demo_key
         description: |
-          Wrap under the symmetric key. No scheme: here, because the default
+          Wrap under the symmetric key. No scheme here, because the default
           CMS container works for a symmetric key too: the recipient becomes a
           KEKRecipientInfo naming the key both sides hold, and everything else
           about the blob is what the other two wraps produce.
@@ -214,7 +214,7 @@ sections:
           comes from the wrapped artifact, so it cannot disagree with the bytes
           being decrypted.
 
-          No algorithm: here either, because a keypair names itself once its
+          No algorithm here either, because a keypair names itself once its
           DER parses. Declaring one would still be checked against what came
           out, and the step below has to declare one.
 
@@ -235,10 +235,10 @@ sections:
           expect_key: "cmac-aes:${artifact.kek.kcv | hex}"
         creates: restored_kek
         description: |
-          Recovering the symmetric key needs algorithm:. Nothing travels with a
+          Recovering the symmetric key needs algorithm. Nothing travels with a
           wrapped key saying what it is, and a 32-byte secret is not
           distinguishable from any other 32 bytes, so the receiving ceremony
-          declares it the way it declares policy:. Get it wrong and the step
+          declares it the way it declares policy. Get it wrong and the step
           fails on the size rather than importing something else.
 
           expect_key is a check value here, not a fingerprint, because that is

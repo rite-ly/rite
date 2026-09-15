@@ -38,7 +38,7 @@ flowchart TD
 
 | Crate           | Purpose                                                                                                                                              |
 |-----------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `rite-sdk`      | Backend traits and key-material types (`PublicKeyDer`, `CertificateDer`). The boundary any external backend implements against.                       |
+| `rite-sdk`      | Backend traits and key-material types (`PublicKeyDer`, `CertificateDer`). The boundary any external backend implements against.                      |
 | `rite-model`    | DSL IR (`Ceremony`, `Step`, `Prompt`, …) and the durable transcript schema (`StepFact`, `ResponseRecord`, …). Carries no executor or channel types.  |
 | `rite-resolver` | YAML resolution and lowering, diagnostics, parameter checks.                                                                                         |
 | `rite-runtime`  | Channel protocol, executor, reporter, transcript sink, action trait and registry.                                                                    |
@@ -75,8 +75,8 @@ flowchart TD
 
 A ceremony file is untrusted input: it may be downloaded and run by an
 operator who never read it. Any string that originates in a ceremony and
-reaches the filesystem — an artifact id that becomes an output filename, a
-material's `path:` value — must be confined so it cannot escape the directory
+reaches the filesystem (an artifact id that becomes an output filename, a
+material's `path` value) must be confined so it cannot escape the directory
 it belongs in (`../../…` traversal, an absolute path, or a symlink planted at
 the destination).
 
@@ -88,7 +88,7 @@ Do not hand-roll these checks. Route every ceremony-derived path through
   time; `OutputConfig::artifact_path` re-checks at the filesystem boundary so
   a new code path cannot reintroduce a traversal.
 - `confine` for a value that may legitimately be a relative subpath but must
-  stay within a known root (material `path:` under the ceremony directory).
+  stay within a known root (material `path` under the ceremony directory).
 
 These helpers are purely lexical. When *creating* a file at a confined path,
 also open it with `create_new` (see `executor::write_new_file`) so a

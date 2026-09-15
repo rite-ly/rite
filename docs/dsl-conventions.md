@@ -6,11 +6,11 @@ Scope: `.rite.yaml` ceremony files.
 
 A `${...}` expression names a value through one of three namespaces:
 
-| Namespace  | Names                                                    | Example                 |
-|------------|----------------------------------------------------------|-------------------------|
-| `param`    | a `parameters:` declaration                              | `${param.out_dir}`      |
-| `role`     | a `roles:` declaration                                   | `${role.crypto_officer}`|
-| `artifact` | a `materials:` declaration, or a step's `creates:` value | `${artifact.root_csr}`  |
+| Namespace  | Names                                                  | Example                  |
+|------------|--------------------------------------------------------|--------------------------|
+| `param`    | a `parameters` declaration                             | `${param.out_dir}`       |
+| `role`     | a `roles` declaration                                  | `${role.crypto_officer}` |
+| `artifact` | a `materials` declaration, or a step's `creates` value | `${artifact.root_csr}`   |
 
 A material is read as `${artifact.<id>}`. There is no `material` namespace:
 materials and step outputs are both artifacts once the ceremony runs, and a
@@ -22,18 +22,18 @@ artifact holds.
 
 ### Where expressions are read
 
-| Field                                 | Holds          | What happens to it                  |
-|---------------------------------------|----------------|-------------------------------------|
-| step `with:` values                   | any expression | evaluated when the step runs        |
-| step `description:`                   | any expression | printed as written by `rite script` |
-| `role:`, `reads:`, `creates:`, `act:` | one reference  | resolved by `rite check`            |
-| everything else                       | prose          | rendered as written, never parsed   |
+| Field                             | Holds          | What happens to it                  |
+|-----------------------------------|----------------|-------------------------------------|
+| step `with` values                | any expression | evaluated when the step runs        |
+| step `description`                | any expression | printed as written by `rite script` |
+| `role`, `reads`, `creates`, `act` | one reference  | resolved by `rite check`            |
+| everything else                   | prose          | rendered as written, never parsed   |
 
 `rite script` renders a blank protocol before parameters have values, so a
-`description:` prints `${param.region}` rather than the value the run uses.
+`description` prints `${param.region}` rather than the value the run uses.
 
 Prose covers ceremony, section and act descriptions, role names,
-`preconditions:`, `prerequisites:`, material titles and paths, and parameter,
+`preconditions`, `prerequisites`, material titles and paths, and parameter,
 output and duty descriptions.
 
 Wherever a field holds an expression or a reference, `${` opens one: a `${...}`

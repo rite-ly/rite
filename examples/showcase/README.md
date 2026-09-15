@@ -68,7 +68,7 @@ neither.
 
 The escrow wrap declares `expect_recipient:`, so the step refuses a key whose
 fingerprint does not match what the ceremony committed to in advance. The
-unwrap declares `expect_key:` as an expression over the key that went in, which
+unwrap declares `expect_key` as an expression over the key that went in, which
 makes the step assert the round trip; a restore ceremony would put the origin
 ceremony's recorded fingerprint there instead. No step names a scheme:
 `unwrap_key` reads it from the wrapped artifact, so it cannot disagree with the

@@ -4,7 +4,7 @@ description: |
   Generate an offline signing key and issue its self-signed certificate, with a
   per-step retry policy on the device-touching steps.
 
-  Demonstrates the retry: field.
+  Demonstrates the retry field.
 
 backends:
   openssl:
@@ -41,7 +41,7 @@ sections:
           subject: "CN=Example Signing Key,O=Example Org"
         creates: signing_csr
         description: |
-          Build the certificate signing request. No retry: field, so the default
+          Build the certificate signing request. No retry field, so the default
           applies: a transient failure prompts the operator to retry or abort,
           with no limit.
       issue_signing_cert:

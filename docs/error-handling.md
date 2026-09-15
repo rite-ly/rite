@@ -1,6 +1,6 @@
 # Error Handling
 
-Scope: what happens when a step fails during `rite run`, and the `retry:` field.
+Scope: what happens when a step fails during `rite run`, and the `retry` field.
 
 ## When a step fails
 
@@ -32,19 +32,19 @@ not statically "retryable" or "not retryable":
   so they are never retried.
 
 You do not need to predict this when authoring. The safe default (prompt on a
-transient failure) already applies to every step. The `retry:` field only
+transient failure) already applies to every step. The `retry` field only
 **constrains** that default, it never enables retry:
 
 - `retry: never` always takes effect: it forbids the prompt on any step.
 - `retry: { attempts: N }` only bites if a transient failure actually occurs; on
   a step that can only fail fatally it is simply inert.
-- A fatal failure ignores `retry:` entirely and stops the run. You cannot retry a
+- A fatal failure ignores `retry` entirely and stops the run. You cannot retry a
   verification until it passes; the classification lives on the error types in
   the runtime, and a ceremony author cannot mark a mismatch retriable.
 
-## Constraining retries: `retry:`
+## Constraining retries: `retry`
 
-By default a transient failure prompts the operator with no limit. The `retry:`
+By default a transient failure prompts the operator with no limit. The `retry`
 field constrains that, per step:
 
 ```yaml
@@ -64,7 +64,7 @@ steps:
     retry: never
 ```
 
-Omit `retry:` for the default (prompt, unlimited). `attempts` must be at least 1;
+Omit `retry` for the default (prompt, unlimited). `attempts` must be at least 1;
 use `retry: never` to forbid retries entirely.
 
 In non-interactive runs (`rite run --frontend headless`, dry runs) the retry

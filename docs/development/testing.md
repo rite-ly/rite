@@ -14,7 +14,7 @@ of compatibility are in play and must not be conflated:
 - **Format compatibility** (transcript, DSL schema, rendered documents). A data contract with
   the outside world: a transcript produced today must still `rite verify` tomorrow, and a
   ceremony written against the documented DSL must keep parsing, unless we deliberately bump the
-  `version:` field. Format changes are intentional and reviewed, never incidental.
+  `version` field. Format changes are intentional and reviewed, never incidental.
 
 | Tier             | Crates                                                         | Promise at 0.x                                                                   | Emphasis                                      |
 |------------------|----------------------------------------------------------------|----------------------------------------------------------------------------------|-----------------------------------------------|

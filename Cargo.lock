@@ -1891,7 +1891,7 @@ dependencies = [
 
 [[package]]
 name = "rite"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "assert_cmd",
  "base16ct 1.0.0",
@@ -1917,7 +1917,7 @@ dependencies = [
 
 [[package]]
 name = "rite-ls"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "dashmap",
  "rite-model",
@@ -1928,7 +1928,7 @@ dependencies = [
 
 [[package]]
 name = "rite-model"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "indexmap",
  "rite-sdk",
@@ -1938,7 +1938,7 @@ dependencies = [
 
 [[package]]
 name = "rite-openssl"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base16ct 1.0.0",
  "openssl",
@@ -1950,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "rite-piv"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "der 0.7.10",
  "rite-sdk",
@@ -1961,7 +1961,7 @@ dependencies = [
 
 [[package]]
 name = "rite-pkcs11"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cryptoki",
  "rite-sdk",
@@ -1969,7 +1969,7 @@ dependencies = [
 
 [[package]]
 name = "rite-render"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64ct",
  "chrono",
@@ -1983,7 +1983,7 @@ dependencies = [
 
 [[package]]
 name = "rite-resolver"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "indexmap",
  "marked-yaml",
@@ -1996,7 +1996,7 @@ dependencies = [
 
 [[package]]
 name = "rite-runtime"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base16ct 1.0.0",
  "base32ct",
@@ -2018,7 +2018,7 @@ dependencies = [
 
 [[package]]
 name = "rite-sdk"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64ct",
  "bitflags",
@@ -2030,7 +2030,7 @@ dependencies = [
 
 [[package]]
 name = "rite-stdlib"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "openssl",
@@ -2052,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "rite-tui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -2065,7 +2065,7 @@ dependencies = [
 
 [[package]]
 name = "rite-yubikey"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "rite-piv",
  "rite-sdk",

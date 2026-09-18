@@ -2305,9 +2305,45 @@ mod tests {
     }
 
     /// PKCS#8 material for a key this build can make.
-    #[cfg(test)]
     fn pkcs8_of(key: &PKey<Private>) -> Vec<u8> {
         key.private_key_to_pkcs8().unwrap()
+    }
+
+    /// Import material for the post-quantum algorithms, and nothing on a build
+    /// without them.
+    ///
+    /// Building it needs `PKey::private_key_from_seed`, which the `openssl`
+    /// crate compiles only against a version carrying those providers. The cfg
+    /// is confined here so the caller reads the same either way.
+    fn post_quantum_material() -> Vec<(KeyAlgorithm, Vec<u8>)> {
+        #[cfg(not(ossl350))]
+        {
+            Vec::new()
+        }
+        #[cfg(ossl350)]
+        {
+            use openssl::pkey::KeyType;
+
+            [
+                (KeyAlgorithm::MlDsa44, KeyType::ML_DSA_44, ML_DSA_SEED_LEN),
+                (KeyAlgorithm::MlDsa65, KeyType::ML_DSA_65, ML_DSA_SEED_LEN),
+                (KeyAlgorithm::MlDsa87, KeyType::ML_DSA_87, ML_DSA_SEED_LEN),
+                (KeyAlgorithm::MlKem512, KeyType::ML_KEM_512, ML_KEM_SEED_LEN),
+                (KeyAlgorithm::MlKem768, KeyType::ML_KEM_768, ML_KEM_SEED_LEN),
+                (
+                    KeyAlgorithm::MlKem1024,
+                    KeyType::ML_KEM_1024,
+                    ML_KEM_SEED_LEN,
+                ),
+            ]
+            .into_iter()
+            .map(|(algorithm, key_type, seed_len)| {
+                let seed = vec![9u8; seed_len];
+                let key = PKey::private_key_from_seed(None, key_type, None, &seed).unwrap();
+                (algorithm, pkcs8_of(&key))
+            })
+            .collect()
+        }
     }
 
     /// Every algorithm this build supports, imported once.
@@ -2328,7 +2364,7 @@ mod tests {
             pkcs8_of(&PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap())
         };
 
-        let mut cases: Vec<(KeyAlgorithm, Vec<u8>)> = vec![
+        let cases: Vec<(KeyAlgorithm, Vec<u8>)> = vec![
             (
                 KeyAlgorithm::Aes128,
                 vec![7u8; KeyAlgorithm::Aes128.key_bytes().unwrap()],
@@ -2353,29 +2389,7 @@ mod tests {
             ),
         ];
 
-        #[cfg(ossl350)]
-        {
-            use openssl::pkey::KeyType;
-
-            for (algorithm, key_type, seed_len) in [
-                (KeyAlgorithm::MlDsa44, KeyType::ML_DSA_44, ML_DSA_SEED_LEN),
-                (KeyAlgorithm::MlDsa65, KeyType::ML_DSA_65, ML_DSA_SEED_LEN),
-                (KeyAlgorithm::MlDsa87, KeyType::ML_DSA_87, ML_DSA_SEED_LEN),
-                (KeyAlgorithm::MlKem512, KeyType::ML_KEM_512, ML_KEM_SEED_LEN),
-                (KeyAlgorithm::MlKem768, KeyType::ML_KEM_768, ML_KEM_SEED_LEN),
-                (
-                    KeyAlgorithm::MlKem1024,
-                    KeyType::ML_KEM_1024,
-                    ML_KEM_SEED_LEN,
-                ),
-            ] {
-                let seed = vec![9u8; seed_len];
-                let key = PKey::private_key_from_seed(None, key_type, None, &seed).unwrap();
-                cases.push((algorithm, pkcs8_of(&key)));
-            }
-        }
-
-        for (algorithm, material) in cases {
+        for (algorithm, material) in cases.into_iter().chain(post_quantum_material()) {
             let mut backend = OpenSslBackend::try_new("test").unwrap();
             let meta = backend
                 .import_key(spec(algorithm, "imported"), &material)

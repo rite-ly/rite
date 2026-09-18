@@ -39,9 +39,10 @@ pub use backend::{
 };
 
 pub use types::{
-    Attestation, AttestationKind, BackendConfig, CertRef, DeviceInfo, IncoherentWrap, KeyAlgorithm,
-    KeyCheckValue, KeyId, KeyMetadata, KeyPolicy, KeySecurityAttributes, KeySpec, KeyUsages, Oid,
-    ParseError, PcrValue, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo,
-    PivTouchPolicy, Pkcs11Mechanism, Pkcs11TokenFlags, Pkcs11TokenInfo, RecipientInfoKind,
-    SignAlgorithm, TpmInfo, WrapDescription, WrapScheme, WrappedKey, YubikeySlotMetadata, oid,
+    Attestation, AttestationKind, BackendConfig, CertRef, DataKey, DeviceInfo, EncryptedData,
+    IncoherentContainer, KeyAlgorithm, KeyCheckValue, KeyId, KeyMetadata, KeyPolicy, KeyProtection,
+    KeySecurityAttributes, KeySpec, KeyUsages, Oid, ParseError, PcrValue, PivDeviceInfo,
+    PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy, Pkcs11Mechanism,
+    Pkcs11TokenFlags, Pkcs11TokenInfo, RecipientInfoKind, SignAlgorithm, TpmInfo, WrapDescription,
+    WrapScheme, WrappedKey, YubikeySlotMetadata, oid,
 };

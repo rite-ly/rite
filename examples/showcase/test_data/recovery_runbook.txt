@@ -1,0 +1,14 @@
+RECOVERY RUNBOOK (illustrative)
+
+1. Retrieve the sealed archive from the vault. The envelope is labelled with
+   the check value of the key that opens it. Confirm it matches the value in
+   the ceremony record before going further.
+
+2. Convene two custodians. Neither may hold the archive and the key at the
+   same time between the vault and the room.
+
+3. Open the archive on the air-gapped machine. Follow the steps inside from
+   the top; do not skip to the signing section.
+
+4. Record the time the archive was opened and by whom, and re-seal what is
+   left at the end of the session.

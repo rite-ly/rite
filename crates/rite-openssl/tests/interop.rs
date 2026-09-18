@@ -301,7 +301,7 @@ fn openssl_cli_decrypts_a_wrap_under_a_symmetric_key() {
 
     let mut backend = OpenSslBackend::try_new("interop-test").unwrap();
     let kek = backend
-        .import_private_key(
+        .import_key(
             KeySpec {
                 algorithm: KeyAlgorithm::Aes256,
                 label: "kek".to_string(),
@@ -384,7 +384,7 @@ fn rite_unwraps_what_the_openssl_cli_wrote() {
     let mut secret = vec![0u8; 32];
     openssl::rand::rand_bytes(&mut secret).unwrap();
     let kek = backend
-        .import_private_key(
+        .import_key(
             KeySpec {
                 algorithm: KeyAlgorithm::Aes256,
                 label: "kek".to_string(),
@@ -457,6 +457,108 @@ fn rite_unwraps_what_the_openssl_cli_wrote() {
         restored.public_key.as_ref().map(PublicKeyDer::as_bytes),
         Some(payload.public_key_to_der().unwrap().as_slice()),
         "the key Rite recovered is not the key the CLI wrapped"
+    );
+
+    secret.fill(0);
+}
+
+/// The container `encrypt_data` assembles, opened by the command line.
+///
+/// Built the way the action builds it, from a data key the backend produced and
+/// a content pipeline that never sees the key-encryption key, rather than
+/// through `wrap`. That path writes the same structure, and this is what says
+/// so against an implementation neither half of Rite wrote.
+#[test]
+fn the_openssl_cli_opens_content_sealed_to_a_data_key() {
+    if !openssl_binary_available() {
+        eprintln!("skipping: openssl binary not available");
+        return;
+    }
+
+    let mut backend = OpenSslBackend::try_new("interop-test").unwrap();
+    let mut secret = vec![0u8; 32];
+    openssl::rand::rand_bytes(&mut secret).unwrap();
+    let kek = backend
+        .import_key(
+            KeySpec {
+                algorithm: KeyAlgorithm::Aes256,
+                label: "kek".to_string(),
+                policy: KeyPolicy::default_for(KeyAlgorithm::Aes256),
+                location_hint: None,
+            },
+            &secret,
+        )
+        .unwrap();
+
+    let content = b"the custodian's copy of the recovery phrase";
+    let data_key = backend
+        .generate_data_key(&kek.key_id, KeyAlgorithm::Aes256)
+        .expect("the backend protects a data key under the KEK it holds");
+    let sealed = rite_openssl::seal_content(data_key.plaintext(), content)
+        .expect("the content pipeline encrypts under the data key");
+
+    let kcv = kek.check_value.as_ref().expect("a symmetric key has one");
+    let der = rite_sdk::cms::write_kek_enveloped(&rite_sdk::cms::KekEnvelope {
+        key_identifier: kcv.as_bytes().to_vec(),
+        wrapped_cek: data_key.wrapped().to_vec(),
+        nonce: sealed.nonce,
+        ciphertext: sealed.ciphertext,
+        tag: sealed.tag,
+    })
+    .expect("the container assembles");
+
+    let dir = tempfile::tempdir().unwrap();
+    let blob = dir.path().join("sealed.der");
+    std::fs::write(&blob, &der).unwrap();
+
+    let decrypt = Command::new("openssl")
+        .args([
+            "cms",
+            "-decrypt",
+            "-binary",
+            "-inform",
+            "DER",
+            "-in",
+            blob.to_str().unwrap(),
+            "-secretkey",
+            &base16ct::lower::encode_string(&secret),
+            "-secretkeyid",
+            &base16ct::lower::encode_string(kcv.as_bytes()),
+        ])
+        .output()
+        .expect("Failed to spawn openssl cms");
+    assert!(
+        decrypt.status.success(),
+        "openssl cms -decrypt -secretkey failed:\nstderr: {}",
+        String::from_utf8_lossy(&decrypt.stderr),
+    );
+    assert_eq!(
+        decrypt.stdout, content,
+        "the command line recovered something other than the content that went in"
+    );
+
+    // And the backend opens the data key again from the same bytes, which is
+    // the half `decrypt_data` uses.
+    let reopened = backend
+        .open_data_key(
+            &kek.key_id,
+            data_key.wrapped(),
+            rite_sdk::KeyProtection::AesKeyWrap,
+        )
+        .expect("the KEK opens the data key it protected");
+    assert_eq!(reopened.as_slice(), data_key.plaintext());
+    assert_eq!(data_key.protection(), rite_sdk::KeyProtection::AesKeyWrap);
+
+    // A protection this backend does not implement is refused rather than
+    // attempted, since one protection's bytes look like another's.
+    let refused = backend.open_data_key(
+        &kek.key_id,
+        data_key.wrapped(),
+        rite_sdk::KeyProtection::RsaOaepSha256,
+    );
+    assert!(
+        refused.is_err(),
+        "a data key protected another way must not be opened as AES-KW"
     );
 
     secret.fill(0);

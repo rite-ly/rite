@@ -125,6 +125,9 @@ pub fn resolve_public_key<S: BuildHasher>(
         ArtifactValue::WrappedKey { .. } => Err(BackendError::InvalidKeyFormat(format!(
             "artifact '{artifact_id}' is a wrapped key, not a public key"
         ))),
+        ArtifactValue::EncryptedData(_) => Err(BackendError::InvalidKeyFormat(format!(
+            "artifact '{artifact_id}' is encrypted content, not a public key"
+        ))),
     }
 }
 
@@ -167,6 +170,9 @@ pub fn resolve_certificate<S: BuildHasher>(
         | ArtifactValue::PublicKey(_)
         | ArtifactValue::WrappedKey { .. } => Err(BackendError::InvalidKeyFormat(format!(
             "artifact '{artifact_id}' holds a key, not a certificate"
+        ))),
+        ArtifactValue::EncryptedData(_) => Err(BackendError::InvalidKeyFormat(format!(
+            "artifact '{artifact_id}' is encrypted content, not a certificate"
         ))),
     }
 }

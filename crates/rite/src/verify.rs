@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::wrap_checks::{WrapCheck, check_wraps};
+use crate::container_checks::{ContainerCheck, check_containers};
 use clap::Args as ClapArgs;
 use rite_model::StepFact;
 use rite_runtime::{
@@ -47,11 +47,11 @@ pub fn run(args: &Args) {
         .as_deref()
         .map(|dir| check_artifacts(dir, loaded.facts.iter().map(|t| &t.fact)));
 
-    // A wrap fact states what algorithms were used and who the recipient was.
-    // The artifact it produced says the same things independently, so where
-    // the artifact is at hand the two are compared.
+    // A wrap or encrypt fact states what algorithms were used and who the
+    // recipient was. The artifact it produced says the same things
+    // independently, so where the artifact is at hand the two are compared.
     let facts: Vec<&StepFact> = loaded.facts.iter().map(|t| &t.fact).collect();
-    let wrap_checks = check_wraps(source_dir.as_deref(), &facts);
+    let container_checks = check_containers(source_dir.as_deref(), &facts);
 
     print_counts(loaded.facts.len(), &entropy);
 
@@ -60,7 +60,7 @@ pub fn run(args: &Args) {
         None => (false, false),
     };
 
-    let wraps_failed = summarize_wraps(&wrap_checks);
+    let containers_failed = summarize_containers(&container_checks);
 
     // The chain check proves internal consistency only: a complete substitute
     // transcript verifies just as cleanly. Tying it to the witnessed ceremony
@@ -104,11 +104,11 @@ pub fn run(args: &Args) {
         failed = true;
     }
 
-    if wraps_failed {
+    if containers_failed {
         eprintln!();
         eprintln!(
-            "Verification failed: a wrapped artifact contradicts what the transcript\n\
-             records about the wrap that produced it."
+            "Verification failed: an artifact contradicts what the transcript records\n\
+             about the step that produced it."
         );
         failed = true;
     }
@@ -183,21 +183,21 @@ fn print_counts(facts: usize, entropy: &rite_runtime::EntropyVerified) {
     }
 }
 
-/// Print the per-wrap result lines, and report whether any artifact
+/// Print the per-container result lines, and report whether any artifact
 /// contradicts what the transcript says was done to it.
 ///
-/// A wrap nothing could check prints as unchecked and fails nothing: an
+/// A container nothing could check prints as unchecked and fails nothing: an
 /// artifact carried off to its destination is the normal case, and absence is
 /// not evidence either way.
-fn summarize_wraps(checks: &[WrapCheck]) -> bool {
+fn summarize_containers(checks: &[ContainerCheck]) -> bool {
     if checks.is_empty() {
         return false;
     }
-    println!("  Wraps:");
+    println!("  Containers:");
     for check in checks {
         println!("    {}", check.describe());
     }
-    checks.iter().any(WrapCheck::failed)
+    checks.iter().any(ContainerCheck::failed)
 }
 
 /// Print the per-artifact result lines and fold the statuses into

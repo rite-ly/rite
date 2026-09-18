@@ -97,7 +97,7 @@ impl KeyStoreBackend for PivCardBackend {
         )
     }
 
-    fn import_private_key(
+    fn import_key(
         &mut self,
         _spec: KeySpec,
         _key_bytes: &[u8],

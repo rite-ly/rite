@@ -4,6 +4,10 @@
 `unwrap_key` decrypts one and imports it into a backend. Both are about
 custody: who ends up able to use the key.
 
+For bytes that are not a key, see
+[encrypting-content.md](encrypting-content.md). The container is the same one
+and the claim is not.
+
 ## The two paths
 
 The input a step reads selects the path, and the choice is visible in the
@@ -142,16 +146,16 @@ other 32 bytes are the same bytes, so the receiving ceremony declares what it
 is restoring, the way it already declares `policy`:
 
 ```yaml
-  - id: restore_kek
-    action: unwrap_key
-    backend: openssl
-    reads:
-      unwrapping_key: ${artifact.transport_key}
-      wrapped_data: ${artifact.wrapped_kek}
-    with:
-      algorithm: AES-256
-      expect_key: cmac-aes:763cbc
-      label: restored-kek
+restore_kek:
+  action: unwrap_key
+  backend: openssl
+  reads:
+    unwrapping_key: ${artifact.transport_key}
+    wrapped_data: ${artifact.wrapped_kek}
+  with:
+    algorithm: AES-256
+    expect_key: cmac-aes:763cbc
+    label: restored-kek
 ```
 
 `algorithm` is required to recover a symmetric key and optional for a keypair,
@@ -166,6 +170,51 @@ The declared algorithm also picks the default `policy` usages, sign and verify
 for a keypair and wrap and unwrap for a symmetric key, exactly as at generation.
 `extractable` defaults to true either way, because the backend has just held the
 key in the clear and claiming otherwise would be a claim the run cannot support.
+
+## Installing a key the ceremony already holds
+
+`import_key` is `unwrap_key` without the decrypt. It reads bytes and installs
+them as a key of a named algorithm:
+
+```yaml
+import_the_kek:
+  action: import_key
+  backend: openssl
+  reads:
+    key_material: ${artifact.kek_component}
+  with:
+    algorithm: AES-256
+    label: transport-kek
+    expect_key: cmac-aes:d0cd55
+    policy:
+      usages: [wrap, unwrap]
+```
+
+The bytes can be a material carried into the room or an artifact an earlier
+step produced. `algorithm` is required here where `unwrap_key` allows it to be
+left out for a keypair: a wrapped artifact carries a description, and plain
+bytes carry nothing. It also selects how the material is read, as the key
+itself for a symmetric algorithm and as a private key for every other. The
+declared algorithm is checked against what the material turns out to be, so a
+key stored under a name it does not answer to fails the step instead.
+
+A private key is read as PEM or DER, whichever it is, since PEM announces
+itself in its first line and is what `openssl` writes by default. An encrypted
+PEM is refused by name, because a ceremony carries no passphrase to open one.
+
+`expect_key` and `policy` work as they do at unwrap, and `expect_key` matters
+more here. It is the only evidence the ceremony has about material it did not
+produce, so a ceremony that knows the check value should state it.
+
+A public key needs none of this. It is read where it is used, from a material
+or any artifact holding its bytes, and never enters a backend, because nothing
+holds it and nothing about it is secret.
+
+`rite verify` names the difference between a key imported this way and one the
+ceremony generated. A wrap addressed to an imported key reports `addressed to a
+key imported into this ceremony`, which says the blob can be opened here and
+stops short of saying where the key came from. That is outside the bundle, and
+an attestation is what covers it.
 
 ## What the transcript records
 

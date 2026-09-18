@@ -5,6 +5,7 @@
 mod check;
 mod common;
 mod console;
+mod container_checks;
 mod headless;
 #[cfg(feature = "render")]
 mod report;
@@ -14,7 +15,6 @@ mod script;
 mod system_info;
 mod verify;
 mod version;
-mod wrap_checks;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};

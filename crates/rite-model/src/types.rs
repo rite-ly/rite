@@ -105,6 +105,28 @@ pub enum ActionType {
     WrapKey,
     /// Decrypt a wrapped key and import it into a backend under a new label.
     UnwrapKey,
+    /// Encrypt content for a recipient, producing an encrypted-data artifact.
+    ///
+    /// `wrap_key` for bytes that are not a key. The container is the same one,
+    /// and the claim is not: a wrap says a key left a backend under protection,
+    /// while encrypted content makes no custody claim at all.
+    ///
+    /// Reads `encryption_key:`, a key-encryption key the backend holds. The key
+    /// protects a fresh content-encryption key, and the content is encrypted
+    /// under that.
+    EncryptData,
+    /// Decrypt an encrypted-data artifact back to bytes.
+    ///
+    /// The bytes become an ordinary artifact, so a later step reads them as a
+    /// material: `import_key` lifts them into a key, `check_value` compares
+    /// them, `sign_data` signs them.
+    DecryptData,
+    /// Install key material the ceremony holds as a key of a named algorithm.
+    ///
+    /// `unwrap_key` without the decrypt. The bytes can be a material carried
+    /// into the room or an artifact an earlier step produced, and `algorithm:`
+    /// says how to read them, because raw material says nothing about itself.
+    ImportKey,
     /// Export public key from keypair.
     ExportPublic,
     /// Sign arbitrary data with a backend-managed key.
@@ -307,6 +329,9 @@ impl ActionType {
         ActionType::GenerateKey,
         ActionType::WrapKey,
         ActionType::UnwrapKey,
+        ActionType::ImportKey,
+        ActionType::EncryptData,
+        ActionType::DecryptData,
         ActionType::ExportPublic,
         ActionType::SignData,
         ActionType::VerifySignature,
@@ -337,6 +362,9 @@ impl ActionType {
             | ActionType::PivReadCertificate
             | ActionType::PivSign
             | ActionType::YubikeyAttestSlot
+            | ActionType::ImportKey
+            | ActionType::EncryptData
+            | ActionType::DecryptData
             | ActionType::TpmAttest => BackendUsage::Required,
 
             ActionType::VerifySignature => BackendUsage::SoftwareUnlessNamed,
@@ -363,6 +391,9 @@ impl ActionType {
         match self {
             ActionType::CheckValue => &["actual", "expected"],
             ActionType::GenerateCsr => &["subject"],
+            // Raw material carries no description, so the ceremony declares
+            // what it is lifting rather than the step guessing.
+            ActionType::ImportKey => &["algorithm"],
 
             ActionType::ClockCheck
             | ActionType::Confirm
@@ -380,6 +411,8 @@ impl ActionType {
             | ActionType::PivReadCertificate
             | ActionType::PivSign
             | ActionType::YubikeyAttestSlot
+            | ActionType::EncryptData
+            | ActionType::DecryptData
             | ActionType::IssueCertificate => &[],
         }
     }
@@ -411,7 +444,10 @@ impl ActionType {
             ],
             ActionType::GenerateKey => &["algorithm", "policy", "slot"],
             ActionType::WrapKey => &["scheme", "expect_recipient"],
-            ActionType::UnwrapKey => &["algorithm", "expect_key", "label", "policy"],
+            ActionType::UnwrapKey | ActionType::ImportKey => {
+                &["algorithm", "expect_key", "label", "policy"]
+            }
+            ActionType::EncryptData => &["scheme"],
             ActionType::SignData | ActionType::VerifySignature => &["algorithm", "message"],
             ActionType::Attest => &["statement"],
             ActionType::GatherEntropy => &["instruction"],
@@ -419,11 +455,11 @@ impl ActionType {
             ActionType::GenerateCsr => &["subject", "san"],
             ActionType::PivReadCertificate | ActionType::YubikeyAttestSlot => &["slot", "message"],
             ActionType::PivSign => &["slot", "algorithm", "message"],
-            // `export_public` takes its inputs through `reads:` alone, and
-            // `tpm_attest` has no handler in any build yet, so neither has a
-            // `with:` shape to accept. For the second, `unsupported_actions`
-            // is what reports the step itself.
-            ActionType::ExportPublic | ActionType::TpmAttest => &[],
+            // `export_public` and `decrypt_data` take their inputs through
+            // `reads:` alone, and `tpm_attest` has no handler in any build yet,
+            // so none of the three has a `with:` shape to accept. For the last,
+            // `unsupported_actions` is what reports the step itself.
+            ActionType::ExportPublic | ActionType::DecryptData | ActionType::TpmAttest => &[],
         }
     }
 
@@ -444,6 +480,11 @@ impl ActionType {
                 with_field_requires: &[("expect_recipient", "recipient")],
             },
             ActionType::UnwrapKey => ReadsContract::required(&["unwrapping_key", "wrapped_data"]),
+            ActionType::ImportKey => ReadsContract::required(&["key_material"]),
+            ActionType::EncryptData => ReadsContract::required(&["data", "encryption_key"]),
+            ActionType::DecryptData => {
+                ReadsContract::required(&["encrypted_data", "decryption_key"])
+            }
             ActionType::SignData => ReadsContract::required(&["key", "data"]),
             ActionType::VerifySignature => ReadsContract::required(&["key", "data", "signature"]),
             ActionType::IssueCertificate => ReadsContract::required(&["signing_key", "csr"]),
@@ -490,6 +531,9 @@ impl ActionType {
             ActionType::PivReadCertificate => "Read a certificate from a PIV smart card slot.",
             ActionType::PivSign => "Sign data using a PIV smart card key.",
             ActionType::YubikeyAttestSlot => "Attest a YubiKey PIV slot key.",
+            ActionType::ImportKey => "Import a key from material the ceremony holds.",
+            ActionType::EncryptData => "Encrypt content under a key held by a backend.",
+            ActionType::DecryptData => "Decrypt an encrypted-data artifact back to bytes.",
         }
     }
 }
@@ -505,6 +549,9 @@ impl std::fmt::Display for ActionType {
             ActionType::GenerateKey => write!(f, "generate_key"),
             ActionType::WrapKey => write!(f, "wrap_key"),
             ActionType::UnwrapKey => write!(f, "unwrap_key"),
+            ActionType::ImportKey => write!(f, "import_key"),
+            ActionType::EncryptData => write!(f, "encrypt_data"),
+            ActionType::DecryptData => write!(f, "decrypt_data"),
             ActionType::ExportPublic => write!(f, "export_public"),
             ActionType::SignData => write!(f, "sign_data"),
             ActionType::VerifySignature => write!(f, "verify_signature"),
@@ -529,6 +576,8 @@ pub enum OutputType {
     PublicKey,
     /// A key wrapped for transport, in the container its scheme names.
     WrappedKey,
+    /// Content encrypted for a recipient, in the container its scheme names.
+    EncryptedData,
     /// X.509 certificate.
     Certificate,
     /// DNSSEC signed resource record set.
@@ -548,6 +597,7 @@ impl std::fmt::Display for OutputType {
         match self {
             OutputType::PublicKey => write!(f, "public_key"),
             OutputType::WrappedKey => write!(f, "wrapped_key"),
+            OutputType::EncryptedData => write!(f, "encrypted_data"),
             OutputType::Certificate => write!(f, "certificate"),
             OutputType::SignedRrset => write!(f, "signed_rrset"),
             OutputType::Sct => write!(f, "sct"),
@@ -562,7 +612,10 @@ impl OutputType {
     pub fn default_extension(&self) -> &'static str {
         match self {
             OutputType::PublicKey | OutputType::Certificate => "pem",
-            OutputType::WrappedKey | OutputType::SignedRrset | OutputType::Sct => "bin",
+            OutputType::WrappedKey
+            | OutputType::EncryptedData
+            | OutputType::SignedRrset
+            | OutputType::Sct => "bin",
             OutputType::Document => "txt",
             OutputType::CeremonyLog => "json",
         }
@@ -704,6 +757,9 @@ mod tests {
             (ActionType::GenerateKey, "\"generate_key\""),
             (ActionType::WrapKey, "\"wrap_key\""),
             (ActionType::UnwrapKey, "\"unwrap_key\""),
+            (ActionType::ImportKey, "\"import_key\""),
+            (ActionType::EncryptData, "\"encrypt_data\""),
+            (ActionType::DecryptData, "\"decrypt_data\""),
             (ActionType::ExportPublic, "\"export_public\""),
             (ActionType::Attest, "\"attest\""),
             (ActionType::TpmAttest, "\"tpm_attest\""),
@@ -734,6 +790,7 @@ mod tests {
             ActionType::GenerateKey,
             ActionType::WrapKey,
             ActionType::UnwrapKey,
+            ActionType::ImportKey,
             ActionType::ExportPublic,
             ActionType::Attest,
             ActionType::TpmAttest,
@@ -761,6 +818,7 @@ mod tests {
         let cases: &[(OutputType, &str)] = &[
             (OutputType::PublicKey, "\"public_key\""),
             (OutputType::WrappedKey, "\"wrapped_key\""),
+            (OutputType::EncryptedData, "\"encrypted_data\""),
             (OutputType::Certificate, "\"certificate\""),
             (OutputType::Document, "\"document\""),
             (OutputType::CeremonyLog, "\"ceremony_log\""),
@@ -876,6 +934,9 @@ mod tests {
                 | ActionType::GenerateKey
                 | ActionType::WrapKey
                 | ActionType::UnwrapKey
+                | ActionType::ImportKey
+                | ActionType::EncryptData
+                | ActionType::DecryptData
                 | ActionType::ExportPublic
                 | ActionType::SignData
                 | ActionType::VerifySignature

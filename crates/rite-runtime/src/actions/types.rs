@@ -3,7 +3,8 @@
 use base64ct::{Base64, Encoding};
 
 use rite_sdk::{
-    CertificateDer, KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer, WrapScheme, WrappedKey,
+    CertificateDer, EncryptedData, KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer, WrapScheme,
+    WrappedKey,
 };
 
 /// Runtime representation of an artifact.
@@ -31,6 +32,14 @@ pub enum ArtifactValue {
     /// the wrap actually used. The container follows the scheme; the OpenSSL
     /// backend produces a CMS `ContentInfo`.
     WrappedKey(WrappedKey),
+    /// Content encrypted for a recipient, in the container its scheme names.
+    ///
+    /// Distinct from [`WrappedKey`](ArtifactValue::WrappedKey) even though the
+    /// bytes have the same shape. What differs is the claim: a wrapped key left
+    /// a backend under protection, and encrypted content says nothing about
+    /// custody. The type is what keeps a document from reaching a step that
+    /// installs keys.
+    EncryptedData(EncryptedData),
     /// Exported public key.
     PublicKey(PublicKeyDer),
     /// Binary content from files or inline data (documents, crypto materials).
@@ -93,6 +102,12 @@ impl std::fmt::Display for ArtifactValue {
                     wrapped.data().len()
                 ),
             },
+            ArtifactValue::EncryptedData(encrypted) => write!(
+                f,
+                "EncryptedData({}, {} bytes)",
+                encrypted.scheme(),
+                encrypted.data().len()
+            ),
             ArtifactValue::PublicKey(key) => {
                 let pem = encode_pem("PUBLIC KEY", key.as_bytes());
                 write!(f, "{pem}")
@@ -129,6 +144,46 @@ fn pem_label(scheme: WrapScheme) -> Option<&'static str> {
     match scheme {
         WrapScheme::CmsAes256Gcm => Some("CMS"),
         _ => None,
+    }
+}
+
+/// Write out a container the way a recipient reads it.
+///
+/// Shared by a wrapped key and encrypted content, because the scheme decides
+/// the encoding and the two carry the same schemes. `kind` names the artifact
+/// in the error, so a wrong `format:` says which artifact it was written on.
+fn serialize_container(
+    scheme: WrapScheme,
+    data: &[u8],
+    format: Option<&str>,
+    kind: &str,
+) -> Result<SerializedArtifact, String> {
+    let (mime, ext) = match scheme {
+        WrapScheme::CmsAes256Gcm => ("application/pkcs7-mime", "p7c"),
+        _ => ("application/octet-stream", "bin"),
+    };
+    match format.unwrap_or("der") {
+        "der" => Ok(SerializedArtifact {
+            bytes: data.to_vec(),
+            mime_type: Some(mime.to_string()),
+            extension: ext,
+        }),
+        "pem" => {
+            let label = pem_label(scheme).ok_or_else(|| {
+                format!(
+                    "{scheme} produces raw bytes, which have no PEM form. Write it as 'der', \
+                     which is what a recipient imports."
+                )
+            })?;
+            Ok(SerializedArtifact {
+                bytes: encode_pem(label, data).into_bytes(),
+                mime_type: Some("application/x-pem-file".to_string()),
+                extension: "pem",
+            })
+        }
+        other => Err(format!(
+            "Invalid format '{other}' for {kind} (valid: der, pem)"
+        )),
     }
 }
 
@@ -189,36 +244,14 @@ impl ArtifactValue {
     pub fn serialize(&self, format: Option<&str>) -> Result<SerializedArtifact, String> {
         match self {
             ArtifactValue::WrappedKey(wrapped) => {
-                let fmt = format.unwrap_or("der");
-                let (mime, ext) = match wrapped.scheme() {
-                    WrapScheme::CmsAes256Gcm => ("application/pkcs7-mime", "p7c"),
-                    _ => ("application/octet-stream", "bin"),
-                };
-                match fmt {
-                    "der" => Ok(SerializedArtifact {
-                        bytes: wrapped.data().to_vec(),
-                        mime_type: Some(mime.to_string()),
-                        extension: ext,
-                    }),
-                    "pem" => {
-                        let label = pem_label(wrapped.scheme()).ok_or_else(|| {
-                            format!(
-                                "{} produces raw bytes, which have no PEM form. Write it as \
-                                 'der', which is what a recipient imports.",
-                                wrapped.scheme()
-                            )
-                        })?;
-                        Ok(SerializedArtifact {
-                            bytes: encode_pem(label, wrapped.data()).into_bytes(),
-                            mime_type: Some("application/x-pem-file".to_string()),
-                            extension: "pem",
-                        })
-                    }
-                    _ => Err(format!(
-                        "Invalid format '{fmt}' for WrappedKey (valid: der, pem)"
-                    )),
-                }
+                serialize_container(wrapped.scheme(), wrapped.data(), format, "WrappedKey")
             }
+            ArtifactValue::EncryptedData(encrypted) => serialize_container(
+                encrypted.scheme(),
+                encrypted.data(),
+                format,
+                "EncryptedData",
+            ),
 
             ArtifactValue::PublicKey(key) => serialize_der(key.as_bytes(), &PUBLIC_KEY, format),
 

@@ -31,9 +31,11 @@ use rite_sdk::{
 use rite_openssl::OpenSslBackend;
 #[cfg(feature = "openssl")]
 use rite_sdk::{
-    KeyMetadata, KeyPolicy, KeySpec, KeyStoreBackend, KeyTransportBackend, RandomBackend,
-    SignAlgorithm, SignBackend, VerifyBackend, WrapScheme, WrappedKey,
+    DataKey, KeyMetadata, KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend, KeyTransportBackend,
+    RandomBackend, SignAlgorithm, SignBackend, VerifyBackend, WrapScheme, WrappedKey,
 };
+#[cfg(feature = "openssl")]
+use zeroize::Zeroizing;
 
 /// The private half of the key a mock PIV slot holds, in PKCS#8 DER.
 ///
@@ -118,7 +120,7 @@ impl MockBackend {
             OpenSslBackend::try_new(&name).expect("OpenSslBackend::try_new is infallible");
         #[cfg(feature = "openssl")]
         let slot_key = crypto
-            .import_private_key(
+            .import_key(
                 KeySpec {
                     algorithm: KeyAlgorithm::EcdsaP256,
                     label: "mock-piv-slot".to_string(),
@@ -220,12 +222,8 @@ impl KeyStoreBackend for MockBackend {
         self.crypto.generate_key(spec)
     }
 
-    fn import_private_key(
-        &mut self,
-        spec: KeySpec,
-        key_bytes: &[u8],
-    ) -> Result<KeyMetadata, BackendError> {
-        self.crypto.import_private_key(spec, key_bytes)
+    fn import_key(&mut self, spec: KeySpec, key_bytes: &[u8]) -> Result<KeyMetadata, BackendError> {
+        self.crypto.import_key(spec, key_bytes)
     }
 
     fn export_public_key(&self, key_id: &KeyId) -> Result<PublicKeyDer, BackendError> {
@@ -297,6 +295,23 @@ impl KeyTransportBackend for MockBackend {
     ) -> Result<KeyMetadata, BackendError> {
         self.crypto
             .unwrap(wrapped, unwrapping_key_id, label, policy, expected)
+    }
+
+    fn generate_data_key(
+        &mut self,
+        kek: &KeyId,
+        algorithm: KeyAlgorithm,
+    ) -> Result<DataKey, BackendError> {
+        self.crypto.generate_data_key(kek, algorithm)
+    }
+
+    fn open_data_key(
+        &mut self,
+        kek: &KeyId,
+        wrapped: &[u8],
+        protection: KeyProtection,
+    ) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+        self.crypto.open_data_key(kek, wrapped, protection)
     }
 
     fn wrap_to_public(
@@ -596,7 +611,7 @@ mod tests {
                     &wrapped,
                     &kek.key_id,
                     "unwrapped-key",
-                    crate::params::unwrapped_key_default_policy(None),
+                    crate::params::installed_key_default_policy(None),
                     None,
                 )
                 .unwrap();

@@ -5,7 +5,7 @@ use rite_runtime::{
     Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
     Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_backend_key,
 };
-use rite_sdk::{Backend, KeyTransportBackend, WrapScheme};
+use rite_sdk::{Backend, WrapScheme};
 use serde_json::json;
 
 use crate::params::WrapKeyParams;
@@ -89,7 +89,8 @@ impl Action for WrapKeyAction {
                         "Key wrapping requires both keys on same backend (key: '{key_backend}', wrapper: '{wrap_key_backend}')"
                     )));
                 }
-                let (transport, backend_fp) = require_transport_backend(backend, key_backend)?;
+                let (transport, _, backend_fp) =
+                    crate::crypto::transport_backend(backend, key_backend, "wrap a key")?;
                 reporter.log(Icon::Spinner, "Wrapping key using backend...")?;
                 let wk = transport.wrap(key_to_wrap.key_id, wrapping_key.key_id, scheme)?;
                 (wk, backend_fp)
@@ -126,7 +127,8 @@ impl Action for WrapKeyAction {
                     declared: typed.expect_recipient.is_some(),
                 })?;
 
-                let (transport, backend_fp) = require_transport_backend(backend, key_backend)?;
+                let (transport, _, backend_fp) =
+                    crate::crypto::transport_backend(backend, key_backend, "wrap a key")?;
                 reporter.log(
                     Icon::Spinner,
                     "Wrapping key to external recipient public key...",
@@ -220,26 +222,4 @@ fn wrapping_input(step: &StepInfo) -> Result<(Custody, &ArtifactRef), ActionErro
             "wrap_key: missing required input 'wrapping_key' or 'recipient'".to_string(),
         )),
     }
-}
-
-/// Validate and downcast the backend to [`KeyTransportBackend`].
-fn require_transport_backend<'a>(
-    backend: Option<&'a mut dyn Backend>,
-    expected_name: &str,
-) -> Result<(&'a mut dyn KeyTransportBackend, String), ActionError> {
-    let backend_mut = backend
-        .ok_or_else(|| ActionError::Failed("Backend required for key wrapping".to_string()))?;
-    let backend_name = backend_mut.name().to_string();
-    let backend_fingerprint = backend_mut.fingerprint();
-    if backend_name != expected_name {
-        return Err(ActionError::Failed(format!(
-            "Key owned by backend '{expected_name}', but current backend is '{backend_name}'"
-        )));
-    }
-    let transport = backend_mut.as_transport_mut().ok_or_else(|| {
-        ActionError::Failed(format!(
-            "Backend '{backend_name}' does not support key wrapping"
-        ))
-    })?;
-    Ok((transport, backend_fingerprint))
 }

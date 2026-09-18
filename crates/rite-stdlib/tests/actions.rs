@@ -680,7 +680,12 @@ fn import_key_refuses_material_that_is_not_the_declared_algorithm() {
     let material_id = ArtifactId::new("escrowed");
     let state = make_state().with_material(
         material_id.clone(),
-        ArtifactValue::Bytes(import_material(KeyAlgorithm::Ed25519)),
+        ArtifactValue::Bytes(
+            openssl::pkey::PKey::generate_ed25519()
+                .unwrap()
+                .private_key_to_pkcs8()
+                .unwrap(),
+        ),
     );
     let step = import_step("import", "restored", material_id);
 
@@ -701,147 +706,6 @@ fn import_key_refuses_material_that_is_not_the_declared_algorithm() {
     assert!(
         message.contains("RSA-2048") && message.contains("Ed25519"),
         "the refusal should name both, got: {message}"
-    );
-}
-
-/// Valid import material for one algorithm: the key itself for a symmetric
-/// one, PKCS#8 DER for every other.
-///
-/// The wildcard arm fails rather than skipping. `KeyAlgorithm` is
-/// `#[non_exhaustive]`, so a match here cannot be compiler-complete, and a new
-/// algorithm should surface as a failing test rather than as silence.
-fn import_material(algorithm: KeyAlgorithm) -> Vec<u8> {
-    use openssl::pkey::{Id, KeyType, PKey};
-
-    fn pkcs8(key: &PKey<openssl::pkey::Private>) -> Vec<u8> {
-        key.private_key_to_pkcs8().unwrap()
-    }
-    fn from_seed(key_type: KeyType, seed_len: usize) -> Vec<u8> {
-        let seed = vec![9u8; seed_len];
-        pkcs8(&PKey::private_key_from_seed(None, key_type, None, &seed).unwrap())
-    }
-    fn ec(nid: openssl::nid::Nid) -> Vec<u8> {
-        let group = openssl::ec::EcGroup::from_curve_name(nid).unwrap();
-        pkcs8(&PKey::from_ec_key(openssl::ec::EcKey::generate(&group).unwrap()).unwrap())
-    }
-
-    match algorithm {
-        KeyAlgorithm::Aes128 | KeyAlgorithm::Aes256 => {
-            vec![7u8; algorithm.key_bytes().unwrap()]
-        }
-        KeyAlgorithm::Rsa2048 => {
-            pkcs8(&PKey::from_rsa(openssl::rsa::Rsa::generate(2048).unwrap()).unwrap())
-        }
-        KeyAlgorithm::Rsa4096 => {
-            pkcs8(&PKey::from_rsa(openssl::rsa::Rsa::generate(4096).unwrap()).unwrap())
-        }
-        KeyAlgorithm::EcdsaP256 => ec(openssl::nid::Nid::X9_62_PRIME256V1),
-        KeyAlgorithm::EcdsaP384 => ec(openssl::nid::Nid::SECP384R1),
-        KeyAlgorithm::Ed25519 => {
-            let key = PKey::generate_ed25519().unwrap();
-            assert_eq!(key.id(), Id::ED25519);
-            pkcs8(&key)
-        }
-        KeyAlgorithm::MlDsa44 => from_seed(KeyType::ML_DSA_44, 32),
-        KeyAlgorithm::MlDsa65 => from_seed(KeyType::ML_DSA_65, 32),
-        KeyAlgorithm::MlDsa87 => from_seed(KeyType::ML_DSA_87, 32),
-        KeyAlgorithm::MlKem512 => from_seed(KeyType::ML_KEM_512, 64),
-        KeyAlgorithm::MlKem768 => from_seed(KeyType::ML_KEM_768, 64),
-        KeyAlgorithm::MlKem1024 => from_seed(KeyType::ML_KEM_1024, 64),
-        other => {
-            panic!("import_material has no case for {other}, so import_key is untested for it")
-        }
-    }
-}
-
-/// Every algorithm the SDK offers, imported once, on whatever build is running.
-///
-/// The two arms of `import_key` differ in how they read the material and in
-/// what names the key afterwards, so both are asserted per algorithm rather
-/// than once for the family.
-#[test]
-fn import_key_accepts_every_algorithm_this_build_supports() {
-    let algorithms = [
-        KeyAlgorithm::Rsa2048,
-        KeyAlgorithm::Rsa4096,
-        KeyAlgorithm::EcdsaP256,
-        KeyAlgorithm::EcdsaP384,
-        KeyAlgorithm::Ed25519,
-        KeyAlgorithm::MlDsa44,
-        KeyAlgorithm::MlDsa65,
-        KeyAlgorithm::MlDsa87,
-        KeyAlgorithm::MlKem512,
-        KeyAlgorithm::MlKem768,
-        KeyAlgorithm::MlKem1024,
-        KeyAlgorithm::Aes128,
-        KeyAlgorithm::Aes256,
-    ];
-
-    let mut exercised = 0;
-    for algorithm in algorithms {
-        // Build-relative, exactly as at generation: an OpenSSL without the
-        // post-quantum providers cannot read that material either.
-        if rite_openssl::build_limitation(algorithm).is_some() {
-            continue;
-        }
-        exercised += 1;
-
-        let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
-        let material_id = ArtifactId::new("material");
-        let state = make_state().with_material(
-            material_id.clone(),
-            ArtifactValue::Bytes(import_material(algorithm)),
-        );
-        let step = import_step("import", "imported", material_id);
-
-        let mut harness = ReporterHarness::new();
-        let result = {
-            let ctx = state.handler_context();
-            let mut reporter = harness.reporter(step.id.clone());
-            ImportKeyAction
-                .execute(
-                    &step,
-                    &ctx,
-                    &serde_json::json!({ "algorithm": algorithm.to_string() }),
-                    &mut reporter,
-                    Some(&mut backend),
-                )
-                .unwrap_or_else(|e| panic!("import_key must accept {algorithm}: {e}"))
-        };
-
-        match produced(&result.artifacts, "imported") {
-            ArtifactValue::BackendKey {
-                algorithm: imported,
-                public_key,
-                check_value,
-                ..
-            } => {
-                assert_eq!(*imported, algorithm);
-                if algorithm.is_symmetric() {
-                    assert!(public_key.is_none(), "{algorithm} has no public half");
-                    assert!(
-                        check_value.is_some(),
-                        "{algorithm} is named by its check value"
-                    );
-                } else {
-                    assert!(
-                        public_key.is_some(),
-                        "{algorithm} is named by its public half"
-                    );
-                    assert!(check_value.is_none(), "{algorithm} has no check value");
-                }
-            }
-            other => panic!("import_key must produce a BackendKey for {algorithm}, got {other:?}"),
-        }
-    }
-
-    // Only the post-quantum set is build-relative, so a run that exercised
-    // fewer than the rest skipped something it should not have, and the test
-    // would otherwise pass by doing nothing.
-    assert!(
-        exercised >= 7,
-        "only {exercised} algorithms were exercised; the classical and symmetric \
-         ones are supported by every build"
     );
 }
 

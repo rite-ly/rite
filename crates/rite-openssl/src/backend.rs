@@ -2304,6 +2304,126 @@ mod tests {
         );
     }
 
+    /// PKCS#8 material for a key this build can make.
+    #[cfg(test)]
+    fn pkcs8_of(key: &PKey<Private>) -> Vec<u8> {
+        key.private_key_to_pkcs8().unwrap()
+    }
+
+    /// Every algorithm this build supports, imported once.
+    ///
+    /// The two arms of `import_key` differ in how they read the material and in
+    /// what names the key afterwards, so both are asserted per algorithm rather
+    /// than once for the family.
+    ///
+    /// The whole sweep lives here rather than beside the action tests in
+    /// `rite-stdlib`, because reading the material is what varies per algorithm
+    /// and that is this crate's work. It is also the crate that knows which
+    /// OpenSSL it linked: post-quantum material is built from a seed, through an
+    /// API that exists only where the providers do.
+    #[test]
+    fn imports_every_algorithm_this_build_supports() {
+        let ec = |nid| {
+            let group = EcGroup::from_curve_name(nid).unwrap();
+            pkcs8_of(&PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap())
+        };
+
+        let mut cases: Vec<(KeyAlgorithm, Vec<u8>)> = vec![
+            (
+                KeyAlgorithm::Aes128,
+                vec![7u8; KeyAlgorithm::Aes128.key_bytes().unwrap()],
+            ),
+            (
+                KeyAlgorithm::Aes256,
+                vec![7u8; KeyAlgorithm::Aes256.key_bytes().unwrap()],
+            ),
+            (
+                KeyAlgorithm::Rsa2048,
+                pkcs8_of(&PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap()),
+            ),
+            (
+                KeyAlgorithm::Rsa4096,
+                pkcs8_of(&PKey::from_rsa(Rsa::generate(4096).unwrap()).unwrap()),
+            ),
+            (KeyAlgorithm::EcdsaP256, ec(Nid::X9_62_PRIME256V1)),
+            (KeyAlgorithm::EcdsaP384, ec(Nid::SECP384R1)),
+            (
+                KeyAlgorithm::Ed25519,
+                pkcs8_of(&PKey::generate_ed25519().unwrap()),
+            ),
+        ];
+
+        #[cfg(ossl350)]
+        {
+            use openssl::pkey::KeyType;
+
+            for (algorithm, key_type, seed_len) in [
+                (KeyAlgorithm::MlDsa44, KeyType::ML_DSA_44, ML_DSA_SEED_LEN),
+                (KeyAlgorithm::MlDsa65, KeyType::ML_DSA_65, ML_DSA_SEED_LEN),
+                (KeyAlgorithm::MlDsa87, KeyType::ML_DSA_87, ML_DSA_SEED_LEN),
+                (KeyAlgorithm::MlKem512, KeyType::ML_KEM_512, ML_KEM_SEED_LEN),
+                (KeyAlgorithm::MlKem768, KeyType::ML_KEM_768, ML_KEM_SEED_LEN),
+                (
+                    KeyAlgorithm::MlKem1024,
+                    KeyType::ML_KEM_1024,
+                    ML_KEM_SEED_LEN,
+                ),
+            ] {
+                let seed = vec![9u8; seed_len];
+                let key = PKey::private_key_from_seed(None, key_type, None, &seed).unwrap();
+                cases.push((algorithm, pkcs8_of(&key)));
+            }
+        }
+
+        for (algorithm, material) in cases {
+            let mut backend = OpenSslBackend::try_new("test").unwrap();
+            let meta = backend
+                .import_key(spec(algorithm, "imported"), &material)
+                .unwrap_or_else(|e| panic!("import_key must accept {algorithm}: {e}"));
+
+            assert_eq!(meta.algorithm, algorithm);
+            if algorithm.is_symmetric() {
+                assert!(
+                    meta.public_key.is_none(),
+                    "{algorithm} has no public half to name it"
+                );
+                assert!(
+                    meta.check_value.is_some(),
+                    "{algorithm} is named by its check value"
+                );
+            } else {
+                assert!(
+                    meta.public_key.is_some(),
+                    "{algorithm} is named by its public half"
+                );
+                assert!(meta.check_value.is_none(), "{algorithm} has no check value");
+            }
+        }
+    }
+
+    /// The declared algorithm is checked against what the material turns out to
+    /// be, including between two parameter sets of one family.
+    #[test]
+    #[cfg(ossl350)]
+    fn refuses_post_quantum_material_that_is_not_the_declared_algorithm() {
+        use openssl::pkey::KeyType;
+
+        let seed = vec![9u8; ML_DSA_SEED_LEN];
+        let material =
+            pkcs8_of(&PKey::private_key_from_seed(None, KeyType::ML_DSA_44, None, &seed).unwrap());
+
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let error = backend
+            .import_key(spec(KeyAlgorithm::MlDsa87, "imported"), &material)
+            .expect_err("ML-DSA-44 material declared as ML-DSA-87 must be refused");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("ML-DSA-44") && message.contains("ML-DSA-87"),
+            "the refusal should name both, got: {message}"
+        );
+    }
+
     // EC key-transport round-trip tests.
     //
     // All three combinations of (content key type, KEK type) are exercised:

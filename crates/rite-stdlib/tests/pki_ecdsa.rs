@@ -52,7 +52,7 @@ fn step_with_inputs(id: &str, produces: &str, inputs: StepInputs) -> StepInfo {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn test_ecdsa_p256_pki_flow() {
+fn an_ecdsa_p256_key_carries_a_csr_through_to_a_certificate() {
     let mut backend = OpenSslBackend::try_new("test").unwrap();
     let mut harness = ReporterHarness::new();
 
@@ -207,7 +207,7 @@ fn test_ecdsa_p256_pki_flow() {
 /// `tls_server` certificate: `generate_csr` encodes it as a PKCS#9
 /// extensionRequest attribute, `issue_certificate` extracts and copies it.
 #[test]
-fn test_csr_san_roundtrip() {
+fn a_csr_keeps_the_subject_alternative_names_it_was_given() {
     let mut backend = OpenSslBackend::try_new("test").unwrap();
     let mut harness = ReporterHarness::new();
 

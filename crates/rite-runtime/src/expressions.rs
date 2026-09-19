@@ -475,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sha256_of_string() {
+    fn sha256_of_a_string_matches_the_known_digest() {
         let input = Value::String("hello".to_string());
         let result = apply_sha256(&input).unwrap();
 
@@ -492,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sha256_of_bytes() {
+    fn sha256_of_bytes_produces_32_bytes() {
         let input = Value::Bytes(b"hello".to_vec());
         let result = apply_sha256(&input).unwrap();
 
@@ -504,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hex_encoding() {
+    fn hex_encodes_bytes_in_lowercase() {
         let input = Value::Bytes(vec![0xde, 0xad, 0xbe, 0xef]);
         let result = apply_hex(&input).unwrap();
 
@@ -512,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn test_base32_encoding() {
+    fn base32_encodes_bytes_unpadded_and_uppercase() {
         let input = Value::Bytes(b"hello".to_vec());
         let result = apply_base32(&input).unwrap();
 
@@ -521,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn test_base64_encoding() {
+    fn base64_encodes_bytes_with_padding() {
         let input = Value::Bytes(b"hello".to_vec());
         let result = apply_base64(&input).unwrap();
 
@@ -529,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn test_upper() {
+    fn upper_uppercases_a_string() {
         let input = Value::String("hello".to_string());
         let result = apply_upper(&input).unwrap();
 
@@ -537,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lower() {
+    fn lower_lowercases_a_string() {
         let input = Value::String("HELLO".to_string());
         let result = apply_lower(&input).unwrap();
 
@@ -545,10 +545,10 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_sha256_hex() {
+    fn a_pipeline_chains_sha256_into_hex() {
         let ctx = empty_context();
 
-        // Simulate: "hello" | sha256 | hex
+        // ${"hello" | sha256 | hex}
         let expr = Expression::Pipeline {
             source: Box::new(Expression::Literal(Literal::String("hello".to_string()))),
             stages: vec![PipeStage::new("sha256"), PipeStage::new("hex")],
@@ -567,10 +567,10 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_sha256_hex_upper() {
+    fn a_pipeline_chains_sha256_hex_and_upper() {
         let ctx = empty_context();
 
-        // Simulate: "hello" | sha256 | hex | upper
+        // ${"hello" | sha256 | hex | upper}
         let expr = Expression::Pipeline {
             source: Box::new(Expression::Literal(Literal::String("hello".to_string()))),
             stages: vec![
@@ -593,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn test_type_error_sha256_on_integer() {
+    fn sha256_rejects_an_integer() {
         let input = Value::Integer(42);
         let result = apply_sha256(&input);
 
@@ -601,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn test_type_error_upper_on_bytes() {
+    fn upper_rejects_bytes() {
         let input = Value::Bytes(vec![1, 2, 3]);
         let result = apply_upper(&input);
 
@@ -609,10 +609,10 @@ mod tests {
     }
 
     #[test]
-    fn test_substr_via_pipeline() {
+    fn substr_takes_a_prefix() {
         let ctx = empty_context();
 
-        // Test: "abcdefgh" | substr(0, 4)
+        // ${"abcdefgh" | substr(0, 4)}
         let expr = Expression::Pipeline {
             source: Box::new(Expression::Literal(Literal::String("abcdefgh".to_string()))),
             stages: vec![PipeStage {
@@ -629,10 +629,10 @@ mod tests {
     }
 
     #[test]
-    fn test_substr_from_middle_via_pipeline() {
+    fn substr_takes_a_range_from_the_middle() {
         let ctx = empty_context();
 
-        // Test: "abcdefgh" | substr(2, 4)
+        // ${"abcdefgh" | substr(2, 4)}
         let expr = Expression::Pipeline {
             source: Box::new(Expression::Literal(Literal::String("abcdefgh".to_string()))),
             stages: vec![PipeStage {
@@ -649,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn test_artifact_evaluation() {
+    fn an_artifact_reference_resolves_through_a_pipeline() {
         let mut params = HashMap::new();
         params.insert(ParamId::new("name"), serde_json::json!("test"));
 
@@ -675,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn test_param_evaluation() {
+    fn a_param_reference_resolves_to_its_value() {
         let mut params = HashMap::new();
         params.insert(ParamId::new("expected_hash"), serde_json::json!("abc123"));
 
@@ -689,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sha384() {
+    fn sha384_produces_48_bytes() {
         let input = Value::String("hello".to_string());
         let result = apply_sha384(&input).unwrap();
 
@@ -701,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sha512() {
+    fn sha512_produces_64_bytes() {
         let input = Value::String("hello".to_string());
         let result = apply_sha512(&input).unwrap();
 
@@ -713,11 +713,11 @@ mod tests {
     }
 
     #[test]
-    fn test_concat_through_pipeline() {
+    fn concat_joins_its_arguments_and_ignores_the_input() {
         let ctx = empty_context();
 
-        // Test concat via expression: concat("hello", " ", "world")
-        // concat takes all strings as args, ignores pipeline input
+        // ${"ignored" | concat("hello", " ", "world")}, which takes its arguments
+        // as the whole input and ignores what the pipeline hands it.
         let expr = Expression::Pipeline {
             source: Box::new(Expression::Literal(Literal::String("ignored".to_string()))),
             stages: vec![PipeStage {
@@ -741,10 +741,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_and_evaluate_pipeline() {
+    fn a_parsed_expression_string_evaluates_end_to_end() {
         let ctx = empty_context();
 
-        // Test parsing a real expression string
         let expr = rite_model::expression::parse_expression("${\"test\" | sha256 | hex}").unwrap();
         let result = evaluate(&expr, &ctx).unwrap();
 

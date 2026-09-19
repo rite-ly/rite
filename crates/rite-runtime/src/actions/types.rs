@@ -344,12 +344,12 @@ mod tests {
     const P256_SPKI: &[u8] = include_bytes!("testdata/p256.spki.der");
 
     #[test]
-    fn test_public_key_format_validation() {
+    fn a_public_key_serializes_as_pem_by_default_and_der_on_request() {
         let public_der = P256_SPKI.to_vec();
         let public_key =
             ArtifactValue::PublicKey(PublicKeyDer::new(public_der.clone()).expect("valid SPKI"));
 
-        // Test default format (PEM)
+        // Default format
         let serialized = public_key.serialize(None).unwrap();
         assert_eq!(serialized.extension, "pem");
         assert_eq!(
@@ -357,7 +357,7 @@ mod tests {
             Some("application/x-pem-file".to_string())
         );
 
-        // Test explicit PEM format
+        // Explicit PEM
         let serialized = public_key.serialize(Some("pem")).unwrap();
         assert_eq!(serialized.extension, "pem");
         assert_eq!(
@@ -365,7 +365,7 @@ mod tests {
             Some("application/x-pem-file".to_string())
         );
 
-        // Test DER format
+        // DER
         let serialized = public_key.serialize(Some("der")).unwrap();
         assert_eq!(
             serialized.bytes, public_der,
@@ -377,7 +377,7 @@ mod tests {
             Some("application/x-x509-ca-cert".to_string())
         );
 
-        // Test base64 format
+        // Base64
         let serialized = public_key.serialize(Some("base64")).unwrap();
         assert_eq!(serialized.extension, "txt");
         assert_eq!(serialized.mime_type, Some("text/plain".to_string()));
@@ -392,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wrapped_key_format_validation() {
+    fn a_wrapped_key_serializes_as_der_by_default_and_pem_on_request() {
         let cms_data = b"CMS_DATA".to_vec();
         let description = rite_sdk::WrapDescription::new(
             rite_sdk::RecipientInfoKind::Ktri,
@@ -403,7 +403,7 @@ mod tests {
             WrappedKey::new(WrapScheme::CmsAes256Gcm, description, cms_data.clone()).unwrap(),
         );
 
-        // Test default format (DER)
+        // Default format
         let serialized = wrapped.serialize(None).unwrap();
         assert_eq!(
             serialized.bytes, cms_data,
@@ -415,7 +415,7 @@ mod tests {
             Some("application/pkcs7-mime".to_string())
         );
 
-        // Test explicit DER format
+        // Explicit DER
         let serialized = wrapped.serialize(Some("der")).unwrap();
         assert_eq!(serialized.bytes, cms_data);
         assert_eq!(serialized.extension, "p7c");
@@ -424,7 +424,7 @@ mod tests {
             Some("application/pkcs7-mime".to_string())
         );
 
-        // Test PEM format
+        // PEM
         let serialized = wrapped.serialize(Some("pem")).unwrap();
         let pem_str = String::from_utf8(serialized.bytes).unwrap();
         assert!(

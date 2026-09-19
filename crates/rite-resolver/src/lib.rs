@@ -832,9 +832,9 @@ output:
         assert_eq!(text, "${artifact.my_artifact}");
     }
 
-    /// A reference whose namespace does not exist used to resolve to nothing:
-    /// the input was dropped, the value kept as literal text, and the ceremony
-    /// reported valid. Every field that takes one is covered here.
+    /// A reference whose namespace does not exist is a diagnostic, not a silent
+    /// drop that keeps the value as literal text and reports the ceremony valid.
+    /// Every field that takes one is covered here.
     mod unknown_namespaces {
         use super::*;
 

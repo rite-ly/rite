@@ -96,8 +96,7 @@ mod tests {
     use rite_model::ArtifactRef;
 
     #[test]
-    fn step_info_basic() {
-        // Create typed inputs instead of raw JSON
+    fn step_info_exposes_its_id_role_and_backend() {
         let typed_inputs = Some(StepInputs::Single(ArtifactRef::Produced {
             id: ArtifactId::new("foo"),
             property: None,

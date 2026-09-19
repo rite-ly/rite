@@ -1856,6 +1856,37 @@ mod tests {
         assert_eq!(backend.list_keys().unwrap().len(), 0);
     }
 
+    /// A key id that names nothing is `KeyNotFound` wherever it arrives, and
+    /// the message repeats the id.
+    ///
+    /// A ceremony reaches these through artifact references, so a step that
+    /// names an artifact the wrong way lands here rather than at resolution.
+    /// The operator needs to read which name failed.
+    #[test]
+    fn every_method_that_takes_a_key_id_refuses_one_that_names_nothing() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let missing = KeyId::new("no-such-key");
+
+        let errors = [
+            backend.export_public_key(&missing).unwrap_err(),
+            backend
+                .sign(&missing, b"anything", SignAlgorithm::EcdsaSha256)
+                .unwrap_err(),
+            backend.delete_key(&missing).unwrap_err(),
+        ];
+
+        for error in errors {
+            assert!(
+                matches!(error, BackendError::KeyNotFound(_)),
+                "{error:?} is not KeyNotFound"
+            );
+            assert!(
+                error.to_string().contains("no-such-key"),
+                "the message names the id that failed: {error}"
+            );
+        }
+    }
+
     /// The `VerifyBackend` impl must agree with the free function it wraps.
     ///
     /// Everything else here checks signatures through `verify_signature`
@@ -2156,6 +2187,42 @@ mod tests {
         assert!(message.contains("may not wrap another key"), "{message}");
         assert!(
             message.contains("sign, verify"),
+            "the message should say what the policy does allow: {message}"
+        );
+    }
+
+    /// Wrapping and unwrapping are separate usages, so a KEK can be granted
+    /// one without the other.
+    ///
+    /// That is how a ceremony says a station seals and cannot open: the key is
+    /// present at both ends, and the policy is the only thing that separates
+    /// them.
+    #[test]
+    fn refuses_to_unwrap_under_a_key_with_no_unwrap_usage() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let seal_only = backend
+            .generate_key(KeySpec {
+                policy: KeyPolicy {
+                    usages: KeyUsages::WRAP,
+                    ..KeyPolicy::default()
+                },
+                ..spec(KeyAlgorithm::Rsa2048, "seal-only")
+            })
+            .unwrap();
+        let target = backend
+            .generate_key(extractable(KeyAlgorithm::Rsa2048, "target"))
+            .unwrap();
+        let wrapped = backend
+            .wrap(&target.key_id, &seal_only.key_id, WrapScheme::CmsAes256Gcm)
+            .expect("the policy grants wrapping");
+
+        let message = backend
+            .unwrap(&wrapped, &seal_only.key_id, "restored", restored(), None)
+            .expect_err("the same policy withholds unwrapping")
+            .to_string();
+        assert!(message.contains("may not unwrap a key"), "{message}");
+        assert!(
+            message.contains("wrap"),
             "the message should say what the policy does allow: {message}"
         );
     }
@@ -2874,13 +2941,19 @@ mod tests {
 
     /// A symmetric KEK and an extractable symmetric payload, for the tests
     /// that wrap one under the other.
+    ///
+    /// The raw AES schemes name the KEK size they take, and CMS takes a
+    /// 256-bit one, so the scheme decides the KEK rather than the caller.
     fn a_wrapped_secret(
         backend: &mut OpenSslBackend,
         algorithm: KeyAlgorithm,
         scheme: WrapScheme,
     ) -> (KeyId, KeyCheckValue, WrappedKey) {
         let kek = backend
-            .generate_key(spec(KeyAlgorithm::Aes256, "kek"))
+            .generate_key(spec(
+                scheme.required_kek().unwrap_or(KeyAlgorithm::Aes256),
+                "kek",
+            ))
             .unwrap();
         let payload = backend
             .generate_key(KeySpec {
@@ -2907,6 +2980,8 @@ mod tests {
     #[test]
     fn a_declared_symmetric_key_round_trips() {
         for scheme in [
+            WrapScheme::Aes128Kw,
+            WrapScheme::Aes128Kwp,
             WrapScheme::Aes256Kw,
             WrapScheme::Aes256Kwp,
             WrapScheme::CmsAes256Gcm,
@@ -3165,6 +3240,73 @@ mod tests {
                 "a flipped bit in the {region} was accepted"
             );
         }
+    }
+
+    /// A `KEKRecipientInfo` container from an earlier build, frozen.
+    ///
+    /// Rite writes this recipient itself rather than through OpenSSL, so the
+    /// writer and the reader are one pair of hands. A round-trip test passes
+    /// for as long as the two agree with each other, whatever they agree on. A
+    /// blob captured before a change is the only thing that catches them
+    /// moving together away from what a recipient already holds.
+    ///
+    /// The KEK and the payload are fixed, so the check value below is the whole
+    /// assertion: it says the bytes that came out are the key that went in.
+    const FROZEN_KEK: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    const FROZEN_PAYLOAD_KCV: &str = "8210d0";
+    const FROZEN_KEK_ENVELOPED: &str = concat!(
+        "3081bc060b2a864886f70d0109100117a081ac3081a90201003143a241020104",
+        "30050403377822300b060960864801650304012d0428a71ffa1b085b7f8abf9b",
+        "404c4119c9d191c43f7ca3c574b84e1892bb9b654e35d3574dba049f6954304d",
+        "06092a864886f70d010701301e060960864801650304012e3011040cb719bb91",
+        "92b8d1c4275a01280201108020d6545bbca8df877f0196db179608dd08fff270",
+        "ea137f54514a42a1ed8223c2b10410d619eebcddec436e99dd5b33a8c0f577",
+    );
+
+    #[test]
+    fn a_frozen_kek_enveloped_container_still_opens() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let kek = backend
+            .import_key(
+                KeySpec {
+                    policy: KeyPolicy::default_for(KeyAlgorithm::Aes256),
+                    ..spec(KeyAlgorithm::Aes256, "kek")
+                },
+                &base16ct::lower::decode_vec(FROZEN_KEK).unwrap(),
+            )
+            .unwrap();
+
+        let der = base16ct::lower::decode_vec(FROZEN_KEK_ENVELOPED).unwrap();
+        let facts = cms::describe(&der).expect("the reader still parses it");
+        assert!(
+            WrapScheme::CmsAes256Gcm.permits(&facts.description),
+            "the frozen container no longer answers to the scheme that wrote it"
+        );
+        assert_eq!(
+            facts.description.recipient_info,
+            Some(RecipientInfoKind::Kekri)
+        );
+
+        let wrapped = WrappedKey::new(WrapScheme::CmsAes256Gcm, facts.description, der).unwrap();
+        let restored = backend
+            .unwrap(
+                &wrapped,
+                &kek.key_id,
+                "restored",
+                KeyPolicy::default_for(KeyAlgorithm::Aes256),
+                Some(KeyAlgorithm::Aes256),
+            )
+            .expect("the frozen container opens under the frozen KEK");
+
+        assert_eq!(
+            base16ct::lower::encode_string(
+                restored
+                    .check_value
+                    .expect("a symmetric key has one")
+                    .as_bytes()
+            ),
+            FROZEN_PAYLOAD_KCV
+        );
     }
 
     /// A blob addressed to one key must not open under another, and the

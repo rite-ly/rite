@@ -6,6 +6,7 @@ use rite_runtime::{
     compute_fingerprint, resolve_backend_key,
 };
 use rite_sdk::{Backend, KeyCheckValue, KeyProtection, cms};
+use secrecy::SecretBox;
 use serde_json::{Value, json};
 
 use crate::crypto::content::{self, SealedContent};
@@ -14,9 +15,10 @@ use crate::crypto::content::{self, SealedContent};
 ///
 /// The container is undone in the order it was built: the backend opens the
 /// data key it protected, and the content is decrypted under that. What comes
-/// out is an ordinary byte artifact, so a later step reads it the way it reads
-/// a material. `import_key` lifts it into a key, `check_value` compares it,
-/// `sign_data` signs it.
+/// out is a byte artifact a later step reads the way it reads a material:
+/// `import_key` lifts it into a key, `check_value` compares it, `sign_data`
+/// signs it. It is held wiped in memory, and reaches the run directory only
+/// under an output declared `secret: true`.
 pub struct DecryptDataAction;
 
 impl Action for DecryptDataAction {
@@ -103,7 +105,7 @@ impl Action for DecryptDataAction {
             &envelope.wrapped_cek,
             KeyProtection::AesKeyWrap,
         )?;
-        let plaintext = content::open(
+        let mut plaintext = content::open(
             &data_key,
             &SealedContent {
                 nonce: envelope.nonce,
@@ -131,7 +133,11 @@ impl Action for DecryptDataAction {
         })?;
 
         let message = format!("{} bytes decrypted", plaintext.len());
-        let value = ArtifactValue::Bytes(plaintext.to_vec());
+        // The buffer moves from the cipher's wiping wrapper into the artifact's
+        // without a copy. What the wrapper wipes on drop is the empty vector
+        // left in its place.
+        let value =
+            ArtifactValue::Secret(SecretBox::new(Box::new(std::mem::take(&mut *plaintext))));
 
         if let Some(produces) = &step.produces {
             reporter.log(

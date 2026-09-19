@@ -324,6 +324,20 @@ pub enum ResolveError {
         step: StepId,
     },
 
+    /// An output would receive content a step opened, and does not say so.
+    #[error(
+        "Output '{output}' receives the content that step '{step}' ('{action}') opens. Declare \
+         the output 'secret: true' to write the plaintext to the run directory."
+    )]
+    SecretOutputUndeclared {
+        /// The output declared without the flag.
+        output: OutputId,
+        /// The step whose `creates:` names the output.
+        step: StepId,
+        /// The action that opens the content.
+        action: ActionType,
+    },
+
     /// Invalid reference syntax in a field.
     #[error("Invalid reference '{value}' in '{context}' field '{field}': {reason}")]
     InvalidReferenceSyntax {

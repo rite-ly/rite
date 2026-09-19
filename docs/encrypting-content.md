@@ -93,9 +93,53 @@ why.
 content was encrypted are both in the artifact, and a restated value could
 disagree with the bytes that have to be decrypted.
 
-What it produces is an ordinary byte artifact, read the way a material is. A
-step can hash it, compare it, sign it, or hand it to `import_key`, which is how
-a key archived as content becomes a key again.
+What it produces is a byte artifact, read the way a material is. A step can
+hash it, compare it, sign it, or hand it to `import_key`, which is how a key
+archived as content becomes a key again.
+
+The artifact is held as opened content: the bytes are wiped from memory when
+the run drops them, a step that reads them borrows rather than copies, and
+nothing prints them. The content was encrypted because it is secret, and the
+tool cannot tell a runbook from a private key, so it treats every opened
+artifact the same way.
+
+## Writing opened content to disk
+
+Sometimes the plaintext has to become a file. A signing key archived as
+encrypted content is restored for an appliance that imports keys only from a
+file on media, so the ceremony decrypts it and writes it out. An output
+receives opened content only when it says so:
+
+```yaml
+output:
+  restored_signing_key:
+    type: document
+    secret: true
+    description: "The signing key in PKCS#8, for the appliance's import tool."
+
+steps:
+  restore_the_signing_key:
+    action: decrypt_data
+    backend: openssl
+    reads:
+      encrypted_data: ${artifact.archived_signing_key}
+      decryption_key: ${artifact.archive_key}
+    creates: restored_signing_key
+```
+
+Without `secret: true`, `rite check` reports the output and the runtime refuses
+the write. With it, the file is written to the run directory like any other
+output, the operator is warned at the moment it happens, and the flag stands in
+the ceremony definition for anyone reviewing where the key went. Whether the
+plaintext belongs next to the transcript is the author's call; the flag is what
+makes it a call rather than a default.
+
+One path stays open, because closing it would close the ceremony's own hands:
+an expression. `${artifact.restored_signing_key | sha256 | hex}` puts a digest
+in a `check_value` step, and `${artifact.restored_signing_key | base64}` would
+put the key itself wherever that step records its inputs, transcript included.
+What an expression exposes is the author's choice, and Rite does not
+second-guess it.
 
 An encrypted artifact is its own type, so it can be given to `decrypt_data` and
 not to `unwrap_key`. The reverse holds too. The bytes of the two are the same

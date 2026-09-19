@@ -86,7 +86,8 @@ sections:
           actual: ${artifact.recovered_runbook | sha256 | hex}
           expected: ${artifact.runbook | sha256 | hex}
         description: |
-          What comes out of decrypt_data is an ordinary byte artifact, so it
-          is read here the way any material is. A later ceremony could hand
-          the same bytes to import_key instead, which is how a key archived
-          as content becomes a key again.
+          What comes out of decrypt_data is read here the way any material
+          is. A later ceremony could hand the same bytes to import_key
+          instead, which is how a key archived as content becomes a key
+          again. The bytes stay in memory, wiped when the run ends: an
+          output that received them would have to be declared secret: true.

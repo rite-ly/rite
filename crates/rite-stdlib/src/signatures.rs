@@ -23,6 +23,7 @@ use std::hash::BuildHasher;
 use rite_model::ArtifactId;
 use rite_runtime::ArtifactValue;
 use rite_sdk::{BackendError, CertificateDer, PublicKeyDer, SignAlgorithm};
+use secrecy::ExposeSecret;
 
 /// Verify `signature` over `message` with a public key.
 ///
@@ -119,8 +120,10 @@ pub fn resolve_public_key<S: BuildHasher>(
              so there is no public key to work from"
         ))),
         // Only the content says what these are. `Certificate` above is the
-        // artifact shape; this covers a certificate that arrived as plain bytes.
+        // artifact shape; this covers a certificate that arrived as plain
+        // bytes, or came out of a container a step opened.
         ArtifactValue::Bytes(bytes) => PublicKeyDer::from_key_material(bytes),
+        ArtifactValue::Secret(bytes) => PublicKeyDer::from_key_material(bytes.expose_secret()),
         ArtifactValue::Text(text) => PublicKeyDer::from_key_material(text.as_bytes()),
         ArtifactValue::WrappedKey { .. } => Err(BackendError::InvalidKeyFormat(format!(
             "artifact '{artifact_id}' is a wrapped key, not a public key"
@@ -165,6 +168,7 @@ pub fn resolve_certificate<S: BuildHasher>(
     match artifact {
         ArtifactValue::Certificate(certificate) => Ok(certificate.clone()),
         ArtifactValue::Bytes(bytes) => CertificateDer::from_key_material(bytes),
+        ArtifactValue::Secret(bytes) => CertificateDer::from_key_material(bytes.expose_secret()),
         ArtifactValue::Text(text) => CertificateDer::from_key_material(text.as_bytes()),
         ArtifactValue::BackendKey { .. }
         | ArtifactValue::PublicKey(_)

@@ -30,6 +30,8 @@
 
 use std::ops::Range;
 
+use zeroize::Zeroizing;
+
 /// The type/namespace of a reference.
 ///
 /// Used in full-form references like `${param.name}` or `${artifact.ksr}`.
@@ -81,10 +83,18 @@ impl std::fmt::Display for RefType {
 }
 
 /// A runtime value in the expression system.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Debug` shows a byte value by its length, for the reason given on
+/// [`Bytes`](Value::Bytes): an error message or a log line that prints a
+/// value must not print what it holds.
+#[derive(Clone, PartialEq)]
 pub enum Value {
-    /// Raw binary data (computation core)
-    Bytes(Vec<u8>),
+    /// Raw binary data (computation core).
+    ///
+    /// Wiped when dropped, and never printed. A value may be a copy of opened
+    /// content or key material, and the expression engine cannot tell which
+    /// of its inputs are, so every byte value is treated as if it were.
+    Bytes(Zeroizing<Vec<u8>>),
     /// UTF-8 text string
     String(String),
     /// Integer value
@@ -96,12 +106,20 @@ pub enum Value {
 }
 
 impl Value {
+    /// Wrap bytes as a value.
+    pub fn bytes(bytes: Vec<u8>) -> Self {
+        Value::Bytes(Zeroizing::new(bytes))
+    }
+
     /// Try to get this value as bytes.
-    /// Strings are converted to UTF-8 bytes.
-    pub fn as_bytes(&self) -> Option<Vec<u8>> {
+    /// Strings are read as their UTF-8 bytes.
+    ///
+    /// Borrowed rather than copied, so a pipe stage that only reads its input
+    /// leaves no copy of it behind.
+    pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
-            Value::Bytes(b) => Some(b.clone()),
-            Value::String(s) => Some(s.as_bytes().to_vec()),
+            Value::Bytes(b) => Some(b),
+            Value::String(s) => Some(s.as_bytes()),
             _ => None,
         }
     }
@@ -135,6 +153,18 @@ impl Value {
             Value::Integer(_) => "integer",
             Value::Boolean(_) => "boolean",
             Value::Null => "null",
+        }
+    }
+}
+
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Bytes(b) => write!(f, "Bytes(<{} bytes>)", b.len()),
+            Value::String(s) => f.debug_tuple("String").field(s).finish(),
+            Value::Integer(i) => f.debug_tuple("Integer").field(i).finish(),
+            Value::Boolean(b) => f.debug_tuple("Boolean").field(b).finish(),
+            Value::Null => write!(f, "Null"),
         }
     }
 }
@@ -1399,20 +1429,29 @@ mod tests {
 
     #[test]
     fn value_type_names() {
-        assert_eq!(Value::Bytes(vec![]).type_name(), "bytes");
+        assert_eq!(Value::bytes(vec![]).type_name(), "bytes");
         assert_eq!(Value::String(String::new()).type_name(), "string");
         assert_eq!(Value::Integer(0).type_name(), "integer");
         assert_eq!(Value::Boolean(true).type_name(), "boolean");
         assert_eq!(Value::Null.type_name(), "null");
     }
 
+    /// The debug form is what a panic or a log line would print of a value,
+    /// and a byte value may be opened content.
+    #[test]
+    fn value_debug_does_not_print_bytes() {
+        let v = Value::bytes(b"the recovery phrase".to_vec());
+        assert_eq!(format!("{v:?}"), "Bytes(<19 bytes>)");
+        assert_eq!(format!("{:?}", Value::String("x".into())), "String(\"x\")");
+    }
+
     #[test]
     fn value_as_bytes() {
-        let v = Value::Bytes(vec![1, 2, 3]);
-        assert_eq!(v.as_bytes(), Some(vec![1, 2, 3]));
+        let v = Value::bytes(vec![1, 2, 3]);
+        assert_eq!(v.as_bytes(), Some(&[1u8, 2, 3][..]));
 
         let v = Value::String("hello".into());
-        assert_eq!(v.as_bytes(), Some(b"hello".to_vec()));
+        assert_eq!(v.as_bytes(), Some(&b"hello"[..]));
 
         let v = Value::Integer(42);
         assert!(v.as_bytes().is_none());

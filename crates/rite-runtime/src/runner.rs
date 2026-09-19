@@ -43,6 +43,7 @@ use rite_model::{
 use rite_sdk::{Backend, BackendError, Retriability};
 use thiserror::Error;
 
+use crate::actions::ArtifactValue;
 use crate::backend::BackendRegistry;
 use crate::clock::{Clock, SystemClock};
 use crate::entropy::DERIVATION_V1;
@@ -628,14 +629,7 @@ impl Executor {
                 && !dry_run
             {
                 let output_id = OutputId::new(artifact_id.as_str());
-                if self.ceremony.outputs.contains(&output_id) {
-                    std::fs::create_dir_all(self.output_config.artifacts_dir()).map_err(|e| {
-                        ExecutionError::OutputWriteFailed {
-                            name: "artifacts directory".to_string(),
-                            reason: e.to_string(),
-                        }
-                    })?;
-
+                if let Some(output) = self.ceremony.outputs.get(&output_id) {
                     let artifact_value = state.artifacts.get(artifact_id).ok_or_else(|| {
                         ExecutionError::OutputWriteFailed {
                             name: artifact_id.as_str().to_string(),
@@ -643,8 +637,39 @@ impl Executor {
                         }
                     })?;
 
+                    // Opened content is written only where the author said it
+                    // would be. The resolver reports the same case at check
+                    // time; this is the guard for a definition that reached
+                    // the runner some other way. Before the directory is
+                    // created, so a refusal leaves nothing behind.
+                    let opened = matches!(artifact_value, ArtifactValue::Secret(_));
+                    if opened && !output.secret {
+                        return Err(ExecutionError::SecretOutputUndeclared {
+                            name: artifact_id.as_str().to_string(),
+                        });
+                    }
+
+                    std::fs::create_dir_all(self.output_config.artifacts_dir()).map_err(|e| {
+                        ExecutionError::OutputWriteFailed {
+                            name: "artifacts directory".to_string(),
+                            reason: e.to_string(),
+                        }
+                    })?;
+
                     let (path, hash, _size, _mime_type) =
                         write_artifact_to_disk(artifact_id, artifact_value, &self.output_config)?;
+
+                    // After the write, so the operator is told what happened
+                    // rather than what was about to.
+                    if opened {
+                        reporter.log(
+                            Icon::Warning,
+                            format!(
+                                "Output '{output_id}' holds opened content, written in the clear \
+                                 to the run directory"
+                            ),
+                        )?;
+                    }
 
                     // Record the location relative to the run directory so the
                     // transcript stays portable and never embeds the operator's
@@ -792,6 +817,9 @@ impl ExecutionError {
             }
             ExecutionError::OutputWriteFailed { .. } => {
                 (ErrorClass::Integrity, "output_write_failed")
+            }
+            ExecutionError::SecretOutputUndeclared { .. } => {
+                (ErrorClass::Integrity, "secret_output_undeclared")
             }
             ExecutionError::TranscriptError(_) => (ErrorClass::Integrity, "transcript_error"),
             ExecutionError::BackendError(e) => {
@@ -1055,6 +1083,157 @@ sections:
         );
 
         drop(cmd_tx);
+    }
+
+    /// Produces opened content under a step the resolver does not gate, so
+    /// the runner's own guard is what the test exercises.
+    struct OpensContent;
+
+    impl Action for OpensContent {
+        fn action_type(&self) -> ActionType {
+            ActionType::Attest
+        }
+
+        fn execute(
+            &self,
+            step: &StepInfo,
+            _ctx: &HandlerContext,
+            _params: &serde_json::Value,
+            _reporter: &mut Reporter<'_>,
+            _backend: Option<&mut dyn Backend>,
+        ) -> Result<StepResult, ActionError> {
+            let produces = step.produces.clone().expect("step creates");
+            Ok(StepResult::completed_with_artifact(
+                "opened",
+                produces,
+                ArtifactValue::Secret(secrecy::SecretBox::new(Box::new(
+                    b"the recovery phrase".to_vec(),
+                ))),
+            ))
+        }
+    }
+
+    /// A ceremony whose one step creates `opened`, declared as an output
+    /// with or without the `secret` flag.
+    fn ceremony_writing_opened_content(secret: bool) -> Ceremony {
+        let yaml = format!(
+            r#"
+version: "0.3"
+name: "Test"
+roles:
+  participant:
+    person: "Alice"
+output:
+  opened:
+    type: document
+    secret: {secret}
+sections:
+  main:
+    role: ${{role.participant}}
+    steps:
+      open:
+        action: attest
+        silent: true
+        with:
+          statement: "I confirm."
+        creates: opened
+"#
+        );
+        rite_resolver::resolve(&yaml, None)
+            .into_result()
+            .expect("resolve")
+    }
+
+    /// Run `ceremony` to completion, acknowledging every prompt, and return
+    /// the run's result with the facts it emitted.
+    fn run_acknowledging_prompts(
+        ceremony: Ceremony,
+        output_config: OutputConfig,
+    ) -> (Result<ExecutionSummary, ExecutionError>, Vec<StepFact>) {
+        let mut registry = ActionRegistry::new();
+        registry.register(Arc::new(OpensContent));
+
+        let (cmd_tx, cmd_rx) = unbounded::<UiCommand>();
+        let (event_tx, event_rx) = unbounded::<ExecEvent>();
+        let sink: Box<dyn TranscriptSink> = Box::new(InMemorySink::new());
+
+        let executor = Executor::new(
+            ceremony,
+            registry,
+            BackendRegistry::new(),
+            output_config,
+            false,
+            StartupSnapshot::placeholder(),
+        );
+
+        let frontend = std::thread::spawn({
+            let cmd_tx = cmd_tx.clone();
+            move || {
+                let mut facts = Vec::new();
+                while let Ok(event) = event_rx.recv() {
+                    match event {
+                        ExecEvent::Fact { fact, .. } => facts.push(fact),
+                        ExecEvent::AwaitPrompt { prompt_id, .. } => {
+                            let _ = cmd_tx.send(UiCommand::PromptResponse {
+                                prompt_id,
+                                response: crate::protocol::Response::Acknowledge,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                facts
+            }
+        });
+
+        let result = executor.run(&cmd_rx, &event_tx, sink);
+        drop(event_tx);
+        drop(cmd_tx);
+        let facts = frontend.join().expect("frontend join");
+        (result, facts)
+    }
+
+    #[test]
+    fn opened_content_is_not_written_under_an_undeclared_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = OutputConfig::new(dir.path().to_path_buf());
+        let (result, facts) =
+            run_acknowledging_prompts(ceremony_writing_opened_content(false), config.clone());
+
+        match result {
+            Err(ExecutionError::SecretOutputUndeclared { name }) => assert_eq!(name, "opened"),
+            other => panic!("expected the write to be refused, got {other:?}"),
+        }
+        assert!(
+            !facts
+                .iter()
+                .any(|f| matches!(f, StepFact::ArtifactWritten { .. }))
+        );
+        assert!(
+            !config.artifacts_dir().exists(),
+            "a refusal leaves no artifacts directory behind"
+        );
+    }
+
+    #[test]
+    fn opened_content_is_written_under_a_secret_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = OutputConfig::new(dir.path().to_path_buf());
+        let (result, facts) =
+            run_acknowledging_prompts(ceremony_writing_opened_content(true), config);
+
+        let summary = result.expect("ceremony runs");
+        assert_eq!(summary.steps_completed, 1);
+        let written = facts.iter().find_map(|f| match f {
+            StepFact::ArtifactWritten { name, path, .. } => Some((name.clone(), path.clone())),
+            _ => None,
+        });
+        let (name, path) = written.expect("the artifact is written");
+        assert_eq!(name, "opened");
+        assert_eq!(
+            std::fs::read(dir.path().join(path)).expect("read artifact"),
+            b"the recovery phrase"
+        );
     }
 
     #[test]

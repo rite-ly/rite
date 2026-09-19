@@ -284,6 +284,7 @@ impl ResolveContext {
                 id: id.clone(),
                 kind: output.artifact_type,
                 description: output.description.clone(),
+                secret: output.secret,
             };
             if self.outputs.insert(id.clone(), resolved).is_err() {
                 self.add_error(ResolveError::DuplicateOutput(id));
@@ -507,6 +508,7 @@ impl ResolveContext {
                 let (reads, reads_resolved) = self.resolve_inputs(step.reads.as_ref(), &id);
 
                 let creates = self.resolve_creates(step.creates.as_deref(), &id);
+                self.validate_secret_output(&id, step.action, creates.as_ref());
 
                 let with_json = step
                     .with
@@ -701,6 +703,33 @@ impl ResolveContext {
                 } else {
                     quote(&present)
                 },
+            });
+        }
+    }
+
+    /// Report an output that would receive opened content without saying so.
+    ///
+    /// An artifact a step decrypts reaches the run directory only under an
+    /// output declared `secret: true`. The runtime refuses the write as well;
+    /// this is what tells the author at `rite check` rather than in the room.
+    fn validate_secret_output(
+        &mut self,
+        id: &StepId,
+        action: ActionType,
+        creates: Option<&ArtifactId>,
+    ) {
+        if !action.creates_secret() {
+            return;
+        }
+        let Some(artifact) = creates else {
+            return;
+        };
+        let output_id = OutputId::new(artifact.as_str());
+        if self.outputs.get(&output_id).is_some_and(|o| !o.secret) {
+            self.add_error(ResolveError::SecretOutputUndeclared {
+                output: output_id,
+                step: id.clone(),
+                action,
             });
         }
     }
@@ -1336,6 +1365,7 @@ sections:
             schema::OutputDeclaration {
                 artifact_type: rite_model::OutputType::PublicKey,
                 description: None,
+                secret: false,
             },
         );
 
@@ -1898,6 +1928,67 @@ sections:
         assert!(
             missing.contains(&"expected"),
             "expected 'expected' missing: {missing:?}"
+        );
+    }
+
+    /// A `decrypt_data` step whose `creates:` names the output `opened`,
+    /// declared with the given flag.
+    fn resolve_decrypt_into_output(secret: bool) -> ResolveResult<Ceremony> {
+        let mut ceremony = minimal_ceremony();
+        ceremony.backends.insert(
+            "ssl".to_string(),
+            BackendConfig {
+                provider: "openssl".to_string(),
+                extra: serde_json::json!({}),
+            },
+        );
+        ceremony.output.insert(
+            "opened".to_string(),
+            schema::OutputDeclaration {
+                artifact_type: rite_model::OutputType::Document,
+                description: None,
+                secret,
+            },
+        );
+        let mut step = make_step_body();
+        step.action = ActionType::DecryptData;
+        step.backend = Some("ssl".to_string());
+        step.reads = Some(serde_json::json!({
+            "encrypted_data": "${artifact.sealed}",
+            "decryption_key": "${artifact.kek}",
+        }));
+        step.creates = Some("opened".to_string());
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("open".to_string(), step);
+        resolve_ceremony(ceremony, None)
+    }
+
+    #[test]
+    fn decrypt_into_an_output_needs_the_secret_flag() {
+        let result = resolve_decrypt_into_output(false);
+        assert!(result.errors.iter().any(|e| matches!(
+            e,
+            ResolveError::SecretOutputUndeclared { output, step, action }
+                if output.as_str() == "opened"
+                    && step.as_str() == "open"
+                    && *action == ActionType::DecryptData
+        )));
+    }
+
+    #[test]
+    fn decrypt_into_a_secret_output_is_accepted() {
+        let result = resolve_decrypt_into_output(true);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::SecretOutputUndeclared { .. })),
+            "{:?}",
+            result.errors
         );
     }
 

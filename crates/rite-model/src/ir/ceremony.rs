@@ -284,6 +284,15 @@ pub struct Output {
 
     /// Human-readable description.
     pub description: Option<String>,
+
+    /// The output holds content the ceremony opened, and the author has said
+    /// so.
+    ///
+    /// An artifact a step decrypts is kept wiped in memory and is written to
+    /// the run directory only under an output that declares this. The flag is
+    /// the author's acknowledgement that the plaintext will sit on disk next
+    /// to the transcript.
+    pub secret: bool,
 }
 
 /// Reference to an artifact (either a material or a produced artifact).

@@ -68,7 +68,7 @@ pub static ALL: &[ActionMeta] = &[
     ActionMeta {
         name: "decrypt_data",
         short: "Decrypt an encrypted-data artifact back to bytes",
-        long: "Open a container `encrypt_data` produced. Reads `encrypted_data:` and `decryption_key:`, the key the container is addressed to, which is checked by its check value before anything is decrypted. What comes out is an ordinary byte artifact, so a later step reads it the way it reads a material: `import_key` lifts it into a key, `check_value` compares it, `sign_data` signs it.",
+        long: "Open a container `encrypt_data` produced. Reads `encrypted_data:` and `decryption_key:`, the key the container is addressed to, which is checked by its check value before anything is decrypted. What comes out is a byte artifact a later step reads the way it reads a material: `import_key` lifts it into a key, `check_value` compares it, `sign_data` signs it. It is held wiped in memory, and an output that receives it must be declared `secret: true`.",
     },
     ActionMeta {
         name: "export_public",

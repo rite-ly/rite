@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    compute_fingerprint, parse_params,
 };
 use rite_sdk::{Backend, KeyAlgorithm, KeyMetadata, KeyPolicy, KeySpec};
 use serde_json::json;
@@ -16,12 +16,8 @@ use crate::params::GenerateKeyParams;
 pub struct GenerateKeyAction;
 
 impl Action for GenerateKeyAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::GenerateKey,
-            description: "Generate a cryptographic key",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::GenerateKey
     }
 
     fn unsupported_params(&self, params: &serde_json::Value, _step: &StepInfo) -> Vec<String> {

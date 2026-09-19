@@ -8,8 +8,8 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, parse_params, resolve_backend_key,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    parse_params, resolve_backend_key,
 };
 use rite_sdk::Backend;
 use serde_json::json;
@@ -35,12 +35,8 @@ use super::oids::sig_profile_for_algorithm;
 pub struct GenerateCsrAction;
 
 impl Action for GenerateCsrAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::GenerateCsr,
-            description: "Generate PKCS#10 CSR from backend-managed key",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::GenerateCsr
     }
 
     #[allow(clippy::too_many_lines)]

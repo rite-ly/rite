@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, Prompt};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, Response,
-    StepInfo, StepResult, parse_params,
+    Action, ActionError, HandlerContext, Icon, Reporter, Response, StepInfo, StepResult,
+    parse_params,
 };
 use rite_sdk::Backend;
 
@@ -83,12 +83,8 @@ fn to_hex_format(input: &str) -> String {
 pub struct OralReadbackAction;
 
 impl Action for OralReadbackAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::OralReadback,
-            description: "Oral readback verification",
-            category: ActionCategory::Verification,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::OralReadback
     }
 
     fn execute(

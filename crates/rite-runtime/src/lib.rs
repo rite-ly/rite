@@ -43,7 +43,7 @@ mod transcript_sink;
 pub use executor::ExecutionError;
 
 // Actions
-pub use actions::{ActionCategory, ActionMetadata, ArtifactValue};
+pub use actions::ArtifactValue;
 
 // Backend registry (traits live in `rite-sdk`, not here)
 pub use backend::{BackendFactory, BackendRegistry};

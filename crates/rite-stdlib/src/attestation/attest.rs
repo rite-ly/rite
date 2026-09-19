@@ -2,8 +2,7 @@
 
 use rite_model::{ActionType, Prompt, RoleId, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, StepInfo,
-    StepResult, parse_params,
+    Action, ActionError, HandlerContext, Icon, Reporter, StepInfo, StepResult, parse_params,
 };
 use rite_sdk::Backend;
 
@@ -17,12 +16,8 @@ const DEFAULT_STATEMENT: &str = "I attest to the accuracy of the above";
 pub struct AttestAction;
 
 impl Action for AttestAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::Attest,
-            description: "Record a formal attestation",
-            category: ActionCategory::Attestation,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::Attest
     }
 
     fn apply_defaults(&self, params: &mut serde_json::Value, _step: &StepInfo) {

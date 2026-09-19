@@ -16,8 +16,8 @@
 
 use rite_model::{ActionType, CertProfile, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, parse_params, resolve_artifact_bytes, resolve_backend_key,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    parse_params, resolve_artifact_bytes, resolve_backend_key,
 };
 use rite_sdk::{Backend, CertificateDer, PublicKeyDer};
 use serde_json::json;
@@ -140,12 +140,8 @@ impl BuilderProfile for ProfileAdapter {
 pub struct IssueCertificateAction;
 
 impl Action for IssueCertificateAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::IssueCertificate,
-            description: "Issue X.509 certificate from PKCS#10 CSR",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::IssueCertificate
     }
 
     #[allow(clippy::too_many_lines)]

@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    compute_fingerprint, parse_params,
 };
 use rite_sdk::{Backend, CertRef, CertificateDer};
 use serde_json::json;
@@ -20,12 +20,8 @@ use super::params::PivReadCertificateParams;
 pub struct PivReadCertificateAction;
 
 impl Action for PivReadCertificateAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::PivReadCertificate,
-            description: "Read X.509 certificate from PIV smart card slot",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::PivReadCertificate
     }
 
     fn execute(

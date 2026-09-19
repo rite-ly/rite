@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, resolve_backend_key,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    compute_fingerprint, resolve_backend_key,
 };
 use rite_sdk::{Backend, KeyCheckValue, KeyProtection, cms};
 use serde_json::{Value, json};
@@ -20,12 +20,8 @@ use crate::crypto::content::{self, SealedContent};
 pub struct DecryptDataAction;
 
 impl Action for DecryptDataAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::DecryptData,
-            description: "Decrypt an encrypted-data artifact back to bytes",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::DecryptData
     }
 
     fn execute(

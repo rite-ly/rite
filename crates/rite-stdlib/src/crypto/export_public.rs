@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, StepFact, StepInputs};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, resolve_backend_key,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    compute_fingerprint, resolve_backend_key,
 };
 use rite_sdk::Backend;
 use serde_json::json;
@@ -13,12 +13,8 @@ use serde_json::json;
 pub struct ExportPublicAction;
 
 impl Action for ExportPublicAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::ExportPublic,
-            description: "Export the public key from a keypair",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::ExportPublic
     }
 
     fn execute(

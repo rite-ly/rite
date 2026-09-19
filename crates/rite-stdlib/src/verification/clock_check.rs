@@ -3,8 +3,8 @@
 use chrono::{Local, Utc};
 use rite_model::{ActionType, Prompt};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, Response,
-    StepInfo, StepResult, parse_params,
+    Action, ActionError, HandlerContext, Icon, Reporter, Response, StepInfo, StepResult,
+    parse_params,
 };
 use rite_sdk::Backend;
 
@@ -18,12 +18,8 @@ use crate::params::ClockCheckParams;
 pub struct ClockCheckAction;
 
 impl Action for ClockCheckAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::ClockCheck,
-            description: "Verify system clock is correct",
-            category: ActionCategory::Verification,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::ClockCheck
     }
 
     fn execute(

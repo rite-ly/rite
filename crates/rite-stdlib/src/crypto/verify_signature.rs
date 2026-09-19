@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, StepInfo,
-    StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
+    Action, ActionError, HandlerContext, Icon, Reporter, StepInfo, StepResult, compute_fingerprint,
+    parse_params, resolve_artifact_bytes,
 };
 use rite_sdk::Backend;
 use serde_json::json;
@@ -23,12 +23,8 @@ use crate::params::VerifySignatureParams;
 pub struct VerifySignatureAction;
 
 impl Action for VerifySignatureAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::VerifySignature,
-            description: "Verify a signature against a public key",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::VerifySignature
     }
 
     fn execute(

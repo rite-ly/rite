@@ -132,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn test_slugify() {
+    fn slugify_lowercases_and_collapses_separators() {
         assert_eq!(slugify("Simple Name"), "simple-name");
         assert_eq!(slugify("HSM Bootstrap"), "hsm-bootstrap");
         assert_eq!(slugify("Root CA  Signing"), "root-ca-signing");

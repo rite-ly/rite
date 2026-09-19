@@ -1799,7 +1799,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_rsa2048() {
+    fn generates_an_rsa_2048_key() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let metadata = backend
             .generate_key(spec(KeyAlgorithm::Rsa2048, "test-key-2048"))
@@ -1811,7 +1811,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_rsa4096() {
+    fn generates_an_rsa_4096_key() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let metadata = backend
             .generate_key(spec(KeyAlgorithm::Rsa4096, "test-key-4096"))
@@ -1823,7 +1823,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_ecdsa_p256() {
+    fn generates_an_ecdsa_p256_key() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let metadata = backend
             .generate_key(spec(KeyAlgorithm::EcdsaP256, "test-key-p256"))
@@ -1835,7 +1835,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_keys() {
+    fn list_keys_reports_what_was_generated() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         assert_eq!(backend.list_keys().unwrap().len(), 0);
         backend
@@ -1847,7 +1847,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_key() {
+    fn delete_key_removes_it_from_the_listing() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let metadata = backend
             .generate_key(spec(KeyAlgorithm::Rsa2048, "key1"))
@@ -1991,7 +1991,7 @@ mod tests {
     }
 
     #[test]
-    fn test_backend_fingerprint() {
+    fn the_fingerprint_names_the_backend_and_the_openssl_version() {
         let backend = OpenSslBackend::try_new("my-backend").unwrap();
         assert_eq!(backend.name(), "my-backend");
         assert_eq!(backend.provider(), "openssl");
@@ -2005,7 +2005,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wrap_unwrap_rsa_gcm() {
+    fn wrapping_then_unwrapping_an_rsa_key_round_trips() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let kek = backend
             .generate_key(kek(KeyAlgorithm::Rsa2048, "kek"))
@@ -2027,7 +2027,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unwrap_detects_rsa2048() {
+    fn unwrap_recovers_the_algorithm_of_the_wrapped_key() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let kek = backend
             .generate_key(kek(KeyAlgorithm::Rsa4096, "kek"))
@@ -2052,7 +2052,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wrap_key_to_public_der() {
+    fn wrap_to_public_addresses_a_recipient_by_its_spki() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
 
         let recipient = backend
@@ -2078,7 +2078,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wrap_wrong_key() {
+    fn unwrap_refuses_a_kek_that_did_not_wrap_the_key() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let key_a = backend
             .generate_key(kek(KeyAlgorithm::Rsa2048, "key-a"))
@@ -2249,7 +2249,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unwrap_corrupted_cms() {
+    fn unwrap_refuses_a_corrupted_container() {
         // GCM authenticates the content, so any modification to the ciphertext
         // or its tag fails decryption rather than yielding garbled key bytes
         // the backend would then import.
@@ -2280,7 +2280,7 @@ mod tests {
     }
 
     #[test]
-    fn test_import_and_sign() {
+    fn an_imported_key_signs_under_its_original_public_key() {
         let rsa = Rsa::generate(2048).unwrap();
         let original_pkey = PKey::from_rsa(rsa).unwrap();
         let pkcs8_der = original_pkey.private_key_to_pkcs8().unwrap();
@@ -2449,7 +2449,7 @@ mod tests {
     //   EC content  + EC KEK  → RFC 5753 ECDH encapsulation, SEC1 payload
 
     #[test]
-    fn test_wrap_rsa_content_with_ec_kek() {
+    fn wraps_an_rsa_key_to_an_ec_kek() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         // EC P-256 KEK → OpenSSL uses RFC 5753 ECDH key encapsulation.
         let kek = backend
@@ -2473,7 +2473,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wrap_ec_content_with_rsa_kek() {
+    fn wraps_an_ec_key_to_an_rsa_kek() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         // RSA KEK → RSAES-PKCS1-v1.5 encapsulation; the payload is an EC private key
         // serialised in SEC1 (traditional EC DER), recovered via the EcKey fallback parser.
@@ -2498,7 +2498,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wrap_ec_content_with_ec_kek() {
+    fn wraps_an_ec_key_to_an_ec_kek() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         // Both keys are EC P-256: RFC 5753 ECDH encapsulation wraps an SEC1 payload.
         let kek = backend
@@ -2522,7 +2522,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wrap_ec_content_to_ec_public_key() {
+    fn wraps_an_ec_key_to_an_ec_public_key() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         // wrap_to_public with an EC recipient: the throwaway cert carries the EC public key
         // as its subject, triggering RFC 5753 ECDH encapsulation in CMS.
@@ -2549,7 +2549,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_random() {
+    fn generate_random_returns_the_requested_length_and_differs_per_call() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
 
         let bytes = backend.generate_random(32).unwrap();

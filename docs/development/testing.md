@@ -45,6 +45,24 @@ Notes that are easy to get wrong:
   public item as a review nit.
 - **Shared harness code** (e.g. `rite_runtime::test_support::ReporterHarness`) lives behind a
   `test_support` module so other crates' integration tests reuse it instead of duplicating setup.
+- **A test lives in the crate that owns what it needs.** If it names an API behind a `cfg` or a
+  feature, it belongs where that gate is decided. The post-quantum import sweep sits in
+  `rite-openssl` because `ossl350` is set there; written in `rite-stdlib` it failed to compile
+  against OpenSSL 3.0, and a runtime skip cannot save a reference that must compile first.
+
+## Naming
+
+A test name is a sentence about behavior in `snake_case`, with no `test_` prefix. The attribute
+already says it is a test, and the name is what a failure report shows.
+
+```
+unwrap_refuses_a_kek_that_did_not_wrap_the_key
+resolving_an_unknown_artifact_fails
+a_csr_keeps_the_subject_alternative_names_it_was_given
+```
+
+Name the claim, not the function under test. `delete_key_removes_it_from_the_listing` says what
+broke; `test_delete_key` only says where to look.
 
 ## Coverage expectations
 
@@ -57,6 +75,9 @@ behavior silently. Each new entry arrives with a test:
 - **Every backend**: a test per trait method it implements, including the failure shape, not only
   the success path.
 - **Every resolver diagnostic**: a test that the offending input produces it, at the right span.
+- **Every cryptographic algorithm**: a static vector, `f(input) == literal`, taken from an RFC, a
+  FIPS document, or a cross-check against the `openssl` CLI, with the source named in a comment. A
+  round-trip proves the code agrees with itself; only a vector proves it agrees with the standard.
 
 These are registries contributors extend by adding an entry. Rendered prose (duty descriptions,
 step instructions, prompts, report sections) is deliberately *not* on this list: it is covered
@@ -115,4 +136,10 @@ cargo test -p rite-runtime    # one crate
 cargo test --doc              # doc tests only
 cargo test -- --ignored       # hardware/manual tests (need devices)
 cargo insta review            # accept/reject snapshot changes
+
+RITE_OSSL350=0 cargo test -p rite-openssl   # as the OpenSSL 3.0 CI runner sees it
 ```
+
+A dev machine usually links a newer OpenSSL than the `Test` job does, so code behind `ossl350`
+compiles locally and breaks in CI. Run that last line before pushing anything that touches
+`rite-openssl`.

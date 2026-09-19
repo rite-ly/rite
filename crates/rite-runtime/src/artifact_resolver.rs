@@ -182,7 +182,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_resolve_bytes() {
+    fn resolving_a_bytes_artifact_returns_its_content() {
         let mut artifacts = HashMap::new();
         artifacts.insert(
             ArtifactId::new("ksr"),
@@ -194,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_text() {
+    fn resolving_a_text_artifact_returns_its_utf8_bytes() {
         let mut artifacts = HashMap::new();
         artifacts.insert(
             ArtifactId::new("usb_drive"),
@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_not_found() {
+    fn resolving_an_unknown_artifact_fails() {
         let artifacts: HashMap<ArtifactId, ArtifactValue> = HashMap::new();
         let result = resolve_artifact_bytes(&artifacts, &ArtifactId::new("missing"), None);
         assert!(result.is_err());

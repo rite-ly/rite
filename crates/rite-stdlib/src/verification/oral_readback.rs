@@ -146,19 +146,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_nato_phonetic() {
+    fn nato_phonetic_names_every_letter_and_digit() {
         assert_eq!(to_nato_phonetic("ABC"), "Alpha (A), Bravo (B), Charlie (C)");
         assert_eq!(to_nato_phonetic("123"), "One (1), Two (2), Three (3)");
         assert_eq!(to_nato_phonetic("A1B"), "Alpha (A), One (1), Bravo (B)");
     }
 
     #[test]
-    fn test_nato_phonetic_lowercase() {
+    fn nato_phonetic_reads_lowercase_input_as_uppercase() {
         assert_eq!(to_nato_phonetic("abc"), "Alpha (A), Bravo (B), Charlie (C)");
     }
 
     #[test]
-    fn test_hex_format() {
+    fn hex_readback_groups_bytes_in_fours() {
         assert_eq!(to_hex_format("AB"), "41 42");
         assert_eq!(to_hex_format("ABCDEF"), "41 42 43 44  45 46");
     }

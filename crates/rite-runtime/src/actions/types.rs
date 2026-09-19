@@ -344,7 +344,7 @@ mod tests {
     const P256_SPKI: &[u8] = include_bytes!("testdata/p256.spki.der");
 
     #[test]
-    fn test_public_key_format_validation() {
+    fn a_public_key_serializes_as_pem_by_default_and_der_on_request() {
         let public_der = P256_SPKI.to_vec();
         let public_key =
             ArtifactValue::PublicKey(PublicKeyDer::new(public_der.clone()).expect("valid SPKI"));
@@ -392,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wrapped_key_format_validation() {
+    fn a_wrapped_key_serializes_as_der_by_default_and_pem_on_request() {
         let cms_data = b"CMS_DATA".to_vec();
         let description = rite_sdk::WrapDescription::new(
             rite_sdk::RecipientInfoKind::Ktri,

@@ -93,7 +93,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-image-${TA
     cargo build --locked --release -p rite $CARGO_BUILD_ARGS && \
     install -D -m 0755 target/release/rite /out/rite
 
-FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS runtime-base
+FROM debian:trixie-slim@sha256:e27e3dbef3b2064bed82f2fef343c0d02a4b8d5675e5b2c511883442e001630d AS runtime-base
 
 # libssl3 and libpcsclite1 are the shared libraries the glibc image binary links
 # (system OpenSSL + PC/SC). The pcscd daemon and CCID driver are not installed:

@@ -1144,6 +1144,34 @@ impl WrapScheme {
             | WrapScheme::Aes256Kwp => false,
         }
     }
+
+    /// Whether the scheme carries content of any length, as opposed to a key.
+    ///
+    /// A container encrypts the content under its own key and addresses only
+    /// that key to the recipient, so what goes in is arbitrary. A raw mechanism
+    /// encrypts the payload directly under the recipient's key, which bounds it
+    /// to roughly a key's size.
+    ///
+    /// A separate question from [`is_self_describing`](Self::is_self_describing),
+    /// which draws the same line today. That one asks whether a verifier can
+    /// re-derive the algorithms, and this one asks what may be put in. Keeping
+    /// them apart is what lets them diverge honestly when a second container
+    /// lands.
+    ///
+    /// Matched exhaustively on purpose: a scheme added without answering this
+    /// would otherwise default into accepting a file.
+    #[must_use]
+    pub fn carries_content(self) -> bool {
+        match self {
+            WrapScheme::CmsAes256Gcm => true,
+            WrapScheme::RsaOaepSha256
+            | WrapScheme::RsaAesKeyWrapSha256
+            | WrapScheme::Aes128Kw
+            | WrapScheme::Aes256Kw
+            | WrapScheme::Aes128Kwp
+            | WrapScheme::Aes256Kwp => false,
+        }
+    }
 }
 
 impl fmt::Display for WrapScheme {
@@ -1191,57 +1219,46 @@ impl TryFrom<String> for WrapScheme {
     }
 }
 
-/// A wrapped key, the scheme that produced it, and what that wrap did.
+/// Bytes in a container, the scheme that produced them, and what that
+/// operation actually did.
 ///
-/// The three are constructed together and read together: a scheme that does
-/// not admit the description would label the bytes with something the bytes
+/// The three are constructed together and read together: a scheme that does not
+/// admit the description would label the bytes with something the bytes
 /// contradict.
+///
+/// Private, because a container on its own says nothing about what is inside
+/// it. [`WrappedKey`] and [`EncryptedData`] are the two public forms, and the
+/// difference between them is the claim their step made, not the bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(try_from = "WrappedKeyRepr")]
-pub struct WrappedKey {
+#[serde(try_from = "ContainerRepr")]
+struct Container {
     scheme: WrapScheme,
     description: WrapDescription,
     data: Vec<u8>,
 }
 
-/// Deserialization shape for [`WrappedKey`], re-checked on the way in.
+/// Deserialization shape for [`Container`], re-checked on the way in.
 #[derive(Deserialize)]
-struct WrappedKeyRepr {
+struct ContainerRepr {
     scheme: WrapScheme,
     description: WrapDescription,
     data: Vec<u8>,
 }
 
-impl TryFrom<WrappedKeyRepr> for WrappedKey {
-    type Error = IncoherentWrap;
+impl TryFrom<ContainerRepr> for Container {
+    type Error = IncoherentContainer;
 
-    fn try_from(repr: WrappedKeyRepr) -> Result<Self, Self::Error> {
-        WrappedKey::new(repr.scheme, repr.description, repr.data)
+    fn try_from(repr: ContainerRepr) -> Result<Self, Self::Error> {
+        Container::new(repr.scheme, repr.description, repr.data)
     }
 }
 
-/// A wrapped key was labelled with a scheme its own description contradicts.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("scheme {scheme} does not admit this wrap: {description:?}")]
-pub struct IncoherentWrap {
-    /// The scheme the wrap was labelled with.
-    pub scheme: WrapScheme,
-    /// What the artifact says was done.
-    pub description: WrapDescription,
-}
-
-impl WrappedKey {
-    /// Pair wrapped bytes with the scheme and the description of the wrap.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`IncoherentWrap`] if the scheme does not admit the
-    /// description.
-    pub fn new(
+impl Container {
+    fn new(
         scheme: WrapScheme,
         description: WrapDescription,
         data: Vec<u8>,
-    ) -> Result<Self, IncoherentWrap> {
+    ) -> Result<Self, IncoherentContainer> {
         if scheme.permits(&description) {
             Ok(Self {
                 scheme,
@@ -1249,29 +1266,221 @@ impl WrappedKey {
                 data,
             })
         } else {
-            Err(IncoherentWrap {
+            Err(IncoherentContainer {
                 scheme,
                 description,
             })
         }
     }
+}
 
-    /// The scheme this key was wrapped under.
+/// A container was labelled with a scheme its own description contradicts.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("scheme {scheme} does not admit this container: {description:?}")]
+pub struct IncoherentContainer {
+    /// The scheme the bytes were labelled with.
+    pub scheme: WrapScheme,
+    /// What the artifact says was done.
+    pub description: WrapDescription,
+}
+
+/// Give a container newtype the three accessors and the checking constructor.
+///
+/// Both forms answer the same three questions about their bytes. What they do
+/// not share is which steps accept them, which is the whole reason there are
+/// two types rather than one.
+macro_rules! container_newtype {
+    ($name:ident, $what:literal) => {
+        impl $name {
+            #[doc = concat!("Pair ", $what, " with the scheme and the description of what was done.")]
+            ///
+            /// # Errors
+            ///
+            /// Returns [`IncoherentContainer`] if the scheme does not admit the
+            /// description.
+            pub fn new(
+                scheme: WrapScheme,
+                description: WrapDescription,
+                data: Vec<u8>,
+            ) -> Result<Self, IncoherentContainer> {
+                Container::new(scheme, description, data).map(Self)
+            }
+
+            #[doc = concat!("The scheme ", $what, " went into.")]
+            #[must_use]
+            pub fn scheme(&self) -> WrapScheme {
+                self.0.scheme
+            }
+
+            /// What the operation did, read back from the artifact.
+            #[must_use]
+            pub fn description(&self) -> &WrapDescription {
+                &self.0.description
+            }
+
+            /// The container's bytes.
+            #[must_use]
+            pub fn data(&self) -> &[u8] {
+                &self.0.data
+            }
+        }
+    };
+}
+
+/// A key wrapped for transport.
+///
+/// Carries a custody claim: this key left a backend under protection. That is
+/// what separates it from [`EncryptedData`], which holds the same shape of
+/// bytes and claims nothing about custody.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WrappedKey(Container);
+
+container_newtype!(WrappedKey, "a wrapped key");
+
+/// Encrypted content.
+///
+/// A distinct type from [`WrappedKey`] deliberately. The bytes of a container
+/// are the same whether the content was a key or a document; what differs is
+/// the claim the ceremony made about it, so a document that reached the
+/// artifact store cannot be handed to a step that installs keys.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct EncryptedData(Container);
+
+container_newtype!(EncryptedData, "encrypted content");
+
+/// A content-encryption key in the two forms envelope encryption needs.
+///
+/// The plaintext is for the caller to encrypt with and drop. The wrapped copy
+/// is what the container carries, and only the key-encryption key that produced
+/// it opens that again.
+///
+/// This is what every key-protection device offers instead of a cipher: AWS KMS
+/// calls it `GenerateDataKey`, PKCS#11 reaches it with `C_GenerateKey` followed
+/// by `C_WrapKey`. The content never crosses the boundary, so a device that
+/// protects a key it will not export does not also have to be fast enough to
+/// encrypt a file.
+pub struct DataKey {
+    plaintext: zeroize::Zeroizing<Vec<u8>>,
+    wrapped: Vec<u8>,
+    protection: KeyProtection,
+}
+
+/// How a data key was protected, in terms a container can record.
+///
+/// A container names the key-encryption algorithm in its own structure, so the
+/// caller has to know which one the backend used. Asking the backend is the only
+/// way: the protected bytes say nothing about themselves, and what a device does
+/// to protect a key is a property of that device rather than of the request.
+///
+/// Every key-protection API in the field takes this as a parameter on the way
+/// back: Azure Key Vault's `unwrapKey` requires `alg`, PKCS#11's `C_UnwrapKey`
+/// requires a mechanism, and AWS KMS `Decrypt` requires `EncryptionAlgorithm`
+/// for an asymmetric key. A pair of methods without it only works where one
+/// implementation is both ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum KeyProtection {
+    /// RFC 3394 AES Key Wrap under a symmetric KEK.
+    ///
+    /// What a CMS `KEKRecipientInfo` names as `id-aes128-wrap` or
+    /// `id-aes256-wrap`, PKCS#11 as `CKM_AES_KEY_WRAP`, and Azure as `A256KW`.
+    AesKeyWrap,
+    /// RSAES-OAEP with SHA-256, under a public key.
+    ///
+    /// Azure `RSA-OAEP-256`, PKCS#11 `CKM_RSA_PKCS_OAEP`, AWS
+    /// `RSAES_OAEP_SHA_256`.
+    RsaOaepSha256,
+    /// The provider's own envelope, which names no algorithm and follows no
+    /// published format.
+    ///
+    /// AWS KMS is the case to design for. `GenerateDataKey` returns a
+    /// `CiphertextBlob` of up to 6144 bytes for a 32-byte data key, carrying the
+    /// key ARN and the encryption context beside the key, and the response names
+    /// no algorithm at all. Only `Decrypt` against the same service opens it.
+    ///
+    /// A standard container cannot carry one. A CMS `KEKRecipientInfo` has to
+    /// declare a key-encryption algorithm, and declaring `id-aes256-wrap` over
+    /// a blob that is not an AES key wrap would produce an artifact whose own
+    /// structure lies about it, which no reader could open and `rite verify`
+    /// would report as checked. A step that assembles a container refuses this
+    /// by name instead.
+    ProviderDefined,
+}
+
+impl fmt::Display for KeyProtection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            KeyProtection::AesKeyWrap => write!(f, "AES-KW"),
+            KeyProtection::RsaOaepSha256 => write!(f, "RSA-OAEP-SHA256"),
+            KeyProtection::ProviderDefined => write!(f, "a provider-defined envelope"),
+        }
+    }
+}
+
+impl KeyProtection {
+    /// Whether a standard container can record this protection and a standard
+    /// reader can therefore open the result.
+    ///
+    /// Matched exhaustively on purpose: a protection added without answering
+    /// this would otherwise default into being written into a container that
+    /// cannot describe it.
     #[must_use]
-    pub fn scheme(&self) -> WrapScheme {
-        self.scheme
+    pub fn is_nameable_in_a_container(self) -> bool {
+        match self {
+            KeyProtection::AesKeyWrap | KeyProtection::RsaOaepSha256 => true,
+            KeyProtection::ProviderDefined => false,
+        }
+    }
+}
+
+impl std::fmt::Debug for DataKey {
+    /// Names the shape and never the key. A data key is a secret with a short
+    /// life, and a debug print is the way such a thing ends up in a log.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DataKey")
+            .field("plaintext", &format_args!("{} bytes", self.plaintext.len()))
+            .field("wrapped", &format_args!("{} bytes", self.wrapped.len()))
+            .field("protection", &self.protection)
+            .finish()
+    }
+}
+
+impl DataKey {
+    /// Pair a fresh data key with the copy its protector can open, and with
+    /// what protected it.
+    #[must_use]
+    pub fn new(
+        plaintext: zeroize::Zeroizing<Vec<u8>>,
+        wrapped: Vec<u8>,
+        protection: KeyProtection,
+    ) -> Self {
+        Self {
+            plaintext,
+            wrapped,
+            protection,
+        }
     }
 
-    /// What the wrap did, read back from the artifact.
+    /// The key itself, to encrypt content with.
     #[must_use]
-    pub fn description(&self) -> &WrapDescription {
-        &self.description
+    pub fn plaintext(&self) -> &[u8] {
+        &self.plaintext
     }
 
-    /// The wrapped bytes.
+    /// The same key, protected. This is what goes into the container.
     #[must_use]
-    pub fn data(&self) -> &[u8] {
-        &self.data
+    pub fn wrapped(&self) -> &[u8] {
+        &self.wrapped
+    }
+
+    /// What protected it, which is what a container has to declare and what
+    /// opening it again needs.
+    #[must_use]
+    pub fn protection(&self) -> KeyProtection {
+        self.protection
     }
 }
 

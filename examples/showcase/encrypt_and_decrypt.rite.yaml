@@ -1,0 +1,92 @@
+version: "0.3"
+name: "Sealing a Runbook and Proving It Opens"
+description: |
+  Encrypt a document under a key generated here, then open it again and
+  compare it against what went in.
+
+  Demonstrates encrypt_data and decrypt_data. They are to content what
+  wrap_key and unwrap_key are to keys, and they are separate verbs because
+  they make a different claim. A wrap says a key left a backend under
+  protection. Encrypted content says only that these bytes are unreadable
+  without that key.
+
+backends:
+  openssl:
+    provider: openssl
+
+materials:
+  runbook:
+    type: digital
+    path: "test_data/recovery_runbook.txt"
+    title: "Recovery runbook"
+    description: "The document going into the archive."
+
+roles:
+  archivist:
+    name: "Archivist"
+    person: "Alice Rivera"
+
+output:
+  sealed_runbook:
+    type: encrypted_data
+    description: "The runbook, encrypted to the archive key."
+
+sections:
+  seal:
+    name: "Seal and Open"
+    role: ${role.archivist}
+    steps:
+      generate_the_archive_key:
+        action: generate_key
+        backend: openssl
+        with:
+          algorithm: AES-256
+          policy:
+            usages: [wrap, unwrap]
+        creates: archive_key
+        description: |
+          The key the archive is addressed to. It never encrypts the document
+          itself: encrypt_data has the backend produce a fresh
+          content-encryption key per message and protect that, so this key
+          only ever sees a key-sized input. The wrap and unwrap usages are
+          what say so.
+
+      seal_the_runbook:
+        action: encrypt_data
+        backend: openssl
+        reads:
+          data: ${artifact.runbook}
+          encryption_key: ${artifact.archive_key}
+        creates: sealed_runbook
+        description: |
+          The container is a CMS AuthEnvelopedData, the same structure
+          wrap_key writes, so openssl cms -decrypt opens it with no Rite
+          binary present. scheme is not written out because CMS-AES-256-GCM
+          is the default and the only value this action accepts.
+
+      open_the_sealed_runbook:
+        action: decrypt_data
+        backend: openssl
+        reads:
+          encrypted_data: ${artifact.sealed_runbook}
+          decryption_key: ${artifact.archive_key}
+        creates: recovered_runbook
+        description: |
+          Nothing is declared here. What container the bytes are in and how
+          the content was encrypted are both in the artifact, and a restated
+          value could disagree with the bytes that have to be decrypted. The
+          step does check one thing before decrypting: that the container is
+          addressed to the key it was given, so the wrong key fails by name
+          rather than as an authentication error.
+
+      confirm_the_runbook_came_back:
+        action: check_value
+        with:
+          message: "The recovered document is the document that went in."
+          actual: ${artifact.recovered_runbook | sha256 | hex}
+          expected: ${artifact.runbook | sha256 | hex}
+        description: |
+          What comes out of decrypt_data is an ordinary byte artifact, so it
+          is read here the way any material is. A later ceremony could hand
+          the same bytes to import_key instead, which is how a key archived
+          as content becomes a key again.

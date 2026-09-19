@@ -345,7 +345,70 @@ pub struct UnwrapKeyParams {
     pub policy: Option<KeyPolicyParams>,
 }
 
-/// The policy a recovered key gets when the step declares none.
+/// Params for `import_key` action.
+#[cfg(feature = "crypto")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImportKeyParams {
+    /// What the bytes are, as a key algorithm name.
+    ///
+    /// Required, because raw material says nothing about itself: a symmetric
+    /// algorithm reads the bytes as the key itself, every other one reads them
+    /// as PKCS#8 DER. `unwrap_key` can leave this out for a keypair because the
+    /// artifact it reads carries a description; an artifact of plain bytes
+    /// carries nothing.
+    pub algorithm: String,
+    /// The expected identity of the imported key: `"sha256:<hex>"` over its
+    /// SPKI DER for a keypair, `"cmac-aes:<hex>"` for a symmetric key.
+    ///
+    /// Optional, since a ceremony may be lifting material whose identity it
+    /// learns only afterwards. Where it is known it is the only evidence
+    /// available about material this ceremony did not itself produce.
+    #[serde(default)]
+    pub expect_key: Option<String>,
+    /// Label for the imported key (defaults to `"imported-key"`).
+    #[serde(default)]
+    pub label: Option<String>,
+    /// What the imported key is permitted to do, and whether it may leave the
+    /// backend again.
+    ///
+    /// Nothing travels with raw key material saying what it may do, so the
+    /// ceremony declares it, exactly as at `unwrap_key`.
+    #[serde(default)]
+    pub policy: Option<KeyPolicyParams>,
+}
+
+/// Params for `encrypt_data` action.
+#[cfg(feature = "crypto")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EncryptDataParams {
+    /// The container, defaulting to `"CMS-AES-256-GCM"`.
+    ///
+    /// The only value this action accepts today. It is written out rather than
+    /// implied because a second content cipher means a second container, and a
+    /// ceremony that names the one it used stays readable when there are two.
+    #[serde(default)]
+    pub scheme: Option<rite_sdk::WrapScheme>,
+}
+
+/// A key policy as the transcript records it.
+///
+/// One renderer, because three actions record a policy and an auditor
+/// comparing a generate against an import in the same run should be reading a
+/// difference in the policy, never a difference in who wrote it out.
+#[cfg(feature = "crypto")]
+#[must_use]
+pub fn policy_json(policy: &rite_sdk::KeyPolicy) -> serde_json::Value {
+    serde_json::json!({
+        "persistent": policy.persistent,
+        "sensitive": policy.sensitive,
+        "extractable": policy.extractable,
+        "wrap_with_trusted_only": policy.wrap_with_trusted_only,
+        "usages": policy.usages.names(),
+    })
+}
+
+/// The policy a key installed from material the ceremony holds gets when the
+/// step declares none. Shared by `unwrap_key` and `import_key`.
 ///
 /// `extractable` is true because this backend has just held the key in the
 /// clear, so claiming otherwise would be a claim the run cannot support. The
@@ -357,7 +420,7 @@ pub struct UnwrapKeyParams {
 /// reach, since a symmetric key cannot be recovered without the declaration.
 #[cfg(feature = "crypto")]
 #[must_use]
-pub fn unwrapped_key_default_policy(
+pub fn installed_key_default_policy(
     algorithm: Option<rite_sdk::KeyAlgorithm>,
 ) -> rite_sdk::KeyPolicy {
     let usages = algorithm.map_or_else(
@@ -481,6 +544,16 @@ mod schema_drift_tests {
                 serde_keys(UnwrapKeyParams::default()),
             ),
             #[cfg(feature = "crypto")]
+            (
+                ActionType::ImportKey,
+                serde_keys(ImportKeyParams::default()),
+            ),
+            #[cfg(feature = "crypto")]
+            (
+                ActionType::EncryptData,
+                serde_keys(EncryptDataParams::default()),
+            ),
+            #[cfg(feature = "crypto")]
             (ActionType::SignData, serde_keys(SignDataParams::default())),
             #[cfg(feature = "crypto")]
             (
@@ -513,17 +586,17 @@ mod schema_drift_tests {
     fn the_default_policy_for_a_recovered_key_follows_its_algorithm() {
         use rite_sdk::{KeyAlgorithm, KeyUsages};
 
-        let keypair = unwrapped_key_default_policy(Some(KeyAlgorithm::Rsa4096));
+        let keypair = installed_key_default_policy(Some(KeyAlgorithm::Rsa4096));
         assert_eq!(keypair.usages, KeyUsages::SIGN | KeyUsages::VERIFY);
 
-        let secret = unwrapped_key_default_policy(Some(KeyAlgorithm::Aes256));
+        let secret = installed_key_default_policy(Some(KeyAlgorithm::Aes256));
         assert_eq!(secret.usages, KeyUsages::WRAP | KeyUsages::UNWRAP);
 
         // Undeclared is a keypair: a symmetric key cannot be recovered at all
         // without the declaration.
         assert_eq!(
-            unwrapped_key_default_policy(None).usages,
-            unwrapped_key_default_policy(Some(KeyAlgorithm::Rsa4096)).usages
+            installed_key_default_policy(None).usages,
+            installed_key_default_policy(Some(KeyAlgorithm::Rsa4096)).usages
         );
 
         // The key was held in the clear here whatever it is, so claiming it

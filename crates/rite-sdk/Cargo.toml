@@ -17,6 +17,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 bitflags = { workspace = true }
 x509-cert = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 # Only to decode the RFC 4134 example, which the test carries in the base64

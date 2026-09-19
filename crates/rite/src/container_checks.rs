@@ -1,16 +1,19 @@
-//! Offline checks over the wrap steps a transcript records.
+//! Offline checks over the containers a transcript records.
+//!
+//! `wrap_key` and `encrypt_data` produce the same container around different
+//! content, so they are checked the same way and reported together.
 //!
 //! Two things are checkable from a run directory alone, with no key, no
 //! network, and no second transcript:
 //!
-//! - the wrapped artifact on disk against the algorithms the transcript says
-//!   were used, including the recipient the blob names;
+//! - the artifact on disk against the algorithms the transcript says were used,
+//!   including the recipient the blob names;
 //! - the key a wrap consumed against the key this same ceremony generated.
 //!
-//! Everything else a wrap depends on is outside the reach of the bundle: that
-//! the recipient can open the result, and that the recipient is who the
-//! ceremony thought. A wrap that cannot be checked is reported as unchecked
-//! rather than counted as evidence.
+//! Everything else a container depends on is outside the reach of the bundle:
+//! that the recipient can open it, and that the recipient is who the ceremony
+//! thought. A container that cannot be checked is reported as unchecked rather
+//! than counted as evidence.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -22,23 +25,24 @@ use crate::verify::{artifact_location, digest_hex};
 
 /// What was concluded about one wrap step.
 #[derive(Debug)]
-pub struct WrapCheck {
+pub struct ContainerCheck {
     /// Step that performed the wrap.
     pub step: String,
     /// Outcome of the checks that could run.
-    pub status: WrapStatus,
+    pub status: ContainerStatus,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum WrapStatus {
+pub enum ContainerStatus {
     /// The checks that could run, ran.
     Checked {
         /// Whether the recorded algorithms were re-derived or only asserted.
         algorithms: AlgorithmEvidence,
         /// What, if anything, corroborates the recipient the blob names.
         recipient: RecipientEvidence,
-        /// The key wrapped is one this ceremony generated.
-        origin_confirmed: bool,
+        /// Where the key that was wrapped came from, where the transcript
+        /// says so at all.
+        origin: OriginEvidence,
     },
     /// The artifact contradicts the record.
     Mismatch {
@@ -64,7 +68,7 @@ pub enum AlgorithmEvidence {
     /// The scheme's output describes nothing about itself, so the recorded
     /// algorithms are what the backend reports having invoked.
     ///
-    /// Not the same claim as [`WrapStatus::Unchecked`]: there is nothing of
+    /// Not the same claim as [`ContainerStatus::Unchecked`]: there is nothing of
     /// this kind to check, by construction, rather than a check that could not
     /// run, and the two must not print alike.
     AsInvoked(WrapScheme),
@@ -87,19 +91,39 @@ pub enum RecipientEvidence {
     /// The recipient is a key this ceremony generated, so the wrap can be
     /// undone here. Says nothing about anyone's intent, only about custody.
     GeneratedHere,
+    /// The recipient is a key this ceremony imported, so the wrap can be
+    /// undone here too, but the ceremony received that key rather than making
+    /// it. Weaker than [`Self::GeneratedHere`] by exactly that much: where the
+    /// material came from is outside the bundle.
+    ImportedHere,
     /// Nothing in the transcript corroborates the recipient.
     None,
 }
 
-impl WrapCheck {
+/// What the bundle can say about the key a wrap consumed.
+///
+/// The same distinction [`RecipientEvidence`] draws between a key the ceremony
+/// made and one it was handed, on the payload side rather than the recipient
+/// side.
+#[derive(Debug, PartialEq, Eq)]
+pub enum OriginEvidence {
+    /// The wrapped key was generated in this ceremony.
+    GeneratedHere,
+    /// The wrapped key was imported into this ceremony from material it held.
+    ImportedHere,
+    /// Nothing in the transcript names where the wrapped key came from.
+    None,
+}
+
+impl ContainerCheck {
     /// One line for the verifier's output.
     #[must_use]
     pub fn describe(&self) -> String {
         match &self.status {
-            WrapStatus::Checked {
+            ContainerStatus::Checked {
                 algorithms,
                 recipient,
-                origin_confirmed,
+                origin,
             } => {
                 let (verdict, first) = match algorithms {
                     AlgorithmEvidence::Derived => {
@@ -124,46 +148,75 @@ impl WrapCheck {
                     RecipientEvidence::GeneratedHere => {
                         notes.push("addressed to a key generated in this ceremony".to_string());
                     }
+                    RecipientEvidence::ImportedHere => {
+                        notes.push("addressed to a key imported into this ceremony".to_string());
+                    }
                     RecipientEvidence::None => {}
                 }
-                if *origin_confirmed {
-                    notes.push("wrapped a key generated in this ceremony".to_string());
+                match origin {
+                    OriginEvidence::GeneratedHere => {
+                        notes.push("wrapped a key generated in this ceremony".to_string());
+                    }
+                    OriginEvidence::ImportedHere => {
+                        notes.push("wrapped a key imported into this ceremony".to_string());
+                    }
+                    OriginEvidence::None => {}
                 }
                 format!("{}: {verdict} ({})", self.step, notes.join(", "))
             }
-            WrapStatus::Mismatch { detail } => format!("{}: MISMATCH: {detail}", self.step),
-            WrapStatus::Unchecked { reason } => format!("{}: unchecked ({reason})", self.step),
+            ContainerStatus::Mismatch { detail } => format!("{}: MISMATCH: {detail}", self.step),
+            ContainerStatus::Unchecked { reason } => format!("{}: unchecked ({reason})", self.step),
         }
     }
 
     /// Whether this check failed verification.
     #[must_use]
     pub fn failed(&self) -> bool {
-        matches!(self.status, WrapStatus::Mismatch { .. })
+        matches!(self.status, ContainerStatus::Mismatch { .. })
     }
 }
 
-/// Check every wrap the transcript records.
+/// The two output fields this check reads, for a fact that produced a
+/// container, and `None` for a fact that produced none.
 ///
-/// Without a run directory there is no artifact to read, so every wrap is
+/// The check is the same for both operations. What differs is only the names
+/// the producing action wrote, and one table is what keeps the two from
+/// drifting apart.
+fn container_fields(kind: &str) -> Option<(&'static str, &'static str)> {
+    match kind {
+        // A key left a backend under protection.
+        "wrap_key" => Some(("wrapped_key_fingerprint", "wrap")),
+        // Content was encrypted for a recipient, with no custody claim.
+        "encrypt_data" => Some(("encrypted_data_fingerprint", "encryption")),
+        _ => None,
+    }
+}
+
+/// Check every container the transcript records.
+///
+/// Without a run directory there is no artifact to read, so every container is
 /// reported unchecked.
 #[must_use]
-pub fn check_wraps(dir: Option<&Path>, facts: &[&StepFact]) -> Vec<WrapCheck> {
+pub fn check_containers(dir: Option<&Path>, facts: &[&StepFact]) -> Vec<ContainerCheck> {
     let index = Index::of(facts);
     facts
         .iter()
-        .filter_map(|fact| match fact {
-            StepFact::BackendOperation {
+        .filter_map(|fact| {
+            let StepFact::BackendOperation {
                 step,
                 kind,
                 inputs,
                 outputs,
                 ..
-            } if kind == "wrap_key" => Some(WrapCheck {
+            } = fact
+            else {
+                return None;
+            };
+            let fields = container_fields(kind)?;
+            Some(ContainerCheck {
                 step: step.as_str().to_string(),
-                status: check_one(dir, &index, step.as_str(), inputs, outputs),
-            }),
-            _ => None,
+                status: check_one(dir, &index, fields, step.as_str(), inputs, outputs),
+            })
         })
         .collect()
 }
@@ -176,6 +229,10 @@ struct Index<'a> {
     /// Keys this ceremony generated, by whatever names them: a fingerprint
     /// for a keypair, a check value for a symmetric key.
     generated: HashSet<&'a str>,
+    /// Keys this ceremony imported, named the same way. Kept apart from
+    /// `generated` because the two support different claims: one says the
+    /// ceremony made the key, the other only that it received it.
+    imported: HashSet<&'a str>,
     /// Recipient a wrap was given, by the step that wrapped to it, with
     /// whether the ceremony declared it in advance.
     ///
@@ -191,6 +248,7 @@ impl<'a> Index<'a> {
     fn of(facts: &[&'a StepFact]) -> Self {
         let mut index = Index {
             generated: HashSet::new(),
+            imported: HashSet::new(),
             recipients: HashMap::new(),
             artifacts: HashMap::new(),
         };
@@ -205,6 +263,14 @@ impl<'a> Index<'a> {
                     }
                     if let Some(check_value) = string_field(outputs, "key_check_value") {
                         index.generated.insert(check_value);
+                    }
+                }
+                StepFact::BackendOperation { kind, outputs, .. } if kind == "import_key" => {
+                    if let Some(fingerprint) = string_field(outputs, "imported_key_fingerprint") {
+                        index.imported.insert(fingerprint);
+                    }
+                    if let Some(check_value) = string_field(outputs, "imported_key_check_value") {
+                        index.imported.insert(check_value);
                     }
                 }
                 StepFact::WrapRecipientRecorded {
@@ -245,46 +311,60 @@ impl<'a> Index<'a> {
 fn check_one(
     dir: Option<&Path>,
     index: &Index<'_>,
+    (artifact_field, description_field): (&str, &str),
     step: &str,
     inputs: &serde_json::Value,
     outputs: &serde_json::Value,
-) -> WrapStatus {
-    let Some(blob_fingerprint) = string_field(outputs, "wrapped_key_fingerprint") else {
-        return unchecked("the wrap fact records no artifact fingerprint");
+) -> ContainerStatus {
+    let Some(blob_fingerprint) = string_field(outputs, artifact_field) else {
+        return unchecked("the fact records no artifact fingerprint");
     };
     let Some(scheme) = recorded_scheme(inputs) else {
-        return unchecked("the wrap fact records no scheme");
+        return unchecked("the fact records no scheme");
     };
 
     // Whichever form names the wrapped key. Both land in one set, so a
     // symmetric payload traces to its generate step the way a keypair does.
-    let origin_confirmed = ["key_to_wrap_fingerprint", "key_to_wrap_check_value"]
+    let wrapped_key_names: Vec<&str> = ["key_to_wrap_fingerprint", "key_to_wrap_check_value"]
         .iter()
         .filter_map(|field| string_field(inputs, field))
-        .any(|target| index.generated.contains(target));
+        .collect();
+    let origin = if wrapped_key_names
+        .iter()
+        .any(|target| index.generated.contains(target))
+    {
+        OriginEvidence::GeneratedHere
+    } else if wrapped_key_names
+        .iter()
+        .any(|target| index.imported.contains(target))
+    {
+        OriginEvidence::ImportedHere
+    } else {
+        OriginEvidence::None
+    };
 
     // A raw mechanism is not a failed CMS parse, and must not report as one.
     // The scheme in the record is what says which this is, so a verifier needs
     // no marker beyond the name it already has. Checked before the description
     // is parsed, which on this path would be parsed only to be discarded.
     if !scheme.is_self_describing() {
-        return WrapStatus::Checked {
+        return ContainerStatus::Checked {
             algorithms: AlgorithmEvidence::AsInvoked(scheme),
             // The recipient facts are transcript against transcript and never
             // touch the blob, so they hold here exactly as they do for CMS.
             // Only `GeneratedHere`, which reads the blob's own identifier, is
             // out of reach.
             recipient: declared_recipient(index, step),
-            origin_confirmed,
+            origin,
         };
     }
 
-    let Some(recorded) = outputs.get("wrap") else {
-        return unchecked("the wrap fact records no description of the wrap");
+    let Some(recorded) = outputs.get(description_field) else {
+        return unchecked("the fact records no description of what was done");
     };
     let recorded: WrapDescription = match serde_json::from_value(recorded.clone()) {
         Ok(description) => description,
-        Err(e) => return unchecked(format!("the recorded wrap description is unreadable: {e}")),
+        Err(e) => return unchecked(format!("the recorded description is unreadable: {e}")),
     };
 
     let Some(dir) = dir else {
@@ -302,7 +382,7 @@ fn check_one(
     // One comparison of the whole description, so a field added to it is
     // checked here without this function learning its name.
     if from_blob.description != recorded {
-        return WrapStatus::Mismatch {
+        return ContainerStatus::Mismatch {
             detail: format!(
                 "the transcript records {}, the artifact says {}",
                 algorithms(&recorded),
@@ -327,7 +407,7 @@ fn check_one(
                     }
                 }
                 Some(&(recorded, _)) => {
-                    return WrapStatus::Mismatch {
+                    return ContainerStatus::Mismatch {
                         detail: format!(
                             "the transcript records recipient {recorded}, \
                              the artifact names {named}"
@@ -340,15 +420,16 @@ fn check_one(
                 None if index.generated.contains(named.as_str()) => {
                     RecipientEvidence::GeneratedHere
                 }
+                None if index.imported.contains(named.as_str()) => RecipientEvidence::ImportedHere,
                 None => RecipientEvidence::None,
             }
         }
     };
 
-    WrapStatus::Checked {
+    ContainerStatus::Checked {
         algorithms: AlgorithmEvidence::Derived,
         recipient,
-        origin_confirmed,
+        origin,
     }
 }
 
@@ -401,8 +482,8 @@ fn string_field<'a>(value: &'a serde_json::Value, field: &str) -> Option<&'a str
     value.get(field)?.as_str()
 }
 
-fn unchecked(reason: impl Into<String>) -> WrapStatus {
-    WrapStatus::Unchecked {
+fn unchecked(reason: impl Into<String>) -> ContainerStatus {
+    ContainerStatus::Unchecked {
         reason: reason.into(),
     }
 }
@@ -519,22 +600,125 @@ mod tests {
         ]
     }
 
+    /// A container `encrypt_data` produced, and the facts a run records for it.
+    ///
+    /// Built through the same backend path the action uses, so the check runs
+    /// against real bytes rather than a description written by hand.
+    struct Sealed {
+        blob: Vec<u8>,
+        kek_check_value: String,
+        outputs: serde_json::Value,
+    }
+
+    static SEALED: LazyLock<Sealed> = LazyLock::new(make_sealed);
+
+    fn make_sealed() -> Sealed {
+        let mut backend = rite_openssl::OpenSslBackend::try_new("test").unwrap();
+        let kek = backend
+            .generate_key(KeySpec {
+                algorithm: KeyAlgorithm::Aes256,
+                label: "kek".to_string(),
+                policy: KeyPolicy {
+                    usages: rite_sdk::KeyUsages::WRAP | rite_sdk::KeyUsages::UNWRAP,
+                    ..KeyPolicy::default()
+                },
+                location_hint: None,
+            })
+            .unwrap();
+        let check_value = kek.check_value.as_ref().unwrap();
+
+        let data_key = backend
+            .generate_data_key(&kek.key_id, KeyAlgorithm::Aes256)
+            .unwrap();
+        let content = rite_openssl::seal_content(data_key.plaintext(), b"an archive").unwrap();
+        let blob = rite_sdk::cms::write_kek_enveloped(&rite_sdk::cms::KekEnvelope {
+            key_identifier: check_value.as_bytes().to_vec(),
+            wrapped_cek: data_key.wrapped().to_vec(),
+            nonce: content.nonce,
+            ciphertext: content.ciphertext,
+            tag: content.tag,
+        })
+        .unwrap();
+        let description = rite_sdk::cms::describe(&blob).unwrap().description;
+
+        Sealed {
+            kek_check_value: check_value.to_string(),
+            outputs: json!({
+                "encrypted_data_fingerprint": rite_runtime::compute_fingerprint(&blob),
+                "encryption": description,
+            }),
+            blob,
+        }
+    }
+
+    /// An encrypt step is checked on the same terms a wrap gets: the artifact
+    /// is re-read, and the key it is addressed to is traced to the step that
+    /// made it. Nothing was wrapped, so the origin clause is absent.
+    #[test]
+    fn an_encrypt_is_checked_against_its_artifact_and_its_recipient() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sealed = &*SEALED;
+        std::fs::create_dir_all(tmp.path().join("artifacts")).unwrap();
+        std::fs::write(tmp.path().join("artifacts/sealed.p7c"), &sealed.blob).unwrap();
+
+        let facts = vec![
+            StepFact::BackendOperation {
+                step: StepId::new("gen_kek"),
+                kind: "generate_key".to_string(),
+                inputs: json!({}),
+                outputs: json!({ "key_check_value": sealed.kek_check_value }),
+                fingerprint: None,
+            },
+            StepFact::BackendOperation {
+                step: StepId::new("encrypt"),
+                kind: "encrypt_data".to_string(),
+                inputs: json!({
+                    "scheme": "CMS-AES-256-GCM",
+                    "encryption_key": "kek",
+                }),
+                outputs: sealed.outputs.clone(),
+                fingerprint: None,
+            },
+            StepFact::ArtifactWritten {
+                step: StepId::new("encrypt"),
+                name: "sealed".to_string(),
+                path: PathBuf::from("/somewhere/else/artifacts/sealed.p7c"),
+                sha256: rite_runtime::compute_fingerprint(&sealed.blob),
+            },
+        ];
+
+        let checks = check_containers(Some(tmp.path()), &borrow(&facts));
+        let [check] = checks.as_slice() else {
+            panic!("expected one container check, got {checks:?}");
+        };
+        assert_eq!(
+            check.status,
+            ContainerStatus::Checked {
+                algorithms: AlgorithmEvidence::Derived,
+                recipient: RecipientEvidence::GeneratedHere,
+                origin: OriginEvidence::None,
+            },
+            "{}",
+            check.describe()
+        );
+    }
+
     #[test]
     fn a_wrap_whose_artifact_agrees_with_the_record_is_checked() {
         let tmp = tempfile::tempdir().unwrap();
         let wrap = &*WRAP;
         let facts = transcript(tmp.path(), wrap, wrap.outputs.clone());
 
-        let checks = check_wraps(Some(tmp.path()), &borrow(&facts));
+        let checks = check_containers(Some(tmp.path()), &borrow(&facts));
         let [check] = checks.as_slice() else {
             panic!("expected one wrap check, got {checks:?}");
         };
         assert_eq!(
             check.status,
-            WrapStatus::Checked {
+            ContainerStatus::Checked {
                 algorithms: AlgorithmEvidence::Derived,
                 recipient: RecipientEvidence::Declared,
-                origin_confirmed: true,
+                origin: OriginEvidence::GeneratedHere,
             },
             "{}",
             check.describe()
@@ -557,14 +741,14 @@ mod tests {
             }
         }
 
-        let checks = check_wraps(Some(tmp.path()), &borrow(&facts));
+        let checks = check_containers(Some(tmp.path()), &borrow(&facts));
         let check = checks.first().expect("one check");
         assert_eq!(
             check.status,
-            WrapStatus::Checked {
+            ContainerStatus::Checked {
                 algorithms: AlgorithmEvidence::Derived,
                 recipient: RecipientEvidence::Recorded,
-                origin_confirmed: true,
+                origin: OriginEvidence::GeneratedHere,
             },
             "{}",
             check.describe()
@@ -585,17 +769,122 @@ mod tests {
             fingerprint: None,
         });
 
-        let checks = check_wraps(Some(tmp.path()), &borrow(&facts));
+        let checks = check_containers(Some(tmp.path()), &borrow(&facts));
         let [check] = checks.as_slice() else {
             panic!("expected one wrap check, got {checks:?}");
         };
         assert_eq!(
             check.status,
-            WrapStatus::Checked {
+            ContainerStatus::Checked {
                 algorithms: AlgorithmEvidence::Derived,
                 recipient: RecipientEvidence::GeneratedHere,
-                origin_confirmed: true,
+                origin: OriginEvidence::GeneratedHere,
             },
+            "{}",
+            check.describe()
+        );
+    }
+
+    /// A KEK the ceremony imported is still a KEK the ceremony can open the
+    /// blob with, but it received that key rather than making it. The line
+    /// says which, because leaving the clause out would report the weaker
+    /// custody claim as no claim at all.
+    #[test]
+    fn a_wrap_to_an_imported_key_says_it_was_imported() {
+        let mut backend = rite_openssl::OpenSslBackend::try_new("test").unwrap();
+        let kek = backend
+            .import_key(
+                KeySpec {
+                    algorithm: KeyAlgorithm::Aes256,
+                    label: "kek".to_string(),
+                    policy: KeyPolicy::default_for(KeyAlgorithm::Aes256),
+                    location_hint: None,
+                },
+                &[7u8; 32],
+            )
+            .unwrap();
+        let target = backend
+            .generate_key(KeySpec {
+                algorithm: KeyAlgorithm::Rsa2048,
+                label: "target".to_string(),
+                policy: KeyPolicy {
+                    extractable: true,
+                    ..KeyPolicy::default()
+                },
+                location_hint: None,
+            })
+            .unwrap();
+        let wrapped = backend
+            .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
+            .unwrap();
+
+        let target_fingerprint = rite_runtime::compute_fingerprint(
+            backend
+                .export_public_key(&target.key_id)
+                .unwrap()
+                .as_bytes(),
+        );
+        let check_value = kek.check_value.as_ref().unwrap().to_string();
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("artifacts")).unwrap();
+        std::fs::write(tmp.path().join("artifacts/wrapped.p7c"), wrapped.data()).unwrap();
+
+        let facts = vec![
+            StepFact::BackendOperation {
+                step: StepId::new("gen_target"),
+                kind: "generate_key".to_string(),
+                inputs: json!({}),
+                outputs: json!({ "public_key_fingerprint": target_fingerprint }),
+                fingerprint: None,
+            },
+            StepFact::BackendOperation {
+                step: StepId::new("import_kek"),
+                kind: "import_key".to_string(),
+                inputs: json!({}),
+                outputs: json!({ "imported_key_check_value": check_value }),
+                fingerprint: None,
+            },
+            StepFact::BackendOperation {
+                step: StepId::new("wrap"),
+                kind: "wrap_key".to_string(),
+                inputs: json!({
+                    "scheme": "CMS-AES-256-GCM",
+                    "key_to_wrap_fingerprint": target_fingerprint,
+                    "wrapping_key": "kek",
+                }),
+                outputs: json!({
+                    "wrapped_key_fingerprint": rite_runtime::compute_fingerprint(wrapped.data()),
+                    "wrap": wrapped.description(),
+                }),
+                fingerprint: None,
+            },
+            StepFact::ArtifactWritten {
+                step: StepId::new("wrap"),
+                name: "wrapped".to_string(),
+                path: tmp.path().join("artifacts/wrapped.p7c"),
+                sha256: rite_runtime::compute_fingerprint(wrapped.data()),
+            },
+        ];
+
+        let checks = check_containers(Some(tmp.path()), &borrow(&facts));
+        let [check] = checks.as_slice() else {
+            panic!("expected one wrap check, got {checks:?}");
+        };
+        assert_eq!(
+            check.status,
+            ContainerStatus::Checked {
+                algorithms: AlgorithmEvidence::Derived,
+                recipient: RecipientEvidence::ImportedHere,
+                origin: OriginEvidence::GeneratedHere,
+            },
+            "{}",
+            check.describe()
+        );
+        assert!(
+            check
+                .describe()
+                .contains("addressed to a key imported into this ceremony"),
             "{}",
             check.describe()
         );
@@ -683,16 +972,16 @@ mod tests {
             },
         ];
 
-        let checks = check_wraps(Some(tmp.path()), &borrow(&facts));
+        let checks = check_containers(Some(tmp.path()), &borrow(&facts));
         let [check] = checks.as_slice() else {
             panic!("expected one wrap check, got {checks:?}");
         };
         assert_eq!(
             check.status,
-            WrapStatus::Checked {
+            ContainerStatus::Checked {
                 algorithms: AlgorithmEvidence::Derived,
                 recipient: RecipientEvidence::GeneratedHere,
-                origin_confirmed: true,
+                origin: OriginEvidence::GeneratedHere,
             },
             "{}",
             check.describe()
@@ -771,17 +1060,19 @@ mod tests {
             },
         ];
 
-        let checks = check_wraps(Some(tmp.path()), &borrow(&facts));
+        let checks = check_containers(Some(tmp.path()), &borrow(&facts));
         let [check] = checks.as_slice() else {
             panic!("expected one wrap check, got {checks:?}");
         };
-        let WrapStatus::Checked {
-            origin_confirmed, ..
-        } = check.status
-        else {
+        let ContainerStatus::Checked { origin, .. } = &check.status else {
             panic!("{}", check.describe());
         };
-        assert!(origin_confirmed, "{}", check.describe());
+        assert_eq!(
+            *origin,
+            OriginEvidence::GeneratedHere,
+            "{}",
+            check.describe()
+        );
     }
 
     /// With neither a recipient fact nor a matching generate step, the
@@ -794,14 +1085,14 @@ mod tests {
         let mut facts = transcript(tmp.path(), wrap, wrap.outputs.clone());
         facts.retain(|fact| !matches!(fact, StepFact::WrapRecipientRecorded { .. }));
 
-        let checks = check_wraps(Some(tmp.path()), &borrow(&facts));
+        let checks = check_containers(Some(tmp.path()), &borrow(&facts));
         let check = checks.first().expect("one check");
         assert_eq!(
             check.status,
-            WrapStatus::Checked {
+            ContainerStatus::Checked {
                 algorithms: AlgorithmEvidence::Derived,
                 recipient: RecipientEvidence::None,
-                origin_confirmed: true,
+                origin: OriginEvidence::GeneratedHere,
             },
             "{}",
             check.describe()
@@ -828,17 +1119,17 @@ mod tests {
             }
         }
 
-        let checks = check_wraps(Some(tmp.path()), &borrow(&facts));
+        let checks = check_containers(Some(tmp.path()), &borrow(&facts));
         let check = checks.first().expect("one check");
         assert_eq!(
             check.status,
-            WrapStatus::Checked {
+            ContainerStatus::Checked {
                 algorithms: AlgorithmEvidence::AsInvoked(WrapScheme::RsaAesKeyWrapSha256),
                 // The recipient was declared in advance, and that evidence
                 // comes from two transcript facts rather than from the blob,
                 // so a raw mechanism does not cost it.
                 recipient: RecipientEvidence::Declared,
-                origin_confirmed: true,
+                origin: OriginEvidence::GeneratedHere,
             },
             "{}",
             check.describe()
@@ -872,11 +1163,11 @@ mod tests {
             );
         let facts = transcript(tmp.path(), wrap, outputs);
 
-        let checks = check_wraps(Some(tmp.path()), &borrow(&facts));
+        let checks = check_containers(Some(tmp.path()), &borrow(&facts));
         assert!(
             checks.first().expect("one check").failed(),
             "{:?}",
-            checks.first().map(WrapCheck::describe)
+            checks.first().map(ContainerCheck::describe)
         );
     }
 
@@ -891,7 +1182,7 @@ mod tests {
             }
         }
 
-        let checks = check_wraps(Some(tmp.path()), &borrow(&facts));
+        let checks = check_containers(Some(tmp.path()), &borrow(&facts));
         assert!(checks.first().expect("one check").failed());
     }
 
@@ -902,9 +1193,9 @@ mod tests {
         let facts = transcript(tmp.path(), wrap, wrap.outputs.clone());
         std::fs::remove_file(tmp.path().join("artifacts/wrapped.p7c")).unwrap();
 
-        let checks = check_wraps(Some(tmp.path()), &borrow(&facts));
+        let checks = check_containers(Some(tmp.path()), &borrow(&facts));
         let check = checks.first().expect("one check");
-        assert!(matches!(check.status, WrapStatus::Unchecked { .. }));
+        assert!(matches!(check.status, ContainerStatus::Unchecked { .. }));
         assert!(
             !check.failed(),
             "an absent artifact proves nothing either way"
@@ -917,10 +1208,10 @@ mod tests {
         let wrap = &*WRAP;
         let facts = transcript(tmp.path(), wrap, wrap.outputs.clone());
 
-        let checks = check_wraps(None, &borrow(&facts));
+        let checks = check_containers(None, &borrow(&facts));
         assert!(matches!(
             checks.first().expect("one check").status,
-            WrapStatus::Unchecked { .. }
+            ContainerStatus::Unchecked { .. }
         ));
     }
 }

@@ -14,7 +14,10 @@
 //! - [`RandomBackend`](rite_sdk::RandomBackend): random byte generation
 //!
 //! [`verify_signature`] works without a backend instance, so it applies to keys
-//! this crate never held (a PIV card's, say).
+//! this crate never held (a PIV card's, say). [`seal_content`] and
+//! [`open_content`] are free of a backend for a different reason: content
+//! encryption is not an operation any key-protection device performs, so it
+//! belongs beside the backends rather than inside one.
 //!
 //! # Feature flags
 //!
@@ -30,8 +33,10 @@
 #![warn(missing_docs)]
 
 mod backend;
+mod content;
 
 pub use backend::{OpenSslBackend, verify_signature};
+pub use content::{SealedContent, open_content, seal_content};
 
 /// Whether this build can perform ML-DSA and ML-KEM operations.
 ///

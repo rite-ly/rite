@@ -56,6 +56,21 @@ pub static ALL: &[ActionMeta] = &[
         long: "Decrypt a wrapped key and import it into a backend under a new label. The scheme comes from the wrapped artifact rather than the ceremony, so it cannot disagree with the bytes being decrypted. Nothing travels with a wrapped key saying what it is, so `algorithm:` declares that: it is required to recover a symmetric key, whose bytes look like any others of the same length, and checked against what came out for a keypair. `expect_key:` names the key the ceremony means to restore, as a `sha256:` fingerprint for a keypair or a `cmac-aes:` check value for a symmetric key.",
     },
     ActionMeta {
+        name: "import_key",
+        short: "Import a key from material the ceremony holds",
+        long: "Install key material the ceremony already holds as a key of a named algorithm. `unwrap_key` without the decrypt: the bytes can be a material carried into the room or an artifact an earlier step produced. `algorithm:` is required, because raw material says nothing about itself: a symmetric algorithm reads the bytes as the key itself, every other one reads them as PKCS#8 DER. `expect_key:` names what the ceremony means to lift, as a `sha256:` fingerprint for a keypair or a `cmac-aes:` check value for a symmetric key, and is the only evidence available about material this ceremony did not itself produce. `policy:` says what the imported key may do.",
+    },
+    ActionMeta {
+        name: "encrypt_data",
+        short: "Encrypt content under a key held by a backend",
+        long: "Encrypt bytes into a container only the named key opens. `wrap_key` for content that is not a key, and a separate verb because the claim differs: a wrap says a key left a backend under protection, while encrypted content makes no custody claim. Reads `data:` and `encryption_key:`, a 256-bit symmetric key the backend holds. The backend produces a fresh content-encryption key and a copy of it only that key opens, and the content is encrypted under the first, so the content itself never reaches the backend. `scheme:` names the container and defaults to `CMS-AES-256-GCM`, which is the only one this action writes.",
+    },
+    ActionMeta {
+        name: "decrypt_data",
+        short: "Decrypt an encrypted-data artifact back to bytes",
+        long: "Open a container `encrypt_data` produced. Reads `encrypted_data:` and `decryption_key:`, the key the container is addressed to, which is checked by its check value before anything is decrypted. What comes out is an ordinary byte artifact, so a later step reads it the way it reads a material: `import_key` lifts it into a key, `check_value` compares it, `sign_data` signs it.",
+    },
+    ActionMeta {
         name: "export_public",
         short: "Export public key from keypair",
         long: "Export public key from keypair.",

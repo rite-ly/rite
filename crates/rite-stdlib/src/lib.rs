@@ -67,8 +67,8 @@ pub use backend::{MockBackend, create_backend, default_backend_factory};
 pub use attestation::AttestAction;
 #[cfg(feature = "crypto")]
 pub use crypto::{
-    ExportPublicAction, GenerateKeyAction, SignDataAction, UnwrapKeyAction, VerifySignatureAction,
-    WrapKeyAction,
+    DecryptDataAction, EncryptDataAction, ExportPublicAction, GenerateKeyAction, ImportKeyAction,
+    SignDataAction, UnwrapKeyAction, VerifySignatureAction, WrapKeyAction,
 };
 pub use entropy::GatherEntropyAction;
 #[cfg(feature = "yubikey")]
@@ -115,9 +115,12 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
     #[cfg(feature = "crypto")]
     {
         registry.register(Arc::new(GenerateKeyAction));
+        registry.register(Arc::new(ImportKeyAction));
         registry.register(Arc::new(ExportPublicAction));
         registry.register(Arc::new(WrapKeyAction));
         registry.register(Arc::new(UnwrapKeyAction));
+        registry.register(Arc::new(EncryptDataAction));
+        registry.register(Arc::new(DecryptDataAction));
         registry.register(Arc::new(SignDataAction));
         registry.register(Arc::new(VerifySignatureAction));
     }

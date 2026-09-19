@@ -2026,12 +2026,14 @@ dependencies = [
  "serde_json",
  "thiserror",
  "x509-cert 0.3.0",
+ "zeroize",
 ]
 
 [[package]]
 name = "rite-stdlib"
 version = "0.6.0"
 dependencies = [
+ "base16ct 1.0.0",
  "chrono",
  "openssl",
  "rite-model",
@@ -2048,6 +2050,7 @@ dependencies = [
  "subtle",
  "sysinfo",
  "x509-cert 0.3.0",
+ "zeroize",
 ]
 
 [[package]]

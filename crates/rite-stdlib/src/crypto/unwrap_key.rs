@@ -8,7 +8,7 @@ use rite_runtime::{
 use rite_sdk::{Backend, KeyAlgorithm};
 use serde_json::json;
 
-use crate::params::{UnwrapKeyParams, unwrapped_key_default_policy};
+use crate::params::{UnwrapKeyParams, installed_key_default_policy};
 
 /// Unwrap a key inside the receiving backend.
 ///
@@ -93,26 +93,10 @@ impl Action for UnwrapKeyAction {
 
         reporter.log(Icon::Spinner, format!("Unwrapping key using {scheme}..."))?;
 
-        let backend_mut = backend.ok_or_else(|| {
-            ActionError::Failed("Backend required for key unwrapping".to_string())
-        })?;
-        let backend_name = backend_mut.name().to_string();
-        let backend_fingerprint = backend_mut.fingerprint();
+        let (unwrap_backend, backend_name, backend_fingerprint) =
+            crate::crypto::transport_backend(backend, unwrapping_key.backend_name, "unwrap a key")?;
 
-        if backend_name != unwrapping_key.backend_name {
-            return Err(ActionError::Failed(format!(
-                "Unwrapping key owned by backend '{}', but current backend is '{backend_name}'",
-                unwrapping_key.backend_name
-            )));
-        }
-
-        let unwrap_backend = backend_mut.as_transport_mut().ok_or_else(|| {
-            ActionError::Failed(format!(
-                "Backend '{backend_name}' does not support key unwrapping"
-            ))
-        })?;
-
-        let default_policy = unwrapped_key_default_policy(expected);
+        let default_policy = installed_key_default_policy(expected);
         let policy = match &typed.policy {
             None => default_policy,
             Some(declared) => declared
@@ -180,13 +164,7 @@ impl Action for UnwrapKeyAction {
                 // Recorded whether or not the ceremony declared one: what a
                 // recovered key may do is the receiving ceremony's claim, and
                 // an auditor should not have to know the defaults.
-                "policy": json!({
-                    "persistent": policy.persistent,
-                    "sensitive": policy.sensitive,
-                    "extractable": policy.extractable,
-                    "wrap_with_trusted_only": policy.wrap_with_trusted_only,
-                    "usages": policy.usages.names(),
-                }),
+                "policy": crate::params::policy_json(&policy),
             }),
             outputs: json!({
                 "backend": backend_name,

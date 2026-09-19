@@ -98,6 +98,10 @@ pub fn resolve_artifact_bytes<S: BuildHasher>(
         // Real wrapped key
         (ArtifactValue::WrappedKey(wrapped), None) => Ok(wrapped.data().to_vec()),
 
+        // The container, as it would be written to media. What is inside it
+        // needs the key, which is `decrypt_data`'s job and not this one's.
+        (ArtifactValue::EncryptedData(encrypted), None) => Ok(encrypted.data().to_vec()),
+
         // Materials (loaded from files or inline)
         (ArtifactValue::Bytes(bytes), None) => Ok(bytes.clone()),
         (ArtifactValue::Text(text), None) => Ok(text.as_bytes().to_vec()),

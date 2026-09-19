@@ -25,11 +25,13 @@
 
 use std::collections::BTreeMap;
 
+use zeroize::Zeroizing;
+
 use crate::key_material::PublicKeyDer;
 use crate::types::{
-    Attestation, CertRef, KeyAlgorithm, KeyId, KeyMetadata, KeyPolicy, KeySecurityAttributes,
-    KeySpec, PcrValue, PivDeviceInfo, PivSlot, PivSlotInfo, Pkcs11Mechanism, Pkcs11TokenInfo,
-    SignAlgorithm, TpmInfo, WrapScheme, WrappedKey, YubikeySlotMetadata,
+    Attestation, CertRef, DataKey, KeyAlgorithm, KeyId, KeyMetadata, KeyPolicy, KeyProtection,
+    KeySecurityAttributes, KeySpec, PcrValue, PivDeviceInfo, PivSlot, PivSlotInfo, Pkcs11Mechanism,
+    Pkcs11TokenInfo, SignAlgorithm, TpmInfo, WrapScheme, WrappedKey, YubikeySlotMetadata,
 };
 
 /// Implement the `as_*_mut` upcasting helpers on a backend struct.
@@ -197,17 +199,18 @@ pub trait KeyStoreBackend: Backend {
     /// the device.
     fn generate_key(&mut self, spec: KeySpec) -> Result<KeyMetadata, BackendError>;
 
-    /// Import an existing private key.
+    /// Import an existing key from material the caller holds.
+    ///
+    /// `spec.algorithm` says how to read `key_bytes`, because nothing in the
+    /// bytes distinguishes a 32-byte secret from any other 32 bytes: a symmetric
+    /// algorithm takes the raw key, every other one takes PKCS#8 DER. The
+    /// metadata that comes back carries a check value in the first case and a
+    /// public key in the second, which is the identity each kind has.
     ///
     /// Only supported by backends that allow key import (software, some HSMs).
-    /// Hardware security modules may reject key import for security reasons.
-    ///
-    /// `key_bytes` must be in PKCS#8 DER format.
-    fn import_private_key(
-        &mut self,
-        spec: KeySpec,
-        key_bytes: &[u8],
-    ) -> Result<KeyMetadata, BackendError>;
+    /// Hardware security modules may reject it for security reasons, and a
+    /// device that holds only one kind of key refuses the other by name.
+    fn import_key(&mut self, spec: KeySpec, key_bytes: &[u8]) -> Result<KeyMetadata, BackendError>;
 
     /// Export the public key for `key_id`.
     fn export_public_key(&self, key_id: &KeyId) -> Result<PublicKeyDer, BackendError>;
@@ -335,6 +338,63 @@ pub trait KeyTransportBackend: Backend {
         policy: KeyPolicy,
         expected: Option<KeyAlgorithm>,
     ) -> Result<KeyMetadata, BackendError>;
+
+    /// Produce a fresh content-encryption key protected by `kek`.
+    ///
+    /// Two copies of one key come back: the plaintext, for the caller to
+    /// encrypt content with and then drop, and a copy only `kek` opens, which
+    /// the container carries to the recipient.
+    ///
+    /// Content does not appear here. No key-protection
+    /// device Rite talks to is a cipher you hand a file to: a cloud KMS caps a
+    /// direct encrypt at a few kilobytes, a TPM takes a kilobyte per call over
+    /// a slow bus, and a smart card is slower still. Every one of them offers
+    /// this operation instead, so a backend implements what it can actually do
+    /// and the content pipeline stays in one place above it.
+    ///
+    /// `algorithm` must be a symmetric one, since a data key is a secret the
+    /// caller encrypts with directly. It is the length request AWS KMS spells
+    /// `KeySpec: AES_256 | AES_128`.
+    ///
+    /// The result carries a [`KeyProtection`] because the caller has to declare
+    /// the key-encryption algorithm in the container it assembles, and only the
+    /// backend knows which one it used.
+    ///
+    /// # Not yet a parameter
+    ///
+    /// An **encryption context**, which AWS calls `EncryptionContext` and Azure
+    /// calls `aad`, binds a data key to the purpose it was issued for: the same
+    /// value must be supplied to open it again, or the open fails. AWS
+    /// recommends it on every call. It is absent here because supplying it would
+    /// oblige the ceremony to store it somewhere a later run can read it back,
+    /// and CMS has no slot for it that the tag covers except `authAttrs`, which
+    /// is deferred. Adding it is the next widening this pair needs, and it wants
+    /// the transcript question answered first.
+    fn generate_data_key(
+        &mut self,
+        kek: &KeyId,
+        algorithm: KeyAlgorithm,
+    ) -> Result<DataKey, BackendError>;
+
+    /// Recover a data key from the protected copy a container carries.
+    ///
+    /// The counterpart of [`generate_data_key`](Self::generate_data_key), and
+    /// the half of the pair almost every backend implements: protecting a data
+    /// key needs only a public key or a shared secret, while opening one always
+    /// needs the device that holds the other half.
+    ///
+    /// `protection` says how `wrapped` was protected, taken from the container
+    /// rather than assumed, because the bytes say nothing about themselves and
+    /// the backend may implement several. An implementation that was not asked
+    /// which one to use could only guess, and a wrong guess on key material is
+    /// silent. A backend refuses a protection it does not implement rather than
+    /// decrypting under an assumption.
+    fn open_data_key(
+        &mut self,
+        kek: &KeyId,
+        wrapped: &[u8],
+        protection: KeyProtection,
+    ) -> Result<Zeroizing<Vec<u8>>, BackendError>;
 
     /// Wrap `key_id` to an external recipient's public key.
     ///

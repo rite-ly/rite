@@ -1,0 +1,95 @@
+version: "0.3"
+name: "Importing a Transport Key"
+description: |
+  Take a key-encryption key that was produced somewhere else, install it in a
+  backend, and use it to wrap a key generated here.
+
+  Demonstrates import_key. Everything else in Rite makes a key: generate_key
+  produces one, unwrap_key recovers one from a blob it can decrypt. import_key
+  is the third way, and the plainest: it lifts bytes the ceremony already holds
+  into a key of a named algorithm.
+
+  The bytes can come from anywhere a byte artifact can. Here they arrive as a
+  material, a component a custodian carried into the room, which is the case
+  the payments world calls key component entry. They could equally be the
+  output of an earlier step in the same run.
+
+backends:
+  openssl:
+    provider: openssl
+
+materials:
+  kek_component:
+    type: digital
+    path: "test_keys/transport_kek_component.bin"
+    title: "Transport KEK component"
+    description: "Thirty-two raw bytes on the media the custodian brought."
+
+roles:
+  crypto_officer:
+    name: "Crypto Officer"
+    person: "Alice Rivera"
+
+output:
+  wrapped_working_key:
+    type: wrapped_key
+    description: "A key generated here, wrapped under the imported transport KEK."
+
+sections:
+  install:
+    name: "Install and Use the Transport Key"
+    role: ${role.crypto_officer}
+    steps:
+      import_the_kek:
+        action: import_key
+        backend: openssl
+        reads:
+          key_material: ${artifact.kek_component}
+        with:
+          algorithm: AES-256
+          label: transport-kek
+          expect_key: "cmac-aes:d0cd55"
+          policy:
+            usages: [wrap, unwrap]
+        creates: transport_kek
+        description: |
+          algorithm: is required. Raw material says nothing about itself, and
+          thirty-two bytes of an AES key are indistinguishable from thirty-two
+          bytes of anything else, so the ceremony declares what it is lifting
+          rather than the step guessing.
+
+          expect_key: is optional and used here because the value is known,
+          read from the paperwork that travelled with the component rather
+          than from the component itself. It is checked against what the
+          backend computed after the import, so a component that was swapped
+          on the way in fails this step rather than becoming a key the
+          ceremony trusts.
+
+          policy: says what the key may do. A symmetric key defaults to wrap
+          and unwrap, which is what this one is for, so the block is written
+          out only to make the intent visible in the printed script.
+
+      generate_working_key:
+        action: generate_key
+        backend: openssl
+        with:
+          algorithm: ECDSA-P256
+          policy:
+            extractable: true
+        creates: working_key
+        description: |
+          A key that will leave under the imported KEK, so it has to say
+          extractable: true. Without it the wrap step refuses.
+
+      wrap_under_the_imported_kek:
+        action: wrap_key
+        backend: openssl
+        reads:
+          key_to_wrap: ${artifact.working_key}
+          wrapping_key: ${artifact.transport_kek}
+        creates: wrapped_working_key
+        description: |
+          An imported key is a key like any other once it is in the backend.
+          This is the same step a ceremony would write against a KEK it had
+          generated itself, which is the point: what import_key produces is
+          not a second-class artifact.

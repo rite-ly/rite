@@ -56,13 +56,23 @@ pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
         }),
         ActionType::WrapKey => {
             let mut errors = fingerprint(with, "expect_recipient");
-            errors.extend(named_value(with, "scheme", |name| {
-                name.parse::<WrapScheme>()
-                    .map_err(|_| format!("unknown wrapping scheme '{name}'"))
-            }));
+            errors.extend(scheme(with, |_| Ok(())));
             errors
         }
-        ActionType::UnwrapKey => {
+        // Narrower than `wrap_key`'s vocabulary on purpose: the container is
+        // the only thing `encrypt_data` writes, and a name it would refuse
+        // mid-ceremony belongs in `rite check` rather than in the room.
+        ActionType::EncryptData => {
+            named_value(with, "scheme", |name| match name.parse::<WrapScheme>() {
+                Ok(WrapScheme::CmsAes256Gcm) => Ok(()),
+                Ok(other) => Err(format!(
+                    "encrypt_data writes {}, not {other}",
+                    WrapScheme::CmsAes256Gcm
+                )),
+                Err(_) => Err(format!("unknown wrapping scheme '{name}'")),
+            })
+        }
+        ActionType::UnwrapKey | ActionType::ImportKey => {
             let mut errors = key_identity(with, "expect_key");
             errors.extend(named_value(with, "algorithm", |name| {
                 name.parse::<KeyAlgorithm>()
@@ -83,8 +93,26 @@ pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
         | ActionType::PivReadCertificate
         | ActionType::PivSign
         | ActionType::YubikeyAttestSlot
+        | ActionType::DecryptData
         | ActionType::GenerateCsr => Vec::new(),
     }
+}
+
+/// The container a step names, checked against the vocabulary rather than left
+/// to fail at the backend, and then against what the action itself writes.
+///
+/// One message for a name outside the vocabulary, whichever action asked, and
+/// `accept` for the narrowing an action does on top of that.
+fn scheme(
+    with: &serde_json::Value,
+    accept: impl FnOnce(WrapScheme) -> Result<(), String>,
+) -> Vec<ParamError> {
+    named_value(with, "scheme", |name| {
+        let named = name
+            .parse::<WrapScheme>()
+            .map_err(|_| format!("unknown wrapping scheme '{name}'"))?;
+        accept(named)
+    })
 }
 
 /// Apply `parse` to a present string field.
@@ -244,6 +272,35 @@ mod tests {
             check(ActionType::WrapKey, &json!({ "expect_recipient": lower })).is_empty(),
             "the shape the runtime produces is the shape that passes"
         );
+    }
+
+    /// `encrypt_data` takes a narrower vocabulary than `wrap_key`: a scheme it
+    /// would refuse mid-ceremony is refused at check time instead.
+    #[test]
+    fn rejects_a_scheme_encrypt_data_does_not_write() {
+        let message = sole(ActionType::EncryptData, &json!({"scheme": "AES-256-KW"}));
+        assert!(
+            message.contains("encrypt_data writes CMS-AES-256-GCM"),
+            "{message}"
+        );
+
+        let message = sole(ActionType::EncryptData, &json!({"scheme": "CMS-RSA-CBC"}));
+        assert!(message.contains("unknown wrapping scheme"), "{message}");
+
+        assert!(
+            check(
+                ActionType::EncryptData,
+                &json!({"scheme": "CMS-AES-256-GCM"})
+            )
+            .is_empty()
+        );
+        assert!(
+            check(ActionType::EncryptData, &json!({})).is_empty(),
+            "deferred"
+        );
+
+        // The same name is fine on a wrap, which does write it.
+        assert!(check(ActionType::WrapKey, &json!({"scheme": "AES-256-KW"})).is_empty());
     }
 
     /// A scheme name outside the vocabulary would fail in the room, after the

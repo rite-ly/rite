@@ -23,9 +23,9 @@ use openssl::symm::Cipher;
 use openssl::x509::{X509Builder, X509Extension, X509NameBuilder};
 use rite_sdk::cms;
 use rite_sdk::{
-    Backend, BackendError, KeyAlgorithm, KeyCheckValue, KeyId, KeyMetadata, KeyPolicy, KeySpec,
-    KeyStoreBackend, KeyTransportBackend, KeyUsages, PublicKeyDer, RandomBackend, SignAlgorithm,
-    SignBackend, VerifyBackend, WrapScheme, WrappedKey,
+    Backend, BackendError, DataKey, KeyAlgorithm, KeyCheckValue, KeyId, KeyMetadata, KeyPolicy,
+    KeyProtection, KeySpec, KeyStoreBackend, KeyTransportBackend, KeyUsages, PublicKeyDer,
+    RandomBackend, SignAlgorithm, SignBackend, VerifyBackend, WrapScheme, WrappedKey,
 };
 use std::collections::HashMap;
 use zeroize::Zeroizing;
@@ -298,7 +298,7 @@ impl Backend for OpenSslBackend {
 }
 
 /// Map an OpenSSL error to a `BackendError`.
-fn ossl_err(context: &str, e: &openssl::error::ErrorStack) -> BackendError {
+pub(crate) fn ossl_err(context: &str, e: &openssl::error::ErrorStack) -> BackendError {
     BackendError::Other(format!("{context}: {e}"))
 }
 
@@ -636,12 +636,57 @@ fn unsupported_ml_dsa(operation: &str) -> BackendError {
     ))
 }
 
-/// Parse a private key from DER bytes, trying PKCS#8, traditional PKCS#1 (RSA), and
-/// traditional SEC1 (EC) in sequence.
+/// Parse imported private key material in either encoding.
+///
+/// PEM says what it is in its first line, so material that starts with a
+/// preamble is read as PEM and everything else as DER. Encrypted PEM needs a
+/// passphrase that nothing carries here, and is refused by name rather than as
+/// a parse failure.
+///
+/// Separate from [`parse_private_key_der`], which unwrapping uses: a wrapped
+/// key is always DER, so accepting PEM there would accept material no wrap
+/// produces.
+fn parse_imported_private_key(bytes: &[u8]) -> Result<PKey<Private>, BackendError> {
+    if !bytes.trim_ascii_start().starts_with(b"-----BEGIN") {
+        return parse_private_key_der(bytes);
+    }
+
+    // Always the callback form, never `private_key_from_pem`. That one hands
+    // OpenSSL a null callback, and OpenSSL's own default reads a passphrase
+    // from the terminal, which in a running ceremony is a prompt written over
+    // the frontend. This callback supplies nothing, so an encrypted key fails
+    // to parse instead of blocking.
+    //
+    // It is also how the encryption is detected. OpenSSL asks for a passphrase
+    // exactly when the block is encrypted, in every encoding it knows, which is
+    // a stronger test than matching the header strings each encoding happens to
+    // use: PKCS#8 says so in the preamble, and the traditional format that
+    // `openssl genrsa -traditional -aes256` still writes says so in RFC 1421
+    // headers inside an ordinary one.
+    let asked = std::cell::Cell::new(false);
+    PKey::private_key_from_pem_callback(bytes, |_| {
+        asked.set(true);
+        Ok(0)
+    })
+    .map_err(|e| {
+        if asked.get() {
+            BackendError::InvalidData(
+                "this is an encrypted PEM private key, and a ceremony carries no passphrase \
+                 to open it. Decrypt it first with 'openssl pkey -in <file> -out <file>'."
+                    .to_string(),
+            )
+        } else {
+            ossl_err("Parse PEM private key", &e)
+        }
+    })
+}
+
+/// Parse a private key from DER bytes, trying PKCS#8, traditional PKCS#1 (RSA),
+/// and traditional SEC1 (EC) in sequence.
 ///
 /// `private_key_to_der()` emits PKCS#1 for RSA and SEC1 for EC keys. OpenSSL's
-/// `d2i_AutoPrivateKey` (called by `PKey::private_key_from_der`) handles PKCS#8 and
-/// PKCS#1 RSA but not SEC1 EC — the third leg covers that gap.
+/// `d2i_AutoPrivateKey` (called by `PKey::private_key_from_der`) handles PKCS#8
+/// and PKCS#1 RSA but not SEC1 EC, which is the gap the third leg covers.
 fn parse_private_key_der(bytes: &[u8]) -> Result<PKey<Private>, BackendError> {
     PKey::private_key_from_der(bytes)
         .or_else(|_| Rsa::private_key_from_der(bytes).and_then(PKey::from_rsa))
@@ -699,11 +744,7 @@ impl KeyStoreBackend for OpenSslBackend {
         self.store_key(spec.algorithm, spec.label, pkey, spec.policy)
     }
 
-    fn import_private_key(
-        &mut self,
-        spec: KeySpec,
-        key_bytes: &[u8],
-    ) -> Result<KeyMetadata, BackendError> {
+    fn import_key(&mut self, spec: KeySpec, key_bytes: &[u8]) -> Result<KeyMetadata, BackendError> {
         // A symmetric key is its own bytes. Selected by the algorithm because
         // nothing in the bytes distinguishes a 32-byte secret from anything
         // else of that length, so the caller has to say which it means.
@@ -722,7 +763,17 @@ impl KeyStoreBackend for OpenSslBackend {
                 spec.policy,
             );
         }
-        let pkey = parse_private_key_der(key_bytes)?;
+        let pkey = parse_imported_private_key(key_bytes)?;
+        // Declared and actual must agree, as they must at unwrap. Storing the
+        // material under a name the key does not answer to would put that name
+        // in the transcript.
+        let actual = key_algorithm_of(&pkey)?;
+        if actual != spec.algorithm {
+            return Err(BackendError::InvalidData(format!(
+                "the ceremony declares '{}' is {}, but the material is {actual}",
+                spec.label, spec.algorithm
+            )));
+        }
         self.store_key(spec.algorithm, spec.label, pkey, spec.policy)
     }
 
@@ -1154,7 +1205,11 @@ fn aes_key_wrap(
         ctx.decrypt_init(Some(cipher), Some(kek), None)
             .map_err(|e| ossl_err(&format!("{label} unwrap init"), &e))?;
     }
-    let mut out = Vec::new();
+    // Reserved up front. A `Vec` that grows mid-operation leaves the partial
+    // output in a freed allocation, and on the unwrap side that output is a key.
+    // AES-KW adds one 8-byte block on the way out and removes it on the way
+    // back, so the input length plus a block covers both directions.
+    let mut out = Vec::with_capacity(input.len().saturating_add(8));
     ctx.cipher_update_vec(input, &mut out)
         .map_err(|e| ossl_err(&format!("{label} update"), &e))?;
     ctx.cipher_final_vec(&mut out)
@@ -1240,16 +1295,14 @@ fn cms_seal_to_kek(
     // KEK encrypts this, and this encrypts the content.
     let mut cek = Zeroizing::new(vec![0u8; 32]);
     openssl::rand::rand_bytes(&mut cek).map_err(|e| ossl_err("Generate CEK", &e))?;
-    let mut nonce = vec![0u8; 12];
-    openssl::rand::rand_bytes(&mut nonce).map_err(|e| ossl_err("Generate GCM nonce", &e))?;
 
-    let (ciphertext, tag) = aes_256_gcm_seal(&cek, &nonce, payload)?;
+    let sealed = crate::content::seal_content(&cek, payload)?;
     let envelope = cms::KekEnvelope {
         key_identifier: key_identifier.to_vec(),
         wrapped_cek: aes_key_wrap(secret, &cek, KeyWrap::Plain, true)?,
-        nonce,
-        ciphertext,
-        tag,
+        nonce: sealed.nonce,
+        ciphertext: sealed.ciphertext,
+        tag: sealed.tag,
     };
     cms::write_kek_enveloped(&envelope).map_err(|e| BackendError::InvalidData(e.to_string()))
 }
@@ -1312,11 +1365,18 @@ fn cms_open_from_kek(
         KeyWrap::Plain,
         false,
     )?);
-    aes_256_gcm_open(&cek, &envelope.nonce, &envelope.ciphertext, &envelope.tag)
+    crate::content::open_content(
+        &cek,
+        &crate::content::SealedContent {
+            nonce: envelope.nonce,
+            ciphertext: envelope.ciphertext,
+            tag: envelope.tag,
+        },
+    )
 }
 
 /// AES-256-GCM, returning the ciphertext and the tag.
-fn aes_256_gcm_seal(
+pub(crate) fn aes_256_gcm_seal(
     cek: &[u8],
     nonce: &[u8],
     plaintext: &[u8],
@@ -1335,7 +1395,7 @@ fn aes_256_gcm_seal(
 }
 
 /// Undo [`aes_256_gcm_seal`], refusing a tag that does not authenticate.
-fn aes_256_gcm_open(
+pub(crate) fn aes_256_gcm_open(
     cek: &[u8],
     nonce: &[u8],
     ciphertext: &[u8],
@@ -1600,6 +1660,56 @@ impl KeyTransportBackend for OpenSslBackend {
             )));
         }
         self.store_key(key_algorithm, label.to_string(), pkey, policy)
+    }
+
+    fn generate_data_key(
+        &mut self,
+        kek: &KeyId,
+        algorithm: KeyAlgorithm,
+    ) -> Result<DataKey, BackendError> {
+        let size = algorithm.key_bytes().ok_or_else(|| {
+            BackendError::UnsupportedAlgorithm(format!(
+                "a data key is a secret the caller encrypts with, and {algorithm} is not a \
+                 symmetric algorithm"
+            ))
+        })?;
+        let kek = self.get_key(kek)?;
+        kek.policy.require(KeyUsages::WRAP, "protect a data key")?;
+        let (secret, _) = kek.secret()?;
+
+        let mut plaintext = Zeroizing::new(vec![0u8; size]);
+        openssl::rand::rand_bytes(&mut plaintext).map_err(|e| ossl_err("Generate data key", &e))?;
+        let wrapped = aes_key_wrap(secret, &plaintext, KeyWrap::Plain, true)?;
+
+        Ok(DataKey::new(plaintext, wrapped, KeyProtection::AesKeyWrap))
+    }
+
+    fn open_data_key(
+        &mut self,
+        kek: &KeyId,
+        wrapped: &[u8],
+        protection: KeyProtection,
+    ) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+        // Refused rather than attempted. The bytes of one protection are
+        // indistinguishable from another's, so opening under the wrong one
+        // either fails obscurely or, for an unauthenticated mechanism, returns
+        // something that is not the key.
+        if protection != KeyProtection::AesKeyWrap {
+            return Err(BackendError::UnsupportedAlgorithm(format!(
+                "this backend opens a data key protected with {}, and this one is protected \
+                 with {protection}",
+                KeyProtection::AesKeyWrap
+            )));
+        }
+        let kek = self.get_key(kek)?;
+        kek.policy.require(KeyUsages::UNWRAP, "open a data key")?;
+        let (secret, _) = kek.secret()?;
+        Ok(Zeroizing::new(aes_key_wrap(
+            secret,
+            wrapped,
+            KeyWrap::Plain,
+            false,
+        )?))
     }
 
     fn wrap_to_public(
@@ -2176,7 +2286,7 @@ mod tests {
 
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let meta = backend
-            .import_private_key(spec(KeyAlgorithm::Rsa2048, "imported"), &pkcs8_der)
+            .import_key(spec(KeyAlgorithm::Rsa2048, "imported"), &pkcs8_der)
             .unwrap();
 
         let message = b"import round-trip verification message";
@@ -2191,6 +2301,140 @@ mod tests {
         assert!(
             valid,
             "Signature produced by imported key must verify against original public key"
+        );
+    }
+
+    /// PKCS#8 material for a key this build can make.
+    fn pkcs8_of(key: &PKey<Private>) -> Vec<u8> {
+        key.private_key_to_pkcs8().unwrap()
+    }
+
+    /// Import material for the post-quantum algorithms, and nothing on a build
+    /// without them.
+    ///
+    /// Building it needs `PKey::private_key_from_seed`, which the `openssl`
+    /// crate compiles only against a version carrying those providers. The cfg
+    /// is confined here so the caller reads the same either way.
+    fn post_quantum_material() -> Vec<(KeyAlgorithm, Vec<u8>)> {
+        #[cfg(not(ossl350))]
+        {
+            Vec::new()
+        }
+        #[cfg(ossl350)]
+        {
+            use openssl::pkey::KeyType;
+
+            [
+                (KeyAlgorithm::MlDsa44, KeyType::ML_DSA_44, ML_DSA_SEED_LEN),
+                (KeyAlgorithm::MlDsa65, KeyType::ML_DSA_65, ML_DSA_SEED_LEN),
+                (KeyAlgorithm::MlDsa87, KeyType::ML_DSA_87, ML_DSA_SEED_LEN),
+                (KeyAlgorithm::MlKem512, KeyType::ML_KEM_512, ML_KEM_SEED_LEN),
+                (KeyAlgorithm::MlKem768, KeyType::ML_KEM_768, ML_KEM_SEED_LEN),
+                (
+                    KeyAlgorithm::MlKem1024,
+                    KeyType::ML_KEM_1024,
+                    ML_KEM_SEED_LEN,
+                ),
+            ]
+            .into_iter()
+            .map(|(algorithm, key_type, seed_len)| {
+                let seed = vec![9u8; seed_len];
+                let key = PKey::private_key_from_seed(None, key_type, None, &seed).unwrap();
+                (algorithm, pkcs8_of(&key))
+            })
+            .collect()
+        }
+    }
+
+    /// Every algorithm this build supports, imported once.
+    ///
+    /// The two arms of `import_key` differ in how they read the material and in
+    /// what names the key afterwards, so both are asserted per algorithm rather
+    /// than once for the family.
+    ///
+    /// The whole sweep lives here rather than beside the action tests in
+    /// `rite-stdlib`, because reading the material is what varies per algorithm
+    /// and that is this crate's work. It is also the crate that knows which
+    /// OpenSSL it linked: post-quantum material is built from a seed, through an
+    /// API that exists only where the providers do.
+    #[test]
+    fn imports_every_algorithm_this_build_supports() {
+        let ec = |nid| {
+            let group = EcGroup::from_curve_name(nid).unwrap();
+            pkcs8_of(&PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap())
+        };
+
+        let cases: Vec<(KeyAlgorithm, Vec<u8>)> = vec![
+            (
+                KeyAlgorithm::Aes128,
+                vec![7u8; KeyAlgorithm::Aes128.key_bytes().unwrap()],
+            ),
+            (
+                KeyAlgorithm::Aes256,
+                vec![7u8; KeyAlgorithm::Aes256.key_bytes().unwrap()],
+            ),
+            (
+                KeyAlgorithm::Rsa2048,
+                pkcs8_of(&PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap()),
+            ),
+            (
+                KeyAlgorithm::Rsa4096,
+                pkcs8_of(&PKey::from_rsa(Rsa::generate(4096).unwrap()).unwrap()),
+            ),
+            (KeyAlgorithm::EcdsaP256, ec(Nid::X9_62_PRIME256V1)),
+            (KeyAlgorithm::EcdsaP384, ec(Nid::SECP384R1)),
+            (
+                KeyAlgorithm::Ed25519,
+                pkcs8_of(&PKey::generate_ed25519().unwrap()),
+            ),
+        ];
+
+        for (algorithm, material) in cases.into_iter().chain(post_quantum_material()) {
+            let mut backend = OpenSslBackend::try_new("test").unwrap();
+            let meta = backend
+                .import_key(spec(algorithm, "imported"), &material)
+                .unwrap_or_else(|e| panic!("import_key must accept {algorithm}: {e}"));
+
+            assert_eq!(meta.algorithm, algorithm);
+            if algorithm.is_symmetric() {
+                assert!(
+                    meta.public_key.is_none(),
+                    "{algorithm} has no public half to name it"
+                );
+                assert!(
+                    meta.check_value.is_some(),
+                    "{algorithm} is named by its check value"
+                );
+            } else {
+                assert!(
+                    meta.public_key.is_some(),
+                    "{algorithm} is named by its public half"
+                );
+                assert!(meta.check_value.is_none(), "{algorithm} has no check value");
+            }
+        }
+    }
+
+    /// The declared algorithm is checked against what the material turns out to
+    /// be, including between two parameter sets of one family.
+    #[test]
+    #[cfg(ossl350)]
+    fn refuses_post_quantum_material_that_is_not_the_declared_algorithm() {
+        use openssl::pkey::KeyType;
+
+        let seed = vec![9u8; ML_DSA_SEED_LEN];
+        let material =
+            pkcs8_of(&PKey::private_key_from_seed(None, KeyType::ML_DSA_44, None, &seed).unwrap());
+
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let error = backend
+            .import_key(spec(KeyAlgorithm::MlDsa87, "imported"), &material)
+            .expect_err("ML-DSA-44 material declared as ML-DSA-87 must be refused");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("ML-DSA-44") && message.contains("ML-DSA-87"),
+            "the refusal should name both, got: {message}"
         );
     }
 

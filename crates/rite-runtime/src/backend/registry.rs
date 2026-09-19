@@ -319,7 +319,7 @@ mod tests {
                 attestation: None,
             })
         }
-        fn import_private_key(
+        fn import_key(
             &mut self,
             spec: KeySpec,
             _key_bytes: &[u8],

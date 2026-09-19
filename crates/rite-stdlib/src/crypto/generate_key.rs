@@ -150,16 +150,7 @@ fn requested(typed: &GenerateKeyParams, policy: &KeyPolicy) -> serde_json::Value
     if let Some(slot) = &typed.slot {
         inputs.insert("slot".to_string(), slot.clone().into());
     }
-    inputs.insert(
-        "policy".to_string(),
-        json!({
-            "persistent": policy.persistent,
-            "sensitive": policy.sensitive,
-            "extractable": policy.extractable,
-            "wrap_with_trusted_only": policy.wrap_with_trusted_only,
-            "usages": policy.usages.names(),
-        }),
-    );
+    inputs.insert("policy".to_string(), crate::params::policy_json(policy));
     json!(inputs)
 }
 

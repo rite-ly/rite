@@ -2,9 +2,8 @@
 
 use rite_model::{ActionType, Prompt, StepFact, StepInputs};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, Response, StepInfo, StepResult, compute_fingerprint, parse_params,
-    resolve_artifact_bytes,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, Response, StepInfo,
+    StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
 };
 use rite_sdk::{Backend, SignAlgorithm};
 use secrecy::ExposeSecret;
@@ -16,12 +15,8 @@ use super::params::PivSignParams;
 pub struct PivSignAction;
 
 impl Action for PivSignAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::PivSign,
-            description: "Sign data using PIV smart card on-device key",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::PivSign
     }
 
     fn execute(

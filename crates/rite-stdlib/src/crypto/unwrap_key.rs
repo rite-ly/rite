@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_backend_key,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    compute_fingerprint, parse_params, resolve_backend_key,
 };
 use rite_sdk::{Backend, KeyAlgorithm};
 use serde_json::json;
@@ -18,12 +18,8 @@ use crate::params::{UnwrapKeyParams, installed_key_default_policy};
 pub struct UnwrapKeyAction;
 
 impl Action for UnwrapKeyAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::UnwrapKey,
-            description: "Unwrap a key using another key",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::UnwrapKey
     }
 
     #[allow(clippy::too_many_lines)]

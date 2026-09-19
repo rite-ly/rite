@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, Prompt};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, Response,
-    StepInfo, StepResult, parse_params,
+    Action, ActionError, HandlerContext, Icon, Reporter, Response, StepInfo, StepResult,
+    parse_params,
 };
 use rite_sdk::Backend;
 
@@ -13,12 +13,8 @@ use crate::params::ConfirmParams;
 pub struct ConfirmAction;
 
 impl Action for ConfirmAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::Confirm,
-            description: "Request user confirmation",
-            category: ActionCategory::Verification,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::Confirm
     }
 
     fn execute(

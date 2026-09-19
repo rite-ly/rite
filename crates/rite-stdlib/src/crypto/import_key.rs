@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    compute_fingerprint, parse_params, resolve_artifact_bytes,
 };
 use rite_sdk::{Backend, KeyAlgorithm, KeySpec};
 use serde_json::json;
@@ -20,12 +20,8 @@ use crate::params::{ImportKeyParams, installed_key_default_policy};
 pub struct ImportKeyAction;
 
 impl Action for ImportKeyAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::ImportKey,
-            description: "Import a key from material the ceremony holds",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::ImportKey
     }
 
     fn execute(

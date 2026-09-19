@@ -2,9 +2,8 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
-    resolve_backend_key,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    compute_fingerprint, parse_params, resolve_artifact_bytes, resolve_backend_key,
 };
 use rite_sdk::{Backend, DataKey, EncryptedData, KeyAlgorithm, KeyCheckValue, WrapScheme, cms};
 use serde_json::json;
@@ -27,12 +26,8 @@ use crate::params::EncryptDataParams;
 pub struct EncryptDataAction;
 
 impl Action for EncryptDataAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::EncryptData,
-            description: "Encrypt content under a key held by a backend",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::EncryptData
     }
 
     fn execute(

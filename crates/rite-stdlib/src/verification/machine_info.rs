@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, FeatureCheck, HandlerContext, HostInfo,
-    Icon, Reporter, StepInfo, StepResult, parse_params,
+    Action, ActionError, FeatureCheck, HandlerContext, HostInfo, Icon, Reporter, StepInfo,
+    StepResult, parse_params,
 };
 use rite_sdk::Backend;
 
@@ -31,12 +31,8 @@ fn format_feature(check: &FeatureCheck) -> String {
 }
 
 impl Action for MachineInfoAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::MachineInfo,
-            description: "Capture machine information",
-            category: ActionCategory::Verification,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::MachineInfo
     }
 
     fn execute(

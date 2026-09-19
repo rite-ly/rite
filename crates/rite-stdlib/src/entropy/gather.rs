@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, Prompt, ValidatorSpec};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, Response,
-    StepInfo, StepResult, parse_params,
+    Action, ActionError, HandlerContext, Icon, Reporter, Response, StepInfo, StepResult,
+    parse_params,
 };
 use rite_sdk::Backend;
 
@@ -24,12 +24,8 @@ const DEFAULT_INSTRUCTION: &str =
 pub struct GatherEntropyAction;
 
 impl Action for GatherEntropyAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::GatherEntropy,
-            description: "Gather human entropy into the ceremony seed",
-            category: ActionCategory::Verification,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::GatherEntropy
     }
 
     fn apply_defaults(&self, params: &mut serde_json::Value, _step: &StepInfo) {

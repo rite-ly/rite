@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, ArtifactRef, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_backend_key,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    compute_fingerprint, parse_params, resolve_backend_key,
 };
 use rite_sdk::{Backend, WrapScheme};
 use serde_json::json;
@@ -19,12 +19,8 @@ use crate::params::WrapKeyParams;
 pub struct WrapKeyAction;
 
 impl Action for WrapKeyAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::WrapKey,
-            description: "Wrap a key using another key",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::WrapKey
     }
 
     #[allow(clippy::too_many_lines)]

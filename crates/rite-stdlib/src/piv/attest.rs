@@ -2,8 +2,8 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    compute_fingerprint, parse_params,
 };
 use rite_sdk::{Backend, CertificateDer};
 use serde_json::json;
@@ -18,12 +18,8 @@ use super::params::AttestSlotParams;
 pub struct YubikeyAttestSlotAction;
 
 impl Action for YubikeyAttestSlotAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::YubikeyAttestSlot,
-            description: "Generate YubiKey attestation certificate for a PIV slot",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::YubikeyAttestSlot
     }
 
     fn execute(

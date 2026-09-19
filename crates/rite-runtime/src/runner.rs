@@ -43,7 +43,6 @@ use rite_model::{
 use rite_sdk::{Backend, BackendError, Retriability};
 use thiserror::Error;
 
-use crate::actions::ActionMetadata;
 use crate::backend::BackendRegistry;
 use crate::clock::{Clock, SystemClock};
 use crate::entropy::DERIVATION_V1;
@@ -176,8 +175,8 @@ impl From<ReporterError> for ExecutionError {
 /// emits via [`Reporter::fact`] during execution; there is no separate
 /// evidence struct.
 pub trait Action: Send + Sync {
-    /// Metadata describing this action (type, category, description).
-    fn metadata(&self) -> ActionMetadata;
+    /// The action this handler implements, as the DSL names it.
+    fn action_type(&self) -> ActionType;
 
     /// Apply per-step parameter defaults before validation.
     fn apply_defaults(&self, _params: &mut serde_json::Value, _step: &StepInfo) {}
@@ -246,7 +245,7 @@ impl ActionRegistry {
 
     /// Register an action handler.
     pub fn register(&mut self, action: Arc<dyn Action>) {
-        let action_type = action.metadata().action_type;
+        let action_type = action.action_type();
         self.actions.insert(action_type, action);
     }
 
@@ -846,7 +845,6 @@ mod tests {
     use rite_model::ActionType;
 
     use super::*;
-    use crate::actions::ActionCategory;
     use crate::transcript_sink::InMemorySink;
 
     #[test]
@@ -877,12 +875,8 @@ mod tests {
     struct PingAction;
 
     impl Action for PingAction {
-        fn metadata(&self) -> ActionMetadata {
-            ActionMetadata {
-                action_type: ActionType::Attest,
-                description: "test action that always succeeds",
-                category: ActionCategory::Verification,
-            }
+        fn action_type(&self) -> ActionType {
+            ActionType::Attest
         }
 
         fn execute(
@@ -925,12 +919,8 @@ sections:
     struct PickyAction;
 
     impl Action for PickyAction {
-        fn metadata(&self) -> ActionMetadata {
-            ActionMetadata {
-                action_type: ActionType::Attest,
-                description: "test action with an opinion about its params",
-                category: ActionCategory::Verification,
-            }
+        fn action_type(&self) -> ActionType {
+            ActionType::Attest
         }
 
         fn unsupported_params(&self, params: &serde_json::Value, _step: &StepInfo) -> Vec<String> {
@@ -1270,12 +1260,8 @@ sections:
     fn aborts_when_action_returns_aborted() {
         struct AbortAction;
         impl Action for AbortAction {
-            fn metadata(&self) -> ActionMetadata {
-                ActionMetadata {
-                    action_type: ActionType::Attest,
-                    description: "aborts immediately",
-                    category: ActionCategory::Verification,
-                }
+            fn action_type(&self) -> ActionType {
+                ActionType::Attest
             }
             fn execute(
                 &self,
@@ -1365,12 +1351,8 @@ sections:
     }
 
     impl Action for FlakyAction {
-        fn metadata(&self) -> ActionMetadata {
-            ActionMetadata {
-                action_type: ActionType::Attest,
-                description: "flaky test action",
-                category: ActionCategory::Verification,
-            }
+        fn action_type(&self) -> ActionType {
+            ActionType::Attest
         }
 
         fn execute(

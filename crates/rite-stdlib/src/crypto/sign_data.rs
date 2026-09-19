@@ -2,9 +2,8 @@
 
 use rite_model::{ActionType, StepFact};
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, ArtifactValue, HandlerContext, Icon,
-    Reporter, StepInfo, StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
-    resolve_backend_key,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    compute_fingerprint, parse_params, resolve_artifact_bytes, resolve_backend_key,
 };
 use rite_sdk::{Backend, KeyAlgorithm, SignAlgorithm, SignBackend};
 use serde_json::json;
@@ -19,12 +18,8 @@ use crate::params::SignDataParams;
 pub struct SignDataAction;
 
 impl Action for SignDataAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::SignData,
-            description: "Sign data with a backend-managed key",
-            category: ActionCategory::Crypto,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::SignData
     }
 
     fn execute(

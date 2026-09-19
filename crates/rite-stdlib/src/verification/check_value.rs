@@ -17,8 +17,8 @@
 
 use rite_model::ActionType;
 use rite_runtime::{
-    Action, ActionCategory, ActionError, ActionMetadata, HandlerContext, Icon, Reporter, StepInfo,
-    StepResult, parse_params, truncate_for_display,
+    Action, ActionError, HandlerContext, Icon, Reporter, StepInfo, StepResult, parse_params,
+    truncate_for_display,
 };
 use rite_sdk::Backend;
 use subtle::ConstantTimeEq;
@@ -29,12 +29,8 @@ use crate::params::CheckValueParams;
 pub struct CheckValueAction;
 
 impl Action for CheckValueAction {
-    fn metadata(&self) -> ActionMetadata {
-        ActionMetadata {
-            action_type: ActionType::CheckValue,
-            description: "Machine-verified value comparison",
-            category: ActionCategory::Verification,
-        }
+    fn action_type(&self) -> ActionType {
+        ActionType::CheckValue
     }
 
     fn execute(

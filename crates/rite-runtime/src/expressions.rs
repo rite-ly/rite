@@ -105,22 +105,25 @@ fn evaluate_artifact_ref(ref_: &Reference, ctx: &HandlerContext) -> Result<Value
             Ok(Value::String(text.clone()))
         }
 
-        // Binary content (documents, crypto materials) - return as bytes
-        ArtifactValue::Bytes(bytes) => {
+        // Binary content (documents, crypto materials) and opened content:
+        // returned as bytes. The value is a copy, since an expression owns
+        // what it computes on, and the copy is wiped with the value.
+        ArtifactValue::Bytes(_) | ArtifactValue::Secret(_) => {
             // Property access not supported for raw byte artifacts
             if let Some(property) = &ref_.property {
                 return Err(ExecutionError::InvalidParams(format!(
                     "Property access '.{property}' not supported for binary artifacts"
                 )));
             }
-            Ok(Value::Bytes(bytes.clone()))
+            let bytes = resolve_artifact_bytes(ctx.artifacts, &artifact_id, None)?;
+            Ok(Value::bytes(bytes.to_vec()))
         }
 
         // Other artifact types - delegate to resolve_artifact_bytes
         _ => {
             let bytes =
                 resolve_artifact_bytes(ctx.artifacts, &artifact_id, ref_.property.as_deref())?;
-            Ok(Value::Bytes(bytes))
+            Ok(Value::bytes(bytes.to_vec()))
         }
     }
 }
@@ -177,10 +180,10 @@ fn apply_sha256(input: &Value) -> Result<Value, ExecutionError> {
     })?;
 
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
+    hasher.update(bytes);
     let result = hasher.finalize();
 
-    Ok(Value::Bytes(result.to_vec()))
+    Ok(Value::bytes(result.to_vec()))
 }
 
 fn apply_sha384(input: &Value) -> Result<Value, ExecutionError> {
@@ -192,10 +195,10 @@ fn apply_sha384(input: &Value) -> Result<Value, ExecutionError> {
     })?;
 
     let mut hasher = Sha384::new();
-    hasher.update(&bytes);
+    hasher.update(bytes);
     let result = hasher.finalize();
 
-    Ok(Value::Bytes(result.to_vec()))
+    Ok(Value::bytes(result.to_vec()))
 }
 
 fn apply_sha512(input: &Value) -> Result<Value, ExecutionError> {
@@ -207,10 +210,10 @@ fn apply_sha512(input: &Value) -> Result<Value, ExecutionError> {
     })?;
 
     let mut hasher = Sha512::new();
-    hasher.update(&bytes);
+    hasher.update(bytes);
     let result = hasher.finalize();
 
-    Ok(Value::Bytes(result.to_vec()))
+    Ok(Value::bytes(result.to_vec()))
 }
 
 fn apply_hex(input: &Value) -> Result<Value, ExecutionError> {
@@ -221,7 +224,7 @@ fn apply_hex(input: &Value) -> Result<Value, ExecutionError> {
         ))
     })?;
 
-    let hex_string = hex_encode(&bytes);
+    let hex_string = hex_encode(bytes);
     Ok(Value::String(hex_string))
 }
 
@@ -234,7 +237,7 @@ fn apply_base32(input: &Value) -> Result<Value, ExecutionError> {
     })?;
 
     // base32ct returns lowercase, but RFC 4648 specifies uppercase
-    let encoded = Base32Unpadded::encode_string(&bytes).to_uppercase();
+    let encoded = Base32Unpadded::encode_string(bytes).to_uppercase();
     Ok(Value::String(encoded))
 }
 
@@ -246,7 +249,7 @@ fn apply_base64(input: &Value) -> Result<Value, ExecutionError> {
         ))
     })?;
 
-    let encoded = Base64::encode_string(&bytes);
+    let encoded = Base64::encode_string(bytes);
     Ok(Value::String(encoded))
 }
 
@@ -315,10 +318,10 @@ fn apply_concat(args: &[Expression], ctx: &HandlerContext) -> Result<Value, Exec
                 value.type_name()
             ))
         })?;
-        result.extend(bytes);
+        result.extend_from_slice(bytes);
     }
 
-    Ok(Value::Bytes(result))
+    Ok(Value::bytes(result))
 }
 
 /// Evaluate an `ExprValue` to a JSON value.
@@ -493,7 +496,7 @@ mod tests {
 
     #[test]
     fn sha256_of_bytes_produces_32_bytes() {
-        let input = Value::Bytes(b"hello".to_vec());
+        let input = Value::bytes(b"hello".to_vec());
         let result = apply_sha256(&input).unwrap();
 
         if let Value::Bytes(bytes) = result {
@@ -505,7 +508,7 @@ mod tests {
 
     #[test]
     fn hex_encodes_bytes_in_lowercase() {
-        let input = Value::Bytes(vec![0xde, 0xad, 0xbe, 0xef]);
+        let input = Value::bytes(vec![0xde, 0xad, 0xbe, 0xef]);
         let result = apply_hex(&input).unwrap();
 
         assert_eq!(result, Value::String("deadbeef".to_string()));
@@ -513,7 +516,7 @@ mod tests {
 
     #[test]
     fn base32_encodes_bytes_unpadded_and_uppercase() {
-        let input = Value::Bytes(b"hello".to_vec());
+        let input = Value::bytes(b"hello".to_vec());
         let result = apply_base32(&input).unwrap();
 
         // Base32 unpadded encoding of "hello" (RFC 4648 uppercase)
@@ -522,7 +525,7 @@ mod tests {
 
     #[test]
     fn base64_encodes_bytes_with_padding() {
-        let input = Value::Bytes(b"hello".to_vec());
+        let input = Value::bytes(b"hello".to_vec());
         let result = apply_base64(&input).unwrap();
 
         assert_eq!(result, Value::String("aGVsbG8=".to_string()));
@@ -602,7 +605,7 @@ mod tests {
 
     #[test]
     fn upper_rejects_bytes() {
-        let input = Value::Bytes(vec![1, 2, 3]);
+        let input = Value::bytes(vec![1, 2, 3]);
         let result = apply_upper(&input);
 
         assert!(result.is_err());
@@ -734,9 +737,9 @@ mod tests {
 
         // concat returns bytes
         if let Value::Bytes(b) = result {
-            assert_eq!(b, b"hello world".to_vec());
+            assert_eq!(b.as_slice(), b"hello world");
         } else {
-            panic!("Expected Bytes, got {result:?}");
+            panic!("Expected Bytes, got {}", result.type_name());
         }
     }
 

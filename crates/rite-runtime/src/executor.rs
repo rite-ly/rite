@@ -3,7 +3,7 @@
 
 use crate::actions::ArtifactValue;
 use crate::step_info::StepInfo;
-use crate::transcript::compute_file_fingerprint;
+use crate::transcript::compute_fingerprint;
 use rite_model::{ActionType, ArtifactId, Material, MaterialKind, MaterialSource, Step, StepId};
 use rite_sdk::BackendError;
 use std::fs;
@@ -11,6 +11,7 @@ use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::output_config::OutputConfig;
 
@@ -68,6 +69,18 @@ pub enum ExecutionError {
         name: String,
         /// Failure description.
         reason: String,
+    },
+
+    /// An output would receive content a step opened, and its declaration
+    /// does not say so.
+    ///
+    /// A refusal rather than a failure: the disk is fine, and the definition
+    /// is not allowed to do what it asked. The resolver reports the same
+    /// case at check time.
+    #[error("Output '{name}' receives content a step opened, and is not declared 'secret: true'")]
+    SecretOutputUndeclared {
+        /// Output name.
+        name: String,
     },
 
     /// Transcript writing failed.
@@ -160,6 +173,10 @@ pub(crate) fn write_artifact_to_disk(
                 name: artifact_id.as_str().to_string(),
                 reason: e,
             })?;
+    // The serialized copy is the one buffer this path owns. Moved into a
+    // wiping wrapper rather than dropped as is, so writing opened content
+    // leaves no copy of it behind in memory once the file exists.
+    let bytes = Zeroizing::new(serialized.bytes);
 
     let path = output_config
         .artifact_path(artifact_id.as_str(), serialized.extension)
@@ -168,15 +185,14 @@ pub(crate) fn write_artifact_to_disk(
             reason: e.to_string(),
         })?;
 
-    write_new_file(&path, &serialized.bytes).map_err(|e| ExecutionError::OutputWriteFailed {
+    write_new_file(&path, &bytes).map_err(|e| ExecutionError::OutputWriteFailed {
         name: artifact_id.as_str().to_string(),
         reason: e.to_string(),
     })?;
 
-    let hash = compute_file_fingerprint(&path).map_err(|e| ExecutionError::OutputWriteFailed {
-        name: artifact_id.as_str().to_string(),
-        reason: format!("hash computation failed: {e}"),
-    })?;
+    // Hashed from the buffer just written and synced, not read back from the
+    // file: a read-back would be one more unwiped copy of opened content.
+    let hash = compute_fingerprint(&bytes);
 
     let size = fs::metadata(&path)
         .map_err(|e| ExecutionError::OutputWriteFailed {

@@ -180,7 +180,7 @@ impl Action for IssueCertificateAction {
                 ))
             })?;
 
-        let csr = parse_csr(&csr_bytes)
+        let csr = parse_csr(csr_bytes)
             .map_err(|e| ActionError::Failed(format!("Failed to parse CSR: {e}")))?;
 
         reporter.log(Icon::Info, "Parsed CSR successfully")?;

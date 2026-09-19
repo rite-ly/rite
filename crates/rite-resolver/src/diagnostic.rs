@@ -322,6 +322,11 @@ impl SpanMap {
             ResolveError::DuplicateOutput(id) | ResolveError::UnsafeOutputId { id, .. } => {
                 self.outputs.get(id).copied()
             }
+            ResolveError::SecretOutputUndeclared { output, step, .. } => self
+                .outputs
+                .get(output)
+                .or_else(|| self.steps.get(step))
+                .copied(),
             ResolveError::UnknownSection { step, .. }
             | ResolveError::UnknownArtifact { step, .. }
             | ResolveError::MissingRequiredBackend { step, .. }

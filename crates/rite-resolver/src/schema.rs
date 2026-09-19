@@ -301,6 +301,13 @@ pub(crate) struct OutputDeclaration {
     /// Human-readable description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
+    /// The output holds content a step opened, and the author has said so.
+    ///
+    /// Required on an output that a `decrypt_data` step creates. Without it
+    /// the resolver reports the output rather than let the plaintext be
+    /// written next to the transcript unremarked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) secret: bool,
 }
 
 /// Body of a post-ceremony duty (the duty ID is the map key in the `after:` block).

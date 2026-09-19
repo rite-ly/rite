@@ -379,6 +379,43 @@ impl ActionType {
         }
     }
 
+    /// Whether the artifact this action creates is content it opened.
+    ///
+    /// Such an artifact is held wiped in memory and is written to the run
+    /// directory only under an output declared `secret: true`. The resolver
+    /// reports an output that names one without the declaration.
+    ///
+    /// Must list every action whose handler produces `ArtifactValue::Secret`.
+    /// The runtime refuses the write on the value itself, so an action missing
+    /// here fails in the room instead of at `rite check`.
+    pub fn creates_secret(self) -> bool {
+        match self {
+            ActionType::DecryptData => true,
+
+            ActionType::ClockCheck
+            | ActionType::Confirm
+            | ActionType::CheckValue
+            | ActionType::OralReadback
+            | ActionType::MachineInfo
+            | ActionType::GenerateKey
+            | ActionType::WrapKey
+            | ActionType::UnwrapKey
+            | ActionType::ImportKey
+            | ActionType::EncryptData
+            | ActionType::ExportPublic
+            | ActionType::SignData
+            | ActionType::VerifySignature
+            | ActionType::Attest
+            | ActionType::GatherEntropy
+            | ActionType::TpmAttest
+            | ActionType::PivReadCertificate
+            | ActionType::PivSign
+            | ActionType::YubikeyAttestSlot
+            | ActionType::IssueCertificate
+            | ActionType::GenerateCsr => false,
+        }
+    }
+
     /// Returns the `with:` field names that are required for this action.
     ///
     /// The resolver reports a diagnostic for each missing field.

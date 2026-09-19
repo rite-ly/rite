@@ -211,6 +211,8 @@ pub struct OutputView {
     pub kind: String,
     /// Optional description.
     pub description: Option<String>,
+    /// The file holds content a step opened, by the author's declaration.
+    pub secret: bool,
 }
 
 /// A post-ceremony duty.
@@ -342,6 +344,7 @@ impl ScriptView {
                 id: id.as_str().to_string(),
                 kind: output.kind.to_string(),
                 description: output.description.clone(),
+                secret: output.secret,
             })
             .collect();
 

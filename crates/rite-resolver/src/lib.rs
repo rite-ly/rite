@@ -622,7 +622,7 @@ sections:
     // `diagnostic.rs::span_for_error` so missing rows fail fast.
 
     use crate::diagnostic::{Severity, SpanMap};
-    use rite_model::{ActId, ArtifactId, MaterialId, OutputId, SectionId, StepId};
+    use rite_model::{ActId, ActionType, ArtifactId, MaterialId, OutputId, SectionId, StepId};
 
     fn span_map_for(yaml: &str) -> SpanMap {
         let (_, span_map, _) = analyze_str(None, yaml);
@@ -805,6 +805,21 @@ output:
             &ResolveError::UnsafeOutputId {
                 id: OutputId::new("signed_cert"),
                 reason: "name must not contain a path separator ('/' or '\\')".to_string(),
+            },
+        );
+        assert_eq!(text, "signed_cert");
+    }
+
+    #[test]
+    fn dispatch_secret_output_undeclared_spans_output_declaration() {
+        let span_map = span_map_for(DISPATCH_YAML);
+        let text = dispatch_span_text(
+            DISPATCH_YAML,
+            &span_map,
+            &ResolveError::SecretOutputUndeclared {
+                output: OutputId::new("signed_cert"),
+                step: StepId::new("my_step"),
+                action: ActionType::DecryptData,
             },
         );
         assert_eq!(text, "signed_cert");

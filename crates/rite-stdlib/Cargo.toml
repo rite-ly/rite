@@ -24,7 +24,7 @@ openssl-vendored = ["openssl", "rite-openssl/vendored"]
 # Hardware smart-card backends. Opt-in: they pull in the `yubikey` crate, which
 # links the PC/SC system library and so is excluded from the default build and
 # the static musl artifacts. `yubikey` implies `piv` (it extends it).
-piv              = ["dep:rite-piv", "dep:secrecy"]
+piv              = ["dep:rite-piv"]
 yubikey          = ["dep:rite-yubikey", "piv"]
 full             = ["verification", "attestation", "crypto", "pki", "openssl"]
 
@@ -42,12 +42,12 @@ chrono     = { workspace = true }
 base16ct   = { workspace = true }
 sha2       = { workspace = true }
 zeroize    = { workspace = true }
+secrecy    = { workspace = true }
 
 subtle    = { workspace = true, optional = true }
 sysinfo   = { workspace = true, optional = true }
 x509-cert = { workspace = true, optional = true }
 signature = { workspace = true, optional = true }
-secrecy   = { workspace = true, optional = true }
 
 [dev-dependencies]
 rite-openssl = { workspace = true }

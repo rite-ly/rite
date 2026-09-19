@@ -129,7 +129,7 @@
     <h2>Expected Outputs</h2>
     <ul class="outputs">
 {%- for o in script.outputs %}
-      <li><strong>{{ o.id }}</strong> <span class="item-kind">{{ o.kind }}</span>{% if o.description %}<span class="item-desc">{{ o.description }}</span>{% endif %}</li>
+      <li><strong>{{ o.id }}</strong> <span class="item-kind">{{ o.kind }}</span>{% if o.secret %} <span class="item-kind">holds opened content</span>{% endif %}{% if o.description %}<span class="item-desc">{{ o.description }}</span>{% endif %}</li>
 {%- endfor %}
     </ul>
   </section>

@@ -93,9 +93,25 @@ why.
 content was encrypted are both in the artifact, and a restated value could
 disagree with the bytes that have to be decrypted.
 
-What it produces is an ordinary byte artifact, read the way a material is. A
-step can hash it, compare it, sign it, or hand it to `import_key`, which is how
-a key archived as content becomes a key again.
+What it produces is a byte artifact, read the way a material is. A step can
+hash it, compare it, sign it, or hand it to `import_key`, which is how a key
+archived as content becomes a key again.
+
+The artifact is held as opened content: the bytes are wiped from memory when
+the run drops them, a step that reads them borrows rather than copies, and
+nothing prints them. The content was encrypted because it is secret, and the
+tool cannot tell a runbook from a private key, so it treats every opened
+artifact the same way.
+
+Where the bytes go from there is the author's call, made in the definition.
+Declaring the artifact under `output:` writes it to the run directory like any
+other output, in the clear next to the transcript; a signing key archived as
+encrypted content and restored for an appliance that imports keys only from a
+file is one reason to. An expression exposes what the author asks of it:
+`${artifact.restored_key | sha256 | hex}` puts a digest in a `check_value`
+step, and `${artifact.restored_key | base64}` would put the key itself wherever
+that step records its inputs, transcript included. Rite does not second-guess
+either.
 
 An encrypted artifact is its own type, so it can be given to `decrypt_data` and
 not to `unwrap_key`. The reverse holds too. The bytes of the two are the same

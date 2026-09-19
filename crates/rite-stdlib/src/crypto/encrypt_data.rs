@@ -87,7 +87,7 @@ impl Action for EncryptDataAction {
         // key-encryption key opens. Both halves come from the device that holds
         // the KEK, so nothing here has to see the KEK itself.
         let data_key = transport.generate_data_key(&backend_key_id, KeyAlgorithm::Aes256)?;
-        let encrypted = seal_into_container(&data_key, &check_value, &payload)?;
+        let encrypted = seal_into_container(&data_key, &check_value, payload)?;
 
         let fingerprint = compute_fingerprint(encrypted.data());
         reporter.log(Icon::Checkmark, "Content encrypted")?;

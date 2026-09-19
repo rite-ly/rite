@@ -100,10 +100,10 @@ impl Action for VerifySignatureAction {
                      Drop the `backend:` field to check this one in software."
                 ))
             })?;
-            let checked = verifier.verify_public_key(&public_key, &data, &signature, algorithm)?;
+            let checked = verifier.verify_public_key(&public_key, data, signature, algorithm)?;
             (checked, backend_name)
         } else {
-            let checked = crate::signatures::verify(&public_key, &data, &signature, algorithm)
+            let checked = crate::signatures::verify(&public_key, data, signature, algorithm)
                 .map_err(|e| ActionError::Failed(format!("Verification failed to run: {e}")))?;
             (checked, "software".to_string())
         };
@@ -131,7 +131,7 @@ impl Action for VerifySignatureAction {
             outputs: json!({
                 "verified": true,
                 "public_key_fingerprint": compute_fingerprint(public_key.as_bytes()),
-                "signature_fingerprint": compute_fingerprint(&signature),
+                "signature_fingerprint": compute_fingerprint(signature),
             }),
             fingerprint: None,
         })?;

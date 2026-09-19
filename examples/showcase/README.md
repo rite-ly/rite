@@ -118,8 +118,9 @@ works when the key moves to an HSM.
 
 Nothing is declared on the way back. The container carries the algorithms, and
 the step checks that it is addressed to the key it was given before decrypting,
-so a wrong key fails by name. What comes out is an ordinary byte artifact, which
-is why the drill can compare it against the document that went in.
+so a wrong key fails by name. What comes out is read like any byte artifact,
+which is why the drill can compare it against the document that went in. It is
+held wiped in memory and, since no output names it, never written out.
 
 `rite verify` reports the seal beside any wraps, under `Containers`. See
 `docs/encrypting-content.md`.

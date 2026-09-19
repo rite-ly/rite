@@ -14,6 +14,7 @@ use crate::actions::ArtifactValue;
 use crate::executor::ExecutionError;
 use rite_model::ArtifactId;
 use rite_sdk::{KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer};
+use secrecy::ExposeSecret;
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
@@ -25,18 +26,20 @@ use std::hash::BuildHasher;
 /// * `property` - Optional subproperty (e.g., "private" or "public")
 ///
 /// # Returns
-/// The resolved bytes, or an error if resolution fails.
+/// The bytes, borrowed from the store. A reader that only looks at them makes
+/// no copy, which is what keeps opened content from being duplicated on every
+/// read; one that needs to keep them copies on its own account.
 ///
 /// # Supported references
 /// - `artifact_id` → full artifact content
 /// - `artifact_id` + "private" → private key from keypair
 /// - `artifact_id` + "public" → public key from keypair
 /// - `artifact_id` + "kcv" → key check value of a symmetric key
-pub fn resolve_artifact_bytes<S: BuildHasher>(
-    artifacts: &HashMap<ArtifactId, ArtifactValue, S>,
+pub fn resolve_artifact_bytes<'a, S: BuildHasher>(
+    artifacts: &'a HashMap<ArtifactId, ArtifactValue, S>,
     artifact_id: &ArtifactId,
     property: Option<&str>,
-) -> Result<Vec<u8>, ExecutionError> {
+) -> Result<&'a [u8], ExecutionError> {
     let artifact = artifacts.get(artifact_id).ok_or_else(|| {
         ExecutionError::InvalidParams(format!("Artifact '{artifact_id}' not found"))
     })?;
@@ -49,7 +52,7 @@ pub fn resolve_artifact_bytes<S: BuildHasher>(
                 ..
             },
             Some("public"),
-        ) => Ok(pub_key.as_bytes().to_vec()),
+        ) => Ok(pub_key.as_bytes()),
         (
             ArtifactValue::BackendKey {
                 public_key: None, ..
@@ -76,7 +79,7 @@ pub fn resolve_artifact_bytes<S: BuildHasher>(
                 ..
             },
             Some("kcv"),
-        ) => Ok(kcv.as_bytes().to_vec()),
+        ) => Ok(kcv.as_bytes()),
         (
             ArtifactValue::BackendKey {
                 check_value: None,
@@ -93,22 +96,26 @@ pub fn resolve_artifact_bytes<S: BuildHasher>(
         }
 
         // Real public key
-        (ArtifactValue::PublicKey(key), None) => Ok(key.as_bytes().to_vec()),
+        (ArtifactValue::PublicKey(key), None) => Ok(key.as_bytes()),
 
         // Real wrapped key
-        (ArtifactValue::WrappedKey(wrapped), None) => Ok(wrapped.data().to_vec()),
+        (ArtifactValue::WrappedKey(wrapped), None) => Ok(wrapped.data()),
 
         // The container, as it would be written to media. What is inside it
         // needs the key, which is `decrypt_data`'s job and not this one's.
-        (ArtifactValue::EncryptedData(encrypted), None) => Ok(encrypted.data().to_vec()),
+        (ArtifactValue::EncryptedData(encrypted), None) => Ok(encrypted.data()),
 
-        // Materials (loaded from files or inline)
-        (ArtifactValue::Bytes(bytes), None) => Ok(bytes.clone()),
-        (ArtifactValue::Text(text), None) => Ok(text.as_bytes().to_vec()),
+        // Materials (loaded from files or inline), and content a step opened.
+        // The second reads like the first: what a ceremony does with opened
+        // content is what it does with any bytes, and only the write to disk
+        // is gated.
+        (ArtifactValue::Bytes(bytes), None) => Ok(bytes),
+        (ArtifactValue::Secret(bytes), None) => Ok(bytes.expose_secret()),
+        (ArtifactValue::Text(text), None) => Ok(text.as_bytes()),
 
         // X.509 certificate: the whole certificate, not the key inside it.
         // `issue_certificate` reads an issuer certificate through here.
-        (ArtifactValue::Certificate(certificate), None) => Ok(certificate.as_bytes().to_vec()),
+        (ArtifactValue::Certificate(certificate), None) => Ok(certificate.as_bytes()),
 
         // Invalid combinations
         _ => Err(ExecutionError::InvalidParams(format!(

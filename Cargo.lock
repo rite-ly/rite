@@ -1934,6 +1934,7 @@ dependencies = [
  "rite-sdk",
  "serde",
  "serde_json",
+ "zeroize",
 ]
 
 [[package]]
@@ -2014,6 +2015,7 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]

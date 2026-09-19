@@ -92,7 +92,7 @@ impl Action for ImportKeyAction {
             policy: policy.clone(),
             location_hint: None,
         };
-        let metadata = keystore.import_key(spec, &key_bytes)?;
+        let metadata = keystore.import_key(spec, key_bytes)?;
 
         let imported_fingerprint = metadata
             .public_key

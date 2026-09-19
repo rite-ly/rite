@@ -6,6 +6,7 @@ use rite_sdk::{
     CertificateDer, EncryptedData, KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer, WrapScheme,
     WrappedKey,
 };
+use secrecy::{ExposeSecret, SecretBox};
 
 /// Runtime representation of an artifact.
 #[derive(Debug)]
@@ -45,6 +46,16 @@ pub enum ArtifactValue {
     /// Binary content from files or inline data (documents, crypto materials).
     /// Used for hashing, cryptographic operations, and verification.
     Bytes(Vec<u8>),
+    /// Content a step opened, wiped when the artifact is dropped.
+    ///
+    /// The same shape as [`Bytes`](ArtifactValue::Bytes) and a different
+    /// claim: these bytes came out of a container that existed to keep them
+    /// unreadable. A step reads them the way it reads any bytes, and an
+    /// output writes them like any other artifact; declaring the output is
+    /// the author's decision to put them on disk. Nothing displays them: the
+    /// wrapper redacts its `Debug` output and hands the bytes out only
+    /// through `expose_secret`.
+    Secret(SecretBox<Vec<u8>>),
 
     /// Display text for physical item references (USB drives, tamper bags, etc.).
     /// Used in messages and prompts when referencing physical objects.
@@ -116,6 +127,10 @@ impl std::fmt::Display for ArtifactValue {
             ArtifactValue::Bytes(bytes) => {
                 let len = bytes.len();
                 write!(f, "Bytes({len} bytes)")
+            }
+            ArtifactValue::Secret(bytes) => {
+                let len = bytes.expose_secret().len();
+                write!(f, "Secret({len} bytes)")
             }
             ArtifactValue::Text(text) => {
                 write!(f, "Text({text})")
@@ -262,6 +277,11 @@ impl ArtifactValue {
 
             ArtifactValue::Bytes(bytes) => Ok(SerializedArtifact {
                 bytes: bytes.clone(),
+                mime_type: Some("application/octet-stream".to_string()),
+                extension: "bin",
+            }),
+            ArtifactValue::Secret(bytes) => Ok(SerializedArtifact {
+                bytes: bytes.expose_secret().clone(),
                 mime_type: Some("application/octet-stream".to_string()),
                 extension: "bin",
             }),

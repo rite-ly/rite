@@ -2107,8 +2107,7 @@ mod tests {
     }
 
     /// The default policy is the restrictive one, so a ceremony that means to
-    /// wrap a key has to say so at the step that generates it. Before this,
-    /// the policy was recorded and then ignored.
+    /// wrap a key has to say so at the step that generates it.
     #[test]
     fn refuses_to_wrap_a_key_generated_as_non_extractable() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();

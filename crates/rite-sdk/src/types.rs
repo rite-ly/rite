@@ -258,8 +258,8 @@ impl KeyAlgorithm {
     ///
     /// A recipient has to be able to receive a content-encryption key, by key
     /// transport, key agreement, or encapsulation. A signature algorithm can
-    /// do none of the three, however good a key it otherwise is, and finding
-    /// that out mid-ceremony is how it used to surface.
+    /// do none of the three, however good a key it otherwise is, and this
+    /// answers the question before a ceremony reaches the wrap step.
     #[must_use]
     pub fn can_receive_wrap(self) -> bool {
         match self {

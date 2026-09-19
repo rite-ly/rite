@@ -548,7 +548,7 @@ mod tests {
     fn a_pipeline_chains_sha256_into_hex() {
         let ctx = empty_context();
 
-        // Simulate: "hello" | sha256 | hex
+        // ${"hello" | sha256 | hex}
         let expr = Expression::Pipeline {
             source: Box::new(Expression::Literal(Literal::String("hello".to_string()))),
             stages: vec![PipeStage::new("sha256"), PipeStage::new("hex")],
@@ -570,7 +570,7 @@ mod tests {
     fn a_pipeline_chains_sha256_hex_and_upper() {
         let ctx = empty_context();
 
-        // Simulate: "hello" | sha256 | hex | upper
+        // ${"hello" | sha256 | hex | upper}
         let expr = Expression::Pipeline {
             source: Box::new(Expression::Literal(Literal::String("hello".to_string()))),
             stages: vec![
@@ -612,7 +612,7 @@ mod tests {
     fn substr_takes_a_prefix() {
         let ctx = empty_context();
 
-        // Test: "abcdefgh" | substr(0, 4)
+        // ${"abcdefgh" | substr(0, 4)}
         let expr = Expression::Pipeline {
             source: Box::new(Expression::Literal(Literal::String("abcdefgh".to_string()))),
             stages: vec![PipeStage {
@@ -632,7 +632,7 @@ mod tests {
     fn substr_takes_a_range_from_the_middle() {
         let ctx = empty_context();
 
-        // Test: "abcdefgh" | substr(2, 4)
+        // ${"abcdefgh" | substr(2, 4)}
         let expr = Expression::Pipeline {
             source: Box::new(Expression::Literal(Literal::String("abcdefgh".to_string()))),
             stages: vec![PipeStage {
@@ -716,8 +716,8 @@ mod tests {
     fn concat_joins_its_arguments_and_ignores_the_input() {
         let ctx = empty_context();
 
-        // Test concat via expression: concat("hello", " ", "world")
-        // concat takes all strings as args, ignores pipeline input
+        // ${"ignored" | concat("hello", " ", "world")}, which takes its arguments
+        // as the whole input and ignores what the pipeline hands it.
         let expr = Expression::Pipeline {
             source: Box::new(Expression::Literal(Literal::String("ignored".to_string()))),
             stages: vec![PipeStage {
@@ -744,7 +744,6 @@ mod tests {
     fn a_parsed_expression_string_evaluates_end_to_end() {
         let ctx = empty_context();
 
-        // Test parsing a real expression string
         let expr = rite_model::expression::parse_expression("${\"test\" | sha256 | hex}").unwrap();
         let result = evaluate(&expr, &ctx).unwrap();
 

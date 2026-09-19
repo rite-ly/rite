@@ -349,7 +349,7 @@ mod tests {
         let public_key =
             ArtifactValue::PublicKey(PublicKeyDer::new(public_der.clone()).expect("valid SPKI"));
 
-        // Test default format (PEM)
+        // Default format
         let serialized = public_key.serialize(None).unwrap();
         assert_eq!(serialized.extension, "pem");
         assert_eq!(
@@ -357,7 +357,7 @@ mod tests {
             Some("application/x-pem-file".to_string())
         );
 
-        // Test explicit PEM format
+        // Explicit PEM
         let serialized = public_key.serialize(Some("pem")).unwrap();
         assert_eq!(serialized.extension, "pem");
         assert_eq!(
@@ -365,7 +365,7 @@ mod tests {
             Some("application/x-pem-file".to_string())
         );
 
-        // Test DER format
+        // DER
         let serialized = public_key.serialize(Some("der")).unwrap();
         assert_eq!(
             serialized.bytes, public_der,
@@ -377,7 +377,7 @@ mod tests {
             Some("application/x-x509-ca-cert".to_string())
         );
 
-        // Test base64 format
+        // Base64
         let serialized = public_key.serialize(Some("base64")).unwrap();
         assert_eq!(serialized.extension, "txt");
         assert_eq!(serialized.mime_type, Some("text/plain".to_string()));
@@ -403,7 +403,7 @@ mod tests {
             WrappedKey::new(WrapScheme::CmsAes256Gcm, description, cms_data.clone()).unwrap(),
         );
 
-        // Test default format (DER)
+        // Default format
         let serialized = wrapped.serialize(None).unwrap();
         assert_eq!(
             serialized.bytes, cms_data,
@@ -415,7 +415,7 @@ mod tests {
             Some("application/pkcs7-mime".to_string())
         );
 
-        // Test explicit DER format
+        // Explicit DER
         let serialized = wrapped.serialize(Some("der")).unwrap();
         assert_eq!(serialized.bytes, cms_data);
         assert_eq!(serialized.extension, "p7c");
@@ -424,7 +424,7 @@ mod tests {
             Some("application/pkcs7-mime".to_string())
         );
 
-        // Test PEM format
+        // PEM
         let serialized = wrapped.serialize(Some("pem")).unwrap();
         let pem_str = String::from_utf8(serialized.bytes).unwrap();
         assert!(

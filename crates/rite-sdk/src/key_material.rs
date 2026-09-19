@@ -347,8 +347,9 @@ mod tests {
         }
     }
 
-    /// The mistake the type exists to prevent. Certificate DER used to reach an
-    /// SPKI parser and fail with an ASN.1 tag error from inside the provider.
+    /// The mistake the type exists to prevent. Certificate DER handed to an SPKI
+    /// parser fails with an ASN.1 tag error from inside the provider, far from
+    /// the call that supplied it.
     #[test]
     fn rejects_a_certificate_offered_as_a_public_key() {
         let err = PublicKeyDer::new(vectors::CERTIFICATE.to_vec()).unwrap_err();

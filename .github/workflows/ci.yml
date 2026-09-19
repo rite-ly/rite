@@ -104,11 +104,15 @@ jobs:
         run: |
           cargo build -p rite --features openssl-vendored
           cargo build -p rite-ls
-      # The default runner links OpenSSL 3.0, which has no ML-DSA, so the Test
-      # job skips the post-quantum example. This job already bundles a current
-      # OpenSSL, so the example smoke tests run here to cover it.
-      - name: Test examples (vendored OpenSSL)
-        run: cargo test -p rite --features openssl-vendored --test examples
+      # The default runner links OpenSSL 3.0, which has no ML-DSA or ML-KEM, so
+      # the Test job compiles every `ossl350` test out of `rite-openssl` and
+      # skips the post-quantum example. This job bundles a current OpenSSL, so
+      # both run here, and anything behind that cfg is covered by this step
+      # alone.
+      - name: Test (vendored OpenSSL)
+        run: |
+          cargo test -p rite-openssl --features vendored
+          cargo test -p rite --features openssl-vendored --test examples
 
   docker:
     name: Docker (smoke)

@@ -1470,8 +1470,11 @@ fn raw_wrap(
 /// Wrap `material` to `recipient` under `scheme`.
 ///
 /// Matched on the scheme rather than branching on
-/// [`WrapScheme::is_self_describing`]: a scheme this backend gains has to be
-/// given a path here, and the compiler is what asks.
+/// [`WrapScheme::is_self_describing`], so each scheme names the mechanism it
+/// means instead of inheriting one from a property.
+///
+/// [`WrapScheme`] is `#[non_exhaustive]` and defined elsewhere, so a scheme
+/// this backend gains reaches the wildcard arm and is refused by name.
 fn wrap_under(
     recipient: &PKeyRef<impl openssl::pkey::HasPublic>,
     material: &[u8],

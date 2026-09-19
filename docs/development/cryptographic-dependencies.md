@@ -94,15 +94,40 @@ Two pieces make this visible:
   `openssl-sys` publishes through its `links` metadata. (`openssl-sys` is a
   direct dependency of `rite-openssl` for this reason alone, since `links`
   metadata reaches only direct dependents.)
-- `rite_openssl::supports(algorithm)` answers whether this build can produce a
-  given key, and `rite_openssl::POST_QUANTUM_AVAILABLE` exposes the raw cfg
-  behind it. Ask `supports` wherever a useful alternative exists, such as
-  skipping a test or warning during `rite check`, rather than waiting for an
-  `UnsupportedAlgorithm` error mid-ceremony. Keeping the per-algorithm answer
-  in this crate is deliberate: it is the one that compiles the bindings, and
-  matching exhaustively means a new algorithm cannot skip the question.
+- `rite_openssl::build_limitation(algorithm)` names what about this build
+  prevents generating a given key, and `rite_openssl::POST_QUANTUM_AVAILABLE`
+  exposes the raw cfg behind it. Ask it wherever a useful alternative exists,
+  such as skipping a test or warning during `rite check`, rather than waiting
+  for an `UnsupportedAlgorithm` error mid-ceremony. `None` means this build does
+  not limit the algorithm, which also covers one no build can generate, so it is
+  a narrower question than whether the algorithm is supported at all. Keeping
+  the per-algorithm answer in this crate is deliberate: it is the one that
+  compiles the bindings. It carries no compiler enforcement, since
+  `KeyAlgorithm` is `#[non_exhaustive]` and defined in `rite-sdk`, so a new
+  algorithm reads as unlimited until it is listed and the backstop is the
+  refusal in `generate_key`.
 
 Building with post-quantum support requires OpenSSL 3.5 or newer. Distributions still
 shipping 3.0, including Ubuntu 24.04, produce a working build with the
 post-quantum algorithms absent. `--features openssl-vendored` bundles a current
 OpenSSL and always includes them.
+
+## Checking the other build before you push
+
+CI compiles both sides and a development machine sits on one, so code written
+against an API only 3.5 has passes locally and fails on the `Test` job, which
+links the distribution's 3.0. `RITE_OSSL350` replaces the detected answer:
+
+```sh
+RITE_OSSL350=0 cargo clippy --workspace --all-targets -- -D warnings
+RITE_OSSL350=0 cargo test -p rite-openssl -p rite-stdlib
+```
+
+This catches two things a local run otherwise cannot: an API the `openssl`
+crate exposes only in the newer build, and a binding used only inside a
+`cfg(ossl350)` block, which the older build reports as unused.
+
+It overrides this crate's cfg and nothing else, so it answers whether the code
+still builds without the post-quantum paths, not whether it works against
+OpenSSL 3.0. The `Test` job answers that, and the vendored `Build (smoke)` job
+is the only place the `ossl350` tests run at all. Neither sets the variable.

@@ -6,8 +6,25 @@
 //! that crate, so this build script re-derives it from the version number
 //! `openssl-sys` publishes through its `links` metadata.
 
+/// `1` or `0` in place of the detected answer, to compile the other side of
+/// the 3.5 line locally. It overrides this cfg and nothing else, so the linked
+/// library is unchanged.
+const OVERRIDE_VAR: &str = "RITE_OSSL350";
+
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(ossl350)");
+    println!("cargo::rerun-if-env-changed={OVERRIDE_VAR}");
+
+    if let Some(forced) = override_from_env() {
+        println!(
+            "cargo::warning={OVERRIDE_VAR}={} overrides detection",
+            u8::from(forced)
+        );
+        if forced {
+            println!("cargo::rustc-cfg=ossl350");
+        }
+        return;
+    }
 
     // LibreSSL and BoringSSL report an OpenSSL version number for source
     // compatibility but do not ship the ML-DSA provider. Each signals itself
@@ -29,5 +46,16 @@ fn main() {
     // OPENSSL_VERSION_NUMBER is 0xMNN00PPSL, so 3.5.0 is 0x30500000.
     if version >= 0x3050_0000 {
         println!("cargo::rustc-cfg=ossl350");
+    }
+}
+
+/// Empty reads as unset. Anything but `1`, `0` or empty fails the build rather
+/// than being ignored, since a typo here changes what compiles.
+fn override_from_env() -> Option<bool> {
+    match std::env::var(OVERRIDE_VAR).ok()?.as_str() {
+        "1" => Some(true),
+        "0" => Some(false),
+        "" => None,
+        other => panic!("{OVERRIDE_VAR} takes 1 or 0, got {other:?}"),
     }
 }

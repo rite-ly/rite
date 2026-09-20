@@ -121,6 +121,25 @@ pub enum ActionType {
     /// material: `import_key` lifts them into a key, `check_value` compares
     /// them, `sign_data` signs them.
     DecryptData,
+    /// Split a secret into shares of which a threshold reconstruct it.
+    ///
+    /// Shamir over GF(2^8), the `rite-sss/v1` format, with the polynomial
+    /// coefficients drawn from the step's backend. Reads `secret:` and
+    /// creates one artifact holding every share, reached as
+    /// `${artifact.<name>.share_N}` under a later step's `reads:`. At most
+    /// 100 shares. Every subset of `threshold` shares is combined and
+    /// checked before the step completes, so a share that leaves the room
+    /// has been shown to work; a split with more than 100,000 such subsets
+    /// is refused at run time.
+    SplitSecret,
+    /// Reconstruct a secret from shares `split_secret` made.
+    ///
+    /// Reads `shares:`, a list of at least two, each a share of a set or a
+    /// share a custodian typed back. Each share records how many are
+    /// needed, so too few shares is an error before anything is computed.
+    /// The result stays in memory and is erased when the run ends, like the
+    /// content `decrypt_data` opens.
+    CombineShares,
     /// Install key material the ceremony holds as a key of a named algorithm.
     ///
     /// `unwrap_key` without the decrypt. The bytes can be a material carried
@@ -269,6 +288,89 @@ impl fmt::Display for UnknownCertProfile {
     }
 }
 
+/// The secret sharing scheme a `split_secret` step names.
+///
+/// DSL vocabulary, like [`CertProfile`]: the author writes the name and the
+/// transcript records it. One scheme today. The enum exists so a second one
+/// (a prime field, a verifiable variant, codex32) is a variant rather than a
+/// flag, and so a name this build does not implement is refused at `rite
+/// check`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+#[non_exhaustive]
+pub enum SharingScheme {
+    /// Shamir over GF(2^8), one polynomial per byte, the `rite-sss/v1`
+    /// share format.
+    RiteSssV1,
+}
+
+impl SharingScheme {
+    /// The name a ceremony writes and the transcript records.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SharingScheme::RiteSssV1 => "rite-sss/v1",
+        }
+    }
+
+    /// The most shares a split under this scheme may make.
+    ///
+    /// A policy limit rather than what the arithmetic allows: a share index
+    /// is a byte, so `rite-sss/v1` could evaluate 255 points, and 100 is a
+    /// round number well past any split a room of custodians receives. Kept
+    /// low on purpose, since raising it later costs nothing and lowering it
+    /// would break a ceremony that ran. It also leaves the indexes SLIP-0039
+    /// reserves (254 for a digest, 255 for the secret) free for a scheme that
+    /// wants them.
+    pub fn max_shares(self) -> u8 {
+        match self {
+            SharingScheme::RiteSssV1 => 100,
+        }
+    }
+}
+
+impl fmt::Display for SharingScheme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<SharingScheme> for String {
+    fn from(scheme: SharingScheme) -> Self {
+        scheme.as_str().to_string()
+    }
+}
+
+impl std::str::FromStr for SharingScheme {
+    type Err = UnknownSharingScheme;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "rite-sss/v1" => Ok(Self::RiteSssV1),
+            _ => Err(UnknownSharingScheme),
+        }
+    }
+}
+
+impl TryFrom<String> for SharingScheme {
+    type Error = UnknownSharingScheme;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+/// A `scheme:` value naming no sharing scheme this build implements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownSharingScheme;
+
+impl fmt::Display for UnknownSharingScheme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "supported sharing schemes: rite-sss/v1")
+    }
+}
+
+impl std::error::Error for UnknownSharingScheme {}
+
 /// What an action requires of its step's `reads:` map.
 ///
 /// See [`ActionType::reads_contract`].
@@ -288,6 +390,23 @@ pub struct ReadsContract {
     /// never read, so the step would run without whatever the parameter asked
     /// for. This says which parameter needs which input.
     pub with_field_requires: &'static [(&'static str, &'static str)],
+    /// Inputs that hold a list of references rather than one, each with the
+    /// fewest entries a step may give.
+    ///
+    /// For an action that takes a set whose size the ceremony chooses, such
+    /// as the shares of a split. Every other input named in this contract
+    /// holds one reference, and the resolver reports a list where one is
+    /// expected as it reports one where a list is.
+    pub lists: &'static [ListInput],
+}
+
+/// A `reads:` input that holds a list of references.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListInput {
+    /// The key under `reads:`.
+    pub name: &'static str,
+    /// Fewest references the list may hold.
+    pub at_least: usize,
 }
 
 impl ReadsContract {
@@ -302,14 +421,20 @@ impl ReadsContract {
             required: fields,
             exactly_one_of: &[],
             with_field_requires: &[],
+            lists: &[],
         }
+    }
+
+    /// Whether the input named `key` holds a list under this contract.
+    pub fn is_list(&self, key: &str) -> bool {
+        self.lists.iter().any(|list| list.name == key)
     }
 
     /// Whether this contract constrains the `reads:` map at all.
     ///
     /// `with_field_requires` is a rule over `with:`, so it is not counted here.
     pub fn is_empty(&self) -> bool {
-        self.required.is_empty() && self.exactly_one_of.is_empty()
+        self.required.is_empty() && self.exactly_one_of.is_empty() && self.lists.is_empty()
     }
 }
 
@@ -332,6 +457,8 @@ impl ActionType {
         ActionType::ImportKey,
         ActionType::EncryptData,
         ActionType::DecryptData,
+        ActionType::SplitSecret,
+        ActionType::CombineShares,
         ActionType::ExportPublic,
         ActionType::SignData,
         ActionType::VerifySignature,
@@ -365,6 +492,7 @@ impl ActionType {
             | ActionType::ImportKey
             | ActionType::EncryptData
             | ActionType::DecryptData
+            | ActionType::SplitSecret
             | ActionType::TpmAttest => BackendUsage::Required,
 
             ActionType::VerifySignature => BackendUsage::SoftwareUnlessNamed,
@@ -375,6 +503,7 @@ impl ActionType {
             | ActionType::OralReadback
             | ActionType::MachineInfo
             | ActionType::Attest
+            | ActionType::CombineShares
             | ActionType::GatherEntropy => BackendUsage::Unused,
         }
     }
@@ -394,6 +523,7 @@ impl ActionType {
             // Raw material carries no description, so the ceremony declares
             // what it is lifting rather than the step guessing.
             ActionType::ImportKey => &["algorithm"],
+            ActionType::SplitSecret => &["threshold", "shares"],
 
             ActionType::ClockCheck
             | ActionType::Confirm
@@ -413,6 +543,7 @@ impl ActionType {
             | ActionType::YubikeyAttestSlot
             | ActionType::EncryptData
             | ActionType::DecryptData
+            | ActionType::CombineShares
             | ActionType::IssueCertificate => &[],
         }
     }
@@ -448,6 +579,7 @@ impl ActionType {
                 &["algorithm", "expect_key", "label", "policy"]
             }
             ActionType::EncryptData => &["scheme"],
+            ActionType::SplitSecret => &["scheme", "threshold", "shares"],
             ActionType::SignData | ActionType::VerifySignature => &["algorithm", "message"],
             ActionType::Attest => &["statement"],
             ActionType::GatherEntropy => &["instruction"],
@@ -459,7 +591,10 @@ impl ActionType {
             // `reads:` alone, and `tpm_attest` has no handler in any build yet,
             // so none of the three has a `with:` shape to accept. For the last,
             // `unsupported_actions` is what reports the step itself.
-            ActionType::ExportPublic | ActionType::DecryptData | ActionType::TpmAttest => &[],
+            ActionType::ExportPublic
+            | ActionType::DecryptData
+            | ActionType::CombineShares
+            | ActionType::TpmAttest => &[],
         }
     }
 
@@ -478,6 +613,7 @@ impl ActionType {
                 // `expect_recipient` is compared against the recipient a wrap
                 // is given, and only the external path has one.
                 with_field_requires: &[("expect_recipient", "recipient")],
+                lists: &[],
             },
             ActionType::UnwrapKey => ReadsContract::required(&["unwrapping_key", "wrapped_data"]),
             ActionType::ImportKey => ReadsContract::required(&["key_material"]),
@@ -485,6 +621,18 @@ impl ActionType {
             ActionType::DecryptData => {
                 ReadsContract::required(&["encrypted_data", "decryption_key"])
             }
+            ActionType::SplitSecret => ReadsContract::required(&["secret"]),
+            // Two is the smallest threshold; the shares themselves say
+            // whether two is enough, at run time.
+            ActionType::CombineShares => ReadsContract {
+                required: &[],
+                exactly_one_of: &[],
+                with_field_requires: &[],
+                lists: &[ListInput {
+                    name: "shares",
+                    at_least: 2,
+                }],
+            },
             ActionType::SignData => ReadsContract::required(&["key", "data"]),
             ActionType::VerifySignature => ReadsContract::required(&["key", "data", "signature"]),
             ActionType::IssueCertificate => ReadsContract::required(&["signing_key", "csr"]),
@@ -534,6 +682,10 @@ impl ActionType {
             ActionType::ImportKey => "Import a key from material the ceremony holds.",
             ActionType::EncryptData => "Encrypt content under a key held by a backend.",
             ActionType::DecryptData => "Decrypt an encrypted-data artifact back to bytes.",
+            ActionType::SplitSecret => {
+                "Split a secret into shares a threshold of which reconstruct it."
+            }
+            ActionType::CombineShares => "Reconstruct a secret from its shares.",
         }
     }
 }
@@ -552,6 +704,8 @@ impl std::fmt::Display for ActionType {
             ActionType::ImportKey => write!(f, "import_key"),
             ActionType::EncryptData => write!(f, "encrypt_data"),
             ActionType::DecryptData => write!(f, "decrypt_data"),
+            ActionType::SplitSecret => write!(f, "split_secret"),
+            ActionType::CombineShares => write!(f, "combine_shares"),
             ActionType::ExportPublic => write!(f, "export_public"),
             ActionType::SignData => write!(f, "sign_data"),
             ActionType::VerifySignature => write!(f, "verify_signature"),
@@ -760,6 +914,8 @@ mod tests {
             (ActionType::ImportKey, "\"import_key\""),
             (ActionType::EncryptData, "\"encrypt_data\""),
             (ActionType::DecryptData, "\"decrypt_data\""),
+            (ActionType::SplitSecret, "\"split_secret\""),
+            (ActionType::CombineShares, "\"combine_shares\""),
             (ActionType::ExportPublic, "\"export_public\""),
             (ActionType::Attest, "\"attest\""),
             (ActionType::TpmAttest, "\"tpm_attest\""),
@@ -937,6 +1093,8 @@ mod tests {
                 | ActionType::ImportKey
                 | ActionType::EncryptData
                 | ActionType::DecryptData
+                | ActionType::SplitSecret
+                | ActionType::CombineShares
                 | ActionType::ExportPublic
                 | ActionType::SignData
                 | ActionType::VerifySignature

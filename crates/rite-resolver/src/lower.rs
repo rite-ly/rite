@@ -341,11 +341,19 @@ impl<'src> Lowerer<'src> {
             let id = ArtifactId::new(extract_artifact_name(scalar.as_str()));
             self.push_reference(scalar, ReferenceTarget::Artifact(id), step_context);
         } else if let Some(reads_map) = reads_node.as_mapping() {
-            // Named inputs: `reads: { key_to_wrap: "...", wrapping_key: "..." }`.
+            // Named inputs: `reads: { key_to_wrap: "...", wrapping_key: "..." }`,
+            // where a value is one reference or a list of them.
             for (_, val_node) in reads_map.iter() {
-                if let Some(scalar) = val_node.as_scalar() {
+                let mut push = |scalar: &MarkedScalarNode| {
                     let id = ArtifactId::new(extract_artifact_name(scalar.as_str()));
                     self.push_reference(scalar, ReferenceTarget::Artifact(id), step_context);
+                };
+                if let Some(scalar) = val_node.as_scalar() {
+                    push(scalar);
+                } else if let Some(seq) = val_node.as_sequence() {
+                    for scalar in seq.iter().filter_map(Node::as_scalar) {
+                        push(scalar);
+                    }
                 }
             }
         }

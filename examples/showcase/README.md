@@ -124,3 +124,20 @@ held wiped in memory and, since no output names it, never written out.
 
 `rite verify` reports the seal beside any wraps, under `Containers`. See
 `docs/encrypting-content.md`.
+
+### `split_and_combine.rite.yaml` — Splitting a Secret and Putting It Back
+
+Splits a secret into three shares of which any two recover it, recovers it
+from two, and compares the result against what went in. `split_secret` checks
+every pair of shares before the step completes, so a share that leaves the
+room has been shown to work. `combine_shares` takes its shares as a list, in
+any order; each share knows how many are needed, so too few is refused.
+
+What a share cannot tell is whether it belongs with the others: shares from
+two different splits give a wrong secret without complaint, which is why a
+recovery ends by checking what came back. This example has the original in
+hand; a real recovery checks something derived from the secret instead.
+
+Shares and the recovered secret stay in memory and are never written to a
+file. The transcript names the scheme, the threshold and which shares went
+into the recovery, and nothing about the secret itself.

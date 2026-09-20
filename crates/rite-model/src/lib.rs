@@ -33,14 +33,15 @@ pub use material::MaterialSource;
 pub use safe_path::{PathSafetyError, confine, is_safe_component, safe_join, validate_component};
 
 pub use types::{
-    ActionType, BackendUsage, CertProfile, DutyType, Metadata, OutputType, ParameterType,
-    ReadsContract, UnknownCertProfile, derive_role_name, derive_step_name, role_type,
+    ActionType, BackendUsage, CertProfile, DutyType, ListInput, Metadata, OutputType,
+    ParameterType, ReadsContract, SharingScheme, UnknownCertProfile, UnknownSharingScheme,
+    derive_role_name, derive_step_name, role_type,
 };
 
 pub use ir::{
-    Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind, Output,
-    OutputId, ParamId, Parameter, PostCeremonyDuty, RetryPolicy, Role, RoleId, Section, SectionId,
-    Step, StepId, StepInputs, SymbolTable,
+    Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind, NamedInput,
+    Output, OutputId, ParamId, Parameter, PostCeremonyDuty, RetryPolicy, Role, RoleId, Section,
+    SectionId, Step, StepId, StepInputs, SymbolTable,
 };
 
 pub use transcript::{

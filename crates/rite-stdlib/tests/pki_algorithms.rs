@@ -9,7 +9,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use openssl::x509::X509;
-use rite_model::{ArtifactId, ArtifactRef, StepId, StepInputs};
+use rite_model::{ArtifactId, ArtifactRef, NamedInput, StepId, StepInputs};
 use rite_openssl::OpenSslBackend;
 use rite_runtime::{
     Action, ArtifactValue, ExecutionState, StepInfo, test_support::ReporterHarness,
@@ -23,10 +23,10 @@ fn named_inputs(pairs: &[(&str, ArtifactId)]) -> StepInputs {
         .map(|(name, id)| {
             (
                 (*name).to_string(),
-                ArtifactRef::Produced {
+                NamedInput::One(ArtifactRef::Produced {
                     id: id.clone(),
                     property: None,
-                },
+                }),
             )
         })
         .collect();

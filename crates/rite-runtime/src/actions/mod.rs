@@ -5,4 +5,4 @@
 
 mod types;
 
-pub use types::ArtifactValue;
+pub use types::{ArtifactValue, Share, ShareSet};

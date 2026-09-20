@@ -5,7 +5,7 @@
 // nothing, so the negative cases live here.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use rite_model::{ArtifactId, ArtifactRef, StepId, StepInputs};
+use rite_model::{ArtifactId, ArtifactRef, NamedInput, StepId, StepInputs};
 use rite_openssl::OpenSslBackend;
 use rite_runtime::{
     Action, ArtifactValue, ExecutionState, StepInfo, test_support::ReporterHarness,
@@ -25,10 +25,10 @@ fn named_inputs(pairs: &[(&str, &str)]) -> StepInputs {
             .map(|(name, id)| {
                 (
                     (*name).to_string(),
-                    ArtifactRef::Produced {
+                    NamedInput::One(ArtifactRef::Produced {
                         id: ArtifactId::new(*id),
                         property: None,
-                    },
+                    }),
                 )
             })
             .collect(),

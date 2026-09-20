@@ -1,0 +1,72 @@
+version: "0.3"
+name: "Splitting a Secret and Putting It Back"
+description: |
+  Split a secret into three shares, of which any two recover it. Then
+  recover it from two of them and compare it against what went in.
+
+  Demonstrates split_secret and combine_shares. The split is Shamir secret
+  sharing, and the transcript names the scheme so the secret can be
+  recovered without Rite.
+
+backends:
+  openssl:
+    provider: openssl
+
+materials:
+  secret:
+    type: digital
+    path: "test_data/secret.txt"
+    title: "The secret"
+    description: "What gets split. A real ceremony would use a recovery phrase or a passphrase."
+
+roles:
+  officer:
+    name: "Ceremony officer"
+    person: "Alice Rivera"
+
+sections:
+  split:
+    name: "Split and Recover"
+    role: ${role.officer}
+    steps:
+      split_the_secret:
+        action: split_secret
+        backend: openssl
+        reads:
+          secret: ${artifact.secret}
+        with:
+          threshold: 2
+          shares: 3
+        creates: shares
+        description: |
+          Three shares, any two of which recover the secret. Before the step
+          completes, every pair is combined and checked against the secret,
+          so a share that leaves the room has been shown to work. The shares
+          stay in memory and are never written to a file.
+
+      recover_from_two_shares:
+        action: combine_shares
+        reads:
+          shares:
+            - ${artifact.shares.share_3}
+            - ${artifact.shares.share_1}
+        creates: recovered
+        description: |
+          Two of the three, in whatever order they arrive. Each share knows
+          how many are needed, so one share alone is refused. What a share
+          cannot tell is whether it belongs with the others: a share from a
+          different split gives a wrong secret without complaint, which is
+          why the next step checks the result. The recovered secret stays in
+          memory and is erased when the run ends.
+
+      confirm_the_secret_came_back:
+        action: check_value
+        with:
+          message: "The recovered secret is the secret that was split."
+          actual: ${artifact.recovered | sha256 | hex}
+          expected: ${artifact.secret | sha256 | hex}
+        description: |
+          A real recovery has no copy of the secret to compare against, and
+          checks something derived from it instead: an address a device
+          shows, a check value a token prints. This example has the original
+          in hand and says so.

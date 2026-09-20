@@ -71,6 +71,16 @@ pub static ALL: &[ActionMeta] = &[
         long: "Open a container `encrypt_data` produced. Reads `encrypted_data:` and `decryption_key:`, the key the container is addressed to, which is checked by its check value before anything is decrypted. What comes out is a byte artifact a later step reads the way it reads a material: `import_key` lifts it into a key, `check_value` compares it, `sign_data` signs it. It is held wiped in memory until the run drops it.",
     },
     ActionMeta {
+        name: "split_secret",
+        short: "Split a secret into shares a threshold of which reconstruct it",
+        long: "Shamir secret sharing over GF(2^8), the `rite-sss/v1` format. Reads `secret:`, any byte artifact or material, and creates one artifact holding every share; a later step names one share as `${artifact.<name>.share_N}` under its `reads:`, never in `with:`, since a share is never rendered by an expression. `threshold:` and `shares:` are required, from 2 to 100. The polynomial coefficients come from the step's backend, which must generate random bytes. Every subset of `threshold` shares is combined and checked before the step completes, so a split with more than 100,000 such subsets (9-of-20, say) is refused; `rite check` does not count them, a dry run does. `scheme:` names the format and defaults to the only one this build implements.",
+    },
+    ActionMeta {
+        name: "combine_shares",
+        short: "Reconstruct a secret from its shares",
+        long: "Reads `shares:`, a list of at least two, each a share of a set `split_secret` made or a share a custodian typed back. Each share records how many are needed and which one it is, so the step takes no `with:` and too few shares is an error before anything is computed. Shares that disagree on the threshold or the secret's length are rejected; shares from a different split of the same shape cannot be told apart, which is why a recovery ends by checking what came back. The result stays in memory and is erased when the run ends.",
+    },
+    ActionMeta {
         name: "export_public",
         short: "Export public key from keypair",
         long: "Export public key from keypair.",

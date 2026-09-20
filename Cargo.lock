@@ -2051,6 +2051,7 @@ dependencies = [
  "signature 3.0.0",
  "subtle",
  "sysinfo",
+ "thiserror",
  "x509-cert 0.3.0",
  "zeroize",
 ]

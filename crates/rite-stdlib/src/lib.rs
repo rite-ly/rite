@@ -7,6 +7,7 @@
 //! - **Crypto**: `generate_key`, `export_public`, `wrap_key`, `unwrap_key`,
 //!   `sign_data`, `verify_signature`
 //! - **PKI**: `generate_csr`, `issue_certificate`
+//! - **Sharing**: `split_secret`, `combine_shares`
 //!
 //! # Backend integration
 //!
@@ -54,6 +55,7 @@ pub mod entropy;
 pub mod piv;
 #[cfg(feature = "pki")]
 pub mod pki;
+pub mod sharing;
 #[cfg(feature = "verification")]
 pub mod verification;
 
@@ -77,6 +79,7 @@ pub use piv::YubikeyAttestSlotAction;
 pub use piv::{PivReadCertificateAction, PivSignAction};
 #[cfg(feature = "pki")]
 pub use pki::{GenerateCsrAction, IssueCertificateAction};
+pub use sharing::{CombineSharesAction, SplitSecretAction};
 #[cfg(feature = "verification")]
 pub use verification::{
     CheckValueAction, ClockCheckAction, ConfirmAction, HostInfoScope, MachineInfoAction,
@@ -111,6 +114,11 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
     // Human-entropy gathering has no optional dependencies, so it is always
     // available rather than gated behind a feature.
     registry.register(Arc::new(GatherEntropyAction));
+
+    // The arithmetic is dependency-free and the randomness comes from
+    // whichever backend the step names, so sharing needs no feature either.
+    registry.register(Arc::new(SplitSecretAction));
+    registry.register(Arc::new(CombineSharesAction));
 
     #[cfg(feature = "crypto")]
     {

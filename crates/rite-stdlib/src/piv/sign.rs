@@ -106,7 +106,7 @@ impl Action for PivSignAction {
             // Canonical key id from the parsed slot; assembling the `piv:`
             // prefix from the raw hint would double it for prefixed hints.
             let key_id = rite_piv::ops::key_id_for_piv_slot(piv_slot)?;
-            sign_backend.sign(&key_id, &data, sign_algorithm)?
+            sign_backend.sign(&key_id, data, sign_algorithm)?
         };
 
         let signature_fingerprint = compute_fingerprint(&signature);

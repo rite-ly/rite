@@ -1057,6 +1057,130 @@ sections:
         drop(cmd_tx);
     }
 
+    /// Produces opened content, so a test can watch it reach the run
+    /// directory through the same path as any other artifact.
+    struct OpensContent;
+
+    impl Action for OpensContent {
+        fn action_type(&self) -> ActionType {
+            ActionType::Attest
+        }
+
+        fn execute(
+            &self,
+            step: &StepInfo,
+            _ctx: &HandlerContext,
+            _params: &serde_json::Value,
+            _reporter: &mut Reporter<'_>,
+            _backend: Option<&mut dyn Backend>,
+        ) -> Result<StepResult, ActionError> {
+            let produces = step.produces.clone().expect("step creates");
+            Ok(StepResult::completed_with_artifact(
+                "opened",
+                produces,
+                crate::actions::ArtifactValue::Secret(secrecy::SecretBox::new(Box::new(
+                    b"the recovery phrase".to_vec(),
+                ))),
+            ))
+        }
+    }
+
+    /// A ceremony whose one step creates `opened`, declared as an output.
+    fn ceremony_writing_opened_content() -> Ceremony {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles:
+  participant:
+    person: "Alice"
+output:
+  opened:
+    type: document
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      open:
+        action: attest
+        silent: true
+        with:
+          statement: "I confirm."
+        creates: opened
+"#;
+        rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("resolve")
+    }
+
+    /// Run `ceremony` to completion, acknowledging every prompt, and return
+    /// the run's result with the facts it emitted.
+    fn run_acknowledging_prompts(
+        ceremony: Ceremony,
+        output_config: OutputConfig,
+    ) -> (Result<ExecutionSummary, ExecutionError>, Vec<StepFact>) {
+        let mut registry = ActionRegistry::new();
+        registry.register(Arc::new(OpensContent));
+
+        let (cmd_tx, cmd_rx) = unbounded::<UiCommand>();
+        let (event_tx, event_rx) = unbounded::<ExecEvent>();
+        let sink: Box<dyn TranscriptSink> = Box::new(InMemorySink::new());
+
+        let executor = Executor::new(
+            ceremony,
+            registry,
+            BackendRegistry::new(),
+            output_config,
+            false,
+            StartupSnapshot::placeholder(),
+        );
+
+        let frontend = std::thread::spawn({
+            let cmd_tx = cmd_tx.clone();
+            move || {
+                let mut facts = Vec::new();
+                while let Ok(event) = event_rx.recv() {
+                    match event {
+                        ExecEvent::Fact { fact, .. } => facts.push(fact),
+                        ExecEvent::AwaitPrompt { prompt_id, .. } => {
+                            let _ = cmd_tx.send(UiCommand::PromptResponse {
+                                prompt_id,
+                                response: crate::protocol::Response::Acknowledge,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                facts
+            }
+        });
+
+        let result = executor.run(&cmd_rx, &event_tx, sink);
+        drop(event_tx);
+        drop(cmd_tx);
+        let facts = frontend.join().expect("frontend join");
+        (result, facts)
+    }
+
+    #[test]
+    fn opened_content_declared_as_an_output_is_written() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = OutputConfig::new(dir.path().to_path_buf());
+        let (result, facts) = run_acknowledging_prompts(ceremony_writing_opened_content(), config);
+
+        let summary = result.expect("ceremony runs");
+        assert_eq!(summary.steps_completed, 1);
+        let written = facts.iter().find_map(|f| match f {
+            StepFact::ArtifactWritten { name, path, .. } => Some((name.clone(), path.clone())),
+            _ => None,
+        });
+        let (name, path) = written.expect("the artifact is written");
+        assert_eq!(name, "opened");
+        assert_eq!(
+            std::fs::read(dir.path().join(path)).expect("read artifact"),
+            b"the recovery phrase"
+        );
+    }
+
     #[test]
     fn run_stamps_every_fact_from_the_injected_clock() {
         use crate::test_support::{FixedClock, fixed_test_time};

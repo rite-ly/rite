@@ -15,6 +15,7 @@ use rite_stdlib::{
     EncryptDataAction, ExportPublicAction, GatherEntropyAction, ImportKeyAction, MachineInfoAction,
     MockBackend, OralReadbackAction, UnwrapKeyAction, WrapKeyAction,
 };
+use secrecy::ExposeSecret;
 
 fn make_state() -> ExecutionState {
     ExecutionState::new(HashMap::new(), HashMap::new(), HashMap::new(), false)
@@ -843,9 +844,18 @@ fn decrypt_data_recovers_what_encrypt_data_sealed() {
             .expect("decrypt_data completes")
     };
 
-    match produced(&result.artifacts, "recovered") {
-        ArtifactValue::Bytes(bytes) => assert_eq!(bytes.as_slice(), b"the recovery phrase"),
-        other => panic!("decrypt_data must produce Bytes, got {other:?}"),
+    // Opened content is the wiped, redacted variant, not plain bytes. The
+    // `Debug` form is what a panic message or a log line would print of it.
+    let recovered = produced(&result.artifacts, "recovered");
+    assert!(
+        !format!("{recovered:?}").contains("recovery"),
+        "the debug form must not print opened content: {recovered:?}"
+    );
+    match recovered {
+        ArtifactValue::Secret(bytes) => {
+            assert_eq!(bytes.expose_secret().as_slice(), b"the recovery phrase");
+        }
+        other => panic!("decrypt_data must produce Secret, got {other:?}"),
     }
 }
 

@@ -74,7 +74,7 @@ impl Action for SignDataAction {
 
         let sign_backend =
             require_sign_backend(backend, key.backend_name, &key_ref.display_name())?;
-        let signature = sign_backend.sign(key.key_id, &data, algorithm)?;
+        let signature = sign_backend.sign(key.key_id, data, algorithm)?;
 
         let signature_fingerprint = compute_fingerprint(&signature);
         // The step's completion message is shown on its own, so it carries the

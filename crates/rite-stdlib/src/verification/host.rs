@@ -202,33 +202,17 @@ fn collect_security_features() -> Hardening {
 
 // Apple Silicon has always-on hardware memory encryption via the Secure
 // Enclave. DART (per-device IOMMU) is also always active on Apple Silicon.
-// Intel Macs have neither; the T2 chip encrypts the SSD only, not RAM.
 #[cfg(target_os = "macos")]
 fn collect_security_features() -> Hardening {
-    let apple_silicon = std::env::consts::ARCH == "aarch64";
-    let (ram_encryption, dma_protection) = if apple_silicon {
-        (
-            FeatureCheck::with_detail(
-                FeatureStatus::Active,
-                "Apple Silicon: always-on hardware encryption via Secure Enclave",
-            ),
-            FeatureCheck::with_detail(
-                FeatureStatus::Active,
-                "Apple Silicon: DART per-device IOMMU always on",
-            ),
-        )
-    } else {
-        (
-            FeatureCheck::with_detail(
-                FeatureStatus::Inactive,
-                "Intel Mac: T2 chip encrypts SSD only, not RAM",
-            ),
-            FeatureCheck::with_detail(FeatureStatus::Unavailable, "Intel Mac"),
-        )
-    };
     Hardening {
-        ram_encryption,
-        dma_protection,
+        ram_encryption: FeatureCheck::with_detail(
+            FeatureStatus::Active,
+            "Apple Silicon: always-on hardware encryption via Secure Enclave",
+        ),
+        dma_protection: FeatureCheck::with_detail(
+            FeatureStatus::Active,
+            "Apple Silicon: DART per-device IOMMU always on",
+        ),
         freed_page_zeroing: FeatureCheck::with_detail(FeatureStatus::NotApplicable, "macOS"),
     }
 }

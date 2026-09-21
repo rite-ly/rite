@@ -53,9 +53,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15-intel
-            rust_target: x86_64-apple-darwin
-            rite_target: darwin-amd64
           - os: macos-latest
             rust_target: aarch64-apple-darwin
             rite_target: darwin-arm64
@@ -361,7 +358,7 @@ jobs:
           ARTS="$(pwd)/artifacts"
 
           # Unix: rite as tarball, rite-ls as flat binary
-          for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+          for target in linux-amd64 linux-arm64 darwin-arm64; do
             tmp=$(mktemp -d)
             cp "$ARTS/rite-${target}/rite" "$tmp/rite"
             chmod +x "$tmp/rite"

@@ -331,6 +331,8 @@ impl SpanMap {
             | ResolveError::InvalidWithValue { step, .. }
             | ResolveError::MissingReadsInput { step, .. }
             | ResolveError::AmbiguousReadsInput { step, .. }
+            | ResolveError::TooFewReadsInputs { step, .. }
+            | ResolveError::ReadsInputShape { step, .. }
             | ResolveError::InvalidRetryAttempts { step }
             | ResolveError::ArtifactNeverProduced { step, .. } => self.steps.get(step).copied(),
             ResolveError::UndeclaredBackend { step, backend } => self

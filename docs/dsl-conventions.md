@@ -29,6 +29,11 @@ artifact holds.
 | `role`, `reads`, `creates`, `act` | one reference  | resolved by `rite check`            |
 | everything else                   | prose          | rendered as written, never parsed   |
 
+A named `reads:` input holds one reference, or a list of them where the
+action takes as many as the ceremony gives it, as `combine_shares` takes its
+`shares:`. Which shape an input takes is the action's, and `rite check`
+reports the other.
+
 `rite script` renders a blank protocol before parameters have values, so a
 `description` prints `${param.region}` rather than the value the run uses.
 

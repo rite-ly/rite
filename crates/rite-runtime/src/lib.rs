@@ -43,7 +43,7 @@ mod transcript_sink;
 pub use executor::ExecutionError;
 
 // Actions
-pub use actions::ArtifactValue;
+pub use actions::{ArtifactValue, Share, ShareSet};
 
 // Backend registry (traits live in `rite-sdk`, not here)
 pub use backend::{BackendFactory, BackendRegistry};
@@ -104,4 +104,6 @@ pub use expressions::{
 };
 
 // Artifact resolution (used by action implementors).
-pub use artifact_resolver::{BackendKeyMeta, resolve_artifact_bytes, resolve_backend_key};
+pub use artifact_resolver::{
+    BackendKeyMeta, resolve_artifact_bytes, resolve_backend_key, resolve_share,
+};

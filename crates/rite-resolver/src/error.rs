@@ -276,6 +276,41 @@ pub enum ResolveError {
         found: String,
     },
 
+    /// The action takes a list under one of its inputs and the step gives
+    /// too few entries, or no list at all.
+    #[error(
+        "Step '{step}': action '{action}' input '{name}' is a list of at least {at_least} \
+         references; found {found}"
+    )]
+    TooFewReadsInputs {
+        /// The step ID.
+        step: StepId,
+        /// The action whose list is short.
+        action: ActionType,
+        /// The input that holds the list.
+        name: &'static str,
+        /// Fewest entries the action accepts.
+        at_least: usize,
+        /// What the step gives instead: `none`, or how many.
+        found: String,
+    },
+
+    /// A `reads:` input holds a list where the action takes one reference,
+    /// or one reference where it takes a list.
+    #[error("Step '{step}': action '{action}' input '{name}' holds {expected}; found {found}")]
+    ReadsInputShape {
+        /// The step ID.
+        step: StepId,
+        /// The action whose contract sets the shape.
+        action: ActionType,
+        /// The input.
+        name: String,
+        /// `one reference` or `a list of references`.
+        expected: &'static str,
+        /// The YAML type found instead.
+        found: &'static str,
+    },
+
     /// Step `retry: { attempts: N }` has a zero attempt budget, which can never
     /// run the step. Use `retry: never` to forbid retries instead.
     #[error(
@@ -350,8 +385,8 @@ pub enum ResolveError {
 
     /// A named entry under `reads:` holds a value of the wrong YAML type.
     #[error(
-        "Expected a string holding an artifact reference in '{context}' field '{field}', \
-         found {found}"
+        "Expected a string holding an artifact reference, or a list of them, in '{context}' \
+         field '{field}', found {found}"
     )]
     ReadsInputNotAString {
         /// Where the value appears.

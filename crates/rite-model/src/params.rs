@@ -12,7 +12,7 @@
 //! checking, and that question is answered by the action handler instead, at
 //! the point where a backend exists to ask.
 
-use crate::types::{ActionType, CertProfile};
+use crate::types::{ActionType, CertProfile, SharingScheme};
 use rite_sdk::{KeyAlgorithm, KeyUsages, SignAlgorithm, WrapScheme};
 
 /// A `with:` value an action cannot accept.
@@ -72,6 +72,38 @@ pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
                 Err(_) => Err(format!("unknown wrapping scheme '{name}'")),
             })
         }
+        ActionType::SplitSecret => {
+            let mut errors = named_value(with, "scheme", |name| {
+                name.parse::<SharingScheme>()
+                    .map(|_| ())
+                    .map_err(|e| format!("unknown sharing scheme '{name}'; {e}"))
+            });
+            // The limit is the named scheme's, or the default's when the
+            // scheme is absent or not a literal; a scheme that fails to parse
+            // is reported above and the counts are still checked against
+            // something.
+            let scheme = with
+                .get("scheme")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|name| name.parse::<SharingScheme>().ok())
+                .unwrap_or(SharingScheme::RiteSssV1);
+            let max = u64::from(scheme.max_shares());
+            errors.extend(share_count(with, "threshold", max));
+            errors.extend(share_count(with, "shares", max));
+            if let (Some(threshold), Some(shares)) = (
+                with.get("threshold").and_then(serde_json::Value::as_u64),
+                with.get("shares").and_then(serde_json::Value::as_u64),
+            ) && shares < threshold
+            {
+                errors.push(ParamError {
+                    message: format!(
+                        "'shares' is {shares} and 'threshold' is {threshold}; fewer shares than \
+                         the threshold could never reconstruct the secret"
+                    ),
+                });
+            }
+            errors
+        }
         ActionType::UnwrapKey | ActionType::ImportKey => {
             let mut errors = key_identity(with, "expect_key");
             errors.extend(named_value(with, "algorithm", |name| {
@@ -94,8 +126,26 @@ pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
         | ActionType::PivSign
         | ActionType::YubikeyAttestSlot
         | ActionType::DecryptData
+        | ActionType::CombineShares
         | ActionType::GenerateCsr => Vec::new(),
     }
+}
+
+/// A share count or threshold: an integer from 2 to the scheme's limit.
+///
+/// One is not a split. An absent field is deferred, as everywhere here; a
+/// present one that is not an integer is wrong whatever it would have parsed
+/// to.
+fn share_count(with: &serde_json::Value, field: &'static str, max: u64) -> Vec<ParamError> {
+    let Some(value) = with.get(field) else {
+        return Vec::new();
+    };
+    let message = match value.as_u64() {
+        Some(n) if (2..=max).contains(&n) => return Vec::new(),
+        Some(n) => format!("'{field}' is {n}; it must be from 2 to {max}"),
+        None => format!("'{field}' must be an integer from 2 to {max}, found {value}"),
+    };
+    vec![ParamError { message }]
 }
 
 /// The container a step names, checked against the vocabulary rather than left
@@ -408,5 +458,54 @@ mod tests {
         assert!(
             sole(ActionType::GenerateKey, &json!({"algorithm": 4096})).contains("must be a string")
         );
+    }
+
+    #[test]
+    fn split_secret_counts_are_bounded_by_the_scheme() {
+        assert!(
+            check(
+                ActionType::SplitSecret,
+                &json!({"threshold": 2, "shares": 100})
+            )
+            .is_empty()
+        );
+        assert!(
+            sole(
+                ActionType::SplitSecret,
+                &json!({"threshold": 2, "shares": 101})
+            )
+            .contains("from 2 to 100")
+        );
+        assert!(
+            sole(
+                ActionType::SplitSecret,
+                &json!({"threshold": 1, "shares": 3})
+            )
+            .contains("from 2 to 100")
+        );
+        assert!(
+            sole(
+                ActionType::SplitSecret,
+                &json!({"threshold": 4, "shares": 3})
+            )
+            .contains("fewer shares than the threshold")
+        );
+        assert!(
+            sole(
+                ActionType::SplitSecret,
+                &json!({"threshold": "two", "shares": 3})
+            )
+            .contains("must be an integer")
+        );
+        assert!(
+            sole(
+                ActionType::SplitSecret,
+                &json!({"scheme": "sss/v9", "threshold": 2, "shares": 3})
+            )
+            .contains("unknown sharing scheme")
+        );
+        // A `${param}` threshold is absent from the literal projection and is
+        // deferred, not reported.
+        assert!(check(ActionType::SplitSecret, &json!({"shares": 3})).is_empty());
     }
 }

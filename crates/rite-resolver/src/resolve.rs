@@ -14,8 +14,8 @@ use rite_model::expression::{
 };
 use rite_model::{
     Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind,
-    MaterialSource, Metadata, Output, OutputId, ParamId, Parameter, PostCeremonyDuty, RetryPolicy,
-    Role, RoleId, Section, SectionId, Step, StepId, StepInputs, SymbolTable,
+    MaterialSource, Metadata, NamedInput, Output, OutputId, ParamId, Parameter, PostCeremonyDuty,
+    RetryPolicy, Role, RoleId, Section, SectionId, Step, StepId, StepInputs, SymbolTable,
 };
 use rite_model::{ActionType, BackendUsage, DutyType, ParameterType};
 use std::collections::{HashMap, HashSet};
@@ -681,27 +681,70 @@ impl ResolveContext {
             }
         }
 
+        let quote = |keys: &[&str]| {
+            keys.iter()
+                .map(|key| format!("'{key}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let found = |present: &[&str]| {
+            if present.is_empty() {
+                "none".to_string()
+            } else {
+                quote(present)
+            }
+        };
+
         for group in contract.exactly_one_of {
             let present: Vec<&str> = group.iter().copied().filter(|key| names(key)).collect();
             if present.len() == 1 {
                 continue;
             }
-            let quote = |keys: &[&str]| {
-                keys.iter()
-                    .map(|key| format!("'{key}'"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
             self.add_error(ResolveError::AmbiguousReadsInput {
                 step: id.clone(),
                 action: step.action,
                 alternatives: quote(group),
-                found: if present.is_empty() {
-                    "none".to_string()
-                } else {
-                    quote(&present)
-                },
+                found: found(&present),
             });
+        }
+
+        // Each input has one shape under the contract: a list where the
+        // action takes a list, one reference everywhere else. A handler asks
+        // for the shape it expects, so the other would read as absent.
+        let inputs = step.reads.as_ref().and_then(|r| r.as_object());
+        for (key, value) in inputs.into_iter().flatten() {
+            let takes_list = contract.is_list(key);
+            if takes_list != value.is_array() {
+                self.add_error(ResolveError::ReadsInputShape {
+                    step: id.clone(),
+                    action: step.action,
+                    name: key.clone(),
+                    expected: if takes_list {
+                        "a list of references"
+                    } else {
+                        "one reference"
+                    },
+                    found: value_type_name(value),
+                });
+            }
+        }
+
+        // The count is a floor, with no rule on which entries are present:
+        // a drill brings two of three shares, and which two is the
+        // ceremony's business.
+        for list in contract.lists {
+            let entries = inputs
+                .and_then(|m| m.get(list.name))
+                .map(|v| v.as_array().map_or(1, Vec::len));
+            if entries.is_none_or(|n| n < list.at_least) {
+                self.add_error(ResolveError::TooFewReadsInputs {
+                    step: id.clone(),
+                    action: step.action,
+                    name: list.name,
+                    at_least: list.at_least,
+                    found: entries.map_or_else(|| "none".to_string(), |n| n.to_string()),
+                });
+            }
         }
     }
 
@@ -894,22 +937,50 @@ impl ResolveContext {
             }
             serde_json::Value::Object(map) => {
                 // Named inputs: reads: { key_to_wrap: "...", wrapping_key: "..." }
+                // A value is one reference or a list of them; whether the
+                // action takes the shape given is the contract's check.
                 let mut refs = Vec::new();
                 let mut named = HashMap::new();
 
                 for (key, value) in map {
                     let field = format!("reads.{key}");
-                    if let Some(s) = value.as_str() {
-                        if let Some(artifact_ref) = self.resolve_artifact_ref(s, step_id, &field) {
-                            refs.push(artifact_ref.clone());
-                            named.insert(key.clone(), artifact_ref);
+                    match value {
+                        serde_json::Value::String(s) => {
+                            if let Some(artifact_ref) =
+                                self.resolve_artifact_ref(s, step_id, &field)
+                            {
+                                refs.push(artifact_ref.clone());
+                                named.insert(key.clone(), NamedInput::One(artifact_ref));
+                            }
                         }
-                    } else {
-                        self.add_error(ResolveError::ReadsInputNotAString {
-                            context: ReferenceContext::Step(step_id.clone()),
-                            field,
-                            found: value_type_name(value),
-                        });
+                        serde_json::Value::Array(items) => {
+                            let mut many = Vec::with_capacity(items.len());
+                            for (i, item) in items.iter().enumerate() {
+                                let field = format!("{field}[{i}]");
+                                let Some(s) = item.as_str() else {
+                                    self.add_error(ResolveError::ReadsInputNotAString {
+                                        context: ReferenceContext::Step(step_id.clone()),
+                                        field,
+                                        found: value_type_name(item),
+                                    });
+                                    continue;
+                                };
+                                if let Some(artifact_ref) =
+                                    self.resolve_artifact_ref(s, step_id, &field)
+                                {
+                                    refs.push(artifact_ref.clone());
+                                    many.push(artifact_ref);
+                                }
+                            }
+                            named.insert(key.clone(), NamedInput::Many(many));
+                        }
+                        other => {
+                            self.add_error(ResolveError::ReadsInputNotAString {
+                                context: ReferenceContext::Step(step_id.clone()),
+                                field,
+                                found: value_type_name(other),
+                            });
+                        }
                     }
                 }
 
@@ -2193,5 +2264,100 @@ sections:
 
         let result = resolve_ceremony(ceremony, None);
         assert!(result.is_ok(), "Errors: {:?}", result.errors);
+    }
+
+    /// A `combine_shares` step with the given `reads:` value, resolved on its
+    /// own, with `shares` a material so the references resolve.
+    fn resolve_combine_with_reads(reads: serde_json::Value) -> ResolveResult<Ceremony> {
+        let mut ceremony = minimal_ceremony();
+        ceremony.materials.insert(
+            "shares".to_string(),
+            schema::Material::Digital {
+                title: None,
+                description: None,
+                path: None,
+            },
+        );
+        let mut step = make_step_body();
+        step.action = ActionType::CombineShares;
+        step.reads = Some(reads);
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("combine".to_string(), step);
+        resolve_ceremony(ceremony, None)
+    }
+
+    fn reads_errors(result: &ResolveResult<Ceremony>) -> Vec<String> {
+        result
+            .errors
+            .iter()
+            .filter_map(|e| match e {
+                ResolveError::TooFewReadsInputs {
+                    name,
+                    at_least,
+                    found,
+                    ..
+                } => Some(format!("{name} {at_least} {found}")),
+                ResolveError::ReadsInputShape {
+                    name,
+                    expected,
+                    found,
+                    ..
+                } => Some(format!("{name} {expected} {found}")),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn combine_shares_takes_a_list_of_at_least_two_shares() {
+        use serde_json::json;
+        assert_eq!(
+            reads_errors(&resolve_combine_with_reads(json!({
+                "shares": ["${artifact.shares.share_1}"]
+            }))),
+            ["shares 2 1"]
+        );
+        assert_eq!(
+            reads_errors(&resolve_combine_with_reads(json!({}))),
+            ["shares 2 none"]
+        );
+        // One reference where the list goes, and a list where one goes.
+        assert_eq!(
+            reads_errors(&resolve_combine_with_reads(json!({
+                "shares": "${artifact.shares.share_1}"
+            }))),
+            ["shares a list of references string", "shares 2 1"]
+        );
+        assert_eq!(
+            reads_errors(&resolve_combine_with_reads(json!({
+                "shares": ["${artifact.shares.share_1}", "${artifact.shares.share_2}"],
+                "extra": ["${artifact.shares.share_3}"]
+            }))),
+            ["extra one reference array"]
+        );
+        // Which shares are present is the ceremony's business, and they
+        // reach the handler in the order written.
+        let result = resolve_combine_with_reads(json!({
+            "shares": ["${artifact.shares.share_5}", "${artifact.shares.share_2}"]
+        }));
+        assert!(reads_errors(&result).is_empty());
+        let ceremony = result.value.expect("resolves");
+        let step = ceremony
+            .execution_plan
+            .iter()
+            .find(|s| s.id.as_str() == "combine")
+            .unwrap();
+        let inputs = step.reads_resolved.as_ref().unwrap();
+        let shares = inputs.get_many("shares").unwrap();
+        let properties: Vec<Option<&str>> = shares.iter().map(ArtifactRef::property).collect();
+        assert_eq!(properties, [Some("share_5"), Some("share_2")]);
+        assert!(
+            inputs.get("shares").is_none(),
+            "a list is not one reference"
+        );
     }
 }

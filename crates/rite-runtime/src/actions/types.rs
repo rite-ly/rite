@@ -56,6 +56,17 @@ pub enum ArtifactValue {
     /// wrapper redacts its `Debug` output and hands the bytes out only
     /// through `expose_secret`.
     Secret(SecretBox<Vec<u8>>),
+    /// The shares of a split secret, wiped when the artifact is dropped.
+    ///
+    /// One artifact for the whole set, so the transcript and the all-subsets
+    /// check see one thing, and a step names one share as a property:
+    /// `${artifact.shares.share_2}` is the share evaluated at 2. A share is
+    /// read only through `reads:`, never rendered by an expression, since
+    /// the copy an expression makes is unwiped JSON and a prompt text is a
+    /// transcript fact. The set is not written to the run directory at all;
+    /// shares go onto paper, through a step that shows one at a time. A set
+    /// of one is how a share typed back at a recovery arrives.
+    Shares(ShareSet),
 
     /// Display text for physical item references (USB drives, tamper bags, etc.).
     /// Used in messages and prompts when referencing physical objects.
@@ -63,6 +74,113 @@ pub enum ArtifactValue {
 
     /// X.509 certificate. Stored as DER; displayed and serialized as PEM.
     Certificate(CertificateDer),
+}
+
+/// The shares of one split, as each custodian receives them.
+///
+/// The runtime holds the parts and nothing of the arithmetic: what it needs
+/// is to hand one share to a step that names it under `reads:`, and to say
+/// how many there are. A share has no canonical byte form here; laying it
+/// out is a container's job, in a file or on paper. Each share's `y` is
+/// wiped when the set is dropped, and `Debug` prints counts only.
+pub struct ShareSet {
+    threshold: u8,
+    shares: Vec<Share>,
+}
+
+/// One share of a split: the threshold of its set, the `x` it was
+/// evaluated at (from 1) and one `y` byte per byte of the secret.
+pub struct Share {
+    threshold: u8,
+    index: u8,
+    y: SecretBox<Vec<u8>>,
+}
+
+impl Share {
+    /// A share from its parts.
+    pub fn new(threshold: u8, index: u8, y: Vec<u8>) -> Self {
+        Self {
+            threshold,
+            index,
+            y: SecretBox::new(Box::new(y)),
+        }
+    }
+
+    /// How many shares reconstruct the secret this one belongs to.
+    pub fn threshold(&self) -> u8 {
+        self.threshold
+    }
+
+    /// The `x` this share was evaluated at, from 1.
+    pub fn index(&self) -> u8 {
+        self.index
+    }
+
+    /// The `y` values, borrowed.
+    pub fn y(&self) -> &[u8] {
+        self.y.expose_secret()
+    }
+}
+
+impl std::fmt::Debug for Share {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Share(index={}, threshold={}, {} bytes)",
+            self.index,
+            self.threshold,
+            self.y.expose_secret().len()
+        )
+    }
+}
+
+impl ShareSet {
+    /// A set of `shares`, index 1 first, of which `threshold` reconstruct
+    /// the secret.
+    pub fn new(threshold: u8, shares: impl IntoIterator<Item = Share>) -> Self {
+        Self {
+            threshold,
+            shares: shares.into_iter().collect(),
+        }
+    }
+
+    /// How many shares reconstruct the secret.
+    pub fn threshold(&self) -> u8 {
+        self.threshold
+    }
+
+    /// How many shares there are.
+    pub fn count(&self) -> u8 {
+        u8::try_from(self.shares.len()).unwrap_or(u8::MAX)
+    }
+
+    /// The share with this index, from 1.
+    pub fn share(&self, index: u8) -> Option<&Share> {
+        self.shares.iter().find(|share| share.index == index)
+    }
+
+    /// The one share of a set that holds exactly one, as a typed-back share
+    /// arrives; `None` for a set of several, which has to be named.
+    pub fn only(&self) -> Option<&Share> {
+        match self.shares.as_slice() {
+            [share] => Some(share),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for ShareSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ShareSet({}-of-{}, {} bytes each)",
+            self.threshold,
+            self.shares.len(),
+            self.shares
+                .first()
+                .map_or(0, |share| share.y.expose_secret().len())
+        )
+    }
 }
 
 impl std::fmt::Display for ArtifactValue {
@@ -132,6 +250,7 @@ impl std::fmt::Display for ArtifactValue {
                 let len = bytes.expose_secret().len();
                 write!(f, "Secret({len} bytes)")
             }
+            ArtifactValue::Shares(set) => write!(f, "{set:?}"),
             ArtifactValue::Text(text) => {
                 write!(f, "Text({text})")
             }
@@ -285,6 +404,13 @@ impl ArtifactValue {
                 mime_type: Some("application/octet-stream".to_string()),
                 extension: "bin",
             }),
+            // A file holding every share is the secret in the clear under
+            // another name. Shares leave the machine one at a time, on paper.
+            ArtifactValue::Shares(_) => Err(
+                "A share set is not written to disk; each share is shown to its custodian \
+                 by a step that reads it"
+                    .to_string(),
+            ),
             ArtifactValue::Text(text) => Ok(SerializedArtifact {
                 bytes: text.as_bytes().to_vec(),
                 mime_type: Some("text/plain".to_string()),
@@ -409,6 +535,26 @@ mod tests {
             result.unwrap_err().contains("Invalid format 'json'"),
             "Error message should mention invalid format"
         );
+    }
+
+    /// A file of every share would be the secret under another name, so
+    /// `creates:` on a split is held in memory and never serialized.
+    #[test]
+    fn a_share_set_is_never_written_to_disk() {
+        let set = ShareSet::new(
+            2,
+            [
+                Share::new(2, 1, vec![0xCD; 8]),
+                Share::new(2, 2, vec![0xEF; 8]),
+            ],
+        );
+        let shares = ArtifactValue::Shares(set);
+        for format in [None, Some("bin"), Some("pem")] {
+            let error = shares
+                .serialize(format)
+                .expect_err("shares have no file form");
+            assert!(error.contains("not written to disk"), "{error}");
+        }
     }
 
     #[test]

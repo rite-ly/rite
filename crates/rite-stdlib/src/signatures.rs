@@ -131,6 +131,9 @@ pub fn resolve_public_key<S: BuildHasher>(
         ArtifactValue::EncryptedData(_) => Err(BackendError::InvalidKeyFormat(format!(
             "artifact '{artifact_id}' is encrypted content, not a public key"
         ))),
+        ArtifactValue::Shares(_) => Err(BackendError::InvalidKeyFormat(format!(
+            "artifact '{artifact_id}' holds shares of a secret, not a public key"
+        ))),
     }
 }
 
@@ -177,6 +180,9 @@ pub fn resolve_certificate<S: BuildHasher>(
         ))),
         ArtifactValue::EncryptedData(_) => Err(BackendError::InvalidKeyFormat(format!(
             "artifact '{artifact_id}' is encrypted content, not a certificate"
+        ))),
+        ArtifactValue::Shares(_) => Err(BackendError::InvalidKeyFormat(format!(
+            "artifact '{artifact_id}' holds shares of a secret, not a certificate"
         ))),
     }
 }

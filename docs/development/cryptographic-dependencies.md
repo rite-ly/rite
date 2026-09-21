@@ -44,6 +44,30 @@ OpenSSL is the most widely deployed implementation to agree with.
 
 The cost is a C dependency and its build requirements.
 
+## Secret sharing
+
+`rite-stdlib/src/sharing/gf256.rs` implements Shamir secret sharing over
+GF(2^8). It is a primitive by the test above, since the arithmetic touches
+the secret, and it is not taken from a provider because none offers it:
+OpenSSL has no secret sharing, and neither does any device Rite talks to.
+
+The module is one file with the textbook arithmetic, not a table-driven or
+constant-time variant. A ceremony splits one secret once on an air-gapped
+machine, so the property that matters is that the code can be read in full.
+The scheme is stated in the module (Rijndael polynomial, one polynomial per
+byte, a share is its threshold, its `x` from 1 and one `y` per byte) and named
+in the transcript, so any GF(256) library reconstructs a secret without this
+code. How a share is laid out in a file or on paper is a container's
+business, in `sharing/wire.rs` and the paper encoding.
+
+The module draws no randomness. The polynomial coefficients come from the
+step's backend through `RandomBackend`, so the provider answers for the one
+input whose quality matters.
+
+It is a module rather than a crate. A crate in this workspace hides an
+optional dependency behind a feature; this code has none and is always in the
+binary.
+
 ## Device bindings are not providers
 
 `cryptoki` in `rite-pkcs11`, and `yubikey` in `rite-piv`, sit outside the

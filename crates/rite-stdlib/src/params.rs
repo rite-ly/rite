@@ -390,6 +390,32 @@ pub struct EncryptDataParams {
     pub scheme: Option<rite_sdk::WrapScheme>,
 }
 
+/// Params for `split_secret` action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SplitSecretParams {
+    /// The sharing scheme, defaulting to `rite-sss/v1`, the only one this
+    /// build implements. Named so the transcript says which one was used.
+    #[serde(default)]
+    pub scheme: Option<rite_model::SharingScheme>,
+    /// How many shares reconstruct the secret, from 2 to the scheme's limit.
+    pub threshold: u8,
+    /// How many shares to make, from `threshold` to the scheme's limit, 100
+    /// for `rite-sss/v1`. Every subset of `threshold` shares is checked
+    /// before the step completes, so a split with more than 100,000 such
+    /// subsets is refused as well.
+    pub shares: u8,
+}
+
+impl Default for SplitSecretParams {
+    fn default() -> Self {
+        Self {
+            scheme: None,
+            threshold: 2,
+            shares: 2,
+        }
+    }
+}
+
 /// A key policy as the transcript records it.
 ///
 /// One renderer, because three actions record a policy and an auditor
@@ -559,6 +585,10 @@ mod schema_drift_tests {
             (
                 ActionType::VerifySignature,
                 serde_keys(VerifySignatureParams::default()),
+            ),
+            (
+                ActionType::SplitSecret,
+                serde_keys(SplitSecretParams::default()),
             ),
             #[cfg(feature = "pki")]
             (

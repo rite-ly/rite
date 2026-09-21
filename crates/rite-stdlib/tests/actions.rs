@@ -5,15 +5,18 @@
 
 use std::collections::HashMap;
 
-use rite_model::{ArtifactId, ArtifactRef, StepFact, StepId, StepInputs};
+use rite_model::{ArtifactId, ArtifactRef, NamedInput, StepFact, StepId, StepInputs};
 use rite_runtime::{
-    Action, ArtifactValue, ExecutionState, Response, StepInfo, test_support::ReporterHarness,
+    Action, ArtifactValue, ExecutionState, Response, Share, ShareSet, StepInfo,
+    test_support::ReporterHarness,
 };
 use rite_sdk::{KeyAlgorithm, KeyPolicy, KeySpec, KeyStoreBackend};
+use rite_stdlib::sharing::{gf256, wire};
 use rite_stdlib::{
-    AttestAction, CheckValueAction, ClockCheckAction, ConfirmAction, DecryptDataAction,
-    EncryptDataAction, ExportPublicAction, GatherEntropyAction, ImportKeyAction, MachineInfoAction,
-    MockBackend, OralReadbackAction, UnwrapKeyAction, WrapKeyAction,
+    AttestAction, CheckValueAction, ClockCheckAction, CombineSharesAction, ConfirmAction,
+    DecryptDataAction, EncryptDataAction, ExportPublicAction, GatherEntropyAction, ImportKeyAction,
+    MachineInfoAction, MockBackend, OralReadbackAction, SplitSecretAction, UnwrapKeyAction,
+    WrapKeyAction,
 };
 use secrecy::ExposeSecret;
 
@@ -227,10 +230,10 @@ fn step_named(id: &str, produces: &str, pairs: &[(&str, ArtifactId)]) -> StepInf
         .map(|(name, id)| {
             (
                 (*name).to_string(),
-                ArtifactRef::Produced {
+                NamedInput::One(ArtifactRef::Produced {
                     id: id.clone(),
                     property: None,
-                },
+                }),
             )
         })
         .collect();
@@ -967,4 +970,209 @@ fn decrypt_data_refuses_a_wrapped_key() {
         error.to_string().contains("unwrap_key"),
         "the refusal must name the step that opens a wrapped key, got: {error}"
     );
+}
+
+// ── secret sharing ──────────────────────────────────────────────────────────
+
+/// A step whose named inputs are properties of one artifact, the way a drill
+/// names `${artifact.shares.share_1}`.
+///
+/// A `combine_shares` step reading the given shares, each `(artifact, property)`,
+/// as its `shares:` list in that order.
+fn combine_step(shares: &[(&ArtifactId, Option<&str>)]) -> StepInfo {
+    let list = shares
+        .iter()
+        .map(|(id, property)| ArtifactRef::Produced {
+            id: (*id).clone(),
+            property: property.map(str::to_string),
+        })
+        .collect();
+    let map = HashMap::from([("shares".to_string(), NamedInput::Many(list))]);
+    StepInfo::new(
+        StepId::new("combine"),
+        None,
+        None,
+        Some(ArtifactId::new("recovered")),
+        Some(StepInputs::Named(map)),
+    )
+}
+
+fn split(
+    backend: &mut MockBackend,
+    harness: &mut ReporterHarness,
+    secret: &[u8],
+    threshold: u8,
+    shares: u8,
+) -> (ExecutionState, ArtifactValue) {
+    let secret_id = ArtifactId::new("seed_entropy");
+    let state =
+        make_state().with_material(secret_id.clone(), ArtifactValue::Bytes(secret.to_vec()));
+    let step = step_named("split", "shares", &[("secret", secret_id)]);
+    let made = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        SplitSecretAction
+            .execute(
+                &step,
+                &ctx,
+                &serde_json::json!({ "threshold": threshold, "shares": shares }),
+                &mut reporter,
+                Some(backend),
+            )
+            .expect("split_secret completes")
+    };
+    let (_, value) = made.artifacts.into_iter().next().expect("one artifact");
+    (state, value)
+}
+
+#[test]
+fn combine_shares_recovers_what_split_secret_made() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let mut harness = ReporterHarness::new();
+    let secret = b"32 bytes of wallet seed entropy!";
+    let (state, shares) = split(&mut backend, &mut harness, secret, 2, 3);
+
+    assert!(
+        !format!("{shares:?}").contains("wallet"),
+        "the debug form must not print a share: {shares:?}"
+    );
+    let ArtifactValue::Shares(set) = &shares else {
+        panic!("split_secret must produce Shares, got {shares:?}");
+    };
+    assert_eq!((set.threshold(), set.count()), (2, 3));
+
+    // The fact says how, and nothing of what.
+    let inputs = harness
+        .facts()
+        .iter()
+        .find_map(|f| match f {
+            StepFact::BackendOperation { kind, inputs, .. } if kind == "split_secret" => {
+                Some(inputs.clone())
+            }
+            _ => None,
+        })
+        .expect("split_secret records an operation");
+    assert_eq!(inputs.get("scheme").unwrap(), "rite-sss/v1");
+    assert!(!inputs.to_string().contains("wallet"));
+    assert!(!inputs.to_string().contains("32"), "no length: {inputs}");
+
+    // Two of three, out of order, by property.
+    let shares_id = ArtifactId::new("shares");
+    let state = state.with_material(shares_id.clone(), shares);
+    let combine = combine_step(&[(&shares_id, Some("share_3")), (&shares_id, Some("share_1"))]);
+    let recovered = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(combine.id.clone());
+        CombineSharesAction
+            .execute(&combine, &ctx, &serde_json::json!({}), &mut reporter, None)
+            .expect("combine_shares completes")
+    };
+    match produced(&recovered.artifacts, "recovered") {
+        ArtifactValue::Secret(bytes) => assert_eq!(bytes.expose_secret().as_slice(), secret),
+        other => panic!("combine_shares must produce Secret, got {other:?}"),
+    }
+}
+
+#[test]
+fn combine_shares_refuses_fewer_than_the_threshold() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let mut harness = ReporterHarness::new();
+    let (state, shares) = split(&mut backend, &mut harness, &[7; 16], 3, 4);
+    let shares_id = ArtifactId::new("shares");
+    let state = state.with_material(shares_id.clone(), shares);
+    let combine = combine_step(&[(&shares_id, Some("share_2")), (&shares_id, Some("share_4"))]);
+    let ctx = state.handler_context();
+    let mut reporter = harness.reporter(combine.id.clone());
+    let error = CombineSharesAction
+        .execute(&combine, &ctx, &serde_json::json!({}), &mut reporter, None)
+        .expect_err("two shares of a 3-of-4 split are not enough");
+    assert!(error.to_string().contains("3 needed"), "{error}");
+}
+
+/// The drill's shape: two shares come back as bytes, each decoded into a set
+/// of one, and `combine_shares` names them without a property.
+#[test]
+fn shares_that_left_as_bytes_come_back_and_combine() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let mut harness = ReporterHarness::new();
+    let secret = b"32 bytes of wallet seed entropy!";
+    let (state, shares) = split(&mut backend, &mut harness, secret, 2, 3);
+    let ArtifactValue::Shares(set) = &shares else {
+        panic!("split_secret must produce Shares");
+    };
+
+    // What leaves the machine, per share: the wire layout of its parts.
+    let leave = |index: u8| {
+        let share = set.share(index).expect("share exists");
+        let math = gf256::Share::new(share.threshold(), share.index(), share.y().to_vec()).unwrap();
+        wire::encode(&math)
+    };
+    let bytes_2 = leave(2);
+    let bytes_3 = leave(3);
+    assert_eq!(
+        bytes_2.get(..3),
+        Some(&[1, 2, 2][..]),
+        "version, threshold, index"
+    );
+
+    // What comes back: each decoded into a set of one, as a typed-back share
+    // will arrive.
+    let arrive = |bytes: &[u8]| {
+        let (threshold, index, y) = wire::decode(bytes).unwrap().into_parts();
+        ArtifactValue::Shares(ShareSet::new(threshold, [Share::new(threshold, index, y)]))
+    };
+    let a = ArtifactId::new("custodian_a");
+    let b = ArtifactId::new("custodian_b");
+    let state = state
+        .with_material(a.clone(), arrive(&bytes_3))
+        .with_material(b.clone(), arrive(&bytes_2));
+    let combine = combine_step(&[(&a, None), (&b, None)]);
+
+    let recovered = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(combine.id.clone());
+        CombineSharesAction
+            .execute(&combine, &ctx, &serde_json::json!({}), &mut reporter, None)
+            .expect("combine_shares completes")
+    };
+    match produced(&recovered.artifacts, "recovered") {
+        ArtifactValue::Secret(bytes) => assert_eq!(bytes.expose_secret().as_slice(), secret),
+        other => panic!("combine_shares must produce Secret, got {other:?}"),
+    }
+}
+
+#[test]
+fn split_secret_refuses_a_split_with_too_many_subsets_to_check() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let secret_id = ArtifactId::new("s");
+    let state = make_state().with_material(secret_id.clone(), ArtifactValue::Bytes(vec![7; 16]));
+    let step = step_named("split", "shares", &[("secret", secret_id)]);
+    let mut harness = ReporterHarness::new();
+    let ctx = state.handler_context();
+    let mut reporter = harness.reporter(step.id.clone());
+    // 8-of-17 is 24,310 subsets and fine; 9-of-20 is 167,960 and is not.
+    let error = SplitSecretAction
+        .execute(
+            &step,
+            &ctx,
+            &serde_json::json!({ "threshold": 9, "shares": 20 }),
+            &mut reporter,
+            Some(&mut backend),
+        )
+        .expect_err("9-of-20 has more subsets than the step verifies");
+    assert!(error.to_string().contains("167960"), "{error}");
+    assert!(error.to_string().contains("100000"), "{error}");
+
+    // The share limit is the scheme's, checked before the subsets are counted.
+    let mut reporter = harness.reporter(step.id.clone());
+    let error = SplitSecretAction
+        .execute(
+            &step,
+            &ctx,
+            &serde_json::json!({ "threshold": 2, "shares": 101 }),
+            &mut reporter,
+            Some(&mut backend),
+        )
+        .expect_err("rite-sss/v1 makes at most 100 shares");
+    assert!(error.to_string().contains("at most 100"), "{error}");
 }

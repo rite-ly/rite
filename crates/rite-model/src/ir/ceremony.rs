@@ -351,7 +351,31 @@ pub enum StepInputs {
     /// Single artifact reference (e.g., `reads: "${artifact.keypair}"`)
     Single(ArtifactRef),
     /// Named artifact references (e.g., `reads: { key_to_wrap: "...", wrapping_key: "..." }`)
-    Named(HashMap<String, ArtifactRef>),
+    Named(HashMap<String, NamedInput>),
+}
+
+/// The value under one key of a `reads:` map: one reference, or a list of
+/// them for an action that takes as many as the ceremony gives it.
+///
+/// Which shape a key takes is the action's contract, and the resolver
+/// checks it, so a handler asks for the shape it expects and treats the
+/// other as absent.
+#[derive(Debug, Clone)]
+pub enum NamedInput {
+    /// `key: "${artifact.x}"`
+    One(ArtifactRef),
+    /// `key: ["${artifact.x}", "${artifact.y}"]`, in the order written.
+    Many(Vec<ArtifactRef>),
+}
+
+impl NamedInput {
+    /// Every reference under the key, one or many.
+    pub fn refs(&self) -> &[ArtifactRef] {
+        match self {
+            NamedInput::One(r) => std::slice::from_ref(r),
+            NamedInput::Many(refs) => refs,
+        }
+    }
 }
 
 impl StepInputs {
@@ -364,18 +388,26 @@ impl StepInputs {
     }
 
     /// Get named input references (returns `None` if this is `Single`).
-    pub fn as_named(&self) -> Option<&HashMap<String, ArtifactRef>> {
+    pub fn as_named(&self) -> Option<&HashMap<String, NamedInput>> {
         match self {
             StepInputs::Single(_) => None,
             StepInputs::Named(m) => Some(m),
         }
     }
 
-    /// Get a named input by key.
+    /// Get a named input by key, when it holds one reference.
     pub fn get(&self, key: &str) -> Option<&ArtifactRef> {
-        match self {
-            StepInputs::Single(_) => None,
-            StepInputs::Named(m) => m.get(key),
+        match self.as_named()?.get(key)? {
+            NamedInput::One(r) => Some(r),
+            NamedInput::Many(_) => None,
+        }
+    }
+
+    /// Get a named input by key, when it holds a list.
+    pub fn get_many(&self, key: &str) -> Option<&[ArtifactRef]> {
+        match self.as_named()?.get(key)? {
+            NamedInput::One(_) => None,
+            NamedInput::Many(refs) => Some(refs),
         }
     }
 }

@@ -119,6 +119,15 @@ fn evaluate_artifact_ref(ref_: &Reference, ctx: &HandlerContext) -> Result<Value
             Ok(Value::bytes(bytes.to_vec()))
         }
 
+        // A share never becomes an expression value. The value would be
+        // copied into `with:` as JSON, or into a prompt text that the
+        // transcript records; a step that shows or combines a share takes it
+        // through `reads:` and holds a borrow instead.
+        ArtifactValue::Shares(_) => Err(ExecutionError::InvalidParams(format!(
+            "'{artifact_id}' holds shares of a secret, which no expression renders; \
+             name the share under 'reads:' of a step that shows or combines it"
+        ))),
+
         // Other artifact types - delegate to resolve_artifact_bytes
         _ => {
             let bytes =
@@ -484,6 +493,30 @@ mod tests {
             artifacts: artifacts_box,
             roles: &EMPTY_ROLES,
             materials: &EMPTY_MATERIALS,
+        }
+    }
+
+    /// A share reaches a step only through `reads:`; an expression would
+    /// copy it into `with:` or a prompt that the transcript records.
+    #[test]
+    fn a_share_set_is_refused_by_every_expression_form() {
+        let share = crate::Share::new(2, 1, vec![0xAB; 4]);
+        let mut artifacts: HashMap<ArtifactId, ArtifactValue> = HashMap::new();
+        artifacts.insert(
+            ArtifactId::new("shares"),
+            ArtifactValue::Shares(crate::ShareSet::new(2, [share])),
+        );
+        let ctx = make_context(HashMap::new(), artifacts);
+
+        for text in [
+            "${artifact.shares}",
+            "${artifact.shares.share_1}",
+            "${artifact.shares | hex}",
+        ] {
+            let expr = rite_model::expression::parse_expression(text).unwrap();
+            let error = evaluate(&expr, &ctx).expect_err(text).to_string();
+            assert!(error.contains("no expression renders"), "{text}: {error}");
+            assert!(!error.contains("ab"), "{text}: {error}");
         }
     }
 

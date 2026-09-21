@@ -88,6 +88,27 @@ impl StepInfo {
         self.named_input(key)
             .ok_or_else(|| ActionError::Failed(format!("{action}: missing required input '{key}'")))
     }
+
+    /// Look up a named input that holds a list, in the order written,
+    /// returning a uniform `ActionError` when it is missing or holds one
+    /// reference instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ActionError::Failed`] if the input is missing, is not a
+    /// list, or if the step uses a single (positional) input.
+    pub fn required_named_inputs(
+        &self,
+        key: &str,
+        action: &'static str,
+    ) -> Result<&[ArtifactRef], ActionError> {
+        self.typed_inputs
+            .as_ref()
+            .and_then(|i| i.get_many(key))
+            .ok_or_else(|| {
+                ActionError::Failed(format!("{action}: missing required list input '{key}'"))
+            })
+    }
 }
 
 #[cfg(test)]

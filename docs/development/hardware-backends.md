@@ -35,8 +35,9 @@ The prebuilt distributions enable them where the system can link PC/SC:
 | Docker image (`ghcr.io/rite-ly/rite`, glibc)    | yes (`libpcsclite`)           |
 | Linux release tarballs (static musl)            | no (PC/SC cannot static-link) |
 
-So only the static musl Linux tarballs are software-only; everything else ships
-the backends. See [`docs/docker.md`](../docker.md) for the image build split.
+On supported platforms, only the static musl Linux tarballs are software-only;
+Intel macOS is not supported. See [`docs/docker.md`](../docker.md) for the image
+build split.
 
 ## Actions
 

@@ -309,6 +309,7 @@ fn openssl_cli_decrypts_a_wrap_under_a_symmetric_key() {
                 location_hint: None,
             },
             &secret,
+            None,
         )
         .unwrap();
     let payload = backend
@@ -392,6 +393,7 @@ fn rite_unwraps_what_the_openssl_cli_wrote() {
                 location_hint: None,
             },
             &secret,
+            None,
         )
         .unwrap();
 
@@ -487,6 +489,7 @@ fn the_openssl_cli_opens_content_sealed_to_a_data_key() {
                 location_hint: None,
             },
             &secret,
+            None,
         )
         .unwrap();
 

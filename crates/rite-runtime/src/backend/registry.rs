@@ -323,6 +323,7 @@ mod tests {
             &mut self,
             spec: KeySpec,
             _key_bytes: &[u8],
+            _passphrase: Option<&[u8]>,
         ) -> Result<KeyMetadata, BackendError> {
             Ok(KeyMetadata {
                 key_id: KeyId::new("mock-imported-1"),

@@ -101,6 +101,7 @@ impl KeyStoreBackend for PivCardBackend {
         &mut self,
         _spec: KeySpec,
         _key_bytes: &[u8],
+        _passphrase: Option<&[u8]>,
     ) -> Result<KeyMetadata, BackendError> {
         Err(BackendError::UnsupportedOperation(
             "PIV key import requires the 'untested' yubikey feature".to_string(),

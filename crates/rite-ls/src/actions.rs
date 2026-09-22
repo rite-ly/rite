@@ -41,6 +41,16 @@ pub static ALL: &[ActionMeta] = &[
         long: "Capture machine information (hostname, CPU, OS) as evidence. Records device identity to prove which machine ran the ceremony.",
     },
     ActionMeta {
+        name: "enter_value",
+        short: "A person types a value the ceremony records",
+        long: "A person types a value the ceremony records: a serial number read off a device, an address shown on a screen. The value becomes a text artifact under `creates:` and appears in the transcript. `format:` says what kind of value it is: text (the default), digits, alphanumeric, hex, base64, or `{ pattern: \"...\" }`; `length:` or `min_length:`/`max_length:` bound it, in characters for text and bytes for an encoding. A slip is refused at the keyboard and the rule is shown before typing. For hex or base64 the artifact is the decoded bytes.",
+    },
+    ActionMeta {
+        name: "enter_secret",
+        short: "A person types a secret the ceremony holds and never records",
+        long: "A person types a secret the ceremony holds and never records: a passphrase, a PIN. Echo is off, the artifact under `creates:` is wiped from memory when the run ends, and the transcript says only that a secret was entered at this step. A later step names it in `reads:`; `import_key` takes it as `passphrase:` to open an encrypted private key. Takes the same `format:`, `length:`, `min_length:` and `max_length:` as `enter_value`.",
+    },
+    ActionMeta {
         name: "generate_key",
         short: "Generate a key through a backend",
         long: "Generate a key through a backend. `algorithm:` selects what kind: a keypair for RSA, EC, Ed25519, ML-DSA or ML-KEM, one secret for AES. A symmetric key has no public half, so it can only ever be a wrapping key, and the transcript records it by a key check value rather than by a fingerprint. `policy:` says what the key is permitted to do in PKCS#11 terms, defaulting to sign and verify for a keypair and to wrap and unwrap for a symmetric key.",

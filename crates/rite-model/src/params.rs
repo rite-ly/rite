@@ -12,6 +12,9 @@
 //! checking, and that question is answered by the action handler instead, at
 //! the point where a backend exists to ask.
 
+use serde::{Deserialize, Serialize};
+
+use crate::transcript::{Format, ValidatorSpec, compile_pattern};
 use crate::types::{ActionType, CertProfile, SharingScheme};
 use rite_sdk::{KeyAlgorithm, KeyUsages, SignAlgorithm, WrapScheme};
 
@@ -112,6 +115,7 @@ pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
             }));
             errors
         }
+        ActionType::EnterValue | ActionType::EnterSecret => entry_shape(with),
 
         ActionType::ClockCheck
         | ActionType::Confirm
@@ -187,6 +191,157 @@ fn named_value<T>(
         .map(|message| ParamError { message })
         .into_iter()
         .collect()
+}
+
+/// The shape an `enter_value` or `enter_secret` step gives the value it asks
+/// for, checked the way the step will build it.
+///
+/// A field still carrying an expression is absent from the projection, so the
+/// rule is built from what is literal, and a conflict between a literal field
+/// and one resolved at run time is found there.
+fn entry_shape(with: &serde_json::Value) -> Vec<ParamError> {
+    let mut errors = Vec::new();
+    let mut length = |field: &'static str| -> Option<usize> {
+        let value = with.get(field)?;
+        match value.as_u64().and_then(|n| usize::try_from(n).ok()) {
+            Some(n) if n > 0 => Some(n),
+            _ => {
+                errors.push(ParamError {
+                    message: format!("'{field}' must be a positive integer, found {value}"),
+                });
+                None
+            }
+        }
+    };
+    let mut shape = EntryShape {
+        length: length("length"),
+        min_length: length("min_length"),
+        max_length: length("max_length"),
+        format: None,
+    };
+    match with.get("format").map(FormatSpec::from_json) {
+        None => {}
+        Some(Ok(format)) => shape.format = Some(format),
+        Some(Err(message)) => errors.push(ParamError { message }),
+    }
+    if let Err(message) = shape.validator() {
+        errors.push(ParamError { message });
+    }
+    errors
+}
+
+/// `format:` as a step writes it: the name of a [`Format`], or a pattern.
+///
+/// A pattern is a format too, one whose argument is the expression, so it is
+/// written under the same key rather than beside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FormatSpec {
+    /// `format: hex`
+    Named(Format),
+    /// `format: { pattern: "..." }`
+    Pattern {
+        /// A regular expression the whole value must match.
+        pattern: String,
+    },
+}
+
+impl FormatSpec {
+    /// Read the field, with a message that says what the two forms are.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the value is neither a format name nor a pattern.
+    pub fn from_json(value: &serde_json::Value) -> Result<Self, String> {
+        if let Some(name) = value.as_str() {
+            return name.parse().map(FormatSpec::Named);
+        }
+        match value.get("pattern").and_then(|p| p.as_str()) {
+            Some(pattern) if value.as_object().is_some_and(|m| m.len() == 1) => {
+                Ok(FormatSpec::Pattern {
+                    pattern: pattern.to_string(),
+                })
+            }
+            _ => Err(format!(
+                "'format' must name a format (text, digits, alphanumeric, hex, base64) or be \
+                 {{ pattern: \"...\" }}, found {value}"
+            )),
+        }
+    }
+}
+
+/// What an `enter_value` or `enter_secret` step says about the value it asks
+/// for, as the `with:` fields spell it.
+///
+/// One place turns these into a [`ValidatorSpec`], so `rite check` and the
+/// running step cannot disagree about which combinations mean something.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EntryShape {
+    /// `format:`, what kind of value it is.
+    pub format: Option<FormatSpec>,
+    /// `length:`, an exact length.
+    pub length: Option<usize>,
+    /// `min_length:`.
+    pub min_length: Option<usize>,
+    /// `max_length:`.
+    pub max_length: Option<usize>,
+}
+
+impl EntryShape {
+    /// The rule these fields describe.
+    ///
+    /// Nothing given asks only for a non-empty value. A pattern says the
+    /// whole shape, so a length beside it is refused rather than combined
+    /// with it in a way the author would have to guess at. Lengths count the
+    /// format's own units: characters for text, bytes for an encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the fields do not describe one rule, phrased for the
+    /// ceremony author.
+    pub fn validator(&self) -> Result<ValidatorSpec, String> {
+        let bounded =
+            self.length.is_some() || self.min_length.is_some() || self.max_length.is_some();
+        let format = match &self.format {
+            Some(FormatSpec::Pattern { pattern }) => {
+                if bounded {
+                    return Err("a pattern says the whole shape of the value, so 'length', \
+                         'min_length' and 'max_length' cannot be given beside it"
+                        .to_string());
+                }
+                compile_pattern(pattern)?;
+                return Ok(ValidatorSpec::Regex(pattern.clone()));
+            }
+            Some(FormatSpec::Named(format)) => Some(*format),
+            None => None,
+        };
+        let (min_length, max_length) = match (self.length, self.min_length, self.max_length) {
+            (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+                return Err(
+                    "'length' is exact, so 'min_length' and 'max_length' cannot be given \
+                     beside it"
+                        .to_string(),
+                );
+            }
+            (Some(length), None, None) => (Some(length), Some(length)),
+            (None, min, max) => (min, max),
+        };
+        if let (Some(min), Some(max)) = (min_length, max_length)
+            && min > max
+        {
+            return Err(format!(
+                "'min_length' is {min} and 'max_length' is {max}, so no value fits"
+            ));
+        }
+        match format {
+            None if !bounded => Ok(ValidatorSpec::NonEmpty),
+            format => Ok(ValidatorSpec::Format {
+                format: format.unwrap_or(Format::Text),
+                min_length,
+                max_length,
+            }),
+        }
+    }
 }
 
 /// Check the names under `policy: { usages: [...] }`.
@@ -507,5 +662,110 @@ mod tests {
         // A `${param}` threshold is absent from the literal projection and is
         // deferred, not reported.
         assert!(check(ActionType::SplitSecret, &json!({"shares": 3})).is_empty());
+    }
+
+    /// One rule from the shape fields, the same one the step will apply.
+    #[test]
+    fn an_entry_shape_becomes_one_rule() {
+        let shape = EntryShape {
+            format: Some(FormatSpec::Named(Format::Digits)),
+            length: Some(6),
+            ..EntryShape::default()
+        };
+        assert!(matches!(
+            shape.validator(),
+            Ok(ValidatorSpec::Format {
+                format: Format::Digits,
+                min_length: Some(6),
+                max_length: Some(6),
+            })
+        ));
+
+        // Bounds alone: the format is text.
+        let shape = EntryShape {
+            max_length: Some(8),
+            ..EntryShape::default()
+        };
+        assert!(matches!(
+            shape.validator(),
+            Ok(ValidatorSpec::Format {
+                format: Format::Text,
+                min_length: None,
+                max_length: Some(8),
+            })
+        ));
+
+        assert!(matches!(
+            EntryShape::default().validator(),
+            Ok(ValidatorSpec::NonEmpty)
+        ));
+        assert!(matches!(
+            EntryShape {
+                format: Some(FormatSpec::Pattern {
+                    pattern: "[a-z]+".to_string()
+                }),
+                ..EntryShape::default()
+            }
+            .validator(),
+            Ok(ValidatorSpec::Regex(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_an_entry_shape_that_is_two_rules() {
+        assert!(
+            sole(
+                ActionType::EnterValue,
+                &json!({"format": {"pattern": "[0-9]+"}, "length": 6})
+            )
+            .contains("pattern")
+        );
+        assert!(
+            sole(
+                ActionType::EnterSecret,
+                &json!({"length": 6, "min_length": 4})
+            )
+            .contains("'length' is exact")
+        );
+        assert!(
+            sole(
+                ActionType::EnterSecret,
+                &json!({"min_length": 8, "max_length": 6})
+            )
+            .contains("no value fits")
+        );
+    }
+
+    #[test]
+    fn rejects_an_entry_shape_outside_the_vocabulary() {
+        assert!(
+            sole(ActionType::EnterSecret, &json!({"format": "emoji"})).contains("unknown format")
+        );
+        assert!(
+            sole(
+                ActionType::EnterSecret,
+                &json!({"format": {"pattern": "[0-9"}})
+            )
+            .contains("invalid pattern")
+        );
+        assert!(
+            sole(
+                ActionType::EnterSecret,
+                &json!({"format": {"regex": "[0-9]+"}})
+            )
+            .contains("'format' must name a format")
+        );
+        assert!(sole(ActionType::EnterSecret, &json!({"length": 0})).contains("positive integer"));
+        assert!(
+            sole(ActionType::EnterSecret, &json!({"length": "six"})).contains("positive integer")
+        );
+        assert!(check(ActionType::EnterSecret, &json!({"message": "PIN"})).is_empty());
+        assert!(
+            check(
+                ActionType::EnterSecret,
+                &json!({"message": "Key", "format": "hex", "length": 32})
+            )
+            .is_empty()
+        );
     }
 }

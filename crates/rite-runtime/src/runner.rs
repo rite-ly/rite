@@ -1502,6 +1502,7 @@ sections:
                 BeforeFail::Prompt => {
                     reporter.prompt(&Prompt::Secret {
                         label: "Enter PIN".to_string(),
+                        validator: rite_model::ValidatorSpec::NonEmpty,
                     })?;
                 }
                 BeforeFail::Deviation => {

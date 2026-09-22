@@ -192,7 +192,7 @@ fn read_response<R: BufRead, W: Write>(
             let line = read_line(stdin)?;
             Ok(Response::Text(line.trim().to_string()))
         }
-        Prompt::Secret { label } => {
+        Prompt::Secret { label, .. } => {
             let value = rpassword::prompt_password(format!("{label}: "))?;
             Ok(Response::Secret(SecretString::from(value)))
         }

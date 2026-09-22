@@ -1,5 +1,6 @@
 //! Parameter structs for action handlers.
 
+use rite_model::params::FormatSpec;
 use serde::{Deserialize, Serialize};
 
 /// Params for `clock_check` action.
@@ -60,9 +61,6 @@ pub struct OralReadbackParams {
     /// Limit number of characters to read (for long values).
     #[serde(default)]
     pub characters: Option<u32>,
-    /// If true, only record pass/fail result in evidence (no value recorded).
-    #[serde(default)]
-    pub sensitive: bool,
 }
 
 /// Params for `check_value` action.
@@ -127,6 +125,30 @@ pub struct AttestParams {
     /// The attestation statement.
     #[serde(default)]
     pub statement: Option<String>,
+}
+
+/// Params for the `enter_value` and `enter_secret` actions.
+///
+/// The shape fields are turned into one rule by
+/// [`EntryShape`](rite_model::params::EntryShape), which is also what
+/// `rite check` applies to them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EntryParams {
+    /// What the person is asked for, shown at the prompt.
+    pub message: String,
+    /// What kind of value it is: a format name, or `{ pattern: "..." }`.
+    /// Text by default. An encoding makes the artifact the decoded bytes.
+    #[serde(default)]
+    pub format: Option<FormatSpec>,
+    /// An exact length, in characters for text and bytes for an encoding.
+    #[serde(default)]
+    pub length: Option<usize>,
+    /// The fewest units accepted.
+    #[serde(default)]
+    pub min_length: Option<usize>,
+    /// The most units accepted.
+    #[serde(default)]
+    pub max_length: Option<usize>,
 }
 
 /// Params for `gather_entropy` action.
@@ -557,6 +579,8 @@ mod schema_drift_tests {
                 ActionType::GatherEntropy,
                 serde_keys(GatherEntropyParams::default()),
             ),
+            (ActionType::EnterValue, serde_keys(EntryParams::default())),
+            (ActionType::EnterSecret, serde_keys(EntryParams::default())),
             #[cfg(feature = "crypto")]
             (
                 ActionType::GenerateKey,

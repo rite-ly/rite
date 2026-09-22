@@ -45,5 +45,6 @@ pub use ir::{
 };
 
 pub use transcript::{
-    ErrorClass, ErrorRecord, Prompt, ResponseRecord, StepFact, StepOutcome, ValidatorSpec,
+    ErrorClass, ErrorRecord, Format, PLACEHOLDER_LIMIT, Prompt, ResponseRecord, StepFact,
+    StepOutcome, ValidatorSpec, compile_pattern,
 };

@@ -200,7 +200,10 @@ key stored under a name it does not answer to fails the step instead.
 
 A private key is read as PEM or DER, whichever it is, since PEM announces
 itself in its first line and is what `openssl` writes by default. An encrypted
-PEM is refused by name, because a ceremony carries no passphrase to open one.
+key, in either PEM encoding or as PKCS#8 DER, is opened with the secret a step
+named `passphrase` in `reads:` holds, read at the keyboard by `enter_secret`;
+see [typed-entry.md](typed-entry.md). Without one it is refused by name, and
+so is a passphrase given for a key that is not encrypted.
 
 `expect_key` and `policy` work as they do at unwrap, and `expect_key` matters
 more here. It is the only evidence the ceremony has about material it did not

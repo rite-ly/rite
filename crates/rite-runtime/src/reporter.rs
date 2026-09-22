@@ -27,6 +27,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use rite_model::{ErrorClass, ErrorRecord, Prompt, ResponseRecord, StepFact, StepId};
+use secrecy::ExposeSecret;
 use thiserror::Error;
 
 use crate::clock::Clock;
@@ -473,17 +474,18 @@ fn response_to_record(response: &Response) -> ResponseRecord {
 /// 1. **Shape**: the response variant matches the prompt variant (e.g.
 ///    a [`Prompt::Confirm`] requires a [`Response::Bool`]). A mismatch
 ///    indicates a frontend bug.
-/// 2. **Content**: the [`Prompt::Text`] validator is applied to the text,
-///    and [`Prompt::Literal`] requires byte-for-byte equality with the
-///    expected string.
+/// 2. **Content**: the [`Prompt::Text`] and [`Prompt::Secret`] validators
+///    are applied to what was typed, and [`Prompt::Literal`] requires
+///    byte-for-byte equality with the expected string. A secret that fails
+///    its rule is refused with the rule, never with the value.
 fn validate(prompt: &Prompt, response: &Response) -> Result<(), String> {
     match (prompt, response) {
         (Prompt::Confirm { .. }, Response::Bool(_))
-        | (Prompt::Continue { .. }, Response::Acknowledge)
-        | (Prompt::Secret { .. }, Response::Secret(_)) => Ok(()),
+        | (Prompt::Continue { .. }, Response::Acknowledge) => Ok(()),
 
-        (Prompt::Text { validator, .. }, Response::Text(value)) => {
-            apply_validator(validator, value)
+        (Prompt::Text { validator, .. }, Response::Text(value)) => validator.check(value),
+        (Prompt::Secret { validator, .. }, Response::Secret(value)) => {
+            validator.check(value.expose_secret())
         }
 
         (Prompt::Literal { expected, .. }, Response::Text(value)) => {
@@ -495,25 +497,6 @@ fn validate(prompt: &Prompt, response: &Response) -> Result<(), String> {
         }
 
         _ => Err("response shape does not match prompt shape".to_string()),
-    }
-}
-
-fn apply_validator(spec: &rite_model::ValidatorSpec, value: &str) -> Result<(), String> {
-    use rite_model::ValidatorSpec;
-    match spec {
-        ValidatorSpec::NonEmpty => {
-            if value.trim().is_empty() {
-                Err("value must not be empty".to_string())
-            } else {
-                Ok(())
-            }
-        }
-        // Regex validation requires an additional dependency; not yet wired in.
-        ValidatorSpec::Regex(_) => Err("regex validation is not yet implemented".to_string()),
-        // Named predicates will land alongside specific ceremony actions
-        // that need them (serial numbers, hex strings, etc.).
-        ValidatorSpec::Predefined(name) => Err(format!("unknown validator: {name}")),
-        _ => Err("unknown validator variant".to_string()),
     }
 }
 
@@ -761,6 +744,7 @@ mod tests {
         reporter
             .prompt(&Prompt::Secret {
                 label: "PIN".to_string(),
+                validator: ValidatorSpec::NonEmpty,
             })
             .expect("prompt");
 
@@ -871,16 +855,26 @@ mod tests {
     }
 
     #[test]
-    fn regex_validator_not_yet_implemented_returns_rejection() {
-        let err = super::validate(
-            &Prompt::Text {
-                label: "id".to_string(),
-                validator: ValidatorSpec::Regex(r"^[a-z]+$".to_string()),
-            },
-            &Response::Text("abc".to_string()),
-        )
-        .expect_err("regex not implemented");
-        assert!(err.contains("regex"));
+    fn regex_validator_applies_to_text_and_secret_alike() {
+        let text = Prompt::Text {
+            label: "id".to_string(),
+            validator: ValidatorSpec::Regex(r"[a-z]+".to_string()),
+        };
+        assert!(super::validate(&text, &Response::Text("abc".to_string())).is_ok());
+        let err = super::validate(&text, &Response::Text("abc1".to_string()))
+            .expect_err("digit outside the pattern");
+        assert!(err.contains("[a-z]+"), "{err}");
+
+        // The rule is applied to the secret, and the refusal names the rule
+        // and not what was typed.
+        let secret = Prompt::Secret {
+            label: "PIN".to_string(),
+            validator: ValidatorSpec::Regex(r"[0-9]{6}".to_string()),
+        };
+        assert!(super::validate(&secret, &Response::Secret("123456".to_string().into())).is_ok());
+        let err = super::validate(&secret, &Response::Secret("12345".to_string().into()))
+            .expect_err("too short");
+        assert!(!err.contains("12345"), "{err}");
     }
 
     #[test]

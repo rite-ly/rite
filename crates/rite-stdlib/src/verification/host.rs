@@ -202,7 +202,7 @@ fn collect_security_features() -> Hardening {
 
 // Apple Silicon has always-on hardware memory encryption via the Secure
 // Enclave. DART (per-device IOMMU) is also always active on Apple Silicon.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn collect_security_features() -> Hardening {
     Hardening {
         ram_encryption: FeatureCheck::with_detail(
@@ -217,11 +217,11 @@ fn collect_security_features() -> Hardening {
     }
 }
 
-// Windows and other platforms report everything as unavailable for now.
+// Windows, Intel Macs and other platforms report everything as unavailable.
 // TODO(windows): probe real posture (BitLocker, VBS/HVCI, Kernel DMA
 // Protection). Low priority: the Windows binary is meant for authoring
 // ceremonies, not running them, where this posture matters.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))))]
 fn collect_security_features() -> Hardening {
     Hardening {
         ram_encryption: FeatureCheck::new(FeatureStatus::Unavailable),

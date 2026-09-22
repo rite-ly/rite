@@ -991,7 +991,7 @@ fn import_key_refuses_the_wrong_passphrase_without_naming_it() {
 
     let message = error.to_string();
     assert!(message.contains("does not open"), "{message}");
-    assert!(!message.contains("wrong horse"), "{message}");
+    assert!(!message.contains("wrong horse"));
 }
 
 #[test]
@@ -1053,7 +1053,7 @@ fn import_key_refuses_a_passphrase_that_is_not_a_secret() {
     let error = run_import(&state, &step, &mut harness).expect_err("text is not a secret");
     let message = error.to_string();
     assert!(message.contains("is text"), "{message}");
-    assert!(!message.contains("correct horse"), "{message}");
+    assert!(!message.contains("correct horse"));
 }
 
 /// A secret has no properties, so a reference naming one is a slip that

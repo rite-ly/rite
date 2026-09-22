@@ -874,7 +874,8 @@ mod tests {
         assert!(super::validate(&secret, &Response::Secret("123456".to_string().into())).is_ok());
         let err = super::validate(&secret, &Response::Secret("12345".to_string().into()))
             .expect_err("too short");
-        assert!(!err.contains("12345"), "{err}");
+        // No message: on failure it would print the value this checks for.
+        assert!(!err.contains("12345"));
     }
 
     #[test]

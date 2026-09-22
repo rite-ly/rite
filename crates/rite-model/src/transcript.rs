@@ -705,11 +705,11 @@ mod validator_tests {
     #[test]
     fn a_refusal_names_the_rule_and_not_the_value() {
         let err = shape(Format::Digits, 6, 6).check("hunter2").unwrap_err();
-        assert!(!err.contains("hunter2"), "{err}");
+        assert!(!err.contains("hunter2"));
         let err = ValidatorSpec::Regex("[0-9]+".to_string())
             .check("hunter2")
             .unwrap_err();
-        assert!(!err.contains("hunter2"), "{err}");
+        assert!(!err.contains("hunter2"));
     }
 
     #[test]

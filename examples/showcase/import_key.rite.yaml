@@ -1,18 +1,21 @@
 version: "0.3"
-name: "Importing a Transport Key"
+name: "Importing Keys the Ceremony Holds"
 description: |
-  Take a key-encryption key that was produced somewhere else, install it in a
-  backend, and use it to wrap a key generated here.
+  Take keys that were produced somewhere else and install them in a backend:
+  a key-encryption key that arrives as raw bytes, and an escrow keypair that
+  arrives as a PEM file protected by a passphrase its holder types in the
+  room.
 
-  Demonstrates import_key. Everything else in Rite makes a key: generate_key
-  produces one, unwrap_key recovers one from a blob it can decrypt. import_key
-  is the third way, and the plainest: it lifts bytes the ceremony already holds
-  into a key of a named algorithm.
+  Demonstrates import_key, enter_secret and enter_value. Everything else in
+  Rite makes a key: generate_key produces one, unwrap_key recovers one from a
+  blob it can decrypt. import_key is the third way, and the plainest: it
+  lifts bytes the ceremony already holds into a key of a named algorithm.
 
-  The bytes can come from anywhere a byte artifact can. Here they arrive as a
-  material, a component a custodian carried into the room, which is the case
-  the payments world calls key component entry. They could equally be the
-  output of an earlier step in the same run.
+  The bytes can come from anywhere a byte artifact can. In the first section
+  they arrive as a material, a component a custodian carried into the room,
+  which is the case the payments world calls key component entry. In the
+  second they are a private key encrypted under a passphrase, opened by a
+  secret a step read at the keyboard rather than by a file on a disk.
 
 backends:
   openssl:
@@ -24,11 +27,22 @@ materials:
     path: "test_keys/transport_kek_component.bin"
     title: "Transport KEK component"
     description: "Thirty-two raw bytes on the media the custodian brought."
+  escrow_key:
+    type: digital
+    path: "test_keys/escrow_private.pem"
+    title: "Escrow private key"
+    description: |
+      An RSA-2048 private key as encrypted PKCS#8 PEM, the way openssl writes
+      one with a passphrase. For this showcase the passphrase is
+      "placeholder-secret", which is also what a dry run types.
 
 roles:
   crypto_officer:
     name: "Crypto Officer"
     person: "Alice Rivera"
+  escrow_holder:
+    name: "Escrow Holder"
+    person: "Ben Okafor"
 
 output:
   wrapped_working_key:
@@ -93,3 +107,59 @@ sections:
           This is the same step a ceremony would write against a KEK it had
           generated itself, which is the point: what import_key produces is
           not a second-class artifact.
+
+  recover:
+    name: "Install the Escrow Key from Protected Media"
+    role: ${role.escrow_holder}
+    steps:
+      record_the_media_serial:
+        action: enter_value
+        with:
+          message: "Serial number printed on the escrow media"
+          format: alphanumeric
+          min_length: 6
+          max_length: 16
+        creates: escrow_media_serial
+        description: |
+          enter_value takes a value a person types and records it: the serial
+          becomes a text artifact and the transcript carries what was typed,
+          since typing it is the evidence. format: and the length bounds say
+          what shape the value has, so a slip is refused at the keyboard with
+          the rule, not found at the end.
+
+      unlock_the_escrow_key:
+        action: enter_secret
+        with:
+          message: "Passphrase for the escrow key"
+        creates: escrow_passphrase
+        description: |
+          enter_secret is enter_value for a value the transcript must not
+          carry. Echo is off, the artifact is wiped from memory when the run
+          ends, and the transcript records that a secret was entered here and
+          nothing derived from it. The holder types it in the room; no
+          decrypted copy of the key ever sits on a disk.
+
+          For this showcase the passphrase is "placeholder-secret".
+
+      install_the_escrow_key:
+        action: import_key
+        backend: openssl
+        reads:
+          key_material: ${artifact.escrow_key}
+          passphrase: ${artifact.escrow_passphrase}
+        with:
+          algorithm: RSA-2048
+          label: escrow-key
+          expect_key: "sha256:52039f14c6659f4c7e6d49abd5cf6247fba4a0de4d5255a24d28ffc3fae586c0"
+        creates: escrow_keypair
+        description: |
+          The passphrase is named in reads:, beside the material, and never
+          in with:. A reads: input is borrowed from the store by name; a
+          with: value is copied into the step's parameters, which a record
+          may carry. Only a secret artifact is accepted here, so a passphrase
+          that sat in a file is refused by name.
+
+          expect_key: is the fingerprint of the public half, read from the
+          paperwork that travelled with the media. The wrong file, or a file
+          that was swapped, fails this step rather than becoming the escrow
+          key the ceremony trusts.

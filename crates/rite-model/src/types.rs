@@ -90,6 +90,24 @@ pub enum ActionType {
     /// Records device identity to prove which machine ran the ceremony.
     /// Should be placed early in ceremony to establish machine context.
     MachineInfo,
+    /// A person types a value the ceremony needs and can record: a serial
+    /// number read off a device, an address shown on a screen.
+    ///
+    /// The value becomes a text artifact, so a later step compares it or
+    /// prints it, and the transcript carries it. `format:` and the length
+    /// fields say what shape the value has, so a slip is refused at the
+    /// keyboard rather than found at the end.
+    EnterValue,
+    /// A person types a secret the ceremony needs and must not record: a
+    /// passphrase, a PIN.
+    ///
+    /// `enter_value` for a value the transcript may not carry. Echo is off,
+    /// the artifact is held wiped in memory, and the transcript records that
+    /// a secret was entered at this step and nothing derived from it. A step
+    /// names it in `reads:`, which borrows the value. An expression in
+    /// `with:` copies it into the step's parameters, as it would opened
+    /// content.
+    EnterSecret,
 
     /// Generate a key: a keypair for an asymmetric algorithm, one secret for
     /// a symmetric one.
@@ -382,6 +400,12 @@ pub struct ReadsContract {
     /// Groups from which exactly one input must be named. Each group holds the
     /// alternatives in the order they should be listed to the author.
     pub exactly_one_of: &'static [&'static [&'static str]],
+    /// Inputs a step may name and the action reads when it does.
+    ///
+    /// Listed so that a key the action would never look at is refused rather
+    /// than dropped: a `reads:` entry that nothing reads is a step running
+    /// without what its author gave it.
+    pub optional: &'static [&'static str],
     /// `with:` fields that mean nothing unless the step also names a given
     /// input, as `(field, input)` pairs.
     ///
@@ -420,6 +444,7 @@ impl ReadsContract {
         Self {
             required: fields,
             exactly_one_of: &[],
+            optional: &[],
             with_field_requires: &[],
             lists: &[],
         }
@@ -434,7 +459,18 @@ impl ReadsContract {
     ///
     /// `with_field_requires` is a rule over `with:`, so it is not counted here.
     pub fn is_empty(&self) -> bool {
-        self.required.is_empty() && self.exactly_one_of.is_empty() && self.lists.is_empty()
+        self.required.is_empty()
+            && self.exactly_one_of.is_empty()
+            && self.optional.is_empty()
+            && self.lists.is_empty()
+    }
+
+    /// Whether a step of this action may name this input.
+    pub fn accepts(&self, key: &str) -> bool {
+        self.required.contains(&key)
+            || self.optional.contains(&key)
+            || self.exactly_one_of.iter().any(|group| group.contains(&key))
+            || self.lists.iter().any(|list| list.name == key)
     }
 }
 
@@ -451,6 +487,8 @@ impl ActionType {
         ActionType::CheckValue,
         ActionType::OralReadback,
         ActionType::MachineInfo,
+        ActionType::EnterValue,
+        ActionType::EnterSecret,
         ActionType::GenerateKey,
         ActionType::WrapKey,
         ActionType::UnwrapKey,
@@ -502,6 +540,8 @@ impl ActionType {
             | ActionType::CheckValue
             | ActionType::OralReadback
             | ActionType::MachineInfo
+            | ActionType::EnterValue
+            | ActionType::EnterSecret
             | ActionType::Attest
             | ActionType::CombineShares
             | ActionType::GatherEntropy => BackendUsage::Unused,
@@ -524,6 +564,9 @@ impl ActionType {
             // what it is lifting rather than the step guessing.
             ActionType::ImportKey => &["algorithm"],
             ActionType::SplitSecret => &["threshold", "shares"],
+            // The label is what the person sees at the keyboard, and there is
+            // no default that names what they are being asked for.
+            ActionType::EnterValue | ActionType::EnterSecret => &["message"],
 
             ActionType::ClockCheck
             | ActionType::Confirm
@@ -565,7 +608,7 @@ impl ActionType {
         match self {
             ActionType::ClockCheck | ActionType::Confirm => &["message"],
             ActionType::CheckValue => &["actual", "expected", "message", "sensitive"],
-            ActionType::OralReadback => &["value", "format", "characters", "sensitive", "message"],
+            ActionType::OralReadback => &["value", "format", "characters", "message"],
             ActionType::MachineInfo => &[
                 "include_machine_id",
                 "include_cpu",
@@ -573,6 +616,9 @@ impl ActionType {
                 "include_security_features",
                 "message",
             ],
+            ActionType::EnterValue | ActionType::EnterSecret => {
+                &["message", "format", "length", "min_length", "max_length"]
+            }
             ActionType::GenerateKey => &["algorithm", "policy", "slot"],
             ActionType::WrapKey => &["scheme", "expect_recipient"],
             ActionType::UnwrapKey | ActionType::ImportKey => {
@@ -610,13 +656,23 @@ impl ActionType {
             ActionType::WrapKey => ReadsContract {
                 required: &["key_to_wrap"],
                 exactly_one_of: &[&["wrapping_key", "recipient"]],
+                optional: &[],
                 // `expect_recipient` is compared against the recipient a wrap
                 // is given, and only the external path has one.
                 with_field_requires: &[("expect_recipient", "recipient")],
                 lists: &[],
             },
             ActionType::UnwrapKey => ReadsContract::required(&["unwrapping_key", "wrapped_data"]),
-            ActionType::ImportKey => ReadsContract::required(&["key_material"]),
+            ActionType::ImportKey => ReadsContract {
+                required: &["key_material"],
+                exactly_one_of: &[],
+                // What opens an encrypted private key. Read from the store
+                // rather than given in `with:`, so the value is borrowed and
+                // never copied into the step's parameters.
+                optional: &["passphrase"],
+                with_field_requires: &[],
+                lists: &[],
+            },
             ActionType::EncryptData => ReadsContract::required(&["data", "encryption_key"]),
             ActionType::DecryptData => {
                 ReadsContract::required(&["encrypted_data", "decryption_key"])
@@ -627,6 +683,7 @@ impl ActionType {
             ActionType::CombineShares => ReadsContract {
                 required: &[],
                 exactly_one_of: &[],
+                optional: &[],
                 with_field_requires: &[],
                 lists: &[ListInput {
                     name: "shares",
@@ -635,7 +692,16 @@ impl ActionType {
             },
             ActionType::SignData => ReadsContract::required(&["key", "data"]),
             ActionType::VerifySignature => ReadsContract::required(&["key", "data", "signature"]),
-            ActionType::IssueCertificate => ReadsContract::required(&["signing_key", "csr"]),
+            // Without `issuer_cert` the certificate is self-issued under the
+            // CSR's subject; with it, the issuer name and key identifier come
+            // from the CA certificate.
+            ActionType::IssueCertificate => ReadsContract {
+                required: &["signing_key", "csr"],
+                exactly_one_of: &[],
+                optional: &["issuer_cert"],
+                with_field_requires: &[],
+                lists: &[],
+            },
             ActionType::GenerateCsr => ReadsContract::required(&["signing_key"]),
 
             ActionType::ClockCheck
@@ -643,6 +709,8 @@ impl ActionType {
             | ActionType::CheckValue
             | ActionType::OralReadback
             | ActionType::MachineInfo
+            | ActionType::EnterValue
+            | ActionType::EnterSecret
             | ActionType::GenerateKey
             | ActionType::ExportPublic
             | ActionType::Attest
@@ -665,6 +733,8 @@ impl ActionType {
             ActionType::CheckValue => "Verify a value matches an expected result.",
             ActionType::OralReadback => "Read back a value aloud for verification.",
             ActionType::MachineInfo => "Record system and environment information.",
+            ActionType::EnterValue => "Type a value the ceremony records.",
+            ActionType::EnterSecret => "Type a secret the ceremony holds and never records.",
             ActionType::Attest => "Record a signed attestation from a participant.",
             ActionType::GatherEntropy => "Fold human-supplied entropy into the ceremony seed.",
             ActionType::TpmAttest => "Record TPM platform attestation (PCR values).",
@@ -698,6 +768,8 @@ impl std::fmt::Display for ActionType {
             ActionType::CheckValue => write!(f, "check_value"),
             ActionType::OralReadback => write!(f, "oral_readback"),
             ActionType::MachineInfo => write!(f, "machine_info"),
+            ActionType::EnterValue => write!(f, "enter_value"),
+            ActionType::EnterSecret => write!(f, "enter_secret"),
             ActionType::GenerateKey => write!(f, "generate_key"),
             ActionType::WrapKey => write!(f, "wrap_key"),
             ActionType::UnwrapKey => write!(f, "unwrap_key"),
@@ -1087,6 +1159,8 @@ mod tests {
                 | ActionType::CheckValue
                 | ActionType::OralReadback
                 | ActionType::MachineInfo
+                | ActionType::EnterValue
+                | ActionType::EnterSecret
                 | ActionType::GenerateKey
                 | ActionType::WrapKey
                 | ActionType::UnwrapKey

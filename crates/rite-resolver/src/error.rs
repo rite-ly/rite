@@ -260,6 +260,25 @@ pub enum ResolveError {
         field: &'static str,
     },
 
+    /// Step `reads:` map names an input the action never reads.
+    ///
+    /// The same failure as an unknown `with:` key, and reported for the same
+    /// reason: the value would be resolved and then ignored, and the step
+    /// would run without what its author gave it. Only actions that declare
+    /// their inputs are checked, since a contract that names none accepts
+    /// whatever the step reads.
+    #[error("Step '{step}': action '{action}' reads no '{field}' input. Accepted: {accepted}")]
+    UnknownReadsInput {
+        /// The step ID.
+        step: StepId,
+        /// The action whose contract lacks the key.
+        action: ActionType,
+        /// The `reads:` key nothing reads.
+        field: String,
+        /// The inputs the action does read, quoted and comma-separated.
+        accepted: String,
+    },
+
     /// Step `reads:` map names neither or both of two alternative inputs, so
     /// the path the action would take is undetermined.
     #[error(

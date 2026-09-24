@@ -639,46 +639,138 @@ fn unsupported_ml_dsa(operation: &str) -> BackendError {
 /// Parse imported private key material in either encoding.
 ///
 /// PEM says what it is in its first line, so material that starts with a
-/// preamble is read as PEM and everything else as DER. Encrypted PEM needs a
-/// passphrase that nothing carries here, and is refused by name rather than as
-/// a parse failure.
+/// preamble is read as PEM and everything else as DER. An encrypted key is
+/// opened with the passphrase when one is given and refused by name when none
+/// is, rather than failing as a parse error. A passphrase given for a key that
+/// is not encrypted is refused too: the step records that a passphrase was
+/// supplied, and that record has to mean it was used.
 ///
 /// Separate from [`parse_private_key_der`], which unwrapping uses: a wrapped
 /// key is always DER, so accepting PEM there would accept material no wrap
 /// produces.
-fn parse_imported_private_key(bytes: &[u8]) -> Result<PKey<Private>, BackendError> {
-    if !bytes.trim_ascii_start().starts_with(b"-----BEGIN") {
-        return parse_private_key_der(bytes);
+fn parse_imported_private_key(
+    bytes: &[u8],
+    passphrase: Option<&[u8]>,
+) -> Result<PKey<Private>, BackendError> {
+    let parsed = if bytes.trim_ascii_start().starts_with(b"-----BEGIN") {
+        parse_pem_private_key(bytes, passphrase)?
+    } else {
+        parse_der_private_key(bytes, passphrase)?
+    };
+    match (parsed, passphrase) {
+        (Parsed::Plain(_), Some(_)) => Err(BackendError::InvalidData(
+            "a passphrase was supplied, but this private key is not encrypted, so it was \
+             not used"
+                .to_string(),
+        )),
+        (Parsed::Plain(key) | Parsed::Opened(key), _) => Ok(key),
     }
+}
 
-    // Always the callback form, never `private_key_from_pem`. That one hands
-    // OpenSSL a null callback, and OpenSSL's own default reads a passphrase
-    // from the terminal, which in a running ceremony is a prompt written over
-    // the frontend. This callback supplies nothing, so an encrypted key fails
-    // to parse instead of blocking.
-    //
-    // It is also how the encryption is detected. OpenSSL asks for a passphrase
-    // exactly when the block is encrypted, in every encoding it knows, which is
-    // a stronger test than matching the header strings each encoding happens to
-    // use: PKCS#8 says so in the preamble, and the traditional format that
-    // `openssl genrsa -traditional -aes256` still writes says so in RFC 1421
-    // headers inside an ordinary one.
+/// A private key that parsed, and whether a passphrase was needed to do it.
+enum Parsed {
+    /// Read as it was, with no passphrase asked for.
+    Plain(PKey<Private>),
+    /// Decrypted with the passphrase.
+    Opened(PKey<Private>),
+}
+
+/// What the parser says when the material wants a passphrase.
+fn refuse_encrypted(encoding: &str, passphrase: Option<&[u8]>) -> BackendError {
+    match passphrase {
+        Some(_) => BackendError::InvalidData(format!(
+            "the passphrase does not open this encrypted {encoding} private key"
+        )),
+        None => BackendError::InvalidData(format!(
+            "this is an encrypted {encoding} private key, and the ceremony supplies no \
+             passphrase to open it. Read one with 'enter_secret' and name it as 'passphrase' \
+             beside the material."
+        )),
+    }
+}
+
+/// Parse a PEM private key, encrypted or not.
+///
+/// Always the callback form, never `private_key_from_pem`. That one hands
+/// OpenSSL a null callback, and OpenSSL's own default reads a passphrase
+/// from the terminal, which in a running ceremony is a prompt written over
+/// the frontend. This callback answers from what the ceremony holds, or with
+/// nothing, so an encrypted key with no passphrase fails to parse instead of
+/// blocking.
+///
+/// It is also how the encryption is detected. OpenSSL asks for a passphrase
+/// exactly when the block is encrypted, in every encoding it knows, which is
+/// a stronger test than matching the header strings each encoding happens to
+/// use: PKCS#8 says so in the preamble, and the traditional format that
+/// `openssl genrsa -traditional -aes256` still writes says so in RFC 1421
+/// headers inside an ordinary one.
+fn parse_pem_private_key(bytes: &[u8], passphrase: Option<&[u8]>) -> Result<Parsed, BackendError> {
     let asked = std::cell::Cell::new(false);
-    PKey::private_key_from_pem_callback(bytes, |_| {
+    let parsed = PKey::private_key_from_pem_callback(bytes, |buf| {
         asked.set(true);
-        Ok(0)
-    })
-    .map_err(|e| {
-        if asked.get() {
-            BackendError::InvalidData(
-                "this is an encrypted PEM private key, and a ceremony carries no passphrase \
-                 to open it. Decrypt it first with 'openssl pkey -in <file> -out <file>'."
-                    .to_string(),
-            )
-        } else {
-            ossl_err("Parse PEM private key", &e)
+        match passphrase {
+            Some(passphrase) if passphrase.len() <= buf.len() => {
+                if let Some(slot) = buf.get_mut(..passphrase.len()) {
+                    slot.copy_from_slice(passphrase);
+                }
+                Ok(passphrase.len())
+            }
+            _ => Ok(0),
         }
-    })
+    });
+    match parsed {
+        Ok(key) if asked.get() => Ok(Parsed::Opened(key)),
+        Ok(key) => Ok(Parsed::Plain(key)),
+        Err(_) if asked.get() => Err(refuse_encrypted("PEM", passphrase)),
+        Err(e) => Err(ossl_err("Parse PEM private key", &e)),
+    }
+}
+
+/// Parse a DER private key, as PKCS#8 `EncryptedPrivateKeyInfo` when the
+/// plain encodings refuse it.
+///
+/// The plain parse runs first whether or not a passphrase was given, so a
+/// passphrase supplied for material that never needed one is found rather
+/// than swallowed.
+fn parse_der_private_key(bytes: &[u8], passphrase: Option<&[u8]>) -> Result<Parsed, BackendError> {
+    let plain = match parse_private_key_der(bytes) {
+        Ok(key) => return Ok(Parsed::Plain(key)),
+        Err(e) => e,
+    };
+    // Structural test: which DER declares itself encrypted. Without it a
+    // plain parse failure of any other kind would be reported as a wrong
+    // passphrase.
+    if !looks_like_encrypted_pkcs8(bytes) {
+        return Err(plain);
+    }
+    match passphrase {
+        Some(passphrase) => PKey::private_key_from_pkcs8_passphrase(bytes, passphrase)
+            .map(Parsed::Opened)
+            .map_err(|_| refuse_encrypted("DER", Some(passphrase))),
+        None => Err(refuse_encrypted("DER", None)),
+    }
+}
+
+/// Whether DER is a PKCS#8 `EncryptedPrivateKeyInfo`: a SEQUENCE whose first
+/// element is an `AlgorithmIdentifier` naming PBES2 or a PKCS#12 PBE scheme.
+///
+/// A plain `PrivateKeyInfo` starts with an INTEGER version instead, which is
+/// the one byte that tells the two apart.
+fn looks_like_encrypted_pkcs8(bytes: &[u8]) -> bool {
+    // SEQUENCE, a length of one to four bytes, then SEQUENCE (the algorithm
+    // identifier) rather than INTEGER (the version of a plain key).
+    let Some((&0x30, rest)) = bytes.split_first() else {
+        return false;
+    };
+    let Some((&first, rest)) = rest.split_first() else {
+        return false;
+    };
+    let skip = if first & 0x80 == 0 {
+        0
+    } else {
+        usize::from(first & 0x7f)
+    };
+    rest.get(skip) == Some(&0x30)
 }
 
 /// Parse a private key from DER bytes, trying PKCS#8, traditional PKCS#1 (RSA),
@@ -744,11 +836,22 @@ impl KeyStoreBackend for OpenSslBackend {
         self.store_key(spec.algorithm, spec.label, pkey, spec.policy)
     }
 
-    fn import_key(&mut self, spec: KeySpec, key_bytes: &[u8]) -> Result<KeyMetadata, BackendError> {
+    fn import_key(
+        &mut self,
+        spec: KeySpec,
+        key_bytes: &[u8],
+        passphrase: Option<&[u8]>,
+    ) -> Result<KeyMetadata, BackendError> {
         // A symmetric key is its own bytes. Selected by the algorithm because
         // nothing in the bytes distinguishes a 32-byte secret from anything
         // else of that length, so the caller has to say which it means.
         if let Some(length) = spec.algorithm.key_bytes() {
+            if passphrase.is_some() {
+                return Err(BackendError::InvalidData(format!(
+                    "{} is a raw key with nothing to decrypt, so a passphrase cannot apply to it",
+                    spec.algorithm
+                )));
+            }
             if key_bytes.len() != length {
                 return Err(BackendError::InvalidData(format!(
                     "{} is a {length}-byte key, and this is {}",
@@ -763,7 +866,7 @@ impl KeyStoreBackend for OpenSslBackend {
                 spec.policy,
             );
         }
-        let pkey = parse_imported_private_key(key_bytes)?;
+        let pkey = parse_imported_private_key(key_bytes, passphrase)?;
         // Declared and actual must agree, as they must at unwrap. Storing the
         // material under a name the key does not answer to would put that name
         // in the transcript.
@@ -2355,7 +2458,7 @@ mod tests {
 
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let meta = backend
-            .import_key(spec(KeyAlgorithm::Rsa2048, "imported"), &pkcs8_der)
+            .import_key(spec(KeyAlgorithm::Rsa2048, "imported"), &pkcs8_der, None)
             .unwrap();
 
         let message = b"import round-trip verification message";
@@ -2461,7 +2564,7 @@ mod tests {
         for (algorithm, material) in cases.into_iter().chain(post_quantum_material()) {
             let mut backend = OpenSslBackend::try_new("test").unwrap();
             let meta = backend
-                .import_key(spec(algorithm, "imported"), &material)
+                .import_key(spec(algorithm, "imported"), &material, None)
                 .unwrap_or_else(|e| panic!("import_key must accept {algorithm}: {e}"));
 
             assert_eq!(meta.algorithm, algorithm);
@@ -2484,6 +2587,78 @@ mod tests {
         }
     }
 
+    /// Encrypted PKCS#8 DER, which `openssl pkcs8 -topk8` writes, has no
+    /// callback form and is told apart from a plain key by its structure.
+    #[test]
+    fn opens_encrypted_pkcs8_der_with_the_passphrase() {
+        let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let cipher = openssl::symm::Cipher::aes_256_cbc();
+        let encrypted = key
+            .private_key_to_pkcs8_passphrase(cipher, b"correct horse")
+            .unwrap();
+        assert!(looks_like_encrypted_pkcs8(&encrypted));
+        assert!(!looks_like_encrypted_pkcs8(
+            &key.private_key_to_pkcs8().unwrap()
+        ));
+
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let meta = backend
+            .import_key(
+                spec(KeyAlgorithm::Rsa2048, "imported"),
+                &encrypted,
+                Some(b"correct horse"),
+            )
+            .expect("the passphrase opens the key");
+        assert_eq!(
+            meta.public_key.unwrap().as_bytes(),
+            key.public_key_to_der().unwrap()
+        );
+
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let error = backend
+            .import_key(spec(KeyAlgorithm::Rsa2048, "imported"), &encrypted, None)
+            .expect_err("no passphrase, no key");
+        assert!(error.to_string().contains("encrypted DER"), "{error}");
+
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let error = backend
+            .import_key(
+                spec(KeyAlgorithm::Rsa2048, "imported"),
+                &encrypted,
+                Some(b"wrong horse"),
+            )
+            .expect_err("the wrong passphrase does not open it");
+        assert!(error.to_string().contains("does not open"), "{error}");
+    }
+
+    /// A raw key has nothing to decrypt, and a passphrase the record would
+    /// say was used cannot have been.
+    #[test]
+    fn refuses_a_passphrase_where_nothing_is_encrypted() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let error = backend
+            .import_key(
+                spec(KeyAlgorithm::Aes256, "kek"),
+                &[7u8; 32],
+                Some(b"correct horse"),
+            )
+            .expect_err("a raw key takes no passphrase");
+        assert!(error.to_string().contains("raw key"), "{error}");
+
+        let plain = PKey::from_rsa(Rsa::generate(2048).unwrap())
+            .unwrap()
+            .private_key_to_pkcs8()
+            .unwrap();
+        let error = backend
+            .import_key(
+                spec(KeyAlgorithm::Rsa2048, "imported"),
+                &plain,
+                Some(b"correct horse"),
+            )
+            .expect_err("plain DER takes no passphrase");
+        assert!(error.to_string().contains("not encrypted"), "{error}");
+    }
+
     /// The declared algorithm is checked against what the material turns out to
     /// be, including between two parameter sets of one family.
     #[test]
@@ -2497,7 +2672,7 @@ mod tests {
 
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let error = backend
-            .import_key(spec(KeyAlgorithm::MlDsa87, "imported"), &material)
+            .import_key(spec(KeyAlgorithm::MlDsa87, "imported"), &material, None)
             .expect_err("ML-DSA-44 material declared as ML-DSA-87 must be refused");
 
         let message = error.to_string();
@@ -3273,6 +3448,7 @@ mod tests {
                     ..spec(KeyAlgorithm::Aes256, "kek")
                 },
                 &base16ct::lower::decode_vec(FROZEN_KEK).unwrap(),
+                None,
             )
             .unwrap();
 

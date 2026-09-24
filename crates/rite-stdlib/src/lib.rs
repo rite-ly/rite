@@ -3,6 +3,7 @@
 //! This crate provides the built-in action implementations:
 //!
 //! - **Verification**: `clock_check`, `confirm`, `check_value`, `oral_readback`, `machine_info`
+//! - **Entry**: `enter_value`, `enter_secret`
 //! - **Attestation**: `attest`
 //! - **Crypto**: `generate_key`, `export_public`, `wrap_key`, `unwrap_key`,
 //!   `sign_data`, `verify_signature`
@@ -51,6 +52,7 @@ pub mod attestation;
 #[cfg(feature = "crypto")]
 pub mod crypto;
 pub mod entropy;
+pub mod entry;
 #[cfg(feature = "piv")]
 pub mod piv;
 #[cfg(feature = "pki")]
@@ -73,6 +75,7 @@ pub use crypto::{
     SignDataAction, UnwrapKeyAction, VerifySignatureAction, WrapKeyAction,
 };
 pub use entropy::GatherEntropyAction;
+pub use entry::{EnterSecretAction, EnterValueAction};
 #[cfg(feature = "yubikey")]
 pub use piv::YubikeyAttestSlotAction;
 #[cfg(feature = "piv")]
@@ -111,9 +114,11 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
         registry.register(Arc::new(AttestAction));
     }
 
-    // Human-entropy gathering has no optional dependencies, so it is always
-    // available rather than gated behind a feature.
+    // Human-entropy gathering and typed entry have no optional dependencies,
+    // so they are always available rather than gated behind a feature.
     registry.register(Arc::new(GatherEntropyAction));
+    registry.register(Arc::new(EnterValueAction));
+    registry.register(Arc::new(EnterSecretAction));
 
     // The arithmetic is dependency-free and the randomness comes from
     // whichever backend the step names, so sharing needs no feature either.

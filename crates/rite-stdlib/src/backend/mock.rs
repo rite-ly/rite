@@ -128,6 +128,7 @@ impl MockBackend {
                     location_hint: None,
                 },
                 MOCK_SLOT_PRIVATE_KEY,
+                None,
             )
             .expect("the committed slot key fixture is a P-256 PKCS#8 key")
             .key_id;
@@ -222,8 +223,13 @@ impl KeyStoreBackend for MockBackend {
         self.crypto.generate_key(spec)
     }
 
-    fn import_key(&mut self, spec: KeySpec, key_bytes: &[u8]) -> Result<KeyMetadata, BackendError> {
-        self.crypto.import_key(spec, key_bytes)
+    fn import_key(
+        &mut self,
+        spec: KeySpec,
+        key_bytes: &[u8],
+        passphrase: Option<&[u8]>,
+    ) -> Result<KeyMetadata, BackendError> {
+        self.crypto.import_key(spec, key_bytes, passphrase)
     }
 
     fn export_public_key(&self, key_id: &KeyId) -> Result<PublicKeyDer, BackendError> {

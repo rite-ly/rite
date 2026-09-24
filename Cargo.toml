@@ -78,6 +78,7 @@ ratatui = { version = "0.30.0", default-features = false, features = [
 crossterm = "0.29.0"
 dashmap = "6.1.0"
 subtle = "2.6.1"
+regex-lite = "0.1.8"
 sysinfo = { version = "0.39.0", default-features = false, features = ["system", "disk"] }
 x509-cert = { version = "0.3.0", features = ["builder"] }
 signature = "3.0.0"

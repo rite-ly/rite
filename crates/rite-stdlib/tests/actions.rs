@@ -5,7 +5,9 @@
 
 use std::collections::HashMap;
 
-use rite_model::{ArtifactId, ArtifactRef, NamedInput, StepFact, StepId, StepInputs};
+use rite_model::{
+    ArtifactId, ArtifactRef, NamedInput, Prompt, ResponseRecord, StepFact, StepId, StepInputs,
+};
 use rite_runtime::{
     Action, ArtifactValue, ExecutionState, Response, Share, ShareSet, StepInfo,
     test_support::ReporterHarness,
@@ -14,11 +16,11 @@ use rite_sdk::{KeyAlgorithm, KeyPolicy, KeySpec, KeyStoreBackend};
 use rite_stdlib::sharing::{gf256, wire};
 use rite_stdlib::{
     AttestAction, CheckValueAction, ClockCheckAction, CombineSharesAction, ConfirmAction,
-    DecryptDataAction, EncryptDataAction, ExportPublicAction, GatherEntropyAction, ImportKeyAction,
-    MachineInfoAction, MockBackend, OralReadbackAction, SplitSecretAction, UnwrapKeyAction,
-    WrapKeyAction,
+    DecryptDataAction, EncryptDataAction, EnterSecretAction, EnterValueAction, ExportPublicAction,
+    GatherEntropyAction, ImportKeyAction, MachineInfoAction, MockBackend, OralReadbackAction,
+    SplitSecretAction, UnwrapKeyAction, WrapKeyAction,
 };
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretBox, SecretString};
 
 fn make_state() -> ExecutionState {
     ExecutionState::new(HashMap::new(), HashMap::new(), HashMap::new(), false)
@@ -101,6 +103,241 @@ fn gather_entropy_completes_with_a_contribution() {
     };
 
     result.expect("a non-empty contribution is folded and the step completes");
+}
+
+// ── typed entry ─────────────────────────────────────────────────────────────
+
+/// A step that creates `produces` and reads nothing, as an entry step does.
+fn creating_step(id: &str, produces: &str) -> StepInfo {
+    StepInfo::new(
+        StepId::new(id),
+        None,
+        None,
+        Some(ArtifactId::new(produces)),
+        None,
+    )
+}
+
+#[test]
+fn enter_value_records_what_was_typed_as_a_text_artifact() {
+    let mut harness = ReporterHarness::new();
+    harness.enqueue_response(Response::Text("SN-4471".to_string()));
+    let state = make_state();
+    let step = creating_step("read_serial", "serial");
+
+    let result = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        EnterValueAction
+            .execute(
+                &step,
+                &ctx,
+                &serde_json::json!({ "message": "Serial number on the device" }),
+                &mut reporter,
+                None,
+            )
+            .expect("a typed value completes the step")
+    };
+
+    assert!(matches!(
+        produced(&result.artifacts, "serial"),
+        ArtifactValue::Text(value) if value == "SN-4471"
+    ));
+    // The value is evidence, so the prompt fact carries it.
+    assert!(harness.facts().iter().any(|fact| matches!(
+        fact,
+        StepFact::PromptAnswered {
+            response: ResponseRecord::Text { value },
+            ..
+        } if value == "SN-4471"
+    )));
+}
+
+#[test]
+fn enter_secret_holds_the_secret_and_records_only_that_one_was_entered() {
+    let mut harness = ReporterHarness::new();
+    harness.enqueue_response(Response::Secret(SecretString::from("correct horse")));
+    let state = make_state();
+    let step = creating_step("unlock", "escrow_passphrase");
+
+    let result = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        EnterSecretAction
+            .execute(
+                &step,
+                &ctx,
+                &serde_json::json!({ "message": "Passphrase for the escrow key" }),
+                &mut reporter,
+                None,
+            )
+            .expect("a typed secret completes the step")
+    };
+
+    match produced(&result.artifacts, "escrow_passphrase") {
+        ArtifactValue::Secret(secret) => {
+            assert_eq!(secret.expose_secret(), b"correct horse");
+        }
+        other => panic!("enter_secret must produce a Secret, got {other:?}"),
+    }
+    // The fact says a secret was entered, and nothing else about it.
+    let recorded = harness
+        .facts()
+        .iter()
+        .find_map(|fact| match fact {
+            StepFact::PromptAnswered { response, .. } => Some(response),
+            _ => None,
+        })
+        .expect("the prompt is recorded");
+    assert!(matches!(recorded, ResponseRecord::SecretRedacted {}));
+    let serialized = serde_json::to_string(harness.facts()).unwrap();
+    assert!(!serialized.contains("correct horse"));
+}
+
+#[test]
+fn enter_secret_refuses_a_step_that_holds_the_secret_nowhere() {
+    let mut harness = ReporterHarness::new();
+    let state = make_state();
+    let step = bare_step("unlock");
+
+    let ctx = state.handler_context();
+    let mut reporter = harness.reporter(step.id.clone());
+    let error = EnterSecretAction
+        .execute(
+            &step,
+            &ctx,
+            &serde_json::json!({ "message": "Passphrase" }),
+            &mut reporter,
+            None,
+        )
+        .expect_err("a secret with no artifact to hold it would be typed and thrown away");
+
+    assert!(error.to_string().contains("creates:"), "{error}");
+    assert!(
+        harness.facts().is_empty(),
+        "the refusal comes before the person is asked"
+    );
+}
+
+/// The shape is stated in the label, so the person reads the rule before
+/// typing. Applying it is the reporter's job, tested there.
+#[test]
+fn entry_states_its_shape_in_the_prompt() {
+    let mut harness = ReporterHarness::new();
+    harness.enqueue_response(Response::Secret(SecretString::from("123456")));
+    let state = make_state();
+    let step = creating_step("pin", "pin");
+
+    {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        EnterSecretAction
+            .execute(
+                &step,
+                &ctx,
+                &serde_json::json!({ "message": "PIN", "format": "digits", "length": 6 }),
+                &mut reporter,
+                None,
+            )
+            .expect("six digits fit the shape");
+    }
+
+    let prompt = harness
+        .facts()
+        .iter()
+        .find_map(|fact| match fact {
+            StepFact::PromptAnswered { prompt, .. } => Some(prompt),
+            _ => None,
+        })
+        .expect("the prompt is recorded");
+    assert!(matches!(
+        prompt,
+        Prompt::Secret { label, .. } if label == "PIN (6 digits)"
+    ));
+}
+
+#[test]
+fn entry_refuses_a_shape_that_describes_no_rule() {
+    let mut harness = ReporterHarness::new();
+    let state = make_state();
+    let step = creating_step("pin", "pin");
+
+    let ctx = state.handler_context();
+    let mut reporter = harness.reporter(step.id.clone());
+    let error = EnterValueAction
+        .execute(
+            &step,
+            &ctx,
+            &serde_json::json!({ "message": "PIN", "format": { "pattern": "[0-9]+" }, "length": 6 }),
+            &mut reporter,
+            None,
+        )
+        .expect_err("a pattern beside a length is two rules");
+
+    assert!(error.to_string().contains("pattern"), "{error}");
+}
+
+/// With an encoding the string is transport: the prompt fact keeps what was
+/// typed and the artifact keeps what it decodes to.
+#[test]
+fn enter_value_with_an_encoding_keeps_the_decoded_bytes() {
+    let mut harness = ReporterHarness::new();
+    harness.enqueue_response(Response::Text("DE AD be ef".to_string()));
+    let state = make_state();
+    let step = creating_step("read_kcv", "kcv");
+
+    let result = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        EnterValueAction
+            .execute(
+                &step,
+                &ctx,
+                &serde_json::json!({ "message": "KCV", "format": "hex", "length": 4 }),
+                &mut reporter,
+                None,
+            )
+            .expect("four hex bytes, grouped as typed")
+    };
+
+    assert!(matches!(
+        produced(&result.artifacts, "kcv"),
+        ArtifactValue::Bytes(bytes) if bytes == &[0xde, 0xad, 0xbe, 0xef]
+    ));
+    assert!(harness.facts().iter().any(|fact| matches!(
+        fact,
+        StepFact::PromptAnswered {
+            response: ResponseRecord::Text { value },
+            ..
+        } if value == "DE AD be ef"
+    )));
+}
+
+#[test]
+fn enter_secret_with_an_encoding_holds_the_decoded_bytes() {
+    let mut harness = ReporterHarness::new();
+    harness.enqueue_response(Response::Secret(SecretString::from("00".repeat(32))));
+    let state = make_state();
+    let step = creating_step("component", "kek_component");
+
+    let result = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        EnterSecretAction
+            .execute(
+                &step,
+                &ctx,
+                &serde_json::json!({ "message": "Component", "format": "hex", "length": 32 }),
+                &mut reporter,
+                None,
+            )
+            .expect("a 32-byte component as hex")
+    };
+
+    match produced(&result.artifacts, "kek_component") {
+        ArtifactValue::Secret(secret) => assert_eq!(secret.expose_secret(), &[0u8; 32]),
+        other => panic!("enter_secret must produce a Secret, got {other:?}"),
+    }
 }
 
 #[test]
@@ -634,48 +871,232 @@ fn import_key_accepts_a_pem_private_key() {
 /// places: PKCS#8 in the preamble, the traditional format in RFC 1421 headers
 /// inside an ordinary one. Missing the second would leave OpenSSL to ask for
 /// the passphrase itself, on the terminal, in the middle of a ceremony.
-#[test]
-fn import_key_refuses_an_encrypted_pem_by_name() {
+fn encrypted_pems(passphrase: &[u8]) -> Vec<Vec<u8>> {
     let rsa = openssl::rsa::Rsa::generate(2048).unwrap();
     let key = openssl::pkey::PKey::from_rsa(rsa).unwrap();
     let cipher = openssl::symm::Cipher::aes_256_cbc();
     let pkcs8 = key
-        .private_key_to_pem_pkcs8_passphrase(cipher, b"secret")
+        .private_key_to_pem_pkcs8_passphrase(cipher, passphrase)
         .unwrap();
     let traditional = key
         .rsa()
         .unwrap()
-        .private_key_to_pem_passphrase(cipher, b"secret")
+        .private_key_to_pem_passphrase(cipher, passphrase)
         .unwrap();
     assert!(
         traditional.windows(10).any(|w| w == b"Proc-Type:"),
         "the traditional form marks the body, not the preamble"
     );
+    vec![pkcs8, traditional]
+}
 
-    for pem in [pkcs8, traditional] {
-        let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
-        let material_id = ArtifactId::new("escrowed");
-        let state = make_state().with_material(material_id.clone(), ArtifactValue::Bytes(pem));
-        let step = import_step("import", "restored", material_id);
+fn secret(text: &str) -> ArtifactValue {
+    ArtifactValue::Secret(SecretBox::new(Box::new(text.as_bytes().to_vec())))
+}
 
+/// An import step reading `escrowed` as the material and, when given, an
+/// artifact as the passphrase.
+fn passphrase_import(passphrase: Option<&str>) -> StepInfo {
+    let mut reads = vec![("key_material", ArtifactId::new("escrowed"))];
+    if let Some(id) = passphrase {
+        reads.push(("passphrase", ArtifactId::new(id)));
+    }
+    step_named("import", "restored", &reads)
+}
+
+fn run_import(
+    state: &ExecutionState,
+    step: &StepInfo,
+    harness: &mut ReporterHarness,
+) -> Result<rite_runtime::StepResult, rite_runtime::ActionError> {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let ctx = state.handler_context();
+    let mut reporter = harness.reporter(step.id.clone());
+    ImportKeyAction.execute(
+        step,
+        &ctx,
+        &serde_json::json!({ "algorithm": "RSA-2048" }),
+        &mut reporter,
+        Some(&mut backend),
+    )
+}
+
+#[test]
+fn import_key_refuses_an_encrypted_pem_by_name() {
+    for pem in encrypted_pems(b"secret") {
+        let state =
+            make_state().with_material(ArtifactId::new("escrowed"), ArtifactValue::Bytes(pem));
+        let step = passphrase_import(None);
         let mut harness = ReporterHarness::new();
-        let ctx = state.handler_context();
-        let mut reporter = harness.reporter(step.id.clone());
-        let error = ImportKeyAction
-            .execute(
-                &step,
-                &ctx,
-                &serde_json::json!({ "algorithm": "RSA-2048" }),
-                &mut reporter,
-                Some(&mut backend),
-            )
-            .expect_err("a ceremony carries no passphrase");
 
+        let error = run_import(&state, &step, &mut harness)
+            .expect_err("the ceremony supplies no passphrase");
+
+        let message = error.to_string();
         assert!(
-            error.to_string().contains("encrypted PEM"),
-            "the refusal should name the encoding, got: {error}"
+            message.contains("encrypted PEM") && message.contains("enter_secret"),
+            "the refusal should name the encoding and the way out, got: {message}"
         );
     }
+}
+
+#[test]
+fn import_key_opens_an_encrypted_pem_with_the_secret_a_step_read() {
+    for pem in encrypted_pems(b"correct horse") {
+        let state = make_state()
+            .with_material(ArtifactId::new("escrowed"), ArtifactValue::Bytes(pem))
+            .with_material(
+                ArtifactId::new("escrow_passphrase"),
+                secret("correct horse"),
+            );
+        let step = passphrase_import(Some("escrow_passphrase"));
+        let mut harness = ReporterHarness::new();
+
+        let imported =
+            run_import(&state, &step, &mut harness).expect("the passphrase opens the key");
+
+        assert!(matches!(
+            produced(&imported.artifacts, "restored"),
+            ArtifactValue::BackendKey { .. }
+        ));
+        // The record names the artifact the passphrase came from and carries
+        // nothing of its value.
+        let inputs = harness
+            .facts()
+            .iter()
+            .find_map(|fact| match fact {
+                StepFact::BackendOperation { inputs, .. } => Some(inputs),
+                _ => None,
+            })
+            .expect("the import is recorded");
+        assert_eq!(inputs["passphrase"], "escrow_passphrase");
+        assert!(
+            !serde_json::to_string(harness.facts())
+                .unwrap()
+                .contains("correct horse")
+        );
+    }
+}
+
+#[test]
+fn import_key_refuses_the_wrong_passphrase_without_naming_it() {
+    let pem = encrypted_pems(b"correct horse").swap_remove(0);
+    let state = make_state()
+        .with_material(ArtifactId::new("escrowed"), ArtifactValue::Bytes(pem))
+        .with_material(ArtifactId::new("escrow_passphrase"), secret("wrong horse"));
+    let step = passphrase_import(Some("escrow_passphrase"));
+    let mut harness = ReporterHarness::new();
+
+    let error = run_import(&state, &step, &mut harness).expect_err("the passphrase is wrong");
+
+    let message = error.to_string();
+    assert!(message.contains("does not open"), "{message}");
+    assert!(!message.contains("wrong horse"));
+}
+
+#[test]
+fn import_key_refuses_a_passphrase_that_was_never_needed() {
+    let rsa = openssl::rsa::Rsa::generate(2048).unwrap();
+    let pem = openssl::pkey::PKey::from_rsa(rsa)
+        .unwrap()
+        .private_key_to_pem_pkcs8()
+        .unwrap();
+    let state = make_state()
+        .with_material(ArtifactId::new("escrowed"), ArtifactValue::Bytes(pem))
+        .with_material(
+            ArtifactId::new("escrow_passphrase"),
+            secret("correct horse"),
+        );
+    let step = passphrase_import(Some("escrow_passphrase"));
+    let mut harness = ReporterHarness::new();
+
+    let error = run_import(&state, &step, &mut harness)
+        .expect_err("a passphrase the record says was used has to have been used");
+
+    assert!(error.to_string().contains("not encrypted"), "{error}");
+}
+
+/// A passphrase that sat on a disk is what reading one at the keyboard
+/// exists to avoid, so only a secret artifact is accepted.
+#[test]
+fn import_key_refuses_a_passphrase_that_is_not_a_secret() {
+    let pem = encrypted_pems(b"correct horse").swap_remove(0);
+    let state = make_state()
+        .with_material(ArtifactId::new("escrowed"), ArtifactValue::Bytes(pem))
+        .with_material(
+            ArtifactId::new("escrow_passphrase"),
+            ArtifactValue::Bytes(b"correct horse".to_vec()),
+        );
+    let step = passphrase_import(Some("escrow_passphrase"));
+    let mut harness = ReporterHarness::new();
+
+    let error = run_import(&state, &step, &mut harness).expect_err("bytes are not a secret");
+
+    let message = error.to_string();
+    assert!(message.contains("enter_secret"), "{message}");
+    assert!(
+        harness.facts().is_empty(),
+        "the refusal comes before anything is recorded"
+    );
+
+    // A text artifact prints its text, and this message becomes a fact, so
+    // the refusal names the kind and nothing more.
+    let state = make_state()
+        .with_material(
+            ArtifactId::new("escrowed"),
+            ArtifactValue::Bytes(Vec::new()),
+        )
+        .with_material(
+            ArtifactId::new("escrow_passphrase"),
+            ArtifactValue::Text("correct horse".to_string()),
+        );
+    let error = run_import(&state, &step, &mut harness).expect_err("text is not a secret");
+    let message = error.to_string();
+    assert!(message.contains("is text"), "{message}");
+    assert!(!message.contains("correct horse"));
+}
+
+/// A secret has no properties, so a reference naming one is a slip that
+/// would otherwise supply the whole secret without a word.
+#[test]
+fn import_key_refuses_a_passphrase_reference_with_a_property() {
+    let pem = encrypted_pems(b"correct horse").swap_remove(0);
+    let state = make_state()
+        .with_material(ArtifactId::new("escrowed"), ArtifactValue::Bytes(pem))
+        .with_material(
+            ArtifactId::new("escrow_passphrase"),
+            secret("correct horse"),
+        );
+    let reads = vec![
+        (
+            "key_material".to_string(),
+            NamedInput::One(ArtifactRef::Produced {
+                id: ArtifactId::new("escrowed"),
+                property: None,
+            }),
+        ),
+        (
+            "passphrase".to_string(),
+            NamedInput::One(ArtifactRef::Produced {
+                id: ArtifactId::new("escrow_passphrase"),
+                property: Some("value".to_string()),
+            }),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let step = StepInfo::new(
+        StepId::new("import"),
+        None,
+        Some("mock".to_string()),
+        Some(ArtifactId::new("restored")),
+        Some(StepInputs::Named(reads)),
+    );
+    let mut harness = ReporterHarness::new();
+
+    let error = run_import(&state, &step, &mut harness).expect_err("a property on a secret");
+
+    assert!(error.to_string().contains("'.value'"), "{error}");
 }
 
 #[test]

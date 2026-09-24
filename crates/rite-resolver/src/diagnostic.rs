@@ -330,6 +330,7 @@ impl SpanMap {
             | ResolveError::WithFieldNeedsInput { step, .. }
             | ResolveError::InvalidWithValue { step, .. }
             | ResolveError::MissingReadsInput { step, .. }
+            | ResolveError::UnknownReadsInput { step, .. }
             | ResolveError::AmbiguousReadsInput { step, .. }
             | ResolveError::TooFewReadsInputs { step, .. }
             | ResolveError::ReadsInputShape { step, .. }

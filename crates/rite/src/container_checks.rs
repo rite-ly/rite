@@ -801,6 +801,7 @@ mod tests {
                     location_hint: None,
                 },
                 &[7u8; 32],
+                None,
             )
             .unwrap();
         let target = backend

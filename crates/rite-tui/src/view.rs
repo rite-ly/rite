@@ -329,7 +329,7 @@ fn render_prompt(pending: &crate::model::PendingPrompt, frame: &mut Frame<'_>, a
             Line::from(label.clone()),
             Line::from(format!("> {}", pending.input)),
         ],
-        Prompt::Secret { label } => vec![
+        Prompt::Secret { label, .. } => vec![
             Line::from(label.clone()),
             Line::from(format!("> {}", "•".repeat(pending.input.len()))),
         ],

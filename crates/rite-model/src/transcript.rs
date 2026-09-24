@@ -12,22 +12,263 @@
 
 use std::path::PathBuf;
 
+use base64ct::Encoding as _;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::ir::{ActId, RoleId, StepId};
 
-/// Validator applied by the runtime to a free-form text or literal response
-/// before it is accepted.
+/// Validator applied by the runtime to a typed response before it is
+/// accepted.
+///
+/// The rule is part of the prompt, so it is recorded with it: a transcript
+/// says a six-digit secret was entered, never which one. [`check`](Self::check)
+/// is the one place a rule is applied, so `rite check` and the running
+/// ceremony agree on what a pattern accepts.
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum ValidatorSpec {
     /// Reject empty or whitespace-only input.
+    #[default]
     NonEmpty,
-    /// Input must match this regular expression.
+    /// Input must match this regular expression in full.
     Regex(String),
     /// Named, runtime-defined predicate (e.g. `serial_number`).
     Predefined(String),
+    /// A value of one [`Format`], with a length within bounds.
+    ///
+    /// What a PIN or a key component needs, stated without a pattern the
+    /// person writing the ceremony has to get right. The length is counted
+    /// in the format's own units: characters for text, bytes for an
+    /// encoding.
+    Format {
+        /// What kind of value this is.
+        format: Format,
+        /// Fewest units accepted, if bounded.
+        min_length: Option<usize>,
+        /// Most units accepted, if bounded.
+        max_length: Option<usize>,
+    },
+}
+
+/// What kind of value a person types.
+///
+/// Each format has one canonical representation, which is what an entry step
+/// keeps: the text as typed for a text format, the decoded bytes for an
+/// encoding. An encoding is forgiving of the grouping a person types it in,
+/// so whitespace is dropped before decoding.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Format {
+    /// Anything the person can type.
+    Text,
+    /// `0` to `9`.
+    Digits,
+    /// ASCII letters and digits.
+    Alphanumeric,
+    /// Bytes as hexadecimal, in either case, two digits per byte.
+    Hex,
+    /// Bytes as standard base64 with padding, as `openssl base64` writes it.
+    Base64,
+}
+
+impl Format {
+    /// Whether the value stands for bytes, which is what the step then keeps.
+    #[must_use]
+    pub fn is_encoding(self) -> bool {
+        match self {
+            Format::Text | Format::Digits | Format::Alphanumeric => false,
+            Format::Hex | Format::Base64 => true,
+        }
+    }
+
+    /// Whether a text format accepts this character. An encoding accepts
+    /// whatever decodes.
+    fn accepts(self, c: char) -> bool {
+        match self {
+            Format::Text | Format::Hex | Format::Base64 => true,
+            Format::Digits => c.is_ascii_digit(),
+            Format::Alphanumeric => c.is_ascii_alphanumeric(),
+        }
+    }
+
+    /// Decode a typed value of an encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the value is not this encoding, or that the format is not
+    /// one, worded for the person who typed it and naming nothing of what
+    /// they typed.
+    pub fn decode(self, value: &str) -> Result<Vec<u8>, String> {
+        // The value may be a secret, so the copy without its whitespace is
+        // wiped with the call.
+        let compact: Zeroizing<String> =
+            Zeroizing::new(value.chars().filter(|c| !c.is_whitespace()).collect());
+        match self {
+            Format::Hex => base16ct::mixed::decode_vec(compact.as_bytes())
+                .map_err(|_| "value must be hex, two digits per byte".to_string()),
+            Format::Base64 => base64ct::Base64::decode_vec(&compact)
+                .map_err(|_| "value must be standard base64, with padding".to_string()),
+            Format::Text | Format::Digits | Format::Alphanumeric => {
+                Err(format!("{} is text and does not decode", self.describe()))
+            }
+        }
+    }
+
+    /// The unit a length counts, as a person reads it in a hint.
+    #[must_use]
+    pub fn describe(self) -> &'static str {
+        match self {
+            Format::Text => "characters",
+            Format::Digits => "digits",
+            Format::Alphanumeric => "letters or digits",
+            Format::Hex => "bytes as hex",
+            Format::Base64 => "bytes as base64",
+        }
+    }
+
+    /// A stand-in of `length` units that satisfies the format, for a run
+    /// with no one at the keyboard. Never a real value.
+    ///
+    /// `None` above [`PLACEHOLDER_LIMIT`]: a length a ceremony declares is
+    /// not bounded, and a stand-in that size would be allocated for nothing.
+    /// The caller then declines to answer rather than answering with
+    /// something the rule refuses, which would be asked again without end.
+    #[must_use]
+    pub fn placeholder(self, length: usize) -> Option<String> {
+        if length > PLACEHOLDER_LIMIT {
+            return None;
+        }
+        Some(match self {
+            Format::Text | Format::Alphanumeric => "x".repeat(length),
+            Format::Digits => "0".repeat(length),
+            Format::Hex => base16ct::lower::encode_string(&vec![0u8; length]),
+            Format::Base64 => base64ct::Base64::encode_string(&vec![0u8; length]),
+        })
+    }
+}
+
+/// The longest stand-in a [`Format::placeholder`] builds, in the format's
+/// units. Large enough for any value a person would type or paste, and the
+/// entry itself is not bounded by it.
+pub const PLACEHOLDER_LIMIT: usize = 64 * 1024;
+
+impl std::str::FromStr for Format {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "text" => Ok(Format::Text),
+            "digits" => Ok(Format::Digits),
+            "alphanumeric" => Ok(Format::Alphanumeric),
+            "hex" => Ok(Format::Hex),
+            "base64" => Ok(Format::Base64),
+            other => Err(format!(
+                "unknown format '{other}': expected text, digits, alphanumeric, hex or base64"
+            )),
+        }
+    }
+}
+
+impl ValidatorSpec {
+    /// Apply the rule to a typed value.
+    ///
+    /// # Errors
+    ///
+    /// Returns what the value fails to satisfy, worded for the person who
+    /// typed it, or why the rule itself cannot be applied.
+    pub fn check(&self, value: &str) -> Result<(), String> {
+        match self {
+            ValidatorSpec::NonEmpty => {
+                if value.trim().is_empty() {
+                    Err("value must not be empty".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+            ValidatorSpec::Regex(pattern) => {
+                let regex = compile_pattern(pattern)?;
+                if regex.is_match(value) {
+                    Ok(())
+                } else {
+                    Err(format!("value must match {pattern}"))
+                }
+            }
+            // Named predicates will land alongside the actions that need them.
+            ValidatorSpec::Predefined(name) => Err(format!("unknown validator: {name}")),
+            ValidatorSpec::Format {
+                format,
+                min_length,
+                max_length,
+            } => {
+                let hint = self.hint().unwrap_or_default();
+                if value.trim().is_empty() {
+                    return Err("value must not be empty".to_string());
+                }
+                // An encoding is decoded and discarded, wiped on the way out:
+                // the value may be a secret, and this runs before the step
+                // holds it.
+                let length = if format.is_encoding() {
+                    Zeroizing::new(format.decode(value)?).len()
+                } else {
+                    if !value.chars().all(|c| format.accepts(c)) {
+                        return Err(format!("value must be {hint}"));
+                    }
+                    value.chars().count()
+                };
+                if min_length.is_some_and(|min| length < min)
+                    || max_length.is_some_and(|max| length > max)
+                {
+                    return Err(format!("value must be {hint}, this is {length}"));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// The rule as a person reads it before typing, if there is one worth
+    /// stating.
+    ///
+    /// `NonEmpty` says nothing: every prompt asks for something. A pattern is
+    /// shown as written, since a regular expression has no better rendering.
+    #[must_use]
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            ValidatorSpec::NonEmpty | ValidatorSpec::Predefined(_) => None,
+            ValidatorSpec::Regex(pattern) => Some(format!("matching {pattern}")),
+            ValidatorSpec::Format {
+                format,
+                min_length,
+                max_length,
+            } => {
+                let what = format.describe();
+                Some(match (min_length, max_length) {
+                    (Some(min), Some(max)) if min == max => format!("{min} {what}"),
+                    (Some(min), Some(max)) => format!("{min} to {max} {what}"),
+                    (Some(min), None) => format!("at least {min} {what}"),
+                    (None, Some(max)) => format!("at most {max} {what}"),
+                    (None, None) if format.is_encoding() => what.to_string(),
+                    (None, None) => format!("{what} only"),
+                })
+            }
+        }
+    }
+}
+
+/// Compile a pattern so that it must match the whole value.
+///
+/// A rule that read `[0-9]+` and accepted `abc123def` would pass what its
+/// author meant to refuse, so the anchors are always supplied here rather
+/// than expected of the author.
+///
+/// # Errors
+///
+/// Returns why the pattern is not a regular expression.
+pub fn compile_pattern(pattern: &str) -> Result<regex_lite::Regex, String> {
+    regex_lite::Regex::new(&format!("^(?:{pattern})$"))
+        .map_err(|e| format!("invalid pattern '{pattern}': {e}"))
 }
 
 /// Request for user input, recorded into the transcript as part of
@@ -55,6 +296,11 @@ pub enum Prompt {
     Secret {
         /// Label shown to the user.
         label: String,
+        /// Validator applied before the response is accepted. Absent in
+        /// transcripts written before a secret carried one, which asked for
+        /// nothing beyond a non-empty value.
+        #[serde(default)]
+        validator: ValidatorSpec,
     },
     /// User must type a specific literal string exactly. Validation is
     /// performed by the runtime against `expected`.
@@ -407,6 +653,157 @@ impl StepFact {
 /// Breaking the format is allowed in early beta, **deliberately**, update
 /// the fixture in the same commit so the diff documents the wire change.
 #[cfg(test)]
+mod validator_tests {
+    use super::*;
+
+    fn shape(format: Format, min: usize, max: usize) -> ValidatorSpec {
+        ValidatorSpec::Format {
+            format,
+            min_length: Some(min),
+            max_length: Some(max),
+        }
+    }
+
+    #[test]
+    fn a_text_format_checks_characters_and_length() {
+        let pin = shape(Format::Digits, 6, 8);
+        assert!(pin.check("123456").is_ok());
+        assert!(pin.check("12345678").is_ok());
+        assert!(pin.check("12345").unwrap_err().contains("this is 5"));
+        assert!(pin.check("123456789").unwrap_err().contains("this is 9"));
+        assert!(pin.check("12345a").unwrap_err().contains("digits"));
+
+        assert!(shape(Format::Alphanumeric, 1, 4).check("ab12").is_ok());
+        assert!(shape(Format::Alphanumeric, 1, 4).check("ab-1").is_err());
+        assert!(shape(Format::Text, 1, 4).check("ab-1").is_ok());
+        assert!(
+            ValidatorSpec::Format {
+                format: Format::Text,
+                min_length: None,
+                max_length: None,
+            }
+            .check("  ")
+            .is_err(),
+            "a value is still something"
+        );
+    }
+
+    /// The pattern covers the whole value: a rule that read `[0-9]+` and
+    /// accepted `abc123` would pass what its author meant to refuse.
+    #[test]
+    fn a_pattern_must_match_the_whole_value() {
+        let digits = ValidatorSpec::Regex("[0-9]+".to_string());
+        assert!(digits.check("123").is_ok());
+        assert!(digits.check("abc123").is_err());
+        assert!(digits.check("123abc").is_err());
+        // Alternation is grouped before anchoring.
+        let either = ValidatorSpec::Regex("yes|no".to_string());
+        assert!(either.check("no").is_ok());
+        assert!(either.check("nope").is_err());
+    }
+
+    #[test]
+    fn a_refusal_names_the_rule_and_not_the_value() {
+        let err = shape(Format::Digits, 6, 6).check("hunter2").unwrap_err();
+        assert!(!err.contains("hunter2"));
+        let err = ValidatorSpec::Regex("[0-9]+".to_string())
+            .check("hunter2")
+            .unwrap_err();
+        assert!(!err.contains("hunter2"));
+    }
+
+    #[test]
+    fn a_hint_reads_as_a_person_would_say_it() {
+        assert_eq!(shape(Format::Digits, 6, 6).hint().unwrap(), "6 digits");
+        assert_eq!(
+            shape(Format::Text, 6, 8).hint().unwrap(),
+            "6 to 8 characters"
+        );
+        assert_eq!(
+            ValidatorSpec::Format {
+                format: Format::Hex,
+                min_length: Some(32),
+                max_length: None,
+            }
+            .hint()
+            .unwrap(),
+            "at least 32 bytes as hex"
+        );
+        assert_eq!(
+            ValidatorSpec::Format {
+                format: Format::Alphanumeric,
+                min_length: None,
+                max_length: None,
+            }
+            .hint()
+            .unwrap(),
+            "letters or digits only"
+        );
+        assert_eq!(
+            ValidatorSpec::Format {
+                format: Format::Base64,
+                min_length: None,
+                max_length: None,
+            }
+            .hint()
+            .unwrap(),
+            "bytes as base64"
+        );
+        assert!(ValidatorSpec::NonEmpty.hint().is_none());
+    }
+
+    /// The string is transport: grouping and case are dropped, and what is
+    /// checked is the bytes.
+    #[test]
+    fn an_encoding_decodes_and_counts_bytes() {
+        let key = shape(Format::Hex, 4, 4);
+        assert!(key.check("deadbeef").is_ok());
+        assert!(key.check("DE AD be ef").is_ok());
+        assert!(key.check("deadbe").unwrap_err().contains("this is 3"));
+        assert!(key.check("deadbeefx").unwrap_err().contains("hex"));
+        assert_eq!(Format::Hex.decode("DE AD").unwrap(), vec![0xde, 0xad]);
+
+        let b64 = ValidatorSpec::Format {
+            format: Format::Base64,
+            min_length: None,
+            max_length: None,
+        };
+        assert!(b64.check("aGVsbG8=").is_ok());
+        assert!(b64.check("aGVsbG8").is_err(), "padding is required");
+        assert_eq!(Format::Base64.decode("aGVs\nbG8=").unwrap(), b"hello");
+        assert!(Format::Digits.decode("12").is_err(), "text does not decode");
+    }
+
+    #[test]
+    fn a_placeholder_satisfies_its_own_format() {
+        for format in [
+            Format::Text,
+            Format::Digits,
+            Format::Alphanumeric,
+            Format::Hex,
+            Format::Base64,
+        ] {
+            let stand_in = format.placeholder(32).unwrap();
+            assert!(shape(format, 32, 32).check(&stand_in).is_ok());
+        }
+        assert!(Format::Text.placeholder(PLACEHOLDER_LIMIT + 1).is_none());
+    }
+
+    /// A transcript written before secrets carried a rule still reads.
+    #[test]
+    fn a_secret_prompt_without_a_validator_still_parses() {
+        let prompt: Prompt = serde_json::from_str(r#"{"type":"secret","label":"PIN"}"#).unwrap();
+        assert!(matches!(
+            prompt,
+            Prompt::Secret {
+                validator: ValidatorSpec::NonEmpty,
+                ..
+            }
+        ));
+    }
+}
+
+#[cfg(test)]
 mod schema_snapshot_tests {
     use super::*;
     use serde_json::json;
@@ -568,13 +965,18 @@ mod schema_snapshot_tests {
                 step: Some(StepId::new("s1")),
                 prompt: Prompt::Secret {
                     label: "PIN".to_string(),
+                    validator: ValidatorSpec::NonEmpty,
                 },
                 response: ResponseRecord::SecretRedacted {},
             },
             &json!({
                 "type": "prompt_answered",
                 "step": "s1",
-                "prompt": { "type": "secret", "label": "PIN" },
+                "prompt": {
+                    "type": "secret",
+                    "label": "PIN",
+                    "validator": { "kind": "non_empty" },
+                },
                 "response": { "type": "secret_redacted" },
             }),
         );

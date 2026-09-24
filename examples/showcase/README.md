@@ -58,18 +58,27 @@ certificate carrying one, in DER or PEM. Adding a `backend` chooses who runs
 the check, for a deployment that requires it inside a validated boundary, and
 does not change what the step accepts.
 
-### `import_key.rite.yaml` — Importing a Transport Key
+### `import_key.rite.yaml` — Importing Keys the Ceremony Holds
 
-Takes a key-encryption key that was produced somewhere else, installs it with
-`import_key`, and uses it to wrap a key generated in the room. The component
-arrives as a material, thirty-two raw bytes on the media a custodian carried
-in, which is the case the payments world calls key component entry.
+Takes two keys that were produced somewhere else and installs them with
+`import_key`. The first is a key-encryption key that arrives as a material,
+thirty-two raw bytes on the media a custodian carried in, which is the case
+the payments world calls key component entry; it then wraps a key generated in
+the room. The second is an escrow keypair as an encrypted PEM, opened with a
+passphrase its holder types at an `enter_secret` step and names in `reads:`,
+so no decrypted copy of the key touches a disk. An `enter_value` step records
+the media serial on the way.
 
 `algorithm` is required, because raw material says nothing about itself and a
 secret's bytes look like any others of the same length. `expect_key` is
 optional and given here, checked against what the backend computed after the
 import, so a component swapped on the way in fails the step rather than
 becoming a key the ceremony trusts.
+
+The escrow fixture is encrypted under the passphrase `placeholder-secret`,
+which is what the headless driver types for a secret it cannot know, so the
+ceremony completes in a dry run with no setup. Type it yourself in a real run.
+See `docs/typed-entry.md`.
 
 `rite verify` reports the wrap as `addressed to a key imported into this
 ceremony`, which is a weaker claim than the one a generated key earns and is

@@ -102,6 +102,7 @@ impl KeyStoreBackend for YubikeyDevice {
         &mut self,
         _spec: KeySpec,
         _key_bytes: &[u8],
+        _passphrase: Option<&[u8]>,
     ) -> Result<KeyMetadata, BackendError> {
         Err(BackendError::UnsupportedOperation(
             "YubiKey key import requires the 'untested' yubikey feature".to_string(),

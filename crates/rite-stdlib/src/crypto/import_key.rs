@@ -1,11 +1,12 @@
 //! `import_key` action, lift bytes the ceremony holds into a backend key.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::{ActionType, ArtifactRef, StepFact};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, parse_params, resolve_artifact_bytes,
 };
 use rite_sdk::{Backend, KeyAlgorithm, KeySpec};
+use secrecy::ExposeSecret;
 use serde_json::json;
 
 use crate::params::{ImportKeyParams, installed_key_default_policy};
@@ -17,6 +18,11 @@ use crate::params::{ImportKeyParams, installed_key_default_policy};
 /// carried into the room, or a step earlier in the same run. Rite can say
 /// nothing about where material it did not produce came from, so the record
 /// names the artifact the bytes were read from and claims no more than that.
+///
+/// An encrypted private key is opened with the secret a step named
+/// `passphrase` in `reads:` holds, which is how a key that arrives on sealed
+/// media is imported in the room where its passphrase holder stands, with no
+/// decrypted copy on any disk.
 pub struct ImportKeyAction;
 
 impl Action for ImportKeyAction {
@@ -50,6 +56,11 @@ impl Action for ImportKeyAction {
                 },
             )?;
 
+        let passphrase_ref = step.named_input("passphrase");
+        let passphrase = passphrase_ref
+            .map(|reference| resolve_passphrase(ctx, reference))
+            .transpose()?;
+
         let label = typed
             .label
             .clone()
@@ -76,15 +87,7 @@ impl Action for ImportKeyAction {
             ))
         })?;
 
-        // What an imported key may do is the ceremony's claim, exactly as at
-        // unwrap: nothing travels with raw material saying what it is for.
-        let defaults = installed_key_default_policy(Some(algorithm));
-        let policy = match &typed.policy {
-            None => defaults,
-            Some(declared) => declared
-                .resolve_from(&defaults)
-                .map_err(ActionError::Failed)?,
-        };
+        let policy = declared_policy(&typed, algorithm)?;
 
         let spec = KeySpec {
             algorithm,
@@ -92,7 +95,7 @@ impl Action for ImportKeyAction {
             policy: policy.clone(),
             location_hint: None,
         };
-        let metadata = keystore.import_key(spec, key_bytes)?;
+        let metadata = keystore.import_key(spec, key_bytes, passphrase)?;
 
         let imported_fingerprint = metadata
             .public_key
@@ -115,7 +118,13 @@ impl Action for ImportKeyAction {
         reporter.fact(StepFact::BackendOperation {
             step: step.id.clone(),
             kind: "import_key".to_string(),
-            inputs: requested(&typed, &material_ref.display_name(), &label, &policy),
+            inputs: requested(
+                &typed,
+                &material_ref.display_name(),
+                passphrase_ref.map(ArtifactRef::display_name).as_deref(),
+                &label,
+                &policy,
+            ),
             outputs: produced(
                 &backend_name,
                 &backend_fingerprint,
@@ -150,12 +159,83 @@ impl Action for ImportKeyAction {
     }
 }
 
+/// What an imported key may do, which is the ceremony's claim exactly as at
+/// unwrap: nothing travels with raw material saying what it is for.
+fn declared_policy(
+    typed: &ImportKeyParams,
+    algorithm: KeyAlgorithm,
+) -> Result<rite_sdk::KeyPolicy, ActionError> {
+    let defaults = installed_key_default_policy(Some(algorithm));
+    match &typed.policy {
+        None => Ok(defaults),
+        Some(declared) => declared
+            .resolve_from(&defaults)
+            .map_err(ActionError::Failed),
+    }
+}
+
+/// The passphrase a step named, borrowed from the store.
+///
+/// Only a secret artifact is accepted. A passphrase read from a material file
+/// or a text artifact would be a passphrase that sat on a disk, which is what
+/// reading it at the keyboard exists to avoid, and the refusal says where to
+/// get one instead.
+fn resolve_passphrase<'a>(
+    ctx: &'a HandlerContext,
+    reference: &ArtifactRef,
+) -> Result<&'a [u8], ActionError> {
+    // A secret has no properties, and a reference naming one would otherwise
+    // be read as the whole secret, so a misspelling supplies the wrong value
+    // without a word.
+    if let Some(property) = reference.property() {
+        return Err(ActionError::Failed(format!(
+            "'{}' names a property '.{property}', and a passphrase has none",
+            reference.display_name()
+        )));
+    }
+    let id = reference.artifact_id();
+    let artifact = ctx.get_artifact(&id).ok_or_else(|| {
+        ActionError::Failed(format!(
+            "Passphrase artifact '{}' not found",
+            reference.display_name()
+        ))
+    })?;
+    match artifact {
+        ArtifactValue::Secret(secret) => Ok(secret.expose_secret()),
+        // Named by kind and never displayed: a text artifact prints its
+        // text, and this message becomes a fact.
+        other => Err(ActionError::Failed(format!(
+            "'{}' is {}, not a secret. A passphrase is read at the keyboard by \
+             'enter_secret', so that no copy of it is on any disk.",
+            reference.display_name(),
+            kind_of(other)
+        ))),
+    }
+}
+
+/// What an artifact is, for a message that must not show what it holds.
+fn kind_of(artifact: &ArtifactValue) -> &'static str {
+    match artifact {
+        ArtifactValue::BackendKey { .. } => "a backend key",
+        ArtifactValue::WrappedKey(_) => "a wrapped key",
+        ArtifactValue::EncryptedData(_) => "encrypted content",
+        ArtifactValue::PublicKey(_) => "a public key",
+        ArtifactValue::Bytes(_) => "bytes",
+        ArtifactValue::Secret(_) => "a secret",
+        ArtifactValue::Text(_) => "text",
+        ArtifactValue::Certificate(_) => "a certificate",
+        ArtifactValue::Shares(_) => "a set of shares",
+    }
+}
+
 /// What the ceremony asked this step to lift, and what it committed to first.
 ///
 /// `key_material` names the artifact the bytes were read from, which is the
 /// whole of what Rite knows about their origin: where that artifact was
 /// produced in this run a verifier can trace it, and where it was a material
-/// carried into the room there is nothing to trace.
+/// carried into the room there is nothing to trace. `passphrase` likewise
+/// names the artifact and nothing about its value: that a secret was entered
+/// is already on the step that read it.
 ///
 /// Deliberately no digest of the material. That would be a hash of a secret,
 /// which is the shape rite#126 removed; what the key is answers under
@@ -163,11 +243,13 @@ impl Action for ImportKeyAction {
 fn requested(
     typed: &ImportKeyParams,
     key_material: &str,
+    passphrase: Option<&str>,
     label: &str,
     policy: &rite_sdk::KeyPolicy,
 ) -> serde_json::Value {
     json!({
         "key_material": key_material,
+        "passphrase": passphrase,
         "algorithm": typed.algorithm,
         "label": label,
         "expect_key": typed.expect_key,

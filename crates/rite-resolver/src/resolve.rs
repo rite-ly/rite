@@ -670,6 +670,12 @@ impl ResolveContext {
             return;
         }
         let names = |key: &str| reads_names(step, key);
+        let quote = |keys: &[&str]| {
+            keys.iter()
+                .map(|key| format!("'{key}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
 
         for field in contract.required {
             if !names(field) {
@@ -681,12 +687,6 @@ impl ResolveContext {
             }
         }
 
-        let quote = |keys: &[&str]| {
-            keys.iter()
-                .map(|key| format!("'{key}'"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
         let found = |present: &[&str]| {
             if present.is_empty() {
                 "none".to_string()
@@ -694,6 +694,37 @@ impl ResolveContext {
                 quote(present)
             }
         };
+
+        // Keys the action never reads, checked by name as `with:` keys are.
+        let declared: Vec<&str> = step
+            .reads
+            .as_ref()
+            .and_then(|r| r.as_object())
+            .map(|m| m.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+        for field in declared {
+            if !contract.accepts(field) {
+                let accepted: Vec<&str> = contract
+                    .required
+                    .iter()
+                    .chain(
+                        contract
+                            .exactly_one_of
+                            .iter()
+                            .flat_map(|group| group.iter()),
+                    )
+                    .chain(contract.optional.iter())
+                    .copied()
+                    .chain(contract.lists.iter().map(|list| list.name))
+                    .collect();
+                self.add_error(ResolveError::UnknownReadsInput {
+                    step: id.clone(),
+                    action: step.action,
+                    field: field.to_string(),
+                    accepted: quote(&accepted),
+                });
+            }
+        }
 
         for group in contract.exactly_one_of {
             let present: Vec<&str> = group.iter().copied().filter(|key| names(key)).collect();
@@ -2133,6 +2164,14 @@ sections:
     }
 
     fn resolve_wrap_step(reads: serde_json::Value) -> ResolveResult<Ceremony> {
+        resolve_reading_step(ActionType::WrapKey, reads, serde_json::json!({}))
+    }
+
+    fn resolve_reading_step(
+        action: ActionType,
+        reads: serde_json::Value,
+        with: serde_json::Value,
+    ) -> ResolveResult<Ceremony> {
         let mut ceremony = minimal_ceremony();
         ceremony.backends.insert(
             "openssl".to_string(),
@@ -2142,9 +2181,10 @@ sections:
             },
         );
         let mut step = make_step_body();
-        step.action = ActionType::WrapKey;
+        step.action = action;
         step.backend = Some("openssl".to_string());
         step.reads = Some(reads);
+        step.with = Some(with);
         ceremony
             .sections
             .get_mut("main")
@@ -2218,6 +2258,80 @@ sections:
                 result.errors
             );
         }
+    }
+
+    /// A `reads:` key nothing reads is refused as an unknown `with:` key is:
+    /// the value would be resolved and then ignored.
+    #[test]
+    fn errors_on_a_reads_input_the_action_never_reads() {
+        let result = resolve_reading_step(
+            ActionType::ImportKey,
+            serde_json::json!({
+                "key_material": "${artifact.escrowed}",
+                "passprhase": "${artifact.escrow_passphrase}",
+            }),
+            serde_json::json!({ "algorithm": "RSA-4096" }),
+        );
+        let unknown: Vec<(&str, &str)> = result
+            .errors
+            .iter()
+            .filter_map(|e| match e {
+                ResolveError::UnknownReadsInput {
+                    field, accepted, ..
+                } => Some((field.as_str(), accepted.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            unknown,
+            vec![("passprhase", "'key_material', 'passphrase'")]
+        );
+    }
+
+    #[test]
+    fn accepts_an_optional_reads_input_named_or_not() {
+        for reads in [
+            serde_json::json!({ "key_material": "${artifact.escrowed}" }),
+            serde_json::json!({
+                "key_material": "${artifact.escrowed}",
+                "passphrase": "${artifact.escrow_passphrase}",
+            }),
+        ] {
+            let result = resolve_reading_step(
+                ActionType::ImportKey,
+                reads,
+                serde_json::json!({ "algorithm": "RSA-4096" }),
+            );
+            assert!(
+                !result.errors.iter().any(|e| matches!(
+                    e,
+                    ResolveError::UnknownReadsInput { .. } | ResolveError::MissingReadsInput { .. }
+                )),
+                "{:?}",
+                result.errors
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_the_issuer_certificate_of_a_subordinate_issue() {
+        let result = resolve_reading_step(
+            ActionType::IssueCertificate,
+            serde_json::json!({
+                "signing_key": "${artifact.root_key}",
+                "csr": "${artifact.intermediate_csr}",
+                "issuer_cert": "${artifact.root_cert}",
+            }),
+            serde_json::json!({}),
+        );
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::UnknownReadsInput { .. })),
+            "{:?}",
+            result.errors
+        );
     }
 
     #[test]

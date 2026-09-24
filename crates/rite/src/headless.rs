@@ -80,25 +80,48 @@ fn default_response(prompt: &Prompt) -> io::Result<Response> {
         Prompt::Confirm { default, .. } => Ok(Response::Bool(default.unwrap_or(true))),
         Prompt::Continue { .. } => Ok(Response::Acknowledge),
         Prompt::Literal { expected, .. } => Ok(Response::Text(expected.clone())),
-        // Free-form text: a fixed placeholder satisfies an unconstrained
-        // (`NonEmpty`) prompt. A validated prompt (regex, named predicate) can't
-        // be answered generically, so it still fails fast until the step carries
-        // an explicit value.
-        Prompt::Text { label, validator } => match validator {
-            ValidatorSpec::NonEmpty => Ok(Response::Text(PLACEHOLDER_TEXT.to_string())),
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "headless driver cannot answer the validated text prompt: '{label}'. \
-                     Use --frontend=console for an interactive run."
-                ),
-            )),
-        },
-        Prompt::Secret { .. } => Ok(Response::Secret(SecretString::from(PLACEHOLDER_SECRET))),
+        // Free-form text: a placeholder that satisfies the prompt's rule
+        // where one can be built. A pattern can't be answered generically, so
+        // it fails fast rather than being refused and asked again without end.
+        Prompt::Text { label, validator } => placeholder(validator, PLACEHOLDER_TEXT)
+            .map(Response::Text)
+            .ok_or_else(|| cannot_answer("text", label)),
+        Prompt::Secret { label, validator } => placeholder(validator, PLACEHOLDER_SECRET)
+            .map(|value| Response::Secret(SecretString::from(value)))
+            .ok_or_else(|| cannot_answer("secret", label)),
         _ => Err(io::Error::other(format!(
             "headless driver does not know how to handle prompt: {prompt:?}"
         ))),
     }
+}
+
+/// A fixed stand-in that satisfies the rule, if one can be built from it.
+///
+/// A format is answered with the format's own placeholder at its shortest
+/// length, so a dry run walks through a PIN prompt the way it walks through
+/// any other. What is typed there is never a real secret, so the value is
+/// chosen to be obviously not one.
+fn placeholder(validator: &ValidatorSpec, unconstrained: &str) -> Option<String> {
+    match validator {
+        ValidatorSpec::NonEmpty => Some(unconstrained.to_string()),
+        ValidatorSpec::Format {
+            format,
+            min_length,
+            max_length,
+        } => format.placeholder(min_length.or(*max_length).unwrap_or(1).max(1)),
+        // A pattern and a named predicate, and whatever the model adds next.
+        _ => None,
+    }
+}
+
+fn cannot_answer(kind: &str, label: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "headless driver cannot answer the validated {kind} prompt: '{label}'. \
+             Use --frontend=console for an interactive run."
+        ),
+    )
 }
 
 fn render_fact<W: Write>(out: &mut W, fact: &StepFact) -> io::Result<()> {
@@ -130,6 +153,7 @@ fn render_signal<W: Write>(out: &mut W, signal: &UiSignal) -> io::Result<()> {
 mod tests {
     use crossbeam_channel::unbounded;
     use rite_model::StepId;
+    use secrecy::ExposeSecret;
 
     use super::*;
     use rite_runtime::PromptId;
@@ -201,9 +225,58 @@ mod tests {
     fn secret_prompt_gets_placeholder() {
         let resp = default_response(&Prompt::Secret {
             label: "pin".to_string(),
+            validator: rite_model::ValidatorSpec::NonEmpty,
         })
         .expect("response");
         assert!(matches!(resp, Response::Secret(_)));
+    }
+
+    #[test]
+    fn formatted_secret_prompt_gets_a_placeholder_of_that_format() {
+        for (format, min, max) in [
+            (rite_model::Format::Digits, Some(6), Some(8)),
+            (rite_model::Format::Base64, Some(32), None),
+            (rite_model::Format::Hex, None, None),
+        ] {
+            let validator = rite_model::ValidatorSpec::Format {
+                format,
+                min_length: min,
+                max_length: max,
+            };
+            let resp = default_response(&Prompt::Secret {
+                label: "pin".to_string(),
+                validator: validator.clone(),
+            })
+            .expect("response");
+            let Response::Secret(value) = resp else {
+                panic!("expected a secret");
+            };
+            assert!(validator.check(value.expose_secret()).is_ok(), "{format:?}");
+        }
+    }
+
+    #[test]
+    fn oversized_secret_prompt_fails_fast() {
+        let err = default_response(&Prompt::Secret {
+            label: "blob".to_string(),
+            validator: rite_model::ValidatorSpec::Format {
+                format: rite_model::Format::Text,
+                min_length: Some(rite_model::PLACEHOLDER_LIMIT + 1),
+                max_length: None,
+            },
+        })
+        .expect_err("a stand-in that size is not built");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn patterned_secret_prompt_fails_fast() {
+        let err = default_response(&Prompt::Secret {
+            label: "pin".to_string(),
+            validator: rite_model::ValidatorSpec::Regex("[0-9]{6}".to_string()),
+        })
+        .expect_err("a placeholder cannot satisfy a pattern");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]

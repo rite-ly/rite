@@ -203,14 +203,25 @@ pub trait KeyStoreBackend: Backend {
     ///
     /// `spec.algorithm` says how to read `key_bytes`, because nothing in the
     /// bytes distinguishes a 32-byte secret from any other 32 bytes: a symmetric
-    /// algorithm takes the raw key, every other one takes PKCS#8 DER. The
-    /// metadata that comes back carries a check value in the first case and a
-    /// public key in the second, which is the identity each kind has.
+    /// algorithm takes the raw key, every other one takes a private key, as
+    /// PKCS#8 DER or as PEM. The metadata that comes back carries a check value
+    /// in the first case and a public key in the second, which is the identity
+    /// each kind has.
+    ///
+    /// `passphrase` opens a private key that is encrypted, in any encoding the
+    /// backend reads. Material that needs one and is given none is refused by
+    /// name, and so is a passphrase given for material that is not encrypted:
+    /// a passphrase the transcript says was used has to have been used.
     ///
     /// Only supported by backends that allow key import (software, some HSMs).
     /// Hardware security modules may reject it for security reasons, and a
     /// device that holds only one kind of key refuses the other by name.
-    fn import_key(&mut self, spec: KeySpec, key_bytes: &[u8]) -> Result<KeyMetadata, BackendError>;
+    fn import_key(
+        &mut self,
+        spec: KeySpec,
+        key_bytes: &[u8],
+        passphrase: Option<&[u8]>,
+    ) -> Result<KeyMetadata, BackendError>;
 
     /// Export the public key for `key_id`.
     fn export_public_key(&self, key_id: &KeyId) -> Result<PublicKeyDer, BackendError>;

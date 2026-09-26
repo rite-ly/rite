@@ -1,6 +1,6 @@
 //! `yubikey_attest_slot` action: generate a `YubiKey` attestation certificate.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, parse_params,

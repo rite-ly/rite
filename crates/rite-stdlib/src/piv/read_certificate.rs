@@ -1,6 +1,6 @@
 //! `piv_read_certificate` action: read an X.509 certificate from a PIV slot.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, parse_params,

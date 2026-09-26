@@ -1,6 +1,6 @@
 //! `piv_sign` action: sign data with a PIV smart card on-device key.
 
-use rite_model::{ActionType, Format, Prompt, StepFact, StepInputs, ValidatorSpec};
+use rite_model::{ActionType, Format, Prompt, StepInputs, ValidatorSpec};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, Response, StepInfo,
     StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
@@ -198,6 +198,7 @@ fn parse_sign_algorithm(s: &str) -> Result<SignAlgorithm, ActionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rite_model::StepFact;
     use rite_sdk::{BackendError, KeyId, PivBackend, PivDeviceInfo, PivSlotInfo, SignBackend};
 
     #[test]

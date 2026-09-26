@@ -22,8 +22,9 @@ const UNSUMMARISED: &str = "unknown fact variant";
 ///
 /// Returns `None` for facts the live UI shouldn't surface:
 /// - `PromptAnswered`: the operator just typed it.
-/// - `BackendOperation` / `AttestationRecorded`: the surrounding action
-///   handler already calls `Reporter::log` with its own narrative line.
+/// - `BackendOperation` / `AttestationRecorded` / `MachineInfoRecorded`: the
+///   surrounding action handler already calls `Reporter::log` with its own
+///   narrative line.
 /// - `CeremonyCompleted`: the frontend renders a dedicated completion
 ///   screen with the fingerprint.
 #[must_use]
@@ -31,22 +32,39 @@ pub fn fact_summary(fact: &StepFact) -> Option<(Icon, String)> {
     match fact {
         StepFact::CeremonyStarted { name, .. } => Some((Icon::Info, format!("Ceremony: {name}"))),
         StepFact::ActStarted { label, .. } => Some((Icon::Info, format!("Act: {label}"))),
-        StepFact::StepStarted {
-            id,
-            label,
-            role_name,
-            ..
-        } => Some((
-            Icon::Info,
-            format!("Step {label} ({id}), role: {role_name}"),
-        )),
+        StepFact::StepStarted { id, label, role } => {
+            Some((Icon::Info, format!("Step {label} ({id}), role: {role}")))
+        }
         StepFact::PromptAnswered { .. }
         | StepFact::BackendOperation { .. }
         | StepFact::AttestationRecorded { .. }
+        | StepFact::MachineInfoRecorded { .. }
+        // Roles show by name on each step, where a frontend that keeps the
+        // declarations resolves them.
+        | StepFact::RoleDeclared { .. }
         | StepFact::CeremonyCompleted { .. } => None,
-        StepFact::ArtifactWritten { path, .. } => Some((
+        StepFact::RoleAssigned { role, person } => {
+            Some((Icon::Info, format!("Role {role}: {person}")))
+        }
+        StepFact::ParameterBound { name, value } => {
+            Some((Icon::Info, format!("Parameter {name} = {value}")))
+        }
+        StepFact::MaterialLoaded { name, identifier } => Some((
             Icon::Checkmark,
-            format!("Artifact written: {}", path.display()),
+            match identifier {
+                Some(identifier) => format!("Material loaded: {name} ({identifier})"),
+                None => format!("Material loaded: {name}"),
+            },
+        )),
+        StepFact::MaterialDigest { name, digest } => {
+            Some((Icon::Info, format!("Material {name}: {digest}")))
+        }
+        StepFact::BackendBound { name, identity, .. } => {
+            Some((Icon::Info, format!("Backend {name}: {identity}")))
+        }
+        StepFact::ArtifactWritten { file, .. } => Some((
+            Icon::Checkmark,
+            format!("Artifact written: artifacts/{file}"),
         )),
         StepFact::DeviationRecorded { text, .. } => {
             Some((Icon::Warning, format!("Deviation: {text}")))

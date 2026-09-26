@@ -1,6 +1,6 @@
 //! `sign_data` action: sign arbitrary data with a backend-managed key.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, parse_params, resolve_artifact_bytes, resolve_backend_key,
@@ -69,8 +69,6 @@ impl Action for SignDataAction {
 
         let backend = backend
             .ok_or_else(|| ActionError::Failed("Backend required for sign_data".to_string()))?;
-        let backend_name = backend.name().to_string();
-        let backend_fingerprint = backend.fingerprint();
 
         let sign_backend =
             require_sign_backend(backend, key.backend_name, &key_ref.display_name())?;
@@ -81,22 +79,19 @@ impl Action for SignDataAction {
         // result rather than a log line repeating it.
         let summary = format!("Signature produced ({} bytes)", signature.len());
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "sign_data".to_string(),
-            inputs: json!({
+        reporter.backend_operation(
+            "sign_data",
+            json!({
                 "key_artifact": key_ref.display_name(),
                 "data_artifact": data_ref.display_name(),
                 "key_algorithm": key_algorithm.to_string(),
                 "algorithm": algorithm.to_string(),
             }),
-            outputs: json!({
-                "backend": backend_name,
-                "backend_fingerprint": backend_fingerprint,
+            json!({
                 "signature_len": signature.len(),
             }),
-            fingerprint: Some(signature_fingerprint),
-        })?;
+            Some(signature_fingerprint),
+        )?;
 
         if let Some(produces) = &step.produces {
             reporter.log(

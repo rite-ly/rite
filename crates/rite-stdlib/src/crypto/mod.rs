@@ -43,11 +43,10 @@ pub(crate) fn transport_backend<'a>(
     backend: Option<&'a mut dyn Backend>,
     key_backend: &str,
     operation: &str,
-) -> Result<(&'a mut dyn KeyTransportBackend, String, String), ActionError> {
+) -> Result<(&'a mut dyn KeyTransportBackend, String), ActionError> {
     let backend =
         backend.ok_or_else(|| ActionError::Failed(format!("Backend required to {operation}")))?;
     let name = backend.name().to_string();
-    let fingerprint = backend.fingerprint();
     if name != key_backend {
         return Err(ActionError::Failed(format!(
             "Key owned by backend '{key_backend}', but current backend is '{name}'"
@@ -56,5 +55,5 @@ pub(crate) fn transport_backend<'a>(
     let transport = backend
         .as_transport_mut()
         .ok_or_else(|| ActionError::Failed(format!("Backend '{name}' cannot {operation}")))?;
-    Ok((transport, name, fingerprint))
+    Ok((transport, name))
 }

@@ -1,6 +1,6 @@
 //! `piv_read_certificate` action: read an X.509 certificate from a PIV slot.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, parse_params,
@@ -68,16 +68,15 @@ impl Action for PivReadCertificateAction {
             ),
         )?;
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "piv_read_certificate".to_string(),
-            inputs: json!({ "slot": typed.slot }),
-            outputs: json!({
+        reporter.backend_operation(
+            "piv_read_certificate",
+            json!({ "slot": typed.slot }),
+            json!({
                 "cert_fingerprint": cert_fingerprint,
                 "cert_size": cert_der.len(),
             }),
-            fingerprint: Some(cert_fingerprint),
-        })?;
+            Some(cert_fingerprint),
+        )?;
 
         if let Some(produces) = &step.produces {
             reporter.log(

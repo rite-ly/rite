@@ -14,7 +14,7 @@
 //! `SignBackend` (software, PKCS#11, `YubiKey`) without per-backend
 //! cert-building code.
 
-use rite_model::{ActionType, CertProfile, StepFact};
+use rite_model::{ActionType, CertProfile};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     parse_params, resolve_artifact_bytes, resolve_backend_key,
@@ -282,7 +282,6 @@ impl Action for IssueCertificateAction {
             )
         })?;
 
-        let backend_fingerprint = backend.fingerprint();
         let backend_name = backend.name().to_string();
 
         if backend_name != signing_key.backend_name {
@@ -312,22 +311,18 @@ impl Action for IssueCertificateAction {
 
         reporter.log(Icon::Checkmark, "Certificate signed")?;
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "issue_certificate".to_string(),
-            inputs: json!({
+        reporter.backend_operation(
+            "issue_certificate",
+            json!({
                 "algorithm": evidence_algorithm,
                 "profile": profile_name,
                 "validity_days": validity_days,
                 "signing_key": signing_key_ref.display_name(),
                 "csr": csr_ref.display_name(),
             }),
-            outputs: json!({
-                "backend": backend_name,
-                "backend_fingerprint": backend_fingerprint,
-            }),
-            fingerprint: None,
-        })?;
+            json!({}),
+            None,
+        )?;
 
         let artifact = ArtifactValue::Certificate(CertificateDer::new(cert_der).map_err(|e| {
             ActionError::Failed(format!("Issued certificate does not parse back: {e}"))

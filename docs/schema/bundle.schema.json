@@ -1,0 +1,131 @@
+{
+  "$id": "https://ritely.io/schemas/0.6.0/bundle.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Rite bundle index (format 0)",
+  "description": "The bundle.json index of an evidence bundle: what kind of bundle it is and which files it holds. It repeats no digest: every file other than the transcript is bound by a digest the transcript records, so a verifier checks the files against the transcript.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "The URL of the JSON Schema this index was written against, for editors. A reader ignores it.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uri"
+    },
+    "files": {
+      "description": "Every file in the bundle other than the index.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/BundleFile"
+      }
+    },
+    "fingerprint": {
+      "description": "The fingerprint of the bundle's transcript, for indexing. A verifier computes it from the transcript and compares.",
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "rite_bundle": {
+      "description": "Version of the bundle format.",
+      "type": "integer",
+      "const": 0,
+      "maximum": 4294967295,
+      "minimum": 0
+    }
+  },
+  "oneOf": [
+    {
+      "description": "The complete record: the transcript with every fact, the ceremony definition if it was included, and the artifacts the run kept.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "complete"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    {
+      "description": "A disclosure derived from a complete bundle: every line above the threshold is withheld, and only the artifacts whose facts are disclosed are included. The ceremony definition is never included.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "disclosure"
+        },
+        "threshold": {
+          "description": "The widest level disclosed: every line at or below it is disclosed, every line above it withheld.",
+          "$ref": "#/$defs/Level"
+        }
+      },
+      "required": [
+        "kind",
+        "threshold"
+      ]
+    }
+  ],
+  "required": [
+    "rite_bundle",
+    "fingerprint",
+    "files"
+  ],
+  "$defs": {
+    "BundleFile": {
+      "description": "One file in the bundle.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "For an artifact, its name as declared in the ceremony.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "The file's path from the bundle root, with `/` between components.",
+          "type": "string"
+        },
+        "role": {
+          "description": "What the file is.",
+          "$ref": "#/$defs/FileRole"
+        }
+      },
+      "required": [
+        "path",
+        "role"
+      ]
+    },
+    "FileRole": {
+      "description": "What a file is, which also says what binds it to the transcript.",
+      "oneOf": [
+        {
+          "description": "The transcript, which the fingerprint identifies.",
+          "type": "string",
+          "const": "transcript"
+        },
+        {
+          "description": "The ceremony definition, bound by the template digest on ceremony_started.",
+          "type": "string",
+          "const": "definition"
+        },
+        {
+          "description": "An artifact, bound by the digest on its artifact_written fact.",
+          "type": "string",
+          "const": "artifact"
+        }
+      ]
+    },
+    "Level": {
+      "description": "The confidentiality level of a line: who may see its fact. Levels are integers ordered from the widest audience to the narrowest, so a disclosure up to a level withholds every line above it. Three levels are built in at fixed values: public (10, anyone), restricted (20, auditors under agreement) and confidential (30, the ceremony's own organisation). Every level a transcript uses is declared in its header.",
+      "type": "integer",
+      "maximum": 4294967295,
+      "minimum": 0
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

@@ -73,15 +73,12 @@ impl Action for MachineInfoAction {
 
         // Serialize the typed, projected snapshot. Optional fields that were
         // cleared above serialize as JSON null. `arch` is always present.
-        let outputs = serde_json::to_value(&info)
+        let info = serde_json::to_value(&info)
             .map_err(|e| ActionError::Failed(format!("failed to serialize machine info: {e}")))?;
 
-        reporter.fact(StepFact::BackendOperation {
+        reporter.fact(StepFact::MachineInfoRecorded {
             step: step.id.clone(),
-            kind: "machine_info".to_string(),
-            inputs: serde_json::Value::Null,
-            outputs,
-            fingerprint: None,
+            info,
         })?;
 
         Ok(StepResult::completed("Machine info captured"))

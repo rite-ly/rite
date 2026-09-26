@@ -6,7 +6,7 @@
 //! leaves the backend, so the CSR must be generated in-ceremony with
 //! the same backend before [`crate::pki::issue_certificate`] can consume it.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     parse_params, resolve_backend_key,
@@ -118,7 +118,6 @@ impl Action for GenerateCsrAction {
             )
         })?;
 
-        let backend_fingerprint = backend.fingerprint();
         let backend_name = backend.name().to_string();
 
         if backend_name != signing_key.backend_name {
@@ -148,20 +147,16 @@ impl Action for GenerateCsrAction {
 
         reporter.log(Icon::Checkmark, "CSR signed")?;
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "generate_csr".to_string(),
-            inputs: json!({
+        reporter.backend_operation(
+            "generate_csr",
+            json!({
                 "algorithm": evidence_algorithm,
                 "signing_key": signing_key_ref.display_name(),
                 "subject": typed.subject,
             }),
-            outputs: json!({
-                "backend": backend_name,
-                "backend_fingerprint": backend_fingerprint,
-            }),
-            fingerprint: None,
-        })?;
+            json!({}),
+            None,
+        )?;
 
         let artifact = ArtifactValue::Bytes(csr_der);
         let message = "PKCS#10 CSR generated".to_string();

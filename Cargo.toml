@@ -50,6 +50,8 @@ marked-yaml = { version = "0.8.0", features = ["serde"] }
 indexmap = { version = "2.14.0", features = ["serde"] }
 chrono = { version = "0.4.44", default-features = false, features = ["clock", "std", "serde"] }
 insta = { version = "1.47.2", features = ["yaml", "filters"] }
+schemars = "1.2.2"
+jsonschema = { version = "0.57.0", default-features = false }
 assert_cmd = "2.2.2"
 secrecy = "0.10.3"
 rpassword = "7.5.2"

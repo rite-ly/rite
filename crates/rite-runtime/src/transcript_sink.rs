@@ -56,8 +56,6 @@ use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use rand::TryRng;
-use rand::rngs::SysRng;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -210,8 +208,7 @@ impl Chain {
         }
         let value = serde_json::to_value(fact).map_err(io::Error::other)?;
         let canonical = canonical_json(&value).map_err(io::Error::other)?;
-        let mut salt = [0u8; SALT_LEN];
-        SysRng.try_fill_bytes(&mut salt).map_err(io::Error::other)?;
+        let salt: [u8; SALT_LEN] = crate::os_random::os_random()?;
         let leaf = fact_leaf(&salt, &canonical);
         let at = at.to_rfc3339_opts(SecondsFormat::Micros, true);
         let node = chain_node(&previous, &at, level, &leaf);
@@ -878,9 +875,7 @@ fn add_fact(
 }
 
 fn decode_salt(hex: &str) -> Option<[u8; SALT_LEN]> {
-    let mut salt = [0u8; SALT_LEN];
-    let decoded = base16ct::lower::decode(hex, &mut salt).ok()?;
-    (decoded.len() == SALT_LEN).then_some(salt)
+    base16ct::lower::decode_vec(hex).ok()?.try_into().ok()
 }
 
 /// Compare a computed value against the checkpoint recorded on a line.

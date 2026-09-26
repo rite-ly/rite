@@ -35,8 +35,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
-use rand::TryRng;
-use rand::rngs::SysRng;
 use rite_model::{
     ActId, ActionType, ArtifactId, Ceremony, Level, MaterialId, MaterialKind, MaterialSource,
     OutputId, ParamId, RoleId, Sha256Digest, Step, TranscriptHeader,
@@ -63,36 +61,32 @@ use rite_model::{ErrorClass, ErrorRecord, Prompt, RetryPolicy, StepFact, StepOut
 
 /// Gather the machine entropy `m` that seeds the ceremony entropy source.
 ///
-/// Sourced directly from the host OS RNG ([`SysRng`]), independent of any
+/// Sourced directly from the host OS RNG, independent of any
 /// ceremony backend, so a device the ceremony later challenges cannot
 /// influence its own challenge nonce. A dry run instead returns a fixed,
 /// clearly-labelled sentinel so a re-derived value can never be mistaken for
 /// one produced under real entropy.
 fn gather_machine_entropy(dry_run: bool) -> Result<([u8; 32], String), ExecutionError> {
-    let mut m = [0u8; 32];
     if dry_run {
+        let mut m = [0u8; 32];
         for (slot, byte) in m.iter_mut().zip(b"rite-dry-run-not-real-entropy") {
             *slot = *byte;
         }
         return Ok((m, "dry-run".to_string()));
     }
-    SysRng
-        .try_fill_bytes(&mut m)
-        .map_err(|e| ExecutionError::EntropyError(e.to_string()))?;
+    let m =
+        crate::os_random::os_random().map_err(|e| ExecutionError::EntropyError(e.to_string()))?;
     Ok((m, "os".to_string()))
 }
 
-/// Program and version recorded in the transcript header.
 /// Name and version of the program writing transcripts, as the header
 /// records it.
 pub const PRODUCER: &str = concat!("rite ", env!("CARGO_PKG_VERSION"));
 
 /// A fresh run identifier: 16 bytes from the OS RNG, as lowercase hex.
 fn new_run_id() -> Result<String, ExecutionError> {
-    let mut id = [0u8; 16];
-    SysRng
-        .try_fill_bytes(&mut id)
-        .map_err(|e| ExecutionError::EntropyError(e.to_string()))?;
+    let id: [u8; 16] =
+        crate::os_random::os_random().map_err(|e| ExecutionError::EntropyError(e.to_string()))?;
     Ok(base16ct::lower::encode_string(&id))
 }
 

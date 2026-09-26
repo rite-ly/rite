@@ -28,6 +28,7 @@ mod display;
 mod entropy;
 mod executor;
 mod expressions;
+mod os_random;
 mod output_config;
 mod protocol;
 mod reporter;

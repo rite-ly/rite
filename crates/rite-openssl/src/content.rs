@@ -11,7 +11,7 @@
 use rite_sdk::BackendError;
 use zeroize::Zeroizing;
 
-use crate::backend::{aes_256_gcm_open, aes_256_gcm_seal, ossl_err};
+use crate::backend::{aes_256_gcm_open, aes_256_gcm_seal, random_bytes};
 
 /// Content under AES-256-GCM, with the values that have to travel beside it.
 ///
@@ -38,8 +38,7 @@ pub struct SealedContent {
 ///
 /// Returns [`BackendError`] if `cek` is not a 256-bit key or the cipher fails.
 pub fn seal_content(cek: &[u8], payload: &[u8]) -> Result<SealedContent, BackendError> {
-    let mut nonce = vec![0u8; 12];
-    openssl::rand::rand_bytes(&mut nonce).map_err(|e| ossl_err("Generate GCM nonce", &e))?;
+    let nonce = random_bytes(12)?.to_vec();
     let (ciphertext, tag) = aes_256_gcm_seal(cek, &nonce, payload)?;
     Ok(SealedContent {
         nonce,

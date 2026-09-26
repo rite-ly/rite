@@ -79,19 +79,17 @@ snapshot at ceremony start, `CeremonyOverview` and `SystemInfo`), and
 ### `StepFact`
 
 Every variant of `StepFact` is what would convince a future auditor that
-the step happened the way the transcript claims. The kinds:
+the step happened the way the transcript claims. The kinds, their levels and their wire form are
+in [the transcript format](../transcript-format.md#facts); each fact carries one kind of
+information, so it has one level.
 
-- `CeremonyStarted` / `CeremonyCompleted` / `CeremonyFailed`
-- `ActStarted` / `StepStarted` / `StepCompleted`
-- `PromptAnswered` (the prompt itself plus a redacted response)
-- `BackendOperation` (`kind` + structured `inputs` / `outputs` JSON)
-- `AttestationRecorded`
-- `ArtifactWritten`
-- `DeviationRecorded`
+Action handlers emit the facts about their own work (`BackendOperation`, `AttestationRecorded`,
+`MachineInfoRecorded`, `WrapRecipientRecorded`, `EntropyContributed`, `EntropyDrawn`). The
+executor emits the rest at the corresponding lifecycle boundary.
 
-Action handlers emit `BackendOperation` and `AttestationRecorded`
-directly. The executor emits the rest automatically at the corresponding
-lifecycle boundary.
+The wire form of every fact is published as a JSON Schema in [`docs/schema/`](../schema/README.md),
+generated from these types by the tests of `rite-model`. A change to a fact changes the
+committed schema, and the tests say how to regenerate it.
 
 ### `UiCommand`
 
@@ -107,7 +105,8 @@ Action handlers do not touch the channels or the transcript directly.
 They receive a `&mut Reporter<'_>` and call:
 
 ```rust
-reporter.fact(StepFact::BackendOperation { … })?;     // durable
+reporter.backend_operation("sign_data", inputs, outputs, fingerprint)?; // durable
+reporter.fact(StepFact::AttestationRecorded { … })?;  // durable
 reporter.log(Icon::Spinner, "signing…")?;             // UI-only
 reporter.progress("verifying", Some(0.42))?;          // UI-only
 let response = reporter.prompt(&Prompt::Confirm { … })?;
@@ -127,30 +126,28 @@ trait is small:
 
 ```rust
 pub trait TranscriptSink: Send {
-    fn record(&mut self, fact: &StepFact) -> io::Result<()>;
+    fn begin(&mut self, header: &TranscriptHeader) -> io::Result<()>;
+    fn record(&mut self, at: DateTime<Utc>, level: Level, fact: &StepFact) -> io::Result<()>;
     fn finalize(&mut self) -> io::Result<TranscriptFingerprint>;
 }
 ```
 
 The default implementation, `JsonlFileSink`, writes one line per fact
 and `fsync`s before returning, so a fact the executor has moved past
-cannot be lost to a subsequent crash or power loss. Each line:
+cannot be lost to a subsequent crash or power loss.
 
-```jsonc
-{"prev_hash": "sha256:…", "at": "2026-06-01T20:34:51Z", "fact": { "type": "step_started", … }}
-```
+`begin` writes the header line, `record` one fact line at the level the executor chose, and
+`finalize` returns the `chain` of the last line, the fingerprint. The line layout, the levels and
+the commitment chain are specified in [the transcript format](../transcript-format.md); the
+construction is in `rite_model::commitment`. Two properties of the sink:
 
-`at` is the wall-clock time the sink stamped when it wrote the line, the
-single uniform timestamp for every event. Individual facts carry no
-timestamp of their own; a timestamp that is *data* rather than record time
-(a future `clock_check` observed time, an RFC 3161 token) would be a field
-on the fact. Because `at` is part of the line, it is covered by the hash
-chain like the rest of the envelope.
+- The chain advances only after a line is persisted, so a failed write leaves the in-memory chain
+  where the file is.
+- `record` refuses a level the header does not declare, since a reader would refuse the line.
 
-Each line's SHA-256 is the next line's `prev_hash`. The hash of the
-final line *is* the transcript fingerprint; the JSONL is self-identifying
-and no sidecar file is written. `rite verify` walks the chain and
-returns that fingerprint.
+`at` is the wall-clock time the executor supplied, the single timestamp of every fact. A
+timestamp that is data rather than record time (an RFC 3161 token, an observed clock) is a field
+on its fact.
 
 ## Frontend architecture (TEA)
 

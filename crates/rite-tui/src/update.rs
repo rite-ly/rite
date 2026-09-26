@@ -416,12 +416,15 @@ fn handle_fact(model: &mut Model, at: DateTime<Utc>, fact: &StepFact) -> Vec<Cmd
                 label: label.clone(),
             });
         }
-        StepFact::StepStarted {
-            id,
-            label,
-            role_name,
-            ..
-        } => {
+        StepFact::RoleDeclared { role, name } => {
+            model.role_names.insert(role.clone(), name.clone());
+        }
+        StepFact::StepStarted { id, label, role } => {
+            let role_name = model
+                .role_names
+                .get(role)
+                .cloned()
+                .unwrap_or_else(|| role.as_str().to_string());
             // First StepStarted is the natural boundary between pre-step
             // overview and live execution: auto-switch to the Ceremony
             // tab if the operator is still on Overview, so the action
@@ -659,11 +662,17 @@ mod tests {
         let mut model = Model::new();
         let _ = apply_exec(
             &mut model,
+            fact_event(StepFact::RoleDeclared {
+                role: rite_model::RoleId::new("crypto_officer"),
+                name: "Crypto Officer".to_string(),
+            }),
+        );
+        let _ = apply_exec(
+            &mut model,
             fact_event(StepFact::StepStarted {
                 id: StepId::new("s1"),
                 label: "2.1".to_string(),
                 role: rite_model::RoleId::new("crypto_officer"),
-                role_name: "Crypto Officer".to_string(),
             }),
         );
         assert!(matches!(model.screen, Screen::Step { .. }));
@@ -725,7 +734,6 @@ mod tests {
                 id: StepId::new("s1"),
                 label: "1".to_string(),
                 role: rite_model::RoleId::new("op"),
-                role_name: "Operator".to_string(),
             }),
         );
         assert!(matches!(
@@ -746,7 +754,6 @@ mod tests {
                 id: StepId::new("s1"),
                 label: "1".to_string(),
                 role: rite_model::RoleId::new("op"),
-                role_name: "Operator".to_string(),
             }),
         );
         // Operator switches back to Overview to re-read the description.
@@ -766,7 +773,6 @@ mod tests {
                 id: StepId::new("s2"),
                 label: "2".to_string(),
                 role: rite_model::RoleId::new("op"),
-                role_name: "Operator".to_string(),
             }),
         );
         assert!(matches!(
@@ -782,9 +788,7 @@ mod tests {
         let mut model = Model::new();
         let _ = apply_exec(
             &mut model,
-            fact_event(StepFact::CeremonyStarted {
-                name: "Root CA".to_string(),
-            }),
+            fact_event(rite_runtime::test_support::ceremony_started("Root CA")),
         );
         assert_eq!(model.ceremony_name.as_deref(), Some("Root CA"));
         // Description, materials, step count travel via UiSignal::CeremonyOverview,
@@ -833,7 +837,6 @@ mod tests {
             id: StepId::new("s1"),
             label: "Step One".to_string(),
             role: rite_model::RoleId::new("op"),
-            role_name: "Operator".to_string(),
         };
         let _ = apply_exec(&mut model, fact_event(fact));
         let s = model.current_step.expect("current step");

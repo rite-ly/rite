@@ -3,8 +3,9 @@
 
 use crate::actions::ArtifactValue;
 use crate::step_info::StepInfo;
-use crate::transcript::compute_fingerprint;
-use rite_model::{ActionType, ArtifactId, Material, MaterialKind, MaterialSource, Step, StepId};
+use rite_model::{
+    ActionType, ArtifactId, Material, MaterialKind, MaterialSource, Sha256Digest, Step, StepId,
+};
 use rite_sdk::BackendError;
 use std::fs;
 use std::io;
@@ -135,7 +136,11 @@ pub(crate) fn load_material_artifact(
 /// destination (which could otherwise redirect artifact bytes outside the run directory) and
 /// cannot clobber an existing file. On Unix the file is created with `0o600` so artifact
 /// material is not world-readable.
-fn write_new_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+///
+/// # Errors
+///
+/// Returns the I/O error if the file exists or cannot be written and synced.
+pub fn write_new_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -153,7 +158,7 @@ pub(crate) fn write_artifact_to_disk(
     artifact_id: &ArtifactId,
     artifact_value: &ArtifactValue,
     output_config: &OutputConfig,
-) -> Result<(PathBuf, String, u64, Option<String>), ExecutionError> {
+) -> Result<(PathBuf, Sha256Digest, u64, Option<String>), ExecutionError> {
     let serialized =
         artifact_value
             .serialize(None)
@@ -180,7 +185,7 @@ pub(crate) fn write_artifact_to_disk(
 
     // Hashed from the buffer just written and synced, not read back from the
     // file: a read-back would be one more unwiped copy of opened content.
-    let hash = compute_fingerprint(&bytes);
+    let hash = Sha256Digest::of(&bytes);
 
     let size = fs::metadata(&path)
         .map_err(|e| ExecutionError::OutputWriteFailed {

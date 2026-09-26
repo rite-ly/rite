@@ -35,6 +35,18 @@ pub struct ReportData {
     pub artifacts: Vec<ReportArtifact>,
     /// Deviations recorded during the ceremony.
     pub deviations: Vec<ReportDeviation>,
+    /// Set when the transcript is a disclosure: what it withholds.
+    pub withheld: Option<ReportWithheld>,
+}
+
+/// What a disclosed transcript withholds, stated on the report's face.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReportWithheld {
+    /// Number of withheld facts.
+    pub facts: usize,
+    /// Names of the levels the withheld facts were recorded at, narrowest
+    /// last.
+    pub levels: Vec<String>,
 }
 
 /// Terminal status of a ceremony.
@@ -105,10 +117,11 @@ pub struct ReportArtifact {
     pub step_id: String,
     /// Artifact name as declared in the DSL.
     pub name: String,
-    /// Path on disk.
-    pub path: String,
-    /// Lowercase hex SHA-256 of the artifact bytes.
-    pub sha256: String,
+    /// File name under the run's `artifacts/` directory.
+    pub file: String,
+    /// `sha256:<hex>` of the file's bytes. `None` for opened content, whose
+    /// digest the transcript does not record.
+    pub digest: Option<String>,
 }
 
 /// A deviation logged by the operator during the ceremony.
@@ -148,6 +161,7 @@ struct Builder {
     failure: Option<ReportFailure>,
     steps: Vec<ReportStep>,
     step_index: HashMap<String, usize>,
+    role_names: HashMap<String, String>,
     artifacts: Vec<ReportArtifact>,
     deviations: Vec<ReportDeviation>,
 }
@@ -163,6 +177,7 @@ impl Builder {
             failure: None,
             steps: Vec::new(),
             step_index: HashMap::new(),
+            role_names: HashMap::new(),
             artifacts: Vec::new(),
             deviations: Vec::new(),
         }
@@ -174,18 +189,23 @@ impl Builder {
                 self.ceremony_name.clone_from(name);
                 self.started_at = Some(at);
             }
-            StepFact::StepStarted {
-                id,
-                label,
-                role_name,
-                ..
-            } => {
+            StepFact::RoleDeclared { role, name } => {
+                self.role_names
+                    .insert(role.as_str().to_string(), name.clone());
+            }
+            StepFact::StepStarted { id, label, role } => {
                 let step_id = id.as_str().to_string();
                 self.step_index.insert(step_id.clone(), self.steps.len());
+                // A role whose declaration was withheld shows by its id.
+                let role = self
+                    .role_names
+                    .get(role.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| role.as_str().to_string());
                 self.steps.push(ReportStep {
                     step_id,
                     label: label.clone(),
-                    role: role_name.clone(),
+                    role,
                     started_at: at,
                     completed_at: None,
                     outcome_status: "in_progress".to_string(),
@@ -227,14 +247,14 @@ impl Builder {
             StepFact::ArtifactWritten {
                 step,
                 name,
-                path,
-                sha256,
+                file,
+                digest,
             } => {
                 self.artifacts.push(ReportArtifact {
                     step_id: step.as_str().to_string(),
                     name: name.clone(),
-                    path: path.display().to_string(),
-                    sha256: sha256.clone(),
+                    file: file.clone(),
+                    digest: digest.as_ref().map(|d| d.as_str().to_string()),
                 });
             }
             StepFact::DeviationRecorded { step, text } => {
@@ -283,6 +303,7 @@ impl Builder {
             steps: self.steps,
             artifacts: self.artifacts,
             deviations: self.deviations,
+            withheld: None,
         }
     }
 }

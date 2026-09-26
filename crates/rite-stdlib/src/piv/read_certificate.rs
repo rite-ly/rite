@@ -68,16 +68,15 @@ impl Action for PivReadCertificateAction {
             ),
         )?;
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "piv_read_certificate".to_string(),
-            inputs: json!({ "slot": typed.slot }),
-            outputs: json!({
+        reporter.backend_operation(
+            "piv_read_certificate",
+            json!({ "slot": typed.slot }),
+            json!({
                 "cert_fingerprint": cert_fingerprint,
                 "cert_size": cert_der.len(),
             }),
-            fingerprint: Some(cert_fingerprint),
-        })?;
+            Some(cert_fingerprint),
+        )?;
 
         if let Some(produces) = &step.produces {
             reporter.log(

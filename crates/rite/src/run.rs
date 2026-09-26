@@ -189,19 +189,21 @@ pub fn run(args: Args) {
         eprintln!("Frontend error: {e}");
     }
 
-    report_outcome(exec_result, &output_dir, args.no_transcript);
+    report_outcome(exec_result, &output_dir, &args.file, args.no_transcript);
 }
 
 /// Print the terminal summary and exit the process with the matching code.
 ///
-/// On success prints the output directory and transcript fingerprint (exit 0).
-/// On failure or operator abort, exits non-zero: an abort is a deliberate stop
-/// rather than a failure, but the ceremony did not complete either way. The
-/// transcript is recorded up to the stopping point in both cases, so the output
-/// directory is reported so the operator can find the evidence.
+/// On success prints the output directory, the transcript fingerprint and the
+/// commands that check and keep the record (exit 0). On failure or operator
+/// abort, exits non-zero: an abort is a deliberate stop rather than a failure,
+/// but the ceremony did not complete either way. The transcript is recorded up
+/// to the stopping point in both cases, so the output directory and the same
+/// commands are printed so the operator can find and keep the evidence.
 fn report_outcome(
     exec_result: Result<ExecutionSummary, ExecutionError>,
     output_dir: &Path,
+    ceremony: &Path,
     no_transcript: bool,
 ) -> ! {
     match exec_result {
@@ -209,6 +211,8 @@ fn report_outcome(
             if !no_transcript {
                 println!("Output directory: {}", output_dir.display());
                 println!("Transcript fingerprint: {}", summary.transcript_fingerprint);
+                println!();
+                println!("{}", next_steps(output_dir, ceremony));
             }
             std::process::exit(0);
         }
@@ -220,9 +224,39 @@ fn report_outcome(
             }
             if !no_transcript {
                 eprintln!("Output directory: {}", output_dir.display());
+                eprintln!();
+                eprintln!("{}", next_steps(output_dir, ceremony));
             }
             std::process::exit(1);
         }
+    }
+}
+
+/// The commands that check the run, render its report, and package it with
+/// the ceremony it ran from, ready to copy.
+fn next_steps(output_dir: &Path, ceremony: &Path) -> String {
+    let run = shell_arg(&output_dir.display().to_string());
+    let bundle = shell_arg(&format!("{}-bundle", output_dir.display()));
+    let definition = shell_arg(&ceremony.display().to_string());
+    format!(
+        "Next steps:\n  \
+         rite verify {run}\n  \
+         rite report {run}\n  \
+         rite bundle create {run} --definition {definition} -o {bundle}"
+    )
+}
+
+/// `arg` as one shell word: unchanged when it holds only characters no shell
+/// treats specially, single-quoted otherwise.
+fn shell_arg(arg: &str) -> String {
+    let plain = !arg.is_empty()
+        && arg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:@+,=".contains(c));
+    if plain {
+        arg.to_string()
+    } else {
+        format!("'{}'", arg.replace('\'', "'\\''"))
     }
 }
 
@@ -252,4 +286,32 @@ fn default_frontend() -> Frontend {
 fn is_stdout_tty() -> bool {
     use std::io::IsTerminal;
     std::io::stdout().is_terminal()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_steps_name_the_run_and_the_ceremony() {
+        let text = next_steps(
+            Path::new("./root-ca-20260924T101500"),
+            Path::new("root.rite.yaml"),
+        );
+        assert_eq!(
+            text,
+            "Next steps:\n  \
+             rite verify ./root-ca-20260924T101500\n  \
+             rite report ./root-ca-20260924T101500\n  \
+             rite bundle create ./root-ca-20260924T101500 --definition root.rite.yaml \
+             -o ./root-ca-20260924T101500-bundle"
+        );
+    }
+
+    #[test]
+    fn shell_arguments_are_quoted_when_needed() {
+        assert_eq!(shell_arg("runs/a-1"), "runs/a-1");
+        assert_eq!(shell_arg("my runs/a"), "'my runs/a'");
+        assert_eq!(shell_arg("it's"), "'it'\\''s'");
+    }
 }

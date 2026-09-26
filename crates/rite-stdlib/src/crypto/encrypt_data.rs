@@ -1,6 +1,6 @@
 //! `encrypt_data` action, encrypt content for a key the backend holds.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, parse_params, resolve_artifact_bytes, resolve_backend_key,
@@ -80,7 +80,7 @@ impl Action for EncryptDataAction {
             ),
         )?;
 
-        let (transport, backend_name, backend_fingerprint) =
+        let (transport, _) =
             crate::crypto::transport_backend(backend, &key_backend, "protect a data key")?;
 
         // The backend makes the content-encryption key and the copy only the
@@ -92,10 +92,9 @@ impl Action for EncryptDataAction {
         let fingerprint = compute_fingerprint(encrypted.data());
         reporter.log(Icon::Checkmark, "Content encrypted")?;
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "encrypt_data".to_string(),
-            inputs: json!({
+        reporter.backend_operation(
+            "encrypt_data",
+            json!({
                 "scheme": scheme.to_string(),
                 "data": data_ref.display_name(),
                 // How much was encrypted, and deliberately no digest of it.
@@ -105,14 +104,9 @@ impl Action for EncryptDataAction {
                 "encryption_key": key_ref.display_name(),
                 "encryption_key_check_value": check_value.to_string(),
             }),
-            outputs: produced(
-                &backend_name,
-                &backend_fingerprint,
-                &fingerprint,
-                &encrypted,
-            ),
-            fingerprint: Some(fingerprint.clone()),
-        })?;
+            produced(&fingerprint, &encrypted),
+            Some(fingerprint.clone()),
+        )?;
 
         let message = format!("{} bytes encrypted under {scheme}", payload.len());
         let value = ArtifactValue::EncryptedData(encrypted);
@@ -179,15 +173,8 @@ fn seal_into_container(
 /// The description is read out of the artifact and recorded whole, so a
 /// verifier compares the one it re-derives from the blob against this one and a
 /// field added to it is checked without touching either side.
-fn produced(
-    backend_name: &str,
-    backend_fingerprint: &str,
-    fingerprint: &str,
-    encrypted: &EncryptedData,
-) -> serde_json::Value {
+fn produced(fingerprint: &str, encrypted: &EncryptedData) -> serde_json::Value {
     json!({
-        "backend": backend_name,
-        "backend_fingerprint": backend_fingerprint,
         "encrypted_data_fingerprint": fingerprint,
         "encryption": encrypted.description(),
     })

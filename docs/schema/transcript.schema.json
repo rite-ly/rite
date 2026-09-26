@@ -1,0 +1,1204 @@
+{
+  "$id": "https://ritely.io/schemas/0.6.0/transcript.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Rite transcript line (format 0, vocabulary 0)",
+  "description": "One line of a transcript.jsonl file. The first line is the header; every other line records one fact, either complete or withheld. Each line is a JSON object on its own line, and the lines are chained: each line's chain value commits to the line and to every line before it.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/HeaderLine"
+    },
+    {
+      "$ref": "#/$defs/CompleteLine"
+    },
+    {
+      "$ref": "#/$defs/WithheldLine"
+    }
+  ],
+  "$defs": {
+    "ActId": {
+      "description": "An act's identifier, as written in the ceremony.",
+      "type": "string"
+    },
+    "At": {
+      "description": "When the fact was recorded: an RFC 3339 time in UTC with six fractional digits. The chain commits to this exact string.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$"
+    },
+    "CompleteLine": {
+      "description": "A fact line with its content: the fact, the salt that hides it, and the values that commit to both.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/At"
+        },
+        "chain": {
+          "description": "The chain value after this line: SHA-256 over the byte 0x01, the previous chain value, the length of `at` as an 8-byte big-endian integer, `at` in UTF-8, the level as an 8-byte big-endian integer, and the leaf. The chain value of the last line is the transcript's fingerprint.",
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        "fact": {
+          "$ref": "#/$defs/StepFact"
+        },
+        "leaf": {
+          "description": "The commitment to the fact: SHA-256 over the byte 0x00, the 16 salt bytes, and the fact in RFC 8785 canonical JSON.",
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        "level": {
+          "$ref": "#/$defs/Level"
+        },
+        "salt": {
+          "description": "16 random bytes, written as 32 lowercase hex digits. The leaf hashes the decoded bytes. The salt keeps a withheld fact from being guessed from its leaf.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "level",
+        "leaf",
+        "chain",
+        "salt",
+        "fact"
+      ]
+    },
+    "ErrorClass": {
+      "description": "What kind of bad outcome this was.",
+      "oneOf": [
+        {
+          "description": "Something around the ceremony was not ready, such as a device not connected, and the step's work did not happen.",
+          "type": "string",
+          "const": "environmental"
+        },
+        {
+          "description": "The ceremony's own logic concluded badly, such as a verification that did not match or a refused attestation.",
+          "type": "string",
+          "const": "procedural"
+        },
+        {
+          "description": "The run itself cannot be trusted to continue, or the ceremony definition is broken.",
+          "type": "string",
+          "const": "integrity"
+        },
+        {
+          "description": "An operator chose to stop the ceremony.",
+          "type": "string",
+          "const": "abort"
+        }
+      ]
+    },
+    "ErrorRecord": {
+      "description": "What went wrong: a class for audit, a stable kind, and a message for people.",
+      "type": "object",
+      "properties": {
+        "class": {
+          "description": "The kind of bad outcome, for audit.",
+          "$ref": "#/$defs/ErrorClass"
+        },
+        "kind": {
+          "description": "A stable label for the error, such as aborted or step_failed.",
+          "type": "string"
+        },
+        "message": {
+          "description": "A description of the error for people.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "class",
+        "kind",
+        "message"
+      ]
+    },
+    "Format": {
+      "description": "What kind of value a person types.",
+      "oneOf": [
+        {
+          "description": "Anything the person can type.",
+          "type": "string",
+          "const": "text"
+        },
+        {
+          "description": "Decimal digits only.",
+          "type": "string",
+          "const": "digits"
+        },
+        {
+          "description": "ASCII letters and digits.",
+          "type": "string",
+          "const": "alphanumeric"
+        },
+        {
+          "description": "Bytes as hexadecimal, in either case, two digits per byte.",
+          "type": "string",
+          "const": "hex"
+        },
+        {
+          "description": "Bytes as standard base64 with padding.",
+          "type": "string",
+          "const": "base64"
+        }
+      ]
+    },
+    "HeaderLine": {
+      "description": "The first line of a transcript: what the file is, and the start of the chain.",
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "description": "The URL of the JSON Schema of the release that wrote the transcript, for editors and other tools. The chain does not commit to it, and a reader ignores it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri"
+        },
+        "chain": {
+          "description": "The first chain value: SHA-256 over the byte 0x02 followed by the header in RFC 8785 canonical JSON.",
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        "header": {
+          "$ref": "#/$defs/TranscriptHeader"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "header",
+        "chain"
+      ]
+    },
+    "Level": {
+      "description": "The confidentiality level of a line: who may see its fact. Levels are integers ordered from the widest audience to the narrowest, so a disclosure up to a level withholds every line above it. Three levels are built in at fixed values: public (10, anyone), restricted (20, auditors under agreement) and confidential (30, the ceremony's own organisation). Every level a transcript uses is declared in its header.",
+      "type": "integer",
+      "maximum": 4294967295,
+      "minimum": 0
+    },
+    "MaterialId": {
+      "description": "A material's identifier, as written in the ceremony.",
+      "type": "string"
+    },
+    "ParamId": {
+      "description": "A parameter's identifier, as written in the ceremony.",
+      "type": "string"
+    },
+    "Prompt": {
+      "description": "A prompt as it was shown.",
+      "oneOf": [
+        {
+          "description": "A yes or no question.",
+          "type": "object",
+          "properties": {
+            "default": {
+              "description": "The answer given when the person confirms without choosing, if any.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "question": {
+              "description": "The question.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "confirm"
+            }
+          },
+          "required": [
+            "type",
+            "question"
+          ]
+        },
+        {
+          "description": "A request for free text, checked before it is accepted.",
+          "type": "object",
+          "properties": {
+            "label": {
+              "description": "The label shown.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            },
+            "validator": {
+              "description": "The check the answer had to pass.",
+              "$ref": "#/$defs/ValidatorSpec"
+            }
+          },
+          "required": [
+            "type",
+            "label",
+            "validator"
+          ]
+        },
+        {
+          "description": "A request for a secret, such as a PIN. The answer is never recorded.",
+          "type": "object",
+          "properties": {
+            "label": {
+              "description": "The label shown.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "secret"
+            },
+            "validator": {
+              "description": "The check the answer had to pass.",
+              "$ref": "#/$defs/ValidatorSpec"
+            }
+          },
+          "required": [
+            "type",
+            "label",
+            "validator"
+          ]
+        },
+        {
+          "description": "A request to type a given text exactly, such as a confirmation phrase.",
+          "type": "object",
+          "properties": {
+            "expected": {
+              "description": "The text that had to be typed.",
+              "type": "string"
+            },
+            "label": {
+              "description": "The label shown.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "literal"
+            }
+          },
+          "required": [
+            "type",
+            "label",
+            "expected"
+          ]
+        },
+        {
+          "description": "A pause until the person is ready to continue.",
+          "type": "object",
+          "properties": {
+            "hint": {
+              "description": "The hint shown, if any.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "continue"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "ResponseRecord": {
+      "description": "The answer to a prompt, as recorded. A secret answer is never recorded, not even as a digest.",
+      "oneOf": [
+        {
+          "description": "A yes or no answer.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "bool"
+            },
+            "value": {
+              "description": "The answer.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "description": "A free-text answer.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            },
+            "value": {
+              "description": "The answer, as typed.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ]
+        },
+        {
+          "description": "A secret was entered. Only the fact that it was entered is recorded.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "secret_redacted"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The person continued past a pause.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "acknowledged"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "RoleId": {
+      "description": "A role's identifier, as written in the ceremony.",
+      "type": "string"
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "StepFact": {
+      "description": "One recorded fact, identified by its `type`. Each fact type has a fixed set of fields in a given vocabulary.",
+      "oneOf": [
+        {
+          "description": "The ceremony started.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The ceremony's name.",
+              "type": "string"
+            },
+            "template": {
+              "description": "Digest of the ceremony definition file the run was resolved from. The inputs of the run are recorded as their own facts, so this digest covers the definition only.",
+              "$ref": "#/$defs/Sha256Digest"
+            },
+            "type": {
+              "type": "string",
+              "const": "ceremony_started"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "template"
+          ]
+        },
+        {
+          "description": "A role the ceremony defines. Recorded once per role at the start, whether or not anyone is assigned to it; later facts name the role by its identifier.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The role's display name.",
+              "type": "string"
+            },
+            "role": {
+              "description": "The role.",
+              "$ref": "#/$defs/RoleId"
+            },
+            "type": {
+              "type": "string",
+              "const": "role_declared"
+            }
+          },
+          "required": [
+            "type",
+            "role",
+            "name"
+          ]
+        },
+        {
+          "description": "A person was assigned to a role for this run. One fact per assignment, so each can be withheld on its own.",
+          "type": "object",
+          "properties": {
+            "person": {
+              "description": "The person, as supplied when the run started. Recorded as given: nothing in the transcript proves who the person is.",
+              "type": "string"
+            },
+            "role": {
+              "description": "The role.",
+              "$ref": "#/$defs/RoleId"
+            },
+            "type": {
+              "type": "string",
+              "const": "role_assigned"
+            }
+          },
+          "required": [
+            "type",
+            "role",
+            "person"
+          ]
+        },
+        {
+          "description": "A parameter took its value for this run, supplied or defaulted.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The parameter.",
+              "$ref": "#/$defs/ParamId"
+            },
+            "type": {
+              "type": "string",
+              "const": "parameter_bound"
+            },
+            "value": {
+              "description": "The value, as the ceremony used it."
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "value"
+          ]
+        },
+        {
+          "description": "A material was loaded at the start of the run. The digest of a digital material is a separate fact, material_digest, so the two can be disclosed to different audiences.",
+          "type": "object",
+          "properties": {
+            "identifier": {
+              "description": "The identifier of a physical or pre-provisioned material, such as a serial number, when one was supplied.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "The material.",
+              "$ref": "#/$defs/MaterialId"
+            },
+            "type": {
+              "type": "string",
+              "const": "material_loaded"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ]
+        },
+        {
+          "description": "The digest of a digital material's bytes, as loaded.",
+          "type": "object",
+          "properties": {
+            "digest": {
+              "description": "The digest of the material's bytes.",
+              "$ref": "#/$defs/Sha256Digest"
+            },
+            "name": {
+              "description": "The material.",
+              "$ref": "#/$defs/MaterialId"
+            },
+            "type": {
+              "type": "string",
+              "const": "material_digest"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "digest"
+          ]
+        },
+        {
+          "description": "A backend was used for the first time in this run. Recorded once per backend, before its first operation; operations name the backend and do not repeat its identity.",
+          "type": "object",
+          "properties": {
+            "identity": {
+              "description": "The identity the backend reports for itself, such as a device serial number and firmware version.",
+              "type": "string"
+            },
+            "name": {
+              "description": "The backend's name in the ceremony.",
+              "type": "string"
+            },
+            "provider": {
+              "description": "The kind of backend, such as openssl, yubikey or pkcs11.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "backend_bound"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "provider",
+            "identity"
+          ]
+        },
+        {
+          "description": "A description of the machine the ceremony ran on.",
+          "type": "object",
+          "properties": {
+            "info": {
+              "description": "The parts of the machine description the step was asked to record."
+            },
+            "step": {
+              "description": "The step that recorded it.",
+              "$ref": "#/$defs/StepId"
+            },
+            "type": {
+              "type": "string",
+              "const": "machine_info_recorded"
+            }
+          },
+          "required": [
+            "type",
+            "step",
+            "info"
+          ]
+        },
+        {
+          "description": "An act, a named part of the ceremony, started.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The act.",
+              "$ref": "#/$defs/ActId"
+            },
+            "label": {
+              "description": "The act's label, as written in the ceremony.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "act_started"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "label"
+          ]
+        },
+        {
+          "description": "A step started.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The step.",
+              "$ref": "#/$defs/StepId"
+            },
+            "label": {
+              "description": "The step's label, as written in the ceremony.",
+              "type": "string"
+            },
+            "role": {
+              "description": "The role responsible for the step. Its display name is on the role's role_declared fact.",
+              "$ref": "#/$defs/RoleId"
+            },
+            "type": {
+              "type": "string",
+              "const": "step_started"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "label",
+            "role"
+          ]
+        },
+        {
+          "description": "Someone answered a prompt, and the answer was accepted.",
+          "type": "object",
+          "properties": {
+            "prompt": {
+              "description": "The prompt, as shown.",
+              "$ref": "#/$defs/Prompt"
+            },
+            "response": {
+              "description": "The answer, as recorded.",
+              "$ref": "#/$defs/ResponseRecord"
+            },
+            "step": {
+              "description": "The step that asked, or absent for a prompt asked outside any step.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StepId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "prompt_answered"
+            }
+          },
+          "required": [
+            "type",
+            "prompt",
+            "response"
+          ]
+        },
+        {
+          "description": "A backend performed an operation. The inputs and outputs are specific to the kind of operation.",
+          "type": "object",
+          "properties": {
+            "backend": {
+              "description": "The backend the step ran with, by the name the ceremony gives it.                 Its identity is on that backend's backend_bound fact. Absent for an operation                 done in software.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fingerprint": {
+              "description": "A fingerprint of the material the operation produced, when it has one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "inputs": {
+              "description": "What the operation was given: parameters and references to artifacts or materials."
+            },
+            "kind": {
+              "description": "The kind of operation, such as generate_key or sign_data.",
+              "type": "string"
+            },
+            "outputs": {
+              "description": "What the operation produced: artifact names and digests."
+            },
+            "step": {
+              "description": "The step the operation ran in.",
+              "$ref": "#/$defs/StepId"
+            },
+            "type": {
+              "type": "string",
+              "const": "backend_operation"
+            }
+          },
+          "required": [
+            "type",
+            "step",
+            "kind",
+            "inputs",
+            "outputs"
+          ]
+        },
+        {
+          "description": "A key held outside the ceremony received a wrapped key. A separate fact from the operation, so the method of a wrap can be published while the recipient stays withheld.",
+          "type": "object",
+          "properties": {
+            "declared": {
+              "description": "Whether the ceremony named this fingerprint in advance. When it did, the key received was checked against it; otherwise the fingerprint records whatever key arrived.",
+              "type": "boolean"
+            },
+            "fingerprint": {
+              "description": "The digest of the recipient's public key, as DER-encoded SubjectPublicKeyInfo.",
+              "$ref": "#/$defs/Sha256Digest"
+            },
+            "source": {
+              "description": "The artifact or material the recipient's key came from, by its name in the ceremony.",
+              "type": "string"
+            },
+            "step": {
+              "description": "The step that wrapped the key.",
+              "$ref": "#/$defs/StepId"
+            },
+            "type": {
+              "type": "string",
+              "const": "wrap_recipient_recorded"
+            }
+          },
+          "required": [
+            "type",
+            "step",
+            "source",
+            "fingerprint",
+            "declared"
+          ]
+        },
+        {
+          "description": "A person made an attestation.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "description": "The role that made the attestation.",
+              "$ref": "#/$defs/RoleId"
+            },
+            "statement": {
+              "description": "The statement, word for word.",
+              "type": "string"
+            },
+            "step": {
+              "description": "The step the attestation was made in.",
+              "$ref": "#/$defs/StepId"
+            },
+            "type": {
+              "type": "string",
+              "const": "attestation_recorded"
+            }
+          },
+          "required": [
+            "type",
+            "step",
+            "role",
+            "statement"
+          ]
+        },
+        {
+          "description": "An artifact was written to the run's artifacts directory.",
+          "type": "object",
+          "properties": {
+            "digest": {
+              "description": "The digest of the file's bytes. Absent for content a step opened, since a digest of a secret can be tested against guesses.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Sha256Digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "file": {
+              "description": "The file name in the artifacts directory: a single path component.",
+              "type": "string"
+            },
+            "name": {
+              "description": "The artifact's name, as declared in the ceremony.",
+              "type": "string"
+            },
+            "step": {
+              "description": "The step that produced the artifact.",
+              "$ref": "#/$defs/StepId"
+            },
+            "type": {
+              "type": "string",
+              "const": "artifact_written"
+            }
+          },
+          "required": [
+            "type",
+            "step",
+            "name",
+            "file"
+          ]
+        },
+        {
+          "description": "An operator recorded a deviation.",
+          "type": "object",
+          "properties": {
+            "step": {
+              "description": "The step during which the deviation was recorded, or absent outside any step.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StepId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "text": {
+              "description": "The deviation, word for word.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "deviation_recorded"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "One attempt at a step failed. Recorded per attempt: a step that is retried and then succeeds has this fact for each failed attempt, then step_completed.",
+          "type": "object",
+          "properties": {
+            "attempt": {
+              "description": "The attempt's number within the step, starting at 1.",
+              "type": "integer",
+              "maximum": 4294967295,
+              "minimum": 0
+            },
+            "error": {
+              "description": "What went wrong in this attempt.",
+              "$ref": "#/$defs/ErrorRecord"
+            },
+            "step": {
+              "description": "The step.",
+              "$ref": "#/$defs/StepId"
+            },
+            "type": {
+              "type": "string",
+              "const": "step_attempt_failed"
+            }
+          },
+          "required": [
+            "type",
+            "step",
+            "attempt",
+            "error"
+          ]
+        },
+        {
+          "description": "A step finished.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The step.",
+              "$ref": "#/$defs/StepId"
+            },
+            "outcome": {
+              "description": "How the step ended.",
+              "$ref": "#/$defs/StepOutcome"
+            },
+            "type": {
+              "type": "string",
+              "const": "step_completed"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "outcome"
+          ]
+        },
+        {
+          "description": "The ceremony finished. It is the last line of a transcript whose run completed.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "ceremony_completed"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The ceremony failed or was aborted. It is the last line of a transcript whose run did not complete.",
+          "type": "object",
+          "properties": {
+            "error": {
+              "description": "What went wrong.",
+              "$ref": "#/$defs/ErrorRecord"
+            },
+            "type": {
+              "type": "string",
+              "const": "ceremony_failed"
+            }
+          },
+          "required": [
+            "type",
+            "error"
+          ]
+        },
+        {
+          "description": "The ceremony's entropy source was seeded with machine randomness. Recorded once, at the start, so every value drawn from the source can be derived again from the transcript.",
+          "type": "object",
+          "properties": {
+            "derivation": {
+              "description": "The derivation scheme, such as rite-kdf/v1. A verifier refuses a scheme it does not know.",
+              "type": "string"
+            },
+            "m": {
+              "description": "The machine randomness, as lowercase hex.",
+              "type": "string",
+              "pattern": "^(?:[0-9a-f]{2})+$"
+            },
+            "source": {
+              "description": "Where the machine randomness came from, such as os.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "entropy_seeded"
+            }
+          },
+          "required": [
+            "type",
+            "m",
+            "source",
+            "derivation"
+          ]
+        },
+        {
+          "description": "A person added their own randomness to the entropy source, starting a new epoch.",
+          "type": "object",
+          "properties": {
+            "contribution": {
+              "description": "The contribution, word for word, mixed into the source as UTF-8.",
+              "type": "string"
+            },
+            "epoch": {
+              "description": "The epoch this contribution starts, counting from 1.",
+              "type": "integer",
+              "maximum": 4294967295,
+              "minimum": 0
+            },
+            "step": {
+              "description": "The step the contribution was made in.",
+              "$ref": "#/$defs/StepId"
+            },
+            "type": {
+              "type": "string",
+              "const": "entropy_contributed"
+            }
+          },
+          "required": [
+            "type",
+            "step",
+            "epoch",
+            "contribution"
+          ]
+        },
+        {
+          "description": "A value was drawn from the entropy source, such as a nonce, a certificate serial number or a challenge. A verifier derives it again from the seed, the contributions and the path.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "description": "The derivation path: `<epoch>/<step>/<purpose>`.",
+              "type": "string"
+            },
+            "step": {
+              "description": "The step that drew the value.",
+              "$ref": "#/$defs/StepId"
+            },
+            "type": {
+              "type": "string",
+              "const": "entropy_drawn"
+            },
+            "value": {
+              "description": "The value, as lowercase hex. Its length is the number of bytes drawn.",
+              "type": "string",
+              "pattern": "^(?:[0-9a-f]{2})*$"
+            }
+          },
+          "required": [
+            "type",
+            "step",
+            "path",
+            "value"
+          ]
+        }
+      ]
+    },
+    "StepId": {
+      "description": "A step's identifier, as written in the ceremony.",
+      "type": "string"
+    },
+    "StepOutcome": {
+      "description": "How a step ended.",
+      "oneOf": [
+        {
+          "description": "The step did its work.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "A short description of what the step did.",
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "completed"
+            }
+          },
+          "required": [
+            "status",
+            "message"
+          ]
+        }
+      ]
+    },
+    "TranscriptHeader": {
+      "description": "What the file is. A reader checks `rite_transcript` before reading anything else, and refuses a version it does not know.",
+      "type": "object",
+      "properties": {
+        "dry_run": {
+          "description": "Whether the run was a dry run. A dry-run transcript is a rehearsal record, never evidence of a ceremony.",
+          "type": "boolean"
+        },
+        "levels": {
+          "description": "Every level the transcript uses, by name. It holds public, restricted and confidential at their fixed values, and any other level the ceremony declares. No two names share a value.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Level"
+          }
+        },
+        "producer": {
+          "description": "The program and version that wrote the transcript, as it reports itself. Informational: a program cannot vouch for its own identity.",
+          "type": "string"
+        },
+        "rite_transcript": {
+          "description": "Version of the line format and the chain rule.",
+          "type": "integer",
+          "const": 0,
+          "maximum": 4294967295,
+          "minimum": 0
+        },
+        "run_id": {
+          "description": "A random identifier of this run: 32 lowercase hex digits.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "vocabulary": {
+          "description": "Version of the fact vocabulary: which fact types and fields the transcript uses.",
+          "type": "integer",
+          "const": 0,
+          "maximum": 4294967295,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "rite_transcript",
+        "vocabulary",
+        "producer",
+        "run_id",
+        "dry_run",
+        "levels"
+      ]
+    },
+    "ValidatorSpec": {
+      "description": "The check an answer had to pass.",
+      "oneOf": [
+        {
+          "description": "The answer is not empty or blank.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "non_empty"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "The answer matches a regular expression in full.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "regex"
+            },
+            "value": {
+              "description": "The regular expression.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "description": "The answer passes a check the program defines, by name.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "predefined"
+            },
+            "value": {
+              "description": "The name of the check, such as serial_number.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "description": "The answer is a value of one format, with a length within bounds, counted in characters for text and in bytes for an encoding.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "format"
+            },
+            "value": {
+              "type": "object",
+              "properties": {
+                "format": {
+                  "description": "What kind of value the answer is.",
+                  "$ref": "#/$defs/Format"
+                },
+                "max_length": {
+                  "description": "The most units accepted, if bounded.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "maximum": 9007199254740991,
+                  "minimum": 0
+                },
+                "min_length": {
+                  "description": "The fewest units accepted, if bounded.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "maximum": 9007199254740991,
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "format"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        }
+      ]
+    },
+    "WithheldLine": {
+      "description": "A fact line whose fact is withheld from a disclosure. It keeps the time, the level, the leaf and the chain value, so it folds into the chain exactly as the complete line does, and the transcript keeps its fingerprint.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/At"
+        },
+        "chain": {
+          "description": "The chain value after this line.",
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        "leaf": {
+          "description": "The commitment to the withheld fact.",
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        "level": {
+          "$ref": "#/$defs/Level"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "level",
+        "leaf",
+        "chain"
+      ]
+    }
+  }
+}

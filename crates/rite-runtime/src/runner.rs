@@ -31,18 +31,20 @@
 //! finalizes it before returning. Action handlers receive a `&mut Reporter`
 //! and emit transcript-worthy facts through it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use rand::TryRng;
 use rand::rngs::SysRng;
 use rite_model::{
-    ActId, ActionType, ArtifactId, Ceremony, MaterialId, OutputId, ParamId, RoleId, Step,
+    ActId, ActionType, ArtifactId, Ceremony, Level, MaterialId, MaterialKind, MaterialSource,
+    OutputId, ParamId, RoleId, Sha256Digest, Step, TranscriptHeader,
 };
 use rite_sdk::{Backend, BackendError, Retriability};
 use thiserror::Error;
 
+use crate::actions::ArtifactValue;
 use crate::backend::BackendRegistry;
 use crate::clock::{Clock, SystemClock};
 use crate::entropy::DERIVATION_V1;
@@ -51,7 +53,7 @@ use crate::executor::{
 };
 use crate::expressions;
 use crate::output_config::OutputConfig;
-use crate::protocol::{ExecEvent, Icon, MaterialOverview, Response, UiCommand, UiSignal};
+use crate::protocol::{ExecEvent, MaterialOverview, Response, UiCommand, UiSignal};
 use crate::reporter::{Reporter, ReporterError};
 use crate::state::{ExecutionState, HandlerContext, StepResult};
 use crate::step_info::StepInfo;
@@ -78,6 +80,20 @@ fn gather_machine_entropy(dry_run: bool) -> Result<([u8; 32], String), Execution
         .try_fill_bytes(&mut m)
         .map_err(|e| ExecutionError::EntropyError(e.to_string()))?;
     Ok((m, "os".to_string()))
+}
+
+/// Program and version recorded in the transcript header.
+/// Name and version of the program writing transcripts, as the header
+/// records it.
+pub const PRODUCER: &str = concat!("rite ", env!("CARGO_PKG_VERSION"));
+
+/// A fresh run identifier: 16 bytes from the OS RNG, as lowercase hex.
+fn new_run_id() -> Result<String, ExecutionError> {
+    let mut id = [0u8; 16];
+    SysRng
+        .try_fill_bytes(&mut id)
+        .map_err(|e| ExecutionError::EntropyError(e.to_string()))?;
+    Ok(base16ct::lower::encode_string(&id))
 }
 
 /// Errors that may surface from an [`Action`] handler.
@@ -385,6 +401,12 @@ impl Executor {
     ) -> Result<ExecutionSummary, ExecutionError> {
         validate_parameters(&self.ceremony)?;
 
+        // The header goes first: it says what the file is before any fact.
+        let header = TranscriptHeader::new(PRODUCER, &new_run_id()?, self.dry_run);
+        transcript_sink
+            .begin(&header)
+            .map_err(|e| ExecutionError::TranscriptError(e.to_string()))?;
+
         let resolved_params: HashMap<ParamId, serde_json::Value> = self
             .ceremony
             .parameters
@@ -428,7 +450,7 @@ impl Executor {
                 let at = clock.now();
                 let completed = StepFact::CeremonyCompleted {};
                 transcript_sink
-                    .record(at, &completed)
+                    .record(at, completed.default_level(), &completed)
                     .map_err(|e| ExecutionError::TranscriptError(e.to_string()))?;
                 let _ = event_tx.send(ExecEvent::Fact {
                     at,
@@ -450,7 +472,7 @@ impl Executor {
                 let at = clock.now();
                 let record = err.to_error_record();
                 let failed = StepFact::CeremonyFailed { error: record };
-                let _ = transcript_sink.record(at, &failed);
+                let _ = transcript_sink.record(at, failed.default_level(), &failed);
                 let _ = event_tx.send(ExecEvent::Fact { at, fact: failed });
                 if let Ok(fingerprint) = transcript_sink.finalize() {
                     let _ = event_tx.send(ExecEvent::Finalized {
@@ -474,6 +496,7 @@ impl Executor {
 
         reporter.fact(StepFact::CeremonyStarted {
             name: self.ceremony.metadata.name.clone(),
+            template: self.ceremony.source_digest.clone(),
         })?;
 
         // Establish the ceremony entropy source before any step can draw from
@@ -487,6 +510,30 @@ impl Executor {
             source,
             derivation: DERIVATION_V1.to_string(),
         })?;
+
+        // The inputs this run was given, one fact each so each can be
+        // disclosed on its own. The template digest on `CeremonyStarted`
+        // covers none of them.
+        for (id, role) in self.ceremony.roles.iter() {
+            reporter.fact(StepFact::RoleDeclared {
+                role: id.clone(),
+                name: role.name.clone(),
+            })?;
+        }
+        for (id, role) in self.ceremony.roles.iter() {
+            if let Some(person) = &role.person {
+                reporter.fact(StepFact::RoleAssigned {
+                    role: id.clone(),
+                    person: person.clone(),
+                })?;
+            }
+        }
+        for (id, parameter) in self.ceremony.parameters.iter() {
+            reporter.fact(StepFact::ParameterBound {
+                name: id.clone(),
+                value: parameter.value.clone(),
+            })?;
+        }
 
         // Pre-ceremony overview: descriptive metadata for the UI's
         // Overview screen. Sent as a UI-only signal, not a transcript
@@ -522,14 +569,40 @@ impl Executor {
 
         let mut state = ExecutionState::new(resolved_params, roles, materials_map, dry_run);
 
-        // Load materials. Pre-step logs are attributed to no specific step.
+        // Load materials. The digest of a file is its own fact, so an
+        // audience can learn that an input was loaded without being able to
+        // test guesses against its content.
         for (id, material) in self.ceremony.materials.iter() {
             let artifact = load_material_artifact(id.as_str(), material)?;
+            let identifier = match &material.kind {
+                MaterialKind::Physical { identifier, .. } => identifier.clone(),
+                MaterialKind::Digital {
+                    source: Some(MaterialSource::Identifier { identifier }),
+                } => Some(identifier.clone()),
+                MaterialKind::Digital { .. } => None,
+            };
+            // A file loads as bytes; an identifier or physical item as text.
+            let digest = match &artifact {
+                ArtifactValue::Bytes(bytes) => Some(Sha256Digest::of(bytes)),
+                _ => None,
+            };
+            reporter.fact(StepFact::MaterialLoaded {
+                name: id.clone(),
+                identifier,
+            })?;
+            if let Some(digest) = digest {
+                reporter.fact(StepFact::MaterialDigest {
+                    name: id.clone(),
+                    digest,
+                })?;
+            }
             state = state.with_material(ArtifactId::new(id.as_str()), artifact);
-            let display_name = material.display_name();
-            reporter.log(Icon::Checkmark, format!("Loaded material: {display_name}"))?;
         }
 
+        let mut backends = RunBackends {
+            registry: &mut self.backend_registry,
+            bound: HashSet::new(),
+        };
         let has_acts = !self.ceremony.acts.is_empty();
         let mut current_act: Option<ActId> = None;
         let mut counts = StepCounts::default();
@@ -562,17 +635,11 @@ impl Executor {
             }
 
             reporter.set_current_step(Some(step.id.clone()));
-            let role_id = step.role.clone().unwrap_or_else(|| RoleId::new(""));
-            let role_name = self
-                .ceremony
-                .roles
-                .get(&role_id)
-                .map_or_else(|| role_id.as_str().to_string(), |r| r.name.clone());
+            reporter.set_current_backend(step.backend.clone());
             reporter.fact(StepFact::StepStarted {
                 id: step.id.clone(),
                 label: step.step_label.clone(),
-                role: role_id,
-                role_name,
+                role: step.role.clone().unwrap_or_else(|| RoleId::new("")),
             })?;
 
             // Pacing: gate the step body on operator acknowledgement. The
@@ -606,7 +673,7 @@ impl Executor {
                 &ctx,
                 &params,
                 reporter,
-                &mut self.backend_registry,
+                &mut backends,
             )?;
 
             // StepCompleted
@@ -643,29 +710,43 @@ impl Executor {
                         }
                     })?;
 
-                    let (path, hash, _size, _mime_type) =
+                    let (path, digest, _size, _mime_type) =
                         write_artifact_to_disk(artifact_id, artifact_value, &self.output_config)?;
 
-                    // Record the location relative to the run directory so the
-                    // transcript stays portable and never embeds the operator's
-                    // filesystem layout. `verify` re-anchors artifacts under the
-                    // transcript's own `artifacts/` directory regardless.
-                    let recorded_path = match path.strip_prefix(self.output_config.base_dir()) {
-                        Ok(relative) => relative.to_path_buf(),
-                        Err(_) => path.clone(),
+                    // Only the file name is recorded: the file lives under
+                    // the run's `artifacts/` directory, and the operator's
+                    // filesystem layout stays out of the transcript.
+                    let file = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .ok_or_else(|| ExecutionError::OutputWriteFailed {
+                            name: artifact_id.as_str().to_string(),
+                            reason: format!("'{}' has no UTF-8 file name", path.display()),
+                        })?
+                        .to_string();
+
+                    // Opened content gets no digest: a digest of a secret can
+                    // be tested against guesses.
+                    let digest = match artifact_value {
+                        ArtifactValue::Secret(_) => None,
+                        _ => Some(digest),
                     };
 
-                    reporter.fact(StepFact::ArtifactWritten {
-                        step: step.id.clone(),
-                        name: artifact_id.as_str().to_string(),
-                        path: recorded_path,
-                        sha256: hash,
-                    })?;
+                    reporter.fact_at(
+                        artifact_level(step.action, artifact_value),
+                        StepFact::ArtifactWritten {
+                            step: step.id.clone(),
+                            name: artifact_id.as_str().to_string(),
+                            file,
+                            digest,
+                        },
+                    )?;
                 }
             }
         }
 
         reporter.set_current_step(None);
+        reporter.set_current_backend(None);
         drop(plan);
 
         Ok(counts)
@@ -675,6 +756,63 @@ impl Executor {
 #[derive(Default, Debug, Clone, Copy)]
 struct StepCounts {
     completed: usize,
+}
+
+/// The level an artifact is recorded at, which decides whether a disclosure
+/// carries its file.
+///
+/// Certificates and public keys exist to be distributed. Bytes are public
+/// only from the actions that make distributable bytes, a CSR or a signature;
+/// from any other step they may be a document the ceremony handled, so they
+/// stay restricted. Wrapped keys and encrypted content are ciphertext: not
+/// secret, and not for everyone either. Opened content is confidential and is
+/// never bundled at all.
+fn artifact_level(action: ActionType, value: &ArtifactValue) -> Level {
+    match value {
+        ArtifactValue::Certificate(_) | ArtifactValue::PublicKey(_) => Level::PUBLIC,
+        ArtifactValue::Bytes(_)
+            if matches!(
+                action,
+                ActionType::GenerateCsr | ActionType::SignData | ActionType::PivSign
+            ) =>
+        {
+            Level::PUBLIC
+        }
+        ArtifactValue::Bytes(_)
+        | ArtifactValue::Text(_)
+        | ArtifactValue::WrappedKey(_)
+        | ArtifactValue::EncryptedData(_)
+        | ArtifactValue::BackendKey { .. }
+        | ArtifactValue::Shares(_) => Level::RESTRICTED,
+        ArtifactValue::Secret(_) => Level::CONFIDENTIAL,
+    }
+}
+
+/// The run's backends, and which of them have had their identity recorded.
+struct RunBackends<'a> {
+    registry: &'a mut BackendRegistry,
+    bound: HashSet<String>,
+}
+
+impl RunBackends<'_> {
+    /// Hand out a backend, recording its identity the first time it is
+    /// acquired. Operations name the backend and do not repeat the identity,
+    /// which can carry device serials.
+    fn acquire(
+        &mut self,
+        name: &str,
+        reporter: &mut Reporter<'_>,
+    ) -> Result<&mut dyn Backend, ActionError> {
+        let backend = self.registry.get_mut(name)?;
+        if self.bound.insert(name.to_string()) {
+            reporter.fact(StepFact::BackendBound {
+                name: name.to_string(),
+                provider: backend.provider().to_string(),
+                identity: backend.fingerprint(),
+            })?;
+        }
+        Ok(backend)
+    }
 }
 
 /// Run one step, retrying transient failures under operator control.
@@ -693,7 +831,7 @@ fn execute_step_with_retry(
     ctx: &HandlerContext,
     params: &serde_json::Value,
     reporter: &mut Reporter<'_>,
-    backend_registry: &mut BackendRegistry,
+    backends: &mut RunBackends<'_>,
 ) -> Result<StepResult, ExecutionError> {
     let mut attempt: u32 = 1;
     loop {
@@ -703,10 +841,9 @@ fn execute_step_with_retry(
         // initialization (device unplugged, daemon down) carries the same
         // retriability semantics as a backend error inside the handler.
         let attempt_result = match &step_info.backend {
-            Some(name) => match backend_registry.get_mut(name) {
-                Ok(backend) => handler.execute(step_info, ctx, params, reporter, Some(backend)),
-                Err(e) => Err(ActionError::Backend(e)),
-            },
+            Some(name) => backends.acquire(name, reporter).and_then(|backend| {
+                handler.execute(step_info, ctx, params, reporter, Some(backend))
+            }),
             None => handler.execute(step_info, ctx, params, reporter, None),
         };
 
@@ -887,7 +1024,7 @@ mod tests {
             reporter: &mut Reporter<'_>,
             _backend: Option<&mut dyn Backend>,
         ) -> Result<StepResult, ActionError> {
-            reporter.log(Icon::Info, "ping")?;
+            reporter.log(crate::protocol::Icon::Info, "ping")?;
             Ok(StepResult::completed("pinged".to_string()))
         }
     }
@@ -1048,6 +1185,8 @@ sections:
             vec![
                 "ceremony_started",
                 "entropy_seeded",
+                "role_declared",
+                "role_assigned",
                 "step_started",
                 "step_completed",
                 "ceremony_completed",
@@ -1170,13 +1309,17 @@ sections:
         let summary = result.expect("ceremony runs");
         assert_eq!(summary.steps_completed, 1);
         let written = facts.iter().find_map(|f| match f {
-            StepFact::ArtifactWritten { name, path, .. } => Some((name.clone(), path.clone())),
+            StepFact::ArtifactWritten {
+                name, file, digest, ..
+            } => Some((name.clone(), file.clone(), digest.clone())),
             _ => None,
         });
-        let (name, path) = written.expect("the artifact is written");
+        let (name, file, digest) = written.expect("the artifact is written");
         assert_eq!(name, "opened");
+        // Opened content: no digest of a secret goes into the record.
+        assert_eq!(digest, None);
         assert_eq!(
-            std::fs::read(dir.path().join(path)).expect("read artifact"),
+            std::fs::read(dir.path().join("artifacts").join(file)).expect("read artifact"),
             b"the recovery phrase"
         );
     }
@@ -1481,7 +1624,7 @@ sections:
 
         fn execute(
             &self,
-            step: &StepInfo,
+            _step: &StepInfo,
             _ctx: &HandlerContext,
             _params: &serde_json::Value,
             reporter: &mut Reporter<'_>,
@@ -1491,13 +1634,12 @@ sections:
             match self.before_fail {
                 BeforeFail::Nothing => {}
                 BeforeFail::SideEffect => {
-                    reporter.fact(StepFact::BackendOperation {
-                        step: step.id.clone(),
-                        kind: "test_op".to_string(),
-                        inputs: serde_json::Value::Null,
-                        outputs: serde_json::Value::Null,
-                        fingerprint: None,
-                    })?;
+                    reporter.backend_operation(
+                        "test_op",
+                        serde_json::Value::Null,
+                        serde_json::Value::Null,
+                        None,
+                    )?;
                 }
                 BeforeFail::Prompt => {
                     reporter.prompt(&Prompt::Secret {
@@ -1837,6 +1979,33 @@ sections:
         assert_eq!(attempt_numbers(&facts), vec![1]);
     }
 
+    #[test]
+    fn artifact_levels_follow_what_the_artifact_is() {
+        use secrecy::SecretBox;
+
+        let bytes = || ArtifactValue::Bytes(b"x".to_vec());
+        assert_eq!(
+            artifact_level(ActionType::SignData, &bytes()),
+            Level::PUBLIC
+        );
+        assert_eq!(
+            artifact_level(ActionType::GenerateCsr, &bytes()),
+            Level::PUBLIC
+        );
+        // Bytes from any other step may be a document the ceremony handled.
+        assert_eq!(
+            artifact_level(ActionType::DecryptData, &bytes()),
+            Level::RESTRICTED
+        );
+        assert_eq!(
+            artifact_level(
+                ActionType::DecryptData,
+                &ArtifactValue::Secret(SecretBox::new(Box::new(b"x".to_vec())))
+            ),
+            Level::CONFIDENTIAL
+        );
+    }
+
     fn fact_kind(fact: &StepFact) -> &'static str {
         match fact {
             StepFact::CeremonyStarted { .. } => "ceremony_started",
@@ -1854,6 +2023,13 @@ sections:
             StepFact::EntropySeeded { .. } => "entropy_seeded",
             StepFact::EntropyContributed { .. } => "entropy_contributed",
             StepFact::EntropyDrawn { .. } => "entropy_drawn",
+            StepFact::RoleDeclared { .. } => "role_declared",
+            StepFact::RoleAssigned { .. } => "role_assigned",
+            StepFact::ParameterBound { .. } => "parameter_bound",
+            StepFact::MaterialLoaded { .. } => "material_loaded",
+            StepFact::MaterialDigest { .. } => "material_digest",
+            StepFact::BackendBound { .. } => "backend_bound",
+            StepFact::MachineInfoRecorded { .. } => "machine_info_recorded",
             _ => "unknown",
         }
     }

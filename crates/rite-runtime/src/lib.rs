@@ -40,7 +40,7 @@ mod transcript;
 mod transcript_sink;
 
 // Execution
-pub use executor::ExecutionError;
+pub use executor::{ExecutionError, write_new_file};
 
 // Actions
 pub use actions::{ArtifactValue, Share, ShareSet};
@@ -79,15 +79,16 @@ pub use reporter::{Reporter, ReporterError};
 
 // Executor and its action trait.
 pub use runner::{
-    Action, ActionError, ActionRegistry, ExecutionSummary, Executor, StepUnsupportedParam,
-    parse_params,
+    Action, ActionError, ActionRegistry, ExecutionSummary, Executor, PRODUCER,
+    StepUnsupportedParam, parse_params,
 };
 
 // Transcript sink, the durable consumer of `StepFact`s.
 pub use transcript_sink::{
     EntropyVerified, InMemorySink, JsonlFileSink, LoadedTranscript, TimedFact,
-    TranscriptFingerprint, TranscriptSink, TranscriptVerified, VerifyError,
-    read_verified_transcript, verify_entropy, verify_transcript as verify_step_fact_transcript,
+    TranscriptFingerprint, TranscriptSink, TranscriptVerified, UnknownFact, VerifyError,
+    WithheldLine, disclose_transcript, read_verified_transcript, verify_entropy, verify_jsonl,
+    verify_transcript as verify_step_fact_transcript,
 };
 
 // State (needed by `Action` implementors in downstream crates).

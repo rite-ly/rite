@@ -21,7 +21,8 @@ use std::path::Path;
 use rite_model::StepFact;
 use rite_sdk::{KeyCheckValue, RecipientInfoKind, WrapDescription, WrapScheme};
 
-use crate::verify::{artifact_location, digest_hex};
+use crate::verify::digest_hex;
+use rite_model::bundle::artifact_path;
 
 /// What was concluded about one wrap step.
 #[derive(Debug)]
@@ -241,7 +242,7 @@ struct Index<'a> {
     /// entry, and the first `declared` would then stand for both.
     recipients: HashMap<&'a str, (&'a str, bool)>,
     /// Artifact file names by the digest recorded for their contents.
-    artifacts: HashMap<&'a str, &'a std::ffi::OsStr>,
+    artifacts: HashMap<&'a str, &'a str>,
 }
 
 impl<'a> Index<'a> {
@@ -284,13 +285,15 @@ impl<'a> Index<'a> {
                         .entry(step.as_str())
                         .or_insert((fingerprint.as_str(), *declared));
                 }
-                StepFact::ArtifactWritten { path, sha256, .. } => {
-                    if let Some(file_name) = path.file_name() {
-                        index
-                            .artifacts
-                            .entry(digest_hex(sha256))
-                            .or_insert(file_name);
-                    }
+                StepFact::ArtifactWritten {
+                    file,
+                    digest: Some(digest),
+                    ..
+                } => {
+                    index
+                        .artifacts
+                        .entry(digest_hex(digest.as_str()))
+                        .or_insert(file.as_str());
                 }
                 _ => {}
             }
@@ -301,10 +304,10 @@ impl<'a> Index<'a> {
     /// The bytes of the artifact whose recorded digest is `fingerprint`.
     ///
     /// The transcript is untrusted input, so the recorded path is never
-    /// followed: [`artifact_location`] confines it to the run directory.
+    /// followed: [`artifact_path`] confines it to the run directory.
     fn artifact_bytes(&self, dir: &Path, fingerprint: &str) -> Option<Vec<u8>> {
-        let file_name = self.artifacts.get(digest_hex(fingerprint))?;
-        std::fs::read(dir.join(artifact_location(file_name))).ok()
+        let file = self.artifacts.get(digest_hex(fingerprint))?;
+        std::fs::read(dir.join(artifact_path(file)?)).ok()
     }
 }
 
@@ -497,7 +500,6 @@ mod tests {
         KeyAlgorithm, KeyPolicy, KeySpec, KeyStoreBackend, KeyTransportBackend, WrapScheme,
     };
     use serde_json::json;
-    use std::path::PathBuf;
     use std::sync::LazyLock;
 
     /// A real CMS wrap, plus the facts a run would have recorded for it.
@@ -570,6 +572,7 @@ mod tests {
             StepFact::BackendOperation {
                 step: StepId::new("gen"),
                 kind: "generate_key".to_string(),
+                backend: None,
                 inputs: json!({}),
                 outputs: json!({ "public_key_fingerprint": wrap.target_fingerprint }),
                 fingerprint: None,
@@ -583,6 +586,7 @@ mod tests {
             StepFact::BackendOperation {
                 step: StepId::new("wrap"),
                 kind: "wrap_key".to_string(),
+                backend: None,
                 inputs: json!({
                     "scheme": "CMS-AES-256-GCM",
                     "key_to_wrap_fingerprint": wrap.target_fingerprint,
@@ -594,8 +598,8 @@ mod tests {
             StepFact::ArtifactWritten {
                 step: StepId::new("wrap"),
                 name: "wrapped".to_string(),
-                path: PathBuf::from("/somewhere/else/artifacts/wrapped.p7c"),
-                sha256: rite_runtime::compute_fingerprint(&wrap.blob),
+                file: "wrapped.p7c".to_string(),
+                digest: Some(rite_model::Sha256Digest::of(&wrap.blob)),
             },
         ]
     }
@@ -665,6 +669,7 @@ mod tests {
             StepFact::BackendOperation {
                 step: StepId::new("gen_kek"),
                 kind: "generate_key".to_string(),
+                backend: None,
                 inputs: json!({}),
                 outputs: json!({ "key_check_value": sealed.kek_check_value }),
                 fingerprint: None,
@@ -672,6 +677,7 @@ mod tests {
             StepFact::BackendOperation {
                 step: StepId::new("encrypt"),
                 kind: "encrypt_data".to_string(),
+                backend: None,
                 inputs: json!({
                     "scheme": "CMS-AES-256-GCM",
                     "encryption_key": "kek",
@@ -682,8 +688,8 @@ mod tests {
             StepFact::ArtifactWritten {
                 step: StepId::new("encrypt"),
                 name: "sealed".to_string(),
-                path: PathBuf::from("/somewhere/else/artifacts/sealed.p7c"),
-                sha256: rite_runtime::compute_fingerprint(&sealed.blob),
+                file: "sealed.p7c".to_string(),
+                digest: Some(rite_model::Sha256Digest::of(&sealed.blob)),
             },
         ];
 
@@ -764,6 +770,7 @@ mod tests {
         facts.push(StepFact::BackendOperation {
             step: StepId::new("gen_kek"),
             kind: "generate_key".to_string(),
+            backend: None,
             inputs: json!({}),
             outputs: json!({ "public_key_fingerprint": wrap.recipient_fingerprint }),
             fingerprint: None,
@@ -835,6 +842,7 @@ mod tests {
             StepFact::BackendOperation {
                 step: StepId::new("gen_target"),
                 kind: "generate_key".to_string(),
+                backend: None,
                 inputs: json!({}),
                 outputs: json!({ "public_key_fingerprint": target_fingerprint }),
                 fingerprint: None,
@@ -842,6 +850,7 @@ mod tests {
             StepFact::BackendOperation {
                 step: StepId::new("import_kek"),
                 kind: "import_key".to_string(),
+                backend: None,
                 inputs: json!({}),
                 outputs: json!({ "imported_key_check_value": check_value }),
                 fingerprint: None,
@@ -849,6 +858,7 @@ mod tests {
             StepFact::BackendOperation {
                 step: StepId::new("wrap"),
                 kind: "wrap_key".to_string(),
+                backend: None,
                 inputs: json!({
                     "scheme": "CMS-AES-256-GCM",
                     "key_to_wrap_fingerprint": target_fingerprint,
@@ -863,8 +873,8 @@ mod tests {
             StepFact::ArtifactWritten {
                 step: StepId::new("wrap"),
                 name: "wrapped".to_string(),
-                path: tmp.path().join("artifacts/wrapped.p7c"),
-                sha256: rite_runtime::compute_fingerprint(wrapped.data()),
+                file: "wrapped.p7c".to_string(),
+                digest: Some(rite_model::Sha256Digest::of(wrapped.data())),
             },
         ];
 
@@ -940,6 +950,7 @@ mod tests {
             StepFact::BackendOperation {
                 step: StepId::new("gen_target"),
                 kind: "generate_key".to_string(),
+                backend: None,
                 inputs: json!({}),
                 outputs: json!({ "public_key_fingerprint": target_fingerprint }),
                 fingerprint: None,
@@ -947,6 +958,7 @@ mod tests {
             StepFact::BackendOperation {
                 step: StepId::new("gen_kek"),
                 kind: "generate_key".to_string(),
+                backend: None,
                 inputs: json!({}),
                 outputs: json!({ "key_check_value": check_value }),
                 fingerprint: None,
@@ -954,6 +966,7 @@ mod tests {
             StepFact::BackendOperation {
                 step: StepId::new("wrap"),
                 kind: "wrap_key".to_string(),
+                backend: None,
                 inputs: json!({
                     "scheme": "CMS-AES-256-GCM",
                     "key_to_wrap_fingerprint": target_fingerprint,
@@ -968,8 +981,8 @@ mod tests {
             StepFact::ArtifactWritten {
                 step: StepId::new("wrap"),
                 name: "wrapped".to_string(),
-                path: tmp.path().join("artifacts/wrapped.p7c"),
-                sha256: rite_runtime::compute_fingerprint(wrapped.data()),
+                file: "wrapped.p7c".to_string(),
+                digest: Some(rite_model::Sha256Digest::of(wrapped.data())),
             },
         ];
 
@@ -1034,6 +1047,7 @@ mod tests {
             StepFact::BackendOperation {
                 step: StepId::new("gen_kek"),
                 kind: "generate_key".to_string(),
+                backend: None,
                 inputs: json!({}),
                 outputs: json!({ "key_check_value": check_value }),
                 fingerprint: None,
@@ -1041,6 +1055,7 @@ mod tests {
             StepFact::BackendOperation {
                 step: StepId::new("wrap"),
                 kind: "wrap_key".to_string(),
+                backend: None,
                 inputs: json!({
                     "scheme": "CMS-AES-256-GCM",
                     "key_to_wrap_fingerprint": serde_json::Value::Null,
@@ -1056,8 +1071,8 @@ mod tests {
             StepFact::ArtifactWritten {
                 step: StepId::new("wrap"),
                 name: "wrapped".to_string(),
-                path: tmp.path().join("artifacts/wrapped.p7c"),
-                sha256: rite_runtime::compute_fingerprint(wrapped.data()),
+                file: "wrapped.p7c".to_string(),
+                digest: Some(rite_model::Sha256Digest::of(wrapped.data())),
             },
         ];
 

@@ -66,16 +66,15 @@ impl Action for YubikeyAttestSlotAction {
             ),
         )?;
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "yubikey_attest_slot".to_string(),
-            inputs: json!({ "slot": typed.slot }),
-            outputs: json!({
+        reporter.backend_operation(
+            "yubikey_attest_slot",
+            json!({ "slot": typed.slot }),
+            json!({
                 "cert_fingerprint": cert_fingerprint,
                 "cert_size": cert_der.len(),
             }),
-            fingerprint: Some(cert_fingerprint),
-        })?;
+            Some(cert_fingerprint),
+        )?;
 
         if let Some(produces) = &step.produces {
             reporter.log(

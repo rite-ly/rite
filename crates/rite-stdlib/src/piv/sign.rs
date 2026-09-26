@@ -67,7 +67,6 @@ impl Action for PivSignAction {
         let backend = backend
             .ok_or_else(|| ActionError::Failed("Backend required for PIV signing".into()))?;
         let backend_name = backend.name().to_string();
-        let backend_fingerprint = backend.fingerprint();
 
         verify_pin(backend, &backend_name, reporter)?;
 
@@ -88,21 +87,18 @@ impl Action for PivSignAction {
             format!("Signature produced ({} bytes)", signature.len()),
         )?;
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "piv_sign".to_string(),
-            inputs: json!({
+        reporter.backend_operation(
+            "piv_sign",
+            json!({
                 "slot": typed.slot,
                 "algorithm": typed.algorithm,
                 "input_artifact": input_ref.display_name(),
             }),
-            outputs: json!({
-                "backend": backend_name,
-                "backend_fingerprint": backend_fingerprint,
+            json!({
                 "signature_len": signature.len(),
             }),
-            fingerprint: Some(signature_fingerprint),
-        })?;
+            Some(signature_fingerprint),
+        )?;
 
         if let Some(produces) = &step.produces {
             reporter.log(

@@ -7,7 +7,7 @@
 
 use crate::serde_utils;
 use indexmap::IndexMap;
-use rite_model::{ActionType, BackendConfig, DutyType, OutputType, ParameterType};
+use rite_model::{ActionType, BackendConfig, DutyType, OutputType, ParameterType, Sha256Digest};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -46,6 +46,17 @@ pub(crate) struct Ceremony {
     /// Duties to be completed after the ceremony runtime stops (duty ID → body).
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub(crate) after: IndexMap<String, PostCeremonyDutyBody>,
+    /// Digest of the YAML text this definition was parsed from.
+    ///
+    /// Never read from YAML. `lower_ceremony`, the only place a definition is
+    /// deserialized, overwrites the placeholder with the digest of the text it
+    /// parsed.
+    #[serde(skip, default = "unset_source_digest")]
+    pub(crate) source_digest: Sha256Digest,
+}
+
+fn unset_source_digest() -> Sha256Digest {
+    Sha256Digest::of(b"")
 }
 
 /// A role definition.

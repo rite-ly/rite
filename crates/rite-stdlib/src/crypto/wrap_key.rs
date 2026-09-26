@@ -69,7 +69,7 @@ impl Action for WrapKeyAction {
         let target_check_value = key_to_wrap.check_value.map(ToString::to_string);
 
         let key_backend = key_to_wrap.backend_name;
-        let (wrapped_key, backend_fingerprint) = match custody {
+        let wrapped_key = match custody {
             Custody::Backend => {
                 let wrapping_key =
                     resolve_backend_key(ctx.artifacts, &wrapping_key_id).map_err(|e| {
@@ -85,11 +85,10 @@ impl Action for WrapKeyAction {
                         "Key wrapping requires both keys on same backend (key: '{key_backend}', wrapper: '{wrap_key_backend}')"
                     )));
                 }
-                let (transport, _, backend_fp) =
+                let (transport, _) =
                     crate::crypto::transport_backend(backend, key_backend, "wrap a key")?;
                 reporter.log(Icon::Spinner, "Wrapping key using backend...")?;
-                let wk = transport.wrap(key_to_wrap.key_id, wrapping_key.key_id, scheme)?;
-                (wk, backend_fp)
+                transport.wrap(key_to_wrap.key_id, wrapping_key.key_id, scheme)?
             }
             Custody::External => {
                 let recipient = crate::signatures::resolve_public_key(
@@ -123,14 +122,13 @@ impl Action for WrapKeyAction {
                     declared: typed.expect_recipient.is_some(),
                 })?;
 
-                let (transport, _, backend_fp) =
+                let (transport, _) =
                     crate::crypto::transport_backend(backend, key_backend, "wrap a key")?;
                 reporter.log(
                     Icon::Spinner,
                     "Wrapping key to external recipient public key...",
                 )?;
-                let wk = transport.wrap_to_public(key_to_wrap.key_id, &recipient, scheme)?;
-                (wk, backend_fp)
+                transport.wrap_to_public(key_to_wrap.key_id, &recipient, scheme)?
             }
         };
 
@@ -138,10 +136,9 @@ impl Action for WrapKeyAction {
         reporter.log(Icon::Checkmark, "Key wrapped")?;
 
         let description = wrapped_key.description();
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "wrap_key".to_string(),
-            inputs: json!({
+        reporter.backend_operation(
+            "wrap_key",
+            json!({
                 "scheme": wrapped_key.scheme().to_string(),
                 "key_to_wrap": key_to_wrap_ref.display_name(),
                 "wrapping_key": wrapping_key_ref.display_name(),
@@ -152,18 +149,16 @@ impl Action for WrapKeyAction {
                 "key_to_wrap_fingerprint": target_fingerprint,
                 "key_to_wrap_check_value": target_check_value,
             }),
-            outputs: json!({
+            json!({
                 "wrapped_key_fingerprint": fingerprint,
-                "backend": key_backend,
-                "backend_fingerprint": backend_fingerprint,
                 // Read back out of the artifact, not predicted from the
                 // request, and recorded whole. A verifier compares the
                 // description it re-derives from the blob against this one, so
                 // a field added to it is checked without touching either side.
                 "wrap": description,
             }),
-            fingerprint: Some(fingerprint),
-        })?;
+            Some(fingerprint),
+        )?;
 
         let message = format!("Key wrapped using {}", wrapped_key.scheme());
         let wrapped = ArtifactValue::WrappedKey(wrapped_key);

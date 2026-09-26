@@ -1,6 +1,6 @@
 //! `combine_shares` action, the secret back from shares `split_secret` made.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     resolve_share,
@@ -94,17 +94,16 @@ impl Action for CombineSharesAction {
         // The evidence that it is the right secret is whatever the ceremony
         // checks it against next, not a hash an auditor cannot read the
         // input space of.
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "combine_shares".to_string(),
-            inputs: json!({
+        reporter.backend_operation(
+            "combine_shares",
+            json!({
                 "scheme": gf256::FORMAT,
                 "threshold": threshold,
                 "shares": given,
             }),
-            outputs: json!({}),
-            fingerprint: None,
-        })?;
+            json!({}),
+            None,
+        )?;
 
         let message = format!("Secret reconstructed from {} shares", given.len());
         // Moved out of the arithmetic's wiping buffer, not copied; the empty

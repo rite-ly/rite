@@ -26,7 +26,7 @@ A ceremony unfolds in phases. The same YAML drives all of them:
 2. **Validate** — `rite check` catches missing references, undefined roles, schema errors, and step parameters no action can act on.
 3. **Prepare** — `rite script` produces the printed protocol participants follow and complete by hand during the ceremony, archived alongside the digital transcript.
 4. **Execute** — `rite run` walks operators and witnesses through the steps, recording every action in an append-only transcript.
-5. **Audit** — `rite verify` confirms transcript integrity; `rite report` produces a human-readable audit document for stakeholders.
+5. **Audit** — `rite verify` confirms transcript integrity; `rite bundle create` packages the run with its definition as an evidence bundle; `rite bundle disclose` derives a publishable part of it; `rite report` produces a human-readable audit document for stakeholders.
 
 ## Example
 
@@ -96,6 +96,26 @@ rite verify root-ca-key-generation-20260511T201639   # verify integrity
 rite report root-ca-key-generation-20260511T201639   # generate audit report
 ```
 
+To keep the evidence, package the run with the ceremony it ran from. `rite bundle create` checks the
+definition against the digest the transcript records, and each artifact against its own:
+
+```sh
+rite bundle create root-ca-key-generation-20260511T201639 --definition ceremony.rite.yaml -o root-ca-bundle
+rite verify root-ca-bundle
+```
+
+To publish part of it, derive a disclosure. Every fact recorded above the level is withheld but
+stays committed, so the disclosure verifies to the same fingerprint as the complete record:
+
+```sh
+rite bundle disclose root-ca-bundle --level public -o root-ca-public
+rite verify root-ca-public
+```
+
+[Evidence bundles](docs/evidence-bundles.md) covers bundles and disclosures, and
+[the transcript format](docs/transcript-format.md) specifies the transcript for anyone writing
+their own verifier.
+
 ## Installation
 
 Install with Homebrew:
@@ -149,6 +169,7 @@ Both bundle the `rite-ls` language server. For other LSP-aware editors, run `rit
   - [ ] Plugin system for out-of-process backends
 - [x] **Evidence and verification**
   - [x] Transcript generation and `rite verify`
+  - [x] Evidence bundles (`rite bundle create`) and verifiable partial disclosure (`rite bundle disclose`)
   - [x] Verifiable randomness
   - [ ] Hardware-attested execution (TPM PCR measurements and signed quotes)
   - [ ] RFC3161 trusted timestamps

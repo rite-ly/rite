@@ -26,7 +26,7 @@
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
-use rite_model::{ErrorClass, ErrorRecord, Prompt, ResponseRecord, StepFact, StepId};
+use rite_model::{ErrorClass, ErrorRecord, Level, Prompt, ResponseRecord, StepFact, StepId};
 use secrecy::ExposeSecret;
 use thiserror::Error;
 
@@ -107,6 +107,9 @@ pub struct Reporter<'a> {
     transcript: &'a mut dyn TranscriptSink,
     next_prompt_id: u64,
     current_step: Option<StepId>,
+    /// The backend the current step runs with, named on every
+    /// [`StepFact::BackendOperation`] it records.
+    current_backend: Option<String>,
     /// The ceremony entropy source: the single auditable origin of every
     /// random value drawn during the run. `None` until the runner seeds it at
     /// ceremony start; a draw before then is an internal ordering bug and fails
@@ -139,6 +142,7 @@ impl<'a> Reporter<'a> {
             transcript,
             next_prompt_id: 0,
             current_step: None,
+            current_backend: None,
             random: None,
             clock,
             side_effects_emitted: 0,
@@ -169,6 +173,12 @@ impl<'a> Reporter<'a> {
         self.current_step = step;
     }
 
+    /// Set the backend the current step runs with, by its name in the
+    /// ceremony. Called by the executor with [`Reporter::set_current_step`].
+    pub fn set_current_backend(&mut self, backend: Option<String>) {
+        self.current_backend = backend;
+    }
+
     /// The current step, if any. Mostly useful for tests.
     #[must_use]
     pub fn current_step(&self) -> Option<&StepId> {
@@ -189,10 +199,23 @@ impl<'a> Reporter<'a> {
     /// Returns [`ReporterError::Transcript`] if the sink fails to persist,
     /// or [`ReporterError::Disconnected`] if the frontend is gone.
     pub fn fact(&mut self, fact: StepFact) -> Result<(), ReporterError> {
+        let level = fact.default_level();
+        self.fact_at(level, fact)
+    }
+
+    /// Record a durable fact at `level` instead of its type's default.
+    ///
+    /// For the runtime, where the level depends on what the fact describes
+    /// rather than on its type alone, such as an artifact's content.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Reporter::fact`].
+    pub fn fact_at(&mut self, level: Level, fact: StepFact) -> Result<(), ReporterError> {
         // Stamp the event time once, from the run clock, and use it for both
         // the durable record and the live UI event so they never disagree.
         let at = self.clock.now();
-        self.transcript.record(at, &fact)?;
+        self.transcript.record(at, level, &fact)?;
         if fact.is_side_effect() {
             self.side_effects_emitted = self.side_effects_emitted.saturating_add(1);
         }
@@ -200,6 +223,34 @@ impl<'a> Reporter<'a> {
             .send(ExecEvent::Fact { at, fact })
             .map_err(|_| ReporterError::Disconnected)?;
         Ok(())
+    }
+
+    /// Record a [`StepFact::BackendOperation`] of the current step, naming
+    /// the backend the step runs with.
+    ///
+    /// # Errors
+    ///
+    /// [`ReporterError::NoCurrentStep`] if called outside a step, or the
+    /// errors of [`Reporter::fact`].
+    pub fn backend_operation(
+        &mut self,
+        kind: &str,
+        inputs: serde_json::Value,
+        outputs: serde_json::Value,
+        fingerprint: Option<String>,
+    ) -> Result<(), ReporterError> {
+        let step = self
+            .current_step
+            .clone()
+            .ok_or(ReporterError::NoCurrentStep("backend_operation"))?;
+        self.fact(StepFact::BackendOperation {
+            step,
+            kind: kind.to_string(),
+            backend: self.current_backend.clone(),
+            inputs,
+            outputs,
+            fingerprint,
+        })
     }
 
     /// Draw `len` bytes from the ceremony entropy source for `purpose`.
@@ -507,7 +558,6 @@ mod tests {
 
     use super::*;
     use crate::clock::SystemClock;
-    use crate::transcript_sink::InMemorySink;
     use rite_model::ValidatorSpec;
 
     fn ids(step: &str) -> StepId {
@@ -524,15 +574,13 @@ mod tests {
 
         let (event_tx, event_rx) = unbounded();
         let (_cmd_tx, cmd_rx) = unbounded::<UiCommand>();
-        let mut sink = InMemorySink::new();
+        let mut sink = crate::test_support::begun_sink();
         let fixed = fixed_test_time();
         let mut reporter =
             Reporter::new(&event_tx, &cmd_rx, &mut sink, Arc::new(FixedClock(fixed)));
 
         reporter
-            .fact(StepFact::CeremonyStarted {
-                name: "T".to_string(),
-            })
+            .fact(crate::test_support::ceremony_started("T"))
             .expect("fact");
 
         match event_rx.recv().expect("event") {
@@ -545,7 +593,7 @@ mod tests {
     fn fact_writes_to_sink_and_forwards_to_ui() {
         let (event_tx, event_rx) = unbounded();
         let (_cmd_tx, cmd_rx) = unbounded::<UiCommand>();
-        let mut sink = InMemorySink::new();
+        let mut sink = crate::test_support::begun_sink();
         let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
@@ -575,7 +623,7 @@ mod tests {
         // the step/seed checks, so no seeding is needed to exercise it.
         let (event_tx, _event_rx) = unbounded();
         let (_cmd_tx, cmd_rx) = unbounded::<UiCommand>();
-        let mut sink = InMemorySink::new();
+        let mut sink = crate::test_support::begun_sink();
         let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
@@ -590,7 +638,7 @@ mod tests {
     fn log_does_not_touch_transcript() {
         let (event_tx, event_rx) = unbounded();
         let (_cmd_tx, cmd_rx) = unbounded::<UiCommand>();
-        let mut sink = InMemorySink::new();
+        let mut sink = crate::test_support::begun_sink();
         let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
@@ -607,7 +655,7 @@ mod tests {
     fn check_abort_returns_aborted_when_abort_in_queue() {
         let (event_tx, _event_rx) = unbounded::<ExecEvent>();
         let (cmd_tx, cmd_rx) = unbounded();
-        let mut sink = InMemorySink::new();
+        let mut sink = crate::test_support::begun_sink();
         let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
@@ -620,7 +668,7 @@ mod tests {
     fn check_abort_processes_deviation_then_returns_ok() {
         let (event_tx, event_rx) = unbounded();
         let (cmd_tx, cmd_rx) = unbounded();
-        let mut sink = InMemorySink::new();
+        let mut sink = crate::test_support::begun_sink();
         let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
@@ -696,7 +744,7 @@ mod tests {
     fn prompt_round_trip_emits_await_and_records_fact() {
         let (event_tx, event_rx) = unbounded();
         let (cmd_tx, cmd_rx) = unbounded();
-        let mut sink = InMemorySink::new();
+        let mut sink = crate::test_support::begun_sink();
         let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
@@ -729,7 +777,7 @@ mod tests {
     fn prompt_redacts_secret_in_record() {
         let (event_tx, event_rx) = unbounded();
         let (cmd_tx, cmd_rx) = unbounded();
-        let mut sink = InMemorySink::new();
+        let mut sink = crate::test_support::begun_sink();
         let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
@@ -764,7 +812,7 @@ mod tests {
     fn prompt_loop_handles_deviation_then_response() {
         let (event_tx, event_rx) = unbounded();
         let (cmd_tx, cmd_rx) = unbounded();
-        let mut sink = InMemorySink::new();
+        let mut sink = crate::test_support::begun_sink();
         let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 
@@ -895,7 +943,7 @@ mod tests {
     fn prompt_re_emits_with_rejection_reason_when_validator_fails() {
         let (event_tx, event_rx) = unbounded();
         let (cmd_tx, cmd_rx) = unbounded();
-        let mut sink = InMemorySink::new();
+        let mut sink = crate::test_support::begun_sink();
         let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, test_clock());
         reporter.set_current_step(Some(ids("s1")));
 

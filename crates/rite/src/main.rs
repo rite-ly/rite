@@ -83,9 +83,11 @@ enum Commands {
     /// Verify a ceremony transcript's integrity
     ///
     /// Re-checks the append-only hash chain, re-derives the recorded entropy,
-    /// and, for a run directory, re-hashes the artifacts against their recorded
-    /// digests and reads each wrapped key back to confirm it was produced the
-    /// way the transcript says.
+    /// and, for a run directory or a bundle, re-hashes the artifacts against
+    /// their recorded digests and reads each wrapped key back to confirm it was
+    /// produced the way the transcript says. For a bundle, it also checks the
+    /// index and the ceremony definition, and for a disclosure, that exactly
+    /// the facts above its level are withheld.
     Verify(verify::Args),
     /// Create and derive evidence bundles
     ///

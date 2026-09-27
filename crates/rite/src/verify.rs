@@ -14,7 +14,7 @@ const DRY_RUN_SOURCE: &str = "dry-run";
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
-    /// Transcript file or run output directory
+    /// Transcript file, run output directory, or evidence bundle
     pub file: PathBuf,
     /// Accept a transcript with no terminal fact (an interrupted run)
     ///

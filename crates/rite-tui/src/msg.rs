@@ -24,8 +24,9 @@ pub enum Msg {
     },
     /// Timer tick for spinners and time-driven redraws.
     Tick,
-    /// Event from the runtime executor.
-    Exec(ExecEvent),
+    /// Event from the runtime executor. Boxed: it is far larger than the
+    /// other variants, and every message would otherwise be its size.
+    Exec(Box<ExecEvent>),
     /// Explicit quit signal.
     Quit,
 }

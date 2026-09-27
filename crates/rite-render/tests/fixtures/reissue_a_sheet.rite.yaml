@@ -1,0 +1,27 @@
+version: "0.3"
+name: "Reissuing a Damaged Sheet"
+description: "A share typed back from a worn sheet and shown again for a new one."
+
+roles:
+  custodian:
+    name: "Custodian"
+
+sections:
+  reissue:
+    name: "Reissue"
+    role: ${role.custodian}
+    steps:
+      type_the_old_sheet:
+        action: enter_share
+        with:
+          message: "Recovery share 2, worn sheet"
+          length: 32
+        creates: share_2
+
+      write_the_new_sheet:
+        action: reveal
+        reads:
+          value: ${artifact.share_2}
+        with:
+          message: "Recovery share 2"
+          length: 32

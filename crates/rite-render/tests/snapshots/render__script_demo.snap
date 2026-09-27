@@ -310,6 +310,59 @@ ul.checklist li .item-desc {
   color: var(--muted);
 }
 
+/* === Worksheets: one sheet per page, printed once === */
+.sheet {
+  break-after: page;
+}
+.sheet:last-child {
+  break-after: auto;
+}
+.worksheet {
+  border: 1px solid var(--hair);
+  padding: 18px 20px;
+  margin: 24px 0;
+}
+.ws-note {
+  margin: 18px 0 0 0;
+  color: var(--muted);
+}
+.ws-line {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 7px;
+  margin: 7px 0;
+}
+.ws-row-number {
+  width: 1.4em;
+  color: var(--muted);
+  font-size: 0.85em;
+  text-align: right;
+}
+.ws-group {
+  display: inline-flex;
+  gap: 2px;
+}
+.ws-box {
+  display: inline-block;
+  width: 0.95em;
+  height: 1.35em;
+  border: 1px solid #000;
+}
+.ws-parity {
+  margin-left: 6px;
+}
+.ws-parity .ws-box {
+  background: var(--tint);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.ws-small {
+  margin: 8px 0 0 0;
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
 /* === Duties === */
 .duties-intro {
   color: var(--muted);
@@ -513,7 +566,9 @@ code, .hash {
   .duty,
   .signature-block,
   .fingerprint-record,
-  .preconditions {
+  .preconditions,
+  .worksheet,
+  .sheet {
     break-inside: avoid;
   }
   /* Keep a section heading, and the intro line beneath it, with the first

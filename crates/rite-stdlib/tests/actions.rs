@@ -13,12 +13,12 @@ use rite_runtime::{
     test_support::ReporterHarness,
 };
 use rite_sdk::{KeyAlgorithm, KeyPolicy, KeySpec, KeyStoreBackend};
-use rite_stdlib::sharing::{gf256, wire};
+use rite_stdlib::sharing::{gf256, paper, wire};
 use rite_stdlib::{
     AttestAction, CheckValueAction, ClockCheckAction, CombineSharesAction, ConfirmAction,
-    DecryptDataAction, EncryptDataAction, EnterSecretAction, EnterValueAction, ExportPublicAction,
-    GatherEntropyAction, ImportKeyAction, MachineInfoAction, MockBackend, OralReadbackAction,
-    SplitSecretAction, UnwrapKeyAction, WrapKeyAction,
+    DecryptDataAction, EncryptDataAction, EnterSecretAction, EnterShareAction, EnterValueAction,
+    ExportPublicAction, GatherEntropyAction, ImportKeyAction, MachineInfoAction, MockBackend,
+    OralReadbackAction, RevealAction, SplitSecretAction, UnwrapKeyAction, WrapKeyAction,
 };
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 
@@ -192,6 +192,89 @@ fn enter_secret_holds_the_secret_and_records_only_that_one_was_entered() {
     assert!(matches!(recorded, ResponseRecord::SecretRedacted {}));
     let serialized = serde_json::to_string(harness.facts()).unwrap();
     assert!(!serialized.contains("correct horse"));
+}
+
+/// A secret from a sheet in paper32 is asked for row by row: the prompt
+/// carries the row count and the rule, a slip in a row is repaired, a value
+/// of another length is refused and asked for again, and the artifact is
+/// the bytes.
+#[test]
+fn enter_secret_in_paper32_takes_rows_and_holds_the_bytes() {
+    let bytes = [0x5A_u8; 32];
+    let right = rite_model::paper32::encode(&bytes);
+    let mut chars: Vec<char> = right.chars().collect();
+    let slip = chars.get_mut(5).unwrap();
+    *slip = if *slip == 'A' { 'B' } else { 'A' };
+    let slipped: String = chars.iter().collect();
+    let mut harness = ReporterHarness::new();
+    harness.enqueue_response(Response::Secret(SecretString::from(
+        rite_model::paper32::encode(&[0x5A; 16]),
+    )));
+    harness.enqueue_retry(Response::Secret(SecretString::from(slipped)));
+    let state = make_state();
+    let step = creating_step("key_in", "component");
+
+    let result = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        EnterSecretAction
+            .execute(
+                &step,
+                &ctx,
+                &serde_json::json!({
+                    "message": "Key component from the sheet",
+                    "format": "paper32",
+                    "length": 32,
+                }),
+                &mut reporter,
+                None,
+            )
+            .expect("the second answer is the right length")
+    };
+    match produced(&result.artifacts, "component") {
+        ArtifactValue::Secret(secret) => assert_eq!(secret.expose_secret().as_slice(), bytes),
+        other => panic!("enter_secret must produce a Secret, got {other:?}"),
+    }
+    let prompt = harness
+        .facts()
+        .iter()
+        .find_map(|fact| match fact {
+            StepFact::PromptAnswered { prompt, .. } => Some(prompt.clone()),
+            _ => None,
+        })
+        .expect("the prompt is recorded");
+    match prompt {
+        Prompt::EnterRows {
+            rows, validator, ..
+        } => {
+            assert_eq!(rows, Some(2));
+            assert!(validator.is_some());
+        }
+        other => panic!("expected rows, got {other:?}"),
+    }
+    let serialized = serde_json::to_string(harness.facts()).unwrap();
+    assert!(!serialized.contains(&right[..20]), "{serialized}");
+}
+
+/// Rows from a sheet are a secret, so `enter_value`, whose answer the
+/// transcript carries, refuses them.
+#[test]
+fn enter_value_refuses_paper32() {
+    let mut harness = ReporterHarness::new();
+    let state = make_state();
+    let step = creating_step("key_in", "component");
+    let ctx = state.handler_context();
+    let mut reporter = harness.reporter(step.id.clone());
+    let error = EnterValueAction
+        .execute(
+            &step,
+            &ctx,
+            &serde_json::json!({ "message": "Component", "format": "paper32" }),
+            &mut reporter,
+            None,
+        )
+        .expect_err("a sheet's rows are a secret");
+    assert!(error.to_string().contains("enter_secret"), "{error}");
 }
 
 #[test]
@@ -1596,4 +1679,365 @@ fn split_secret_refuses_a_split_with_too_many_subsets_to_check() {
         )
         .expect_err("rite-sss/v1 makes at most 100 shares");
     assert!(error.to_string().contains("at most 100"), "{error}");
+}
+
+/// A share on screen: the prompt carries the rows in their shape, the
+/// fact carries the label and nothing of the value, and no log line
+/// repeats it.
+#[test]
+fn reveal_shows_a_share_and_records_only_that_it_was_shown() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let mut harness = ReporterHarness::new();
+    let (state, shares) = split(&mut backend, &mut harness, &[0x42; 32], 2, 3);
+    let ArtifactValue::Shares(set) = &shares else {
+        panic!("split_secret must produce Shares");
+    };
+    let expected = {
+        let share = set.share(2).expect("share 2");
+        let math = gf256::Share::new(share.threshold(), share.index(), share.y().to_vec()).unwrap();
+        paper::encode(&math)
+    };
+    let shares_id = ArtifactId::new("shares");
+    let state = state.with_material(shares_id.clone(), shares);
+
+    let map = HashMap::from([(
+        "value".to_string(),
+        NamedInput::One(ArtifactRef::Produced {
+            id: shares_id,
+            property: Some("share_2".to_string()),
+        }),
+    )]);
+    let step = StepInfo::new(
+        StepId::new("show"),
+        None,
+        None,
+        None,
+        Some(StepInputs::Named(map)),
+    );
+    harness.enqueue_response(Response::Acknowledge);
+    let result = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        RevealAction
+            .execute(
+                &step,
+                &ctx,
+                &serde_json::json!({ "message": "Write share 2 on the custodian's sheet" }),
+                &mut reporter,
+                None,
+            )
+            .expect("reveal completes")
+    };
+    assert!(result.artifacts.is_empty());
+
+    let recorded = harness
+        .facts()
+        .iter()
+        .find_map(|fact| match fact {
+            StepFact::PromptAnswered { prompt, .. } => Some(prompt.clone()),
+            _ => None,
+        })
+        .expect("the prompt is recorded");
+    match recorded {
+        Prompt::Reveal { label, shown, .. } => {
+            assert_eq!(label, "Write share 2 on the custodian's sheet");
+            assert_eq!(shown.text(), "", "the value never travels with the fact");
+        }
+        other => panic!("expected a reveal prompt, got {other:?}"),
+    }
+    let serialized = serde_json::to_string(harness.facts()).unwrap();
+    assert!(!serialized.contains(&expected[..20]), "{serialized}");
+    // A 32-byte secret is a 35-byte share: two rows of 32.
+    assert_eq!(expected.len(), 64);
+}
+
+/// The sheet is printed for `length:` bytes before the run. A value of
+/// another size is refused before it is shown, so nobody writes into a
+/// sheet that cannot hold it.
+#[test]
+fn reveal_refuses_a_value_whose_length_is_not_the_declared_one() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let mut harness = ReporterHarness::new();
+    let (state, shares) = split(&mut backend, &mut harness, &[0x42; 32], 2, 3);
+    let shares_id = ArtifactId::new("shares");
+    let state = state.with_material(shares_id.clone(), shares);
+    let map = HashMap::from([(
+        "value".to_string(),
+        NamedInput::One(ArtifactRef::Produced {
+            id: shares_id,
+            property: Some("share_2".to_string()),
+        }),
+    )]);
+    let step = StepInfo::new(
+        StepId::new("show"),
+        None,
+        None,
+        None,
+        Some(StepInputs::Named(map)),
+    );
+    let run = |harness: &mut ReporterHarness, length: u64| {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        RevealAction.execute(
+            &step,
+            &ctx,
+            &serde_json::json!({ "message": "Write share 2", "length": length }),
+            &mut reporter,
+            None,
+        )
+    };
+
+    // The length counts the secret's bytes, as the sheet does, not the
+    // share's three header bytes.
+    let err = run(&mut harness, 35).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("value 'shares.share_2' is 32 bytes; the step says length: 35"),
+        "{err}"
+    );
+    assert!(
+        harness
+            .facts()
+            .iter()
+            .all(|fact| !matches!(fact, StepFact::PromptAnswered { .. })),
+        "nothing was shown"
+    );
+
+    harness.enqueue_response(Response::Acknowledge);
+    run(&mut harness, 32).expect("the right length is shown");
+}
+
+/// Run `enter_share` with `with:`, answering its prompt from the queue, into
+/// an artifact named `typed`.
+fn enter_share(
+    state: &ExecutionState,
+    harness: &mut ReporterHarness,
+    with: &serde_json::Value,
+) -> Result<rite_runtime::StepResult, rite_runtime::ActionError> {
+    let step = StepInfo::new(
+        StepId::new("type_back"),
+        None,
+        None,
+        Some(ArtifactId::new("typed")),
+        None,
+    );
+    let ctx = state.handler_context();
+    let mut reporter = harness.reporter(step.id.clone());
+    EnterShareAction.execute(&step, &ctx, with, &mut reporter, None)
+}
+
+fn rows(text: String) -> Response {
+    Response::Secret(secrecy::SecretString::from(text))
+}
+
+/// The recovery's shape: a share typed from its sheet, with a slip in the
+/// second row, reads back as the share, and combines with one held in
+/// memory. The transcript says which share and which row was repaired, and
+/// nothing of the rows.
+#[test]
+fn a_share_typed_back_with_a_slip_combines() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let mut harness = ReporterHarness::new();
+    let secret = b"32 bytes of wallet seed entropy!";
+    let (state, shares) = split(&mut backend, &mut harness, secret, 2, 3);
+    let ArtifactValue::Shares(set) = &shares else {
+        panic!("split_secret must produce Shares");
+    };
+    let sheet = {
+        let share = set.share(3).expect("share 3");
+        let math = gf256::Share::new(share.threshold(), share.index(), share.y().to_vec()).unwrap();
+        paper::encode(&math)
+    };
+    // Two rows as a person types them: grouped, lower case, one slip.
+    let mut chars: Vec<char> = sheet.to_ascii_lowercase().chars().collect();
+    let slip = chars.get_mut(40).unwrap();
+    *slip = if *slip == 'a' { 'b' } else { 'a' };
+    let typed: String = chars.iter().collect();
+    let (row_1, row_2) = typed.split_at(32);
+    harness.enqueue_response(rows(format!("{row_1}\n{} {}", &row_2[..16], &row_2[16..])));
+
+    let result = enter_share(
+        &state,
+        &mut harness,
+        &serde_json::json!({ "message": "Recovery share 3", "length": 32 }),
+    )
+    .expect("enter_share completes");
+
+    let outputs = harness
+        .facts()
+        .iter()
+        .find_map(|f| match f {
+            StepFact::BackendOperation { kind, outputs, .. } if kind == "enter_share" => {
+                Some(outputs.clone())
+            }
+            _ => None,
+        })
+        .expect("enter_share records an operation");
+    assert_eq!(outputs.get("index").unwrap(), 3);
+    assert_eq!(outputs.get("threshold").unwrap(), 2);
+    let repaired = outputs.get("repaired").unwrap().as_array().unwrap();
+    assert_eq!(repaired.len(), 1, "{outputs}");
+    assert!(
+        repaired
+            .first()
+            .and_then(|r| r.as_str())
+            .unwrap()
+            .starts_with("row 2:"),
+        "{outputs}"
+    );
+    let serialized = serde_json::to_string(harness.facts()).unwrap();
+    assert!(!serialized.contains(&sheet[..20]), "{serialized}");
+    assert!(!serialized.contains(&row_1[..20]), "{serialized}");
+
+    let typed_id = ArtifactId::new("typed");
+    let shares_id = ArtifactId::new("shares");
+    let (_, typed) = result.artifacts.into_iter().next().expect("one artifact");
+    let state = state
+        .with_material(typed_id.clone(), typed)
+        .with_material(shares_id.clone(), shares);
+    let combine = combine_step(&[(&typed_id, None), (&shares_id, Some("share_1"))]);
+    let recovered = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(combine.id.clone());
+        CombineSharesAction
+            .execute(&combine, &ctx, &serde_json::json!({}), &mut reporter, None)
+            .expect("combine_shares completes")
+    };
+    match produced(&recovered.artifacts, "recovered") {
+        ArtifactValue::Secret(bytes) => assert_eq!(bytes.expose_secret().as_slice(), secret),
+        other => panic!("combine_shares must produce Secret, got {other:?}"),
+    }
+}
+
+/// Rows that are not a share, and a share of another size than the step
+/// says, are refused and asked for again; the right sheet is taken, and
+/// only that answer is recorded.
+#[test]
+fn rows_that_are_not_the_share_are_asked_for_again() {
+    let mut harness = ReporterHarness::new();
+    let not_a_share = rite_model::paper32::encode(&[9; 20]);
+    let other_size = paper::encode(&gf256::Share::new(2, 1, vec![1; 16]).unwrap());
+    let right = paper::encode(&gf256::Share::new(2, 1, vec![1; 32]).unwrap());
+    harness.enqueue_response(rows(not_a_share));
+    harness.enqueue_retry(rows(other_size));
+    harness.enqueue_retry(rows(right));
+
+    let result = enter_share(
+        &make_state(),
+        &mut harness,
+        &serde_json::json!({ "message": "Recovery share 1", "length": 32 }),
+    )
+    .expect("the third answer is the share");
+    match produced(&result.artifacts, "typed") {
+        ArtifactValue::Shares(set) => assert_eq!((set.threshold(), set.count()), (2, 1)),
+        other => panic!("enter_share must produce Shares, got {other:?}"),
+    }
+    let answers = harness
+        .facts()
+        .iter()
+        .filter(|f| matches!(f, StepFact::PromptAnswered { .. }))
+        .count();
+    assert_eq!(answers, 1);
+}
+
+/// Shares 1 and 3 of a 2-of-3 split of `examples/showcase/test_data/secret.txt`,
+/// as `examples/showcase/test_data/recovery_sheets.txt` prints them.
+const SHEET_1: [&str; 2] = [
+    "0410 2P86 N88E 54SN T4TH BE2N ZE9K | 4M2Q",
+    "BQB9 2YR2 X6S2 A3TG HDPG CPE3 GHE6 | PZTC",
+];
+const SHEET_3: [&str; 2] = [
+    "0410 6GYT 5XRD PV4K M8FZ J395 T9Y8 | 3Y81",
+    "7FJK XCAT XGH6 JSK4 5885 YQAJ S4T5 | 1E5Q",
+];
+const SHEETS_SECRET: &[u8] = b"The safe combination: 31-07-52.\n";
+
+/// Type both sheets back and combine them, and the facts the steps
+/// recorded. `slip` changes one character of the first row of sheet 3.
+fn recover_from_the_sheets(slip: Option<usize>) -> (Vec<u8>, Vec<StepFact>) {
+    let mut facts = Vec::new();
+    let mut state = make_state();
+    let mut sheet_3 = SHEET_3.map(str::to_string);
+    if let Some(at) = slip {
+        let mut chars: Vec<char> = sheet_3[0].chars().collect();
+        let c = chars.get_mut(at).unwrap();
+        *c = if *c == 'A' { 'B' } else { 'A' };
+        sheet_3[0] = chars.into_iter().collect();
+    }
+    let sheets = [
+        ("share_1", SHEET_1.join("\n")),
+        ("share_3", sheet_3.join("\n")),
+    ];
+    for (name, typed) in sheets {
+        // A harness per step: each reporter numbers its prompts from the
+        // start.
+        let mut harness = ReporterHarness::new();
+        harness.enqueue_response(rows(typed));
+        let result = enter_share(
+            &state,
+            &mut harness,
+            &serde_json::json!({ "message": name, "length": 32 }),
+        )
+        .expect("the sheet reads as a share");
+        let (_, share) = result.artifacts.into_iter().next().expect("one artifact");
+        state = state.with_material(ArtifactId::new(name), share);
+        facts.extend_from_slice(harness.facts());
+    }
+    let mut harness = ReporterHarness::new();
+    let (one, three) = (ArtifactId::new("share_1"), ArtifactId::new("share_3"));
+    let combine = combine_step(&[(&three, None), (&one, None)]);
+    let recovered = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(combine.id.clone());
+        CombineSharesAction
+            .execute(&combine, &ctx, &serde_json::json!({}), &mut reporter, None)
+            .expect("combine_shares completes")
+    };
+    let secret = match produced(&recovered.artifacts, "recovered") {
+        ArtifactValue::Secret(bytes) => bytes.expose_secret().clone(),
+        other => panic!("combine_shares must produce Secret, got {other:?}"),
+    };
+    (secret, facts)
+}
+
+/// A fixed vector for the paper format and the share layout: sheets printed
+/// today must recover the same secret for as long as the format is
+/// `rite-sss/v1` in paper32. A change to the alphabet, the bit order, the
+/// parity, the row size or the share header fails here.
+#[test]
+fn the_published_sheets_recover_their_secret() {
+    let (secret, facts) = recover_from_the_sheets(None);
+    assert_eq!(secret, SHEETS_SECRET);
+    let repaired: Vec<_> = facts
+        .iter()
+        .filter_map(|f| match f {
+            StepFact::BackendOperation { kind, outputs, .. } if kind == "enter_share" => {
+                Some(outputs.get("repaired").unwrap().clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(repaired, [serde_json::json!([]), serde_json::json!([])]);
+
+    // The example publishes these sheets and this secret.
+    let data =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/showcase/test_data");
+    let published = std::fs::read_to_string(data.join("recovery_sheets.txt")).unwrap();
+    for row in SHEET_1.iter().chain(&SHEET_3) {
+        assert!(published.contains(row), "recovery_sheets.txt lacks {row}");
+    }
+    assert_eq!(
+        std::fs::read(data.join("secret.txt")).unwrap(),
+        SHEETS_SECRET
+    );
+}
+
+/// The same sheets with a character miscopied: the row is repaired and
+/// named, and the secret is the same.
+#[test]
+fn the_published_sheets_recover_their_secret_through_a_slip() {
+    let (secret, facts) = recover_from_the_sheets(Some(7));
+    assert_eq!(secret, SHEETS_SECRET);
+    let serialized = serde_json::to_string(&facts).unwrap();
+    assert!(serialized.contains("row 1: character"), "{serialized}");
 }

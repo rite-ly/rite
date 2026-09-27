@@ -109,8 +109,8 @@ fact type has a default level:
 signatures are public; wrapped keys, ciphertext and other content are restricted; opened content
 is confidential.
 
-A secret value (a private key, a PIN, a passphrase, opened plaintext) is never recorded, at any
-level.
+A secret value (a private key, a PIN, a passphrase, opened plaintext, a share, a value shown for
+writing down) is never recorded, at any level.
 
 ## Facts
 

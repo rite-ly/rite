@@ -6,12 +6,12 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
 
 use rite_model::Prompt;
 use rite_runtime::{Icon, MaterialOverview, MaterialOverviewKind};
 
-use crate::model::{LogLine, Model, Screen, StepTab};
+use crate::model::{LogLine, Model, PendingPrompt, RevealPhase, RowNotice, Screen, StepTab};
 
 /// Shared color palette. Three muted tones plus the terminal-default
 /// text color: titles, borders, and the footer all step back so the
@@ -44,6 +44,11 @@ mod theme {
     }
     pub fn footer() -> Style {
         Style::default().fg(FOOTER)
+    }
+    /// The parity characters of a value shown for writing down: set
+    /// apart from the data so the sheet's own parity cells are found.
+    pub fn parity() -> Style {
+        Style::default().fg(TITLE)
     }
 }
 
@@ -288,10 +293,179 @@ fn render_ceremony(model: &Model, frame: &mut Frame<'_>, area: Rect) -> usize {
         .areas(area);
     let applied = render_ceremony_table(model, frame, logs_area);
     match &model.pending_prompt {
+        // A value to write down is in its own window; the prompt box stays
+        // empty rather than repeat its title.
+        Some(pending) if matches!(pending.prompt, Prompt::Reveal { .. }) => {
+            render_empty_prompt(frame, prompt_area);
+            render_reveal(pending, frame, area);
+        }
+        Some(pending) if matches!(pending.prompt, Prompt::EnterRows { .. }) => {
+            render_empty_prompt(frame, prompt_area);
+            render_enter_rows(pending, frame, area);
+        }
         Some(pending) => render_prompt(pending, frame, prompt_area),
         None => render_empty_prompt(frame, prompt_area),
     }
     applied
+}
+
+/// Widest the reveal window grows: room for a row of the value with its
+/// number and parity, and prose that wraps at a readable length.
+const REVEAL_WIDTH: u16 = 72;
+
+/// A value to write down, in a window over the log so it reads as apart
+/// from what is recorded, and closes when it is done. It is announced
+/// first, then shown, then shown with the question before it goes.
+fn render_reveal(pending: &PendingPrompt, frame: &mut Frame<'_>, area: Rect) {
+    let Prompt::Reveal { label, note, shown } = &pending.prompt else {
+        return;
+    };
+    let mut lines = vec![Line::from("")];
+    let note_line = |note: &String| {
+        Line::from(Span::styled(
+            note.clone(),
+            theme::text().add_modifier(Modifier::ITALIC),
+        ))
+    };
+    let footer = |keys: &'static str| Line::from(Span::styled(keys, theme::footer()));
+    match pending.reveal {
+        RevealPhase::Ready => {
+            lines.push(Line::from(
+                "Shown once, in this window, and not written to the transcript. Have \
+                 the printed sheet and a pen ready, out of view of others.",
+            ));
+            if let Some(note) = note {
+                lines.push(Line::from(""));
+                lines.push(note_line(note));
+            }
+            lines.push(Line::from(""));
+            lines.push(footer("Enter: show it  ·  Esc: abort"));
+        }
+        RevealPhase::Shown => {
+            lines.extend(shown_lines(shown));
+            lines.push(Line::from(""));
+            lines.push(footer("Enter: written down  ·  Esc: abort"));
+        }
+        RevealPhase::Confirm => {
+            lines.extend(shown_lines(shown));
+            lines.push(Line::from(""));
+            lines.push(Line::from(
+                "Every row written down and checked? It is not shown again.",
+            ));
+            lines.push(Line::from(""));
+            lines.push(footer("y: yes, close it  ·  n: back to it"));
+        }
+    }
+    render_window(label, lines, frame, area);
+}
+
+/// Rows of a value typed from a sheet, in the same window: the rows taken
+/// so far as they read, the row being typed, and what the last check
+/// said.
+fn render_enter_rows(pending: &PendingPrompt, frame: &mut Frame<'_>, area: Rect) {
+    let Prompt::EnterRows {
+        label,
+        note,
+        format,
+        rows,
+        ..
+    } = &pending.prompt
+    else {
+        return;
+    };
+    let layout = format.layout();
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(
+            "Type each row from the sheet and press Enter; each row is checked as it \
+             comes. Not written to the transcript.",
+        ),
+    ];
+    if let Some(note) = note {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            note.clone(),
+            theme::text().add_modifier(Modifier::ITALIC),
+        )));
+    }
+    lines.push(Line::from(""));
+    for (n, row) in pending.entry.rows.iter().enumerate() {
+        if let Some(laid_out) = layout.rows(&row.reads).first() {
+            lines.push(row_line(n, laid_out));
+        }
+    }
+    let current = pending.entry.rows.len();
+    if rows.is_none_or(|expected| current < expected) {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:>3}  ", current.saturating_add(1)),
+                theme::footer(),
+            ),
+            Span::styled(
+                format!("{}▏", pending.input),
+                theme::text().add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+    match &pending.entry.notice {
+        Some(RowNotice::Repaired(repair)) => {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(repair.clone(), theme::title())));
+        }
+        Some(RowNotice::Refused(reason)) => {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("{reason}; type the row again"),
+                theme::text().add_modifier(Modifier::ITALIC),
+            )));
+        }
+        None => {}
+    }
+    if let Some(reason) = &pending.rejection {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("{reason}; type the rows again"),
+            theme::text().add_modifier(Modifier::ITALIC),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        if rows.is_some() {
+            "Enter: next row  ·  Backspace: back  ·  Esc: abort"
+        } else {
+            "Enter: next row, or done on an empty one  ·  Esc: abort"
+        },
+        theme::footer(),
+    )));
+    render_window(label, lines, frame, area);
+}
+
+/// A window over the log, titled, centred, as tall as its lines.
+fn render_window(title: &str, lines: Vec<Line<'_>>, frame: &mut Frame<'_>, area: Rect) {
+    let block = plain_block()
+        .padding(Padding::horizontal(1))
+        .title(Line::from(Span::styled(
+            format!(" {title} "),
+            theme::title().add_modifier(Modifier::BOLD),
+        )));
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(block);
+
+    let width = area.width.saturating_sub(4).min(REVEAL_WIDTH);
+    let height = u16::try_from(paragraph.line_count(width))
+        .unwrap_or(u16::MAX)
+        .min(area.height);
+    let window = Rect {
+        x: area.x.saturating_add(area.width.saturating_sub(width) / 2),
+        y: area
+            .y
+            .saturating_add(area.height.saturating_sub(height) / 2),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, window);
+    frame.render_widget(paragraph, window);
 }
 
 /// Height of the placeholder prompt box: one content line plus borders,
@@ -306,7 +480,7 @@ fn render_empty_prompt(frame: &mut Frame<'_>, area: Rect) {
 }
 
 /// Conservative fixed height for the prompt panel, including its border.
-fn prompt_block_height(pending: &crate::model::PendingPrompt) -> u16 {
+fn prompt_block_height(pending: &PendingPrompt) -> u16 {
     let content_lines: u16 = match &pending.prompt {
         Prompt::Text { .. } | Prompt::Literal { .. } | Prompt::Secret { .. } => 2,
         _ => 1,
@@ -318,7 +492,7 @@ fn prompt_block_height(pending: &crate::model::PendingPrompt) -> u16 {
         .saturating_add(2)
 }
 
-fn render_prompt(pending: &crate::model::PendingPrompt, frame: &mut Frame<'_>, area: Rect) {
+fn render_prompt(pending: &PendingPrompt, frame: &mut Frame<'_>, area: Rect) {
     let body: Vec<Line<'_>> = match &pending.prompt {
         Prompt::Confirm { question, .. } => vec![Line::from(question.clone())],
         Prompt::Continue { hint } => vec![Line::from(
@@ -350,11 +524,46 @@ fn render_prompt(pending: &crate::model::PendingPrompt, frame: &mut Frame<'_>, a
     );
 }
 
+/// A value shown for writing down, one line per row: the row's number,
+/// the data in groups, the parity set apart, as the sheet lays it out.
+/// Owned spans, since the prompt outlives no borrow of the model here.
+fn shown_lines(shown: &rite_model::Shown) -> Vec<Line<'static>> {
+    shown
+        .layout()
+        .rows(shown.text())
+        .iter()
+        .enumerate()
+        .map(|(n, row)| row_line(n, row))
+        .collect()
+}
+
+/// One row of a value, numbered from `n + 1`, in groups, the parity apart.
+fn row_line(n: usize, row: &rite_model::display::Row<'_>) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        format!("{:>3}  ", n.saturating_add(1)),
+        theme::footer(),
+    )];
+    for (i, group) in row.groups.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(
+            (*group).to_string(),
+            theme::text().add_modifier(Modifier::BOLD),
+        ));
+    }
+    if !row.parity.is_empty() {
+        spans.push(Span::styled(" │ ", theme::footer()));
+        spans.push(Span::styled(row.parity.to_string(), theme::parity()));
+    }
+    Line::from(spans)
+}
+
 /// Compose the prompt box title. `Prompt` proper is shown in the muted
 /// title color; the `[y/n]` hint (Confirm prompts) and the "(last
 /// attempt rejected)" suffix step further back into footer gray so the
 /// word `Prompt` reads as the heading and the rest as annotation.
-fn prompt_title(pending: &crate::model::PendingPrompt) -> Line<'_> {
+fn prompt_title(pending: &PendingPrompt) -> Line<'_> {
     let mut spans = vec![Span::styled("Prompt", theme::title())];
     // The submit-key hint lives here (not the footer) so the footer stays a
     // constant width while prompts come and go. Confirm shows the y/n keys;

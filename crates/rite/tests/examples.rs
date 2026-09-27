@@ -77,12 +77,27 @@ fn examples_pass_check() {
     }
 }
 
+/// Whether an example asks for something only a person at the keyboard
+/// has, which a dry run cannot answer: the rows of a share typed from its
+/// sheet. A made-up share would combine into a wrong secret and fail the
+/// check after it, so the step stops a headless run, a dry run included.
+/// These examples still pass `rite check`, and the sheets
+/// `recover_from_paper` uses are typed back by
+/// `the_published_sheets_recover_their_secret` in `rite-stdlib`. An answer
+/// the author gives for a rehearsal, on the step, would let them run here
+/// too.
+fn needs_a_person(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .expect("example is readable")
+        .contains("action: enter_share")
+}
+
 #[test]
 fn examples_complete_dry_run() {
     // One output root for all runs; each ceremony writes its own timestamped
     // subdirectory under it. The TempDir cleans everything up on drop.
     let out_root = tempfile::tempdir().expect("create output tempdir");
-    for file in ceremonies() {
+    for file in ceremonies().into_iter().filter(|p| !needs_a_person(p)) {
         Command::cargo_bin("rite")
             .expect("rite binary builds")
             // --dry-run already forces the headless driver; --no-prompt keeps

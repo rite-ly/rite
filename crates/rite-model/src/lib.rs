@@ -22,9 +22,12 @@ pub mod bundle;
 mod canonical;
 pub mod commitment;
 mod digest;
+pub mod display;
 pub mod expression;
 pub mod ir;
+
 mod material;
+pub mod paper32;
 pub mod params;
 pub mod safe_path;
 #[cfg(test)]
@@ -52,8 +55,9 @@ pub use ir::{
     SectionId, Step, StepId, StepInputs, SymbolTable,
 };
 
+pub use display::{Layout, RevealFormat, TypedRow, TypedValue, UnknownRevealFormat};
 pub use transcript::{
     ErrorClass, ErrorRecord, FACT_TYPES, FACT_VOCABULARY, Format, Level, PLACEHOLDER_LIMIT, Prompt,
-    ResponseRecord, StepFact, StepOutcome, TRANSCRIPT_FORMAT, TRANSCRIPT_SCHEMA, TranscriptHeader,
-    ValidatorSpec, compile_pattern,
+    ResponseRecord, Shown, StepFact, StepOutcome, TRANSCRIPT_FORMAT, TRANSCRIPT_SCHEMA,
+    TranscriptHeader, ValidatorSpec, compile_pattern,
 };

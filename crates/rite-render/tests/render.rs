@@ -1,6 +1,8 @@
 //! Integration tests for the templated renderers.
 
-use rite_render::{Branding, Theme, render_report, render_script, validate_accent};
+use rite_render::{
+    Branding, Theme, render_report, render_script, render_worksheets, validate_accent,
+};
 use std::path::PathBuf;
 
 fn resolve(rel: &str) -> rite_model::Ceremony {
@@ -79,6 +81,48 @@ fn long_instructions_render_as_paragraphs_and_bullets() {
     ));
     // The literal bullet markers must not leak through as plain text.
     assert!(!html.contains("- All wired network interfaces"));
+}
+
+/// A `reveal` step gets a page in the worksheets document: rows of boxes,
+/// one per character the person writes, the parity cells at the end of
+/// each row, the note. The script itself carries no sheet.
+#[test]
+fn a_reveal_step_gets_a_worksheet_page_shaped_by_its_format() {
+    let ceremony = resolve("examples/showcase/split_and_combine.rite.yaml");
+    let html = render_worksheets(&ceremony, &Branding::default(), Theme::Formal)
+        .unwrap()
+        .expect("the example writes a share by hand");
+    assert!(html.contains("Recovery share 3"));
+    assert!(html.contains("Write in block capitals."));
+    assert!(!html.contains("Step 2"), "the sheet names no step");
+    // A 32-byte secret is a 35-byte share, 56 base-32 characters in two
+    // rows of 28, each with 4 of parity: 64 boxes, exact since the length
+    // was given.
+    assert_eq!(html.matches("<span class=\"ws-box\"></span>").count(), 64);
+    assert_eq!(html.matches("<div class=\"ws-line\">").count(), 2);
+    assert_eq!(html.matches("class=\"ws-group ws-parity\"").count(), 2);
+    assert!(!html.contains("Use as many rows"));
+
+    let script = render_script(&ceremony, &Branding::default(), Theme::Formal).unwrap();
+    assert!(!script.contains("<span class=\"ws-box\">"));
+
+    let none = resolve("examples/showcase/encrypt_and_decrypt.rite.yaml");
+    assert!(
+        render_worksheets(&none, &Branding::default(), Theme::Formal)
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// A share typed back with `enter_share` is a share as much as one a
+/// split made, so a sheet that shows it again has the share's boxes.
+#[test]
+fn a_typed_back_share_shown_again_gets_the_share_s_boxes() {
+    let ceremony = resolve("crates/rite-render/tests/fixtures/reissue_a_sheet.rite.yaml");
+    let html = render_worksheets(&ceremony, &Branding::default(), Theme::Formal)
+        .unwrap()
+        .expect("the fixture writes a share by hand");
+    assert_eq!(html.matches("<span class=\"ws-box\"></span>").count(), 64);
 }
 
 #[test]

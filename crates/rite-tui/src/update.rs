@@ -14,8 +14,8 @@ use rite_runtime::{
 };
 
 use crate::model::{
-    DEVIATION_INPUT_MAX, DeviationView, LogLine, Model, PendingPrompt, RunningState, Screen,
-    StepTab, StepView,
+    DEVIATION_INPUT_MAX, DeviationView, EnteredRow, LogLine, Model, PendingPrompt, RevealPhase,
+    RowEntry, RowNotice, RunningState, Screen, StepTab, StepView,
 };
 use crate::msg::{Cmd, Msg};
 
@@ -44,7 +44,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         // facts from a single step types out one log line at a time.
         // `Msg::Tick` drains the queue at `LOG_DRIP_TICKS` cadence.
         Msg::Exec(event) => {
-            model.pending_events.push_back(event);
+            model.pending_events.push_back(*event);
             Vec::new()
         }
         // The forwarder sends Msg::Quit when the executor's channel
@@ -260,11 +260,18 @@ fn handle_abort_confirm_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
 ///
 /// Two-step shape (decide → apply) avoids holding a mutable borrow on
 /// `pending_prompt` across calls that need mutable access to the model.
+#[derive(Clone, Copy)]
 enum PromptAction {
     SubmitBool(bool),
     SubmitText,
     SubmitSecret,
     SubmitAcknowledge,
+    Reveal(RevealPhase),
+    EnterRow {
+        format: rite_model::RevealFormat,
+        expected: Option<usize>,
+    },
+    RowBackspace,
     PushChar(char),
     Backspace,
     Ignore,
@@ -296,10 +303,30 @@ fn handle_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
                 KeyCode::Enter | KeyCode::Char(' ') => Action::SubmitAcknowledge,
                 _ => Action::Ignore,
             },
+            // Enter moves on and only `y` at the question takes the value
+            // away: a stray key while writing must not.
+            Prompt::Reveal { .. } => match (pending.reveal, key.code) {
+                (RevealPhase::Ready, KeyCode::Enter) => Action::Reveal(RevealPhase::Shown),
+                (RevealPhase::Shown, KeyCode::Enter) => Action::Reveal(RevealPhase::Confirm),
+                (RevealPhase::Confirm, KeyCode::Char('y' | 'Y')) => Action::SubmitAcknowledge,
+                (RevealPhase::Confirm, KeyCode::Char('n' | 'N')) => {
+                    Action::Reveal(RevealPhase::Shown)
+                }
+                _ => Action::Ignore,
+            },
             Prompt::Text { .. } | Prompt::Literal { .. } => match key.code {
                 KeyCode::Char(c) => Action::PushChar(c),
                 KeyCode::Backspace => Action::Backspace,
                 KeyCode::Enter => Action::SubmitText,
+                _ => Action::Ignore,
+            },
+            Prompt::EnterRows { format, rows, .. } => match key.code {
+                KeyCode::Char(c) => Action::PushChar(c),
+                KeyCode::Backspace => Action::RowBackspace,
+                KeyCode::Enter => Action::EnterRow {
+                    format: *format,
+                    expected: *rows,
+                },
                 _ => Action::Ignore,
             },
             Prompt::Secret { .. } => match key.code {
@@ -311,10 +338,21 @@ fn handle_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
             _ => Action::Ignore,
         }
     };
+    apply_prompt_action(model, action)
+}
 
+/// Apply what a key decided for the pending prompt.
+fn apply_prompt_action(model: &mut Model, action: PromptAction) -> Vec<Cmd> {
+    use PromptAction as Action;
     match action {
         Action::SubmitBool(b) => send_response(model, Response::Bool(b)),
         Action::SubmitAcknowledge => send_response(model, Response::Acknowledge),
+        Action::Reveal(phase) => {
+            if let Some(pending) = model.pending_prompt.as_mut() {
+                pending.reveal = phase;
+            }
+            Vec::new()
+        }
         Action::SubmitText => {
             let value = model
                 .pending_prompt
@@ -343,8 +381,67 @@ fn handle_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
             }
             Vec::new()
         }
+        Action::EnterRow { format, expected } => enter_row(model, format, expected),
+        Action::RowBackspace => {
+            if let Some(pending) = model.pending_prompt.as_mut() {
+                if pending.input.is_empty() {
+                    // Back into the last row taken, to correct it.
+                    if let Some(row) = pending.entry.rows.pop() {
+                        pending.input = row.typed.to_string();
+                    }
+                    pending.entry.notice = None;
+                } else {
+                    pending.input.pop();
+                }
+            }
+            Vec::new()
+        }
         Action::Ignore => Vec::new(),
     }
+}
+
+/// Check the row being typed and take it, or say why not. The value goes
+/// to the runtime when the last row is taken: the count the step gives, a
+/// short row, or an empty row after full ones.
+fn enter_row(
+    model: &mut Model,
+    format: rite_model::RevealFormat,
+    expected: Option<usize>,
+) -> Vec<Cmd> {
+    let Some(pending) = model.pending_prompt.as_mut() else {
+        return Vec::new();
+    };
+    let done = if pending.input.trim().is_empty() {
+        expected.is_none() && !pending.entry.rows.is_empty()
+    } else {
+        let number = pending.entry.rows.len().saturating_add(1);
+        let more = expected.is_some_and(|rows| number < rows);
+        match format.read_row(&pending.input, number, more) {
+            Ok(read) => {
+                pending.entry.rows.push(EnteredRow {
+                    typed: zeroize::Zeroizing::new(std::mem::take(&mut pending.input)),
+                    reads: read.text,
+                });
+                pending.entry.notice = read.repair.map(RowNotice::Repaired);
+                // A short row is the last one, whether or not the step
+                // said how many to expect.
+                !read.full || expected == Some(pending.entry.rows.len())
+            }
+            Err(reason) => {
+                pending.entry.notice = Some(RowNotice::Refused(reason));
+                false
+            }
+        }
+    };
+    if !done {
+        return Vec::new();
+    }
+    let rows = std::mem::take(&mut pending.entry.rows);
+    let text: Vec<&str> = rows.iter().map(|row| row.typed.as_str()).collect();
+    send_response(
+        model,
+        Response::Secret(secrecy::SecretString::from(text.join("\n"))),
+    )
 }
 
 fn send_response(model: &mut Model, response: Response) -> Vec<Cmd> {
@@ -393,6 +490,8 @@ fn install_prompt(
         prompt,
         input: String::new(),
         rejection,
+        reveal: RevealPhase::Ready,
+        entry: RowEntry::default(),
     });
 }
 
@@ -530,7 +629,7 @@ mod tests {
     /// Push an exec event and drain it from the drip queue with a tick
     /// so unit tests don't have to drive both messages explicitly.
     fn apply_exec(model: &mut Model, event: ExecEvent) -> Vec<Cmd> {
-        let _ = update(model, Msg::Exec(event));
+        let _ = update(model, Msg::Exec(Box::new(event)));
         update(model, Msg::Tick)
     }
 
@@ -875,6 +974,150 @@ mod tests {
     }
 
     #[test]
+    fn a_reveal_is_announced_shown_then_taken_away_only_on_yes() {
+        let mut model = Model::new();
+        model.screen = Screen::Step {
+            tab: StepTab::Ceremony,
+        };
+        install_prompt(
+            &mut model,
+            PromptId::new(3),
+            Prompt::Reveal {
+                label: "share".to_string(),
+                note: None,
+                shown: rite_model::Shown::new(
+                    "A".repeat(32),
+                    rite_model::RevealFormat::Paper32.layout(),
+                ),
+            },
+            None,
+        );
+        let phase = |model: &Model| model.pending_prompt.as_ref().map(|p| p.reveal);
+        let press = |model: &mut Model, code| update(model, Msg::Key(key(code)));
+
+        assert!(press(&mut model, KeyCode::Char(' ')).is_empty());
+        assert_eq!(phase(&model), Some(RevealPhase::Ready));
+        assert!(press(&mut model, KeyCode::Enter).is_empty());
+        assert_eq!(phase(&model), Some(RevealPhase::Shown));
+        assert!(press(&mut model, KeyCode::Char(' ')).is_empty());
+        assert!(press(&mut model, KeyCode::Enter).is_empty());
+        assert_eq!(phase(&model), Some(RevealPhase::Confirm));
+        // Enter again is not a yes; n goes back to the value.
+        assert!(press(&mut model, KeyCode::Enter).is_empty());
+        assert!(press(&mut model, KeyCode::Char('n')).is_empty());
+        assert_eq!(phase(&model), Some(RevealPhase::Shown));
+        assert!(press(&mut model, KeyCode::Enter).is_empty());
+        let cmds = press(&mut model, KeyCode::Char('y'));
+        assert!(matches!(
+            cmds.as_slice(),
+            [Cmd::SendCommand(UiCommand::PromptResponse {
+                response: Response::Acknowledge,
+                ..
+            })]
+        ));
+    }
+
+    /// Rows are taken one at a time: a row that does not read stays to be
+    /// typed again, Backspace on an empty row goes back into the last, and
+    /// the last expected row sends the rows as typed.
+    #[test]
+    fn rows_are_taken_one_at_a_time_and_sent_with_the_last() {
+        use secrecy::ExposeSecret;
+        let text = rite_model::paper32::encode(&[0x5A; 35]);
+        let (first, second) = text.split_at(32);
+        let mut model = Model::new();
+        model.screen = Screen::Step {
+            tab: StepTab::Ceremony,
+        };
+        install_prompt(
+            &mut model,
+            PromptId::new(5),
+            Prompt::EnterRows {
+                label: "share".to_string(),
+                note: None,
+                format: rite_model::RevealFormat::Paper32,
+                rows: Some(2),
+                validator: None,
+            },
+            None,
+        );
+        let typing = |model: &mut Model, text: &str| {
+            for c in text.chars() {
+                let _ = update(model, Msg::Key(key(KeyCode::Char(c))));
+            }
+            update(model, Msg::Key(key(KeyCode::Enter)))
+        };
+        let taken = |model: &Model| model.pending_prompt.as_ref().map(|p| p.entry.rows.len());
+
+        assert!(typing(&mut model, "ABCD").is_empty());
+        assert_eq!(taken(&model), Some(0));
+        assert!(matches!(
+            model
+                .pending_prompt
+                .as_ref()
+                .and_then(|p| p.entry.notice.clone()),
+            Some(RowNotice::Refused(_))
+        ));
+        for _ in 0..4 {
+            let _ = update(&mut model, Msg::Key(key(KeyCode::Backspace)));
+        }
+        assert!(typing(&mut model, first).is_empty());
+        assert_eq!(taken(&model), Some(1));
+        // Back into row 1, and out again.
+        let _ = update(&mut model, Msg::Key(key(KeyCode::Backspace)));
+        assert_eq!(taken(&model), Some(0));
+        assert!(update(&mut model, Msg::Key(key(KeyCode::Enter))).is_empty());
+        assert_eq!(taken(&model), Some(1));
+
+        let cmds = typing(&mut model, second);
+        match cmds.as_slice() {
+            [
+                Cmd::SendCommand(UiCommand::PromptResponse {
+                    response: Response::Secret(rows),
+                    ..
+                }),
+            ] => assert_eq!(rows.expose_secret(), format!("{first}\n{second}")),
+            _ => panic!("expected the rows as a secret"),
+        }
+        assert!(model.pending_prompt.is_none());
+    }
+
+    /// Every row but the last is full: with no count given, a short row
+    /// is the last one and sends the rows without an empty row after it.
+    #[test]
+    fn a_short_row_ends_an_entry_of_no_set_length() {
+        let text = rite_model::paper32::encode(&[0x5A; 30]);
+        let (first, second) = text.split_at(32);
+        let mut model = Model::new();
+        model.screen = Screen::Step {
+            tab: StepTab::Ceremony,
+        };
+        install_prompt(
+            &mut model,
+            PromptId::new(6),
+            Prompt::EnterRows {
+                label: "share".to_string(),
+                note: None,
+                format: rite_model::RevealFormat::Paper32,
+                rows: None,
+                validator: None,
+            },
+            None,
+        );
+        let typing = |model: &mut Model, text: &str| {
+            for c in text.chars() {
+                let _ = update(model, Msg::Key(key(KeyCode::Char(c))));
+            }
+            update(model, Msg::Key(key(KeyCode::Enter)))
+        };
+        assert!(typing(&mut model, first).is_empty());
+        assert!(matches!(
+            typing(&mut model, second).as_slice(),
+            [Cmd::SendCommand(UiCommand::PromptResponse { .. })]
+        ));
+    }
+
+    #[test]
     fn text_prompt_collects_input_then_sends_on_enter() {
         let mut model = Model::new();
         model.screen = Screen::Step {
@@ -942,13 +1185,13 @@ mod tests {
         // drip buffer when Quit arrives.
         let _ = update(
             &mut model,
-            Msg::Exec(fact_event(StepFact::CeremonyCompleted {})),
+            Msg::Exec(Box::new(fact_event(StepFact::CeremonyCompleted {}))),
         );
         let _ = update(
             &mut model,
-            Msg::Exec(ExecEvent::Finalized {
+            Msg::Exec(Box::new(ExecEvent::Finalized {
                 fingerprint: "sha256:abc".to_string(),
-            }),
+            })),
         );
         assert_eq!(model.pending_events.len(), 2);
         assert!(!model.screen.is_terminal());
@@ -988,7 +1231,7 @@ mod tests {
             text: "queued".to_string(),
         };
         // Msg::Exec alone leaves the log empty and the queue non-empty.
-        let _ = update(&mut model, Msg::Exec(ExecEvent::Signal(signal)));
+        let _ = update(&mut model, Msg::Exec(Box::new(ExecEvent::Signal(signal))));
         assert!(model.log.is_empty());
         assert_eq!(model.pending_events.len(), 1);
 

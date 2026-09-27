@@ -137,6 +137,11 @@
           "description": "Bytes as standard base64 with padding.",
           "type": "string",
           "const": "base64"
+        },
+        {
+          "description": "Bytes as paper32 rows, typed a row at a time from a sheet, a wrong character in a row corrected.",
+          "type": "string",
+          "const": "paper32"
         }
       ]
     },
@@ -296,6 +301,81 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "description": "A value shown for a person to write down, withdrawn when they acknowledge. The value is never recorded.",
+          "type": "object",
+          "properties": {
+            "label": {
+              "description": "The label shown above the value.",
+              "type": "string"
+            },
+            "note": {
+              "description": "The note shown with the value, if any.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "reveal"
+            }
+          },
+          "required": [
+            "type",
+            "label"
+          ]
+        },
+        {
+          "description": "A request for a value typed row by row from a sheet, each row checked as it is entered. The answer is never recorded.",
+          "type": "object",
+          "properties": {
+            "format": {
+              "description": "The encoding the sheet was written in.",
+              "$ref": "#/$defs/RevealFormat"
+            },
+            "label": {
+              "description": "The label shown above the rows.",
+              "type": "string"
+            },
+            "note": {
+              "description": "The note shown with the rows, if any.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "rows": {
+              "description": "The number of rows asked for, when the value's length is known. Without it a short row, or an empty row after full ones, ends the entry.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "maximum": 9007199254740991,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "enter_rows"
+            },
+            "validator": {
+              "description": "The check the whole value had to pass. Absent when the step checks the value itself, as for a share.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ValidatorSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "label",
+            "format"
+          ]
         }
       ]
     },
@@ -363,6 +443,21 @@
           "required": [
             "type"
           ]
+        }
+      ]
+    },
+    "RevealFormat": {
+      "description": "The encoding a value is written on paper in.",
+      "oneOf": [
+        {
+          "description": "Rows of 32 base-32 characters, 28 of data and 4 of parity; a wrong character in a row is corrected.",
+          "type": "string",
+          "const": "paper32"
+        },
+        {
+          "description": "Two hexadecimal digits per byte, in rows of 32.",
+          "type": "string",
+          "const": "hex"
         }
       ]
     },

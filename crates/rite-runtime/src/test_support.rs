@@ -19,15 +19,20 @@ use rite_model::{Sha256Digest, StepFact, TranscriptHeader};
 
 /// Owns the channels and sink needed to build a [`Reporter`] for tests.
 ///
-/// The matching event receiver and command sender are kept alive for the
-/// harness's lifetime, so a reporter built from [`Self::reporter`] never
-/// sees a spurious disconnect while emitting facts.
+/// The matching event receiver is kept alive for the harness's lifetime,
+/// so a reporter built from [`Self::reporter`] never sees a spurious
+/// disconnect while emitting facts. Its commands are the ones queued when
+/// it was built, and nothing more: a prompt with no answer left fails as a
+/// disconnect rather than waiting for one that cannot come.
 pub struct ReporterHarness {
     sink: InMemorySink,
     event_tx: Sender<ExecEvent>,
     _event_rx: Receiver<ExecEvent>,
     cmd_tx: Sender<UiCommand>,
     cmd_rx: Receiver<UiCommand>,
+    /// The queued commands a reporter reads, from a channel whose sender
+    /// is already dropped.
+    step_rx: Receiver<UiCommand>,
     next_response_id: u64,
 }
 
@@ -43,6 +48,7 @@ impl ReporterHarness {
             _event_rx: event_rx,
             cmd_tx,
             cmd_rx,
+            step_rx: unbounded().1,
             next_response_id: 0,
         }
     }
@@ -68,6 +74,17 @@ impl ReporterHarness {
         });
     }
 
+    /// Pre-queue a second answer to the prompt the last queued response
+    /// answered, for when that one is refused: a refused prompt is asked
+    /// again under the same id.
+    pub fn enqueue_retry(&mut self, response: Response) {
+        let prompt_id = PromptId::new(self.next_response_id.wrapping_sub(1));
+        let _ = self.cmd_tx.send(UiCommand::PromptResponse {
+            prompt_id,
+            response,
+        });
+    }
+
     /// Build a reporter scoped to the given step. The reporter borrows
     /// the harness for its lifetime.
     ///
@@ -76,9 +93,16 @@ impl ReporterHarness {
     /// box. Tests that need a specific seed can call
     /// [`Reporter::seed_entropy`] again.
     pub fn reporter(&mut self, step: StepId) -> Reporter<'_> {
+        // What an earlier reporter left, then what was queued since, in a
+        // channel that ends once they are read.
+        let (tx, rx) = unbounded();
+        for cmd in self.step_rx.try_iter().chain(self.cmd_rx.try_iter()) {
+            let _ = tx.send(cmd);
+        }
+        self.step_rx = rx;
         let mut reporter = Reporter::new(
             &self.event_tx,
-            &self.cmd_rx,
+            &self.step_rx,
             &mut self.sink,
             Arc::new(SystemClock),
         );

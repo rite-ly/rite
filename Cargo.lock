@@ -2148,6 +2148,7 @@ dependencies = [
  "secrecy 0.10.3",
  "serde_json",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]
@@ -2308,6 +2309,7 @@ dependencies = [
  "rite-model",
  "rite-runtime",
  "secrecy 0.10.3",
+ "zeroize",
 ]
 
 [[package]]

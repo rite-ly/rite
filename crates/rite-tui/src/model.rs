@@ -329,4 +329,54 @@ pub struct PendingPrompt {
     pub input: String,
     /// Most recent rejection reason from the validator, if any.
     pub rejection: Option<String>,
+    /// Where a value shown for writing down stands; unused by other
+    /// prompts.
+    pub reveal: RevealPhase,
+    /// Rows typed so far into a prompt that takes a value row by row;
+    /// unused by other prompts.
+    pub entry: RowEntry,
+}
+
+/// A value typed row by row: the rows taken so far and what the last
+/// check said.
+#[derive(Debug, Clone, Default)]
+pub struct RowEntry {
+    /// Rows taken, in order.
+    pub rows: Vec<EnteredRow>,
+    /// What the last row's check said, until the next one.
+    pub notice: Option<RowNotice>,
+}
+
+/// One row taken: as typed, which is what the runtime reads again, and as
+/// it reads, which is what the screen shows. Both wiped when dropped.
+#[derive(Debug, Clone)]
+pub struct EnteredRow {
+    /// The row as the person typed it.
+    pub typed: zeroize::Zeroizing<String>,
+    /// The row as it should read, repairs made.
+    pub reads: zeroize::Zeroizing<String>,
+}
+
+/// What a row's check said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowNotice {
+    /// The row was taken with a repair the person should check on the
+    /// sheet.
+    Repaired(String),
+    /// The row was not taken, and why.
+    Refused(String),
+}
+
+/// A value to write down goes through three phases in its window: it is
+/// announced, then shown, then shown with the question before it goes,
+/// since it is not shown again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RevealPhase {
+    /// Announced: the window says what is coming, without the value.
+    #[default]
+    Ready,
+    /// The value is on screen.
+    Shown,
+    /// The value is on screen with the question: written down?
+    Confirm,
 }

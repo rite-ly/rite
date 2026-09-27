@@ -412,6 +412,45 @@ pub struct EncryptDataParams {
     pub scheme: Option<rite_sdk::WrapScheme>,
 }
 
+/// Params for `reveal` action.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RevealParams {
+    /// What the value is and what to do with it, shown above it and
+    /// printed on the sheet.
+    pub message: String,
+    /// The encoding: `paper32` (the default) or `hex`.
+    #[serde(default)]
+    pub format: Option<rite_model::RevealFormat>,
+    /// Text printed on the sheet: where it goes, who keeps it.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// The value's length in bytes, when the author knows it, so the sheet
+    /// has exactly the right number of boxes; a value of another size is
+    /// refused. For a share, the secret's length, not counting the three
+    /// bytes a share carries in front of it.
+    #[serde(default)]
+    pub length: Option<u64>,
+}
+
+/// Params for `enter_share` action.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EnterShareParams {
+    /// What the share is, shown above the rows: the sheet's heading.
+    pub message: String,
+    /// The encoding the sheet was written in: `paper32` (the default) or
+    /// `hex`.
+    #[serde(default)]
+    pub format: Option<rite_model::RevealFormat>,
+    /// Shown with the rows: where the sheet came from, who types it.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// The secret's length in bytes, when the author knows it, so the
+    /// prompt asks for exactly the right rows; a share of another size is
+    /// refused.
+    #[serde(default)]
+    pub length: Option<u64>,
+}
+
 /// Params for `split_secret` action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SplitSecretParams {
@@ -609,6 +648,11 @@ mod schema_drift_tests {
             (
                 ActionType::VerifySignature,
                 serde_keys(VerifySignatureParams::default()),
+            ),
+            (ActionType::Reveal, serde_keys(RevealParams::default())),
+            (
+                ActionType::EnterShare,
+                serde_keys(EnterShareParams::default()),
             ),
             (
                 ActionType::SplitSecret,

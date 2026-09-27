@@ -5,13 +5,14 @@
 //! report cannot drift apart visually.
 
 use crate::report::ReportData;
-use crate::view::{Branding, ReportView, ScriptView, render_prose_html};
+use crate::view::{Branding, ReportView, ScriptView, WorksheetsView, render_prose_html};
 use minijinja::value::Value;
 use minijinja::{Environment, context};
 use rite_model::Ceremony;
 
 const SCRIPT_TEMPLATE: &str = include_str!("../templates/script.html.jinja");
 const REPORT_TEMPLATE: &str = include_str!("../templates/report.html.jinja");
+const WORKSHEETS_TEMPLATE: &str = include_str!("../templates/worksheets.html.jinja");
 const FORMAL_CSS: &str = include_str!("../templates/themes/formal.css");
 
 /// A built-in document theme.
@@ -69,6 +70,7 @@ fn environment() -> Result<Environment<'static>, minijinja::Error> {
     });
     env.add_template("script.html", SCRIPT_TEMPLATE)?;
     env.add_template("report.html", REPORT_TEMPLATE)?;
+    env.add_template("worksheets.html", WORKSHEETS_TEMPLATE)?;
     Ok(env)
 }
 
@@ -91,6 +93,33 @@ pub fn render_script(
         css => theme.css(),
         theme => theme.as_str(),
     })
+}
+
+/// Render the worksheets a ceremony's `reveal` steps call for: one page per
+/// value a person writes down, printed once and kept with the value.
+/// `None` when no step writes one.
+///
+/// # Errors
+///
+/// Returns a [`minijinja::Error`] if a template fails to compile or render.
+pub fn render_worksheets(
+    ceremony: &Ceremony,
+    branding: &Branding,
+    theme: Theme,
+) -> Result<Option<String>, minijinja::Error> {
+    let Some(view) = WorksheetsView::from_ceremony(ceremony) else {
+        return Ok(None);
+    };
+    let env = environment()?;
+    let template = env.get_template("worksheets.html")?;
+    template
+        .render(context! {
+            worksheets => view,
+            branding => branding,
+            css => theme.css(),
+            theme => theme.as_str(),
+        })
+        .map(Some)
 }
 
 /// Render a post-ceremony report to a self-contained HTML document.

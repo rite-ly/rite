@@ -174,7 +174,7 @@ pub fn run(args: Args) {
     );
     let exec_handle = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
 
-    let frontend_result = run_frontend(frontend, &cmd_tx, event_rx);
+    let frontend_result = run_frontend(frontend, &cmd_tx, event_rx, args.dry_run);
 
     // Drop our cmd_tx so the executor's recv unblocks cleanly if the
     // frontend exits before the ceremony completes.
@@ -264,12 +264,13 @@ fn run_frontend(
     frontend: Frontend,
     cmd_tx: &crossbeam_channel::Sender<UiCommand>,
     event_rx: crossbeam_channel::Receiver<ExecEvent>,
+    rehearsal: bool,
 ) -> std::io::Result<()> {
     match frontend {
         #[cfg(feature = "tui")]
         Frontend::Tui => rite_tui::run(cmd_tx, event_rx),
         Frontend::Console => crate::console::run(cmd_tx, &event_rx),
-        Frontend::Headless => crate::headless::run(cmd_tx, &event_rx),
+        Frontend::Headless => crate::headless::run(cmd_tx, &event_rx, rehearsal),
     }
 }
 

@@ -85,6 +85,14 @@ pub enum ActionType {
     /// Use when a value must be verified against something external (physical label,
     /// document). Supports NATO phonetic alphabet and hex formatting.
     OralReadback,
+    /// Show a value on screen for a person to write down, then withdraw it.
+    ///
+    /// Reads `value:`, a share or any byte artifact, and shows it in a
+    /// chosen encoding while a prompt is up; on acknowledgement it is gone.
+    /// The transcript records that the value was shown and nothing of it.
+    /// `rite script` prints a page for the step, one box per character
+    /// in rows, the parity cells set apart.
+    Reveal,
     /// Capture machine information (hostname, CPU, OS) as evidence.
     ///
     /// Records device identity to prove which machine ran the ceremony.
@@ -158,6 +166,15 @@ pub enum ActionType {
     /// The result stays in memory and is erased when the run ends, like the
     /// content `decrypt_data` opens.
     CombineShares,
+    /// Type a share back from its sheet, row by row.
+    ///
+    /// Each row is checked as it is typed: a wrong character is corrected
+    /// and named, two unreadable ones are recovered, and a row that needs
+    /// more is typed again. Rows that are not a share are refused before
+    /// the step ends. Creates a share `combine_shares` reads, named without
+    /// a `share_N` property. The transcript records the share's index and
+    /// which rows were repaired, never the rows.
+    EnterShare,
     /// Install key material the ceremony holds as a key of a named algorithm.
     ///
     /// `unwrap_key` without the decrypt. The bytes can be a material carried
@@ -344,6 +361,16 @@ impl SharingScheme {
             SharingScheme::RiteSssV1 => 100,
         }
     }
+
+    /// The length in bytes of one share of a secret of `secret_len` bytes,
+    /// as a sheet or a transport holds it: for `rite-sss/v1`, a version, a
+    /// threshold and an index in front of one byte per byte of the secret.
+    #[must_use]
+    pub fn share_len(self, secret_len: usize) -> usize {
+        match self {
+            SharingScheme::RiteSssV1 => secret_len.saturating_add(3),
+        }
+    }
 }
 
 impl fmt::Display for SharingScheme {
@@ -486,6 +513,7 @@ impl ActionType {
         ActionType::Confirm,
         ActionType::CheckValue,
         ActionType::OralReadback,
+        ActionType::Reveal,
         ActionType::MachineInfo,
         ActionType::EnterValue,
         ActionType::EnterSecret,
@@ -497,6 +525,7 @@ impl ActionType {
         ActionType::DecryptData,
         ActionType::SplitSecret,
         ActionType::CombineShares,
+        ActionType::EnterShare,
         ActionType::ExportPublic,
         ActionType::SignData,
         ActionType::VerifySignature,
@@ -539,11 +568,13 @@ impl ActionType {
             | ActionType::Confirm
             | ActionType::CheckValue
             | ActionType::OralReadback
+            | ActionType::Reveal
             | ActionType::MachineInfo
             | ActionType::EnterValue
             | ActionType::EnterSecret
             | ActionType::Attest
             | ActionType::CombineShares
+            | ActionType::EnterShare
             | ActionType::GatherEntropy => BackendUsage::Unused,
         }
     }
@@ -564,9 +595,12 @@ impl ActionType {
             // what it is lifting rather than the step guessing.
             ActionType::ImportKey => &["algorithm"],
             ActionType::SplitSecret => &["threshold", "shares"],
-            // The label is what the person sees at the keyboard, and there is
-            // no default that names what they are being asked for.
-            ActionType::EnterValue | ActionType::EnterSecret => &["message"],
+            // The label is what the person sees at the keyboard or on the
+            // sheet, and there is no default that names what it is.
+            ActionType::EnterValue
+            | ActionType::EnterSecret
+            | ActionType::Reveal
+            | ActionType::EnterShare => &["message"],
 
             ActionType::ClockCheck
             | ActionType::Confirm
@@ -609,6 +643,7 @@ impl ActionType {
             ActionType::ClockCheck | ActionType::Confirm => &["message"],
             ActionType::CheckValue => &["actual", "expected", "message", "sensitive"],
             ActionType::OralReadback => &["value", "format", "characters", "message"],
+            ActionType::Reveal | ActionType::EnterShare => &["message", "format", "note", "length"],
             ActionType::MachineInfo => &[
                 "include_machine_id",
                 "include_cpu",
@@ -703,6 +738,7 @@ impl ActionType {
                 lists: &[],
             },
             ActionType::GenerateCsr => ReadsContract::required(&["signing_key"]),
+            ActionType::Reveal => ReadsContract::required(&["value"]),
 
             ActionType::ClockCheck
             | ActionType::Confirm
@@ -718,7 +754,8 @@ impl ActionType {
             | ActionType::TpmAttest
             | ActionType::PivReadCertificate
             | ActionType::PivSign
-            | ActionType::YubikeyAttestSlot => ReadsContract::NONE,
+            | ActionType::YubikeyAttestSlot
+            | ActionType::EnterShare => ReadsContract::NONE,
         }
     }
 
@@ -732,6 +769,7 @@ impl ActionType {
             ActionType::Confirm => "Confirm readiness or completion of a manual step.",
             ActionType::CheckValue => "Verify a value matches an expected result.",
             ActionType::OralReadback => "Read back a value aloud for verification.",
+            ActionType::Reveal => "Show a value for a person to write down.",
             ActionType::MachineInfo => "Record system and environment information.",
             ActionType::EnterValue => "Type a value the ceremony records.",
             ActionType::EnterSecret => "Type a secret the ceremony holds and never records.",
@@ -756,6 +794,7 @@ impl ActionType {
                 "Split a secret into shares a threshold of which reconstruct it."
             }
             ActionType::CombineShares => "Reconstruct a secret from its shares.",
+            ActionType::EnterShare => "Type a share back from its sheet.",
         }
     }
 }
@@ -767,6 +806,7 @@ impl std::fmt::Display for ActionType {
             ActionType::Confirm => write!(f, "confirm"),
             ActionType::CheckValue => write!(f, "check_value"),
             ActionType::OralReadback => write!(f, "oral_readback"),
+            ActionType::Reveal => write!(f, "reveal"),
             ActionType::MachineInfo => write!(f, "machine_info"),
             ActionType::EnterValue => write!(f, "enter_value"),
             ActionType::EnterSecret => write!(f, "enter_secret"),
@@ -778,6 +818,7 @@ impl std::fmt::Display for ActionType {
             ActionType::DecryptData => write!(f, "decrypt_data"),
             ActionType::SplitSecret => write!(f, "split_secret"),
             ActionType::CombineShares => write!(f, "combine_shares"),
+            ActionType::EnterShare => write!(f, "enter_share"),
             ActionType::ExportPublic => write!(f, "export_public"),
             ActionType::SignData => write!(f, "sign_data"),
             ActionType::VerifySignature => write!(f, "verify_signature"),
@@ -979,6 +1020,7 @@ mod tests {
             (ActionType::Confirm, "\"confirm\""),
             (ActionType::CheckValue, "\"check_value\""),
             (ActionType::OralReadback, "\"oral_readback\""),
+            (ActionType::Reveal, "\"reveal\""),
             (ActionType::MachineInfo, "\"machine_info\""),
             (ActionType::GenerateKey, "\"generate_key\""),
             (ActionType::WrapKey, "\"wrap_key\""),
@@ -988,6 +1030,7 @@ mod tests {
             (ActionType::DecryptData, "\"decrypt_data\""),
             (ActionType::SplitSecret, "\"split_secret\""),
             (ActionType::CombineShares, "\"combine_shares\""),
+            (ActionType::EnterShare, "\"enter_share\""),
             (ActionType::ExportPublic, "\"export_public\""),
             (ActionType::Attest, "\"attest\""),
             (ActionType::TpmAttest, "\"tpm_attest\""),
@@ -1014,6 +1057,7 @@ mod tests {
             ActionType::Confirm,
             ActionType::CheckValue,
             ActionType::OralReadback,
+            ActionType::Reveal,
             ActionType::MachineInfo,
             ActionType::GenerateKey,
             ActionType::WrapKey,
@@ -1158,6 +1202,7 @@ mod tests {
                 | ActionType::Confirm
                 | ActionType::CheckValue
                 | ActionType::OralReadback
+                | ActionType::Reveal
                 | ActionType::MachineInfo
                 | ActionType::EnterValue
                 | ActionType::EnterSecret
@@ -1169,6 +1214,7 @@ mod tests {
                 | ActionType::DecryptData
                 | ActionType::SplitSecret
                 | ActionType::CombineShares
+                | ActionType::EnterShare
                 | ActionType::ExportPublic
                 | ActionType::SignData
                 | ActionType::VerifySignature

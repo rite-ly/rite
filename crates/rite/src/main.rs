@@ -100,7 +100,9 @@ enum Commands {
     /// Render a ceremony as a printable protocol
     ///
     /// Produces a self-contained HTML document that participants follow and
-    /// complete by hand during the ceremony.
+    /// complete by hand during the ceremony. When a step shows a value to
+    /// write down, also produces the worksheets: one page per such step,
+    /// with the encoding's fixed parts printed and a box for every character.
     #[cfg(feature = "render")]
     Script(script::Args),
     /// Render a post-ceremony report from a transcript

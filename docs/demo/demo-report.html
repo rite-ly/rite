@@ -533,17 +533,17 @@ code, .hash {
 
   <div class="summary-box">
     <p><strong>Status:</strong> <span class="status-completed">Completed</span></p>
-    <p><strong>Started:</strong> 2026-07-23 16:09:32 UTC</p>
-    <p><strong>Completed:</strong> 2026-07-23 16:09:33 UTC</p>
-    <p><strong>Duration:</strong> 0s</p>
-    <p><strong>Transcript fingerprint:</strong> <code>sha256:dc1b8eec6e91ac01d0d870142b641c7ba303c2fec78b1763cd388fee92d30d0a</code></p>
+    <p><strong>Started:</strong> 2026-09-26 11:43:19 UTC</p>
+    <p><strong>Completed:</strong> 2026-09-26 11:43:21 UTC</p>
+    <p><strong>Duration:</strong> 1s</p>
+    <p><strong>Transcript fingerprint:</strong> <code>sha256:d8777b67f67b60ca085ac5b8fcf77115925b22414830ec99682aef9c05dff3af</code></p>
   </div>
   <h2>Artifacts</h2>
   <table class="artifacts">
-    <thead><tr><th>Name</th><th>Step</th><th>Path</th><th>Fingerprint</th></tr></thead>
+    <thead><tr><th>Name</th><th>Step</th><th>File</th><th>Fingerprint</th></tr></thead>
     <tbody>
-      <tr><td>root_cert</td><td><code>issue_root_cert</code></td><td><code>artifacts&#x2f;root_cert.pem</code></td><td><code class="hash">sha256:6138e4d87a2eeea14b40f5de8f520143e42f9ed47d074d38019103faedf6f32d</code></td></tr>
-      <tr><td>root_public_key</td><td><code>export_public_key</code></td><td><code>artifacts&#x2f;root_public_key.pem</code></td><td><code class="hash">sha256:a589d40b33a937c3f477ff0550516b7ff2ee12210d3ae6a6381f60f207cdb256</code></td></tr>
+      <tr><td>root_cert</td><td><code>issue_root_cert</code></td><td><code>root_cert.pem</code></td><td><code class="hash">sha256:e5738701c1081736bc3cfb26f5b3269da6509fe438b42e61208cd989b8686393</code></td></tr>
+      <tr><td>root_public_key</td><td><code>export_public_key</code></td><td><code>root_public_key.pem</code></td><td><code class="hash">sha256:59abb8d15f19bfcc1eb0012c04afc53cda277e588c41bd679571274fa02ccb6e</code></td></tr>
     </tbody>
   </table>
   <h2>Roles</h2>
@@ -555,16 +555,16 @@ code, .hash {
   <table class="execution-log">
     <thead><tr><th class="step-num">Label</th><th>Step</th><th class="role">Role</th><th>Started</th><th>Completed</th><th>Outcome</th></tr></thead>
     <tbody>
-      <tr><td class="step-num">1</td><td><code>verify_air_gap</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-07-23 16:09:32 UTC</td><td>2026-07-23 16:09:32 UTC</td><td>completed, Verification confirmed</td></tr>
-      <tr><td class="step-num">2</td><td><code>generate_root_key</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-07-23 16:09:32 UTC</td><td>2026-07-23 16:09:32 UTC</td><td>completed, RSA-4096 keypair generated</td></tr>
-      <tr><td class="step-num">3</td><td><code>generate_root_csr</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-07-23 16:09:32 UTC</td><td>2026-07-23 16:09:32 UTC</td><td>completed, PKCS#10 CSR generated</td></tr>
-      <tr><td class="step-num">4</td><td><code>issue_root_cert</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-07-23 16:09:32 UTC</td><td>2026-07-23 16:09:33 UTC</td><td>completed, X.509 certificate issued from CSR</td></tr>
-      <tr><td class="step-num">5</td><td><code>export_public_key</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-07-23 16:09:33 UTC</td><td>2026-07-23 16:09:33 UTC</td><td>completed, Public key exported</td></tr>
-      <tr><td class="step-num">6</td><td><code>witness_attest</code></td><td class="role"><abbr title="Witness">Wi</abbr></td><td>2026-07-23 16:09:33 UTC</td><td>2026-07-23 16:09:33 UTC</td><td>completed, Attestation recorded for Witness</td></tr>
-      <tr><td class="step-num">7</td><td><code>officer_attest</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-07-23 16:09:33 UTC</td><td>2026-07-23 16:09:33 UTC</td><td>completed, Attestation recorded for Crypto Officer</td></tr>
+      <tr><td class="step-num">1</td><td><code>verify_air_gap</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-09-26 11:43:19 UTC</td><td>2026-09-26 11:43:19 UTC</td><td>completed, Verification confirmed</td></tr>
+      <tr><td class="step-num">2</td><td><code>generate_root_key</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-09-26 11:43:19 UTC</td><td>2026-09-26 11:43:20 UTC</td><td>completed, RSA-4096 keypair generated</td></tr>
+      <tr><td class="step-num">3</td><td><code>generate_root_csr</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-09-26 11:43:20 UTC</td><td>2026-09-26 11:43:20 UTC</td><td>completed, PKCS#10 CSR generated</td></tr>
+      <tr><td class="step-num">4</td><td><code>issue_root_cert</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-09-26 11:43:20 UTC</td><td>2026-09-26 11:43:20 UTC</td><td>completed, X.509 certificate issued from CSR</td></tr>
+      <tr><td class="step-num">5</td><td><code>export_public_key</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-09-26 11:43:21 UTC</td><td>2026-09-26 11:43:21 UTC</td><td>completed, Public key exported</td></tr>
+      <tr><td class="step-num">6</td><td><code>witness_attest</code></td><td class="role"><abbr title="Witness">Wi</abbr></td><td>2026-09-26 11:43:21 UTC</td><td>2026-09-26 11:43:21 UTC</td><td>completed, Attestation recorded for Witness</td></tr>
+      <tr><td class="step-num">7</td><td><code>officer_attest</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-09-26 11:43:21 UTC</td><td>2026-09-26 11:43:21 UTC</td><td>completed, Attestation recorded for Crypto Officer</td></tr>
     </tbody>
   </table>
 
-  <div class="report-footer">Generated by Rite v0.4.1</div>
+  <div class="report-footer">Generated by Rite v0.6.0</div>
 </body>
 </html>

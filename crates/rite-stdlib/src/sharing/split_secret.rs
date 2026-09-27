@@ -1,6 +1,6 @@
 //! `split_secret` action, Shamir shares of a secret the ceremony holds.
 
-use rite_model::{ActionType, SharingScheme, StepFact};
+use rite_model::{ActionType, SharingScheme};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, Share, ShareSet, StepInfo,
     StepResult, parse_params, resolve_artifact_bytes,
@@ -54,7 +54,6 @@ impl Action for SplitSecretAction {
         let backend = backend
             .ok_or_else(|| ActionError::Failed("Backend required to split a secret".into()))?;
         let backend_name = backend.name().to_string();
-        let backend_fingerprint = backend.fingerprint();
         let random = backend.as_random_mut().ok_or_else(|| {
             ActionError::Failed(format!(
                 "Backend '{backend_name}' cannot generate random bytes, which the polynomial \
@@ -100,22 +99,19 @@ impl Action for SplitSecretAction {
         // is a digest of a secret, and a length is its shape: for a wallet
         // seed the definition gives it away anyway, for a passphrase it is
         // the character count.
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "split_secret".to_string(),
-            inputs: json!({
+        reporter.backend_operation(
+            "split_secret",
+            json!({
                 "scheme": scheme.to_string(),
                 "threshold": typed.threshold,
                 "shares": typed.shares,
                 "secret": secret_ref.display_name(),
             }),
-            outputs: json!({
-                "backend": backend_name,
-                "backend_fingerprint": backend_fingerprint,
+            json!({
                 "subsets_verified": subsets_checked,
             }),
-            fingerprint: None,
-        })?;
+            None,
+        )?;
 
         let message = format!("{}-of-{} shares made", typed.threshold, typed.shares);
         if let Some(produces) = &step.produces {

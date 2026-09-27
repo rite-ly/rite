@@ -775,6 +775,20 @@ output:
     }
 
     #[test]
+    fn dispatch_param_out_of_range_spans_param_declaration() {
+        let span_map = span_map_for(DISPATCH_YAML);
+        let text = dispatch_span_text(
+            DISPATCH_YAML,
+            &span_map,
+            &ResolveError::ParamOutOfRange {
+                param: ParamId::new("my_param"),
+                value: "12345678901234567890".to_string(),
+            },
+        );
+        assert_eq!(text, "my_param");
+    }
+
+    #[test]
     fn dispatch_required_material_missing_spans_material_declaration() {
         let span_map = span_map_for(DISPATCH_YAML);
         let text = dispatch_span_text(

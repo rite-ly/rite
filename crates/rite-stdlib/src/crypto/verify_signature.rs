@@ -1,6 +1,6 @@
 //! `verify_signature` action: check a signature against a public key.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, HandlerContext, Icon, Reporter, StepInfo, StepResult, compute_fingerprint,
     parse_params, resolve_artifact_bytes,
@@ -92,7 +92,7 @@ impl Action for VerifySignatureAction {
 
         // The key is already resolved, so the backend decides only who runs the
         // check, never what is checked.
-        let (verified, checked_by) = if let Some(backend) = backend {
+        let verified = if let Some(backend) = backend {
             let backend_name = backend.name().to_string();
             let verifier = backend.as_verify_mut().ok_or_else(|| {
                 ActionError::Failed(format!(
@@ -100,12 +100,10 @@ impl Action for VerifySignatureAction {
                      Drop the `backend:` field to check this one in software."
                 ))
             })?;
-            let checked = verifier.verify_public_key(&public_key, data, signature, algorithm)?;
-            (checked, backend_name)
+            verifier.verify_public_key(&public_key, data, signature, algorithm)?
         } else {
-            let checked = crate::signatures::verify(&public_key, data, signature, algorithm)
-                .map_err(|e| ActionError::Failed(format!("Verification failed to run: {e}")))?;
-            (checked, "software".to_string())
+            crate::signatures::verify(&public_key, data, signature, algorithm)
+                .map_err(|e| ActionError::Failed(format!("Verification failed to run: {e}")))?
         };
 
         if !verified {
@@ -118,23 +116,21 @@ impl Action for VerifySignatureAction {
             )));
         }
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "verify_signature".to_string(),
-            inputs: json!({
+        reporter.backend_operation(
+            "verify_signature",
+            json!({
                 "key_artifact": key_ref.display_name(),
                 "data_artifact": data_ref.display_name(),
                 "signature_artifact": signature_ref.display_name(),
                 "algorithm": algorithm.to_string(),
-                "verifier": checked_by,
             }),
-            outputs: json!({
+            json!({
                 "verified": true,
                 "public_key_fingerprint": compute_fingerprint(public_key.as_bytes()),
                 "signature_fingerprint": compute_fingerprint(signature),
             }),
-            fingerprint: None,
-        })?;
+            None,
+        )?;
 
         Ok(StepResult::completed("Signature verified"))
     }

@@ -238,14 +238,11 @@ mod tests {
     fn renders_each_fact_kind_without_panicking() {
         let mut buf: Vec<u8> = Vec::new();
         let facts = vec![
-            StepFact::CeremonyStarted {
-                name: "T".to_string(),
-            },
+            rite_runtime::test_support::ceremony_started("T"),
             StepFact::StepStarted {
                 id: StepId::new("a"),
                 label: "Step A".to_string(),
                 role: rite_model::RoleId::new("op"),
-                role_name: "Operator".to_string(),
             },
             StepFact::PromptAnswered {
                 step: Some(StepId::new("a")),
@@ -319,9 +316,9 @@ mod tests {
         // Send only events the helper sees:
         let prompt_id = PromptId::new(7);
         event_tx
-            .send(fact_event(StepFact::CeremonyStarted {
-                name: "T".to_string(),
-            }))
+            .send(fact_event(rite_runtime::test_support::ceremony_started(
+                "T",
+            )))
             .expect("send fact");
         event_tx
             .send(ExecEvent::AwaitPrompt {

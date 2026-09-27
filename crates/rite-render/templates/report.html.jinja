@@ -32,6 +32,9 @@
     <p><strong>Duration:</strong> {{ report.duration }}</p>
 {%- endif %}
     <p><strong>Transcript fingerprint:</strong> <code>{{ report.transcript_fingerprint }}</code></p>
+{%- if report.withheld %}
+    <p><strong>Disclosure:</strong> {{ report.withheld }}</p>
+{%- endif %}
 {%- if report.failure %}
     <p><strong>Failure:</strong> {{ report.failure.message }} ({{ report.failure.kind }}, {{ report.failure.class }})</p>
 {%- endif %}
@@ -64,10 +67,10 @@
 {%- if report.artifacts %}
   <h2>Artifacts</h2>
   <table class="artifacts">
-    <thead><tr><th>Name</th><th>Step</th><th>Path</th><th>Fingerprint</th></tr></thead>
+    <thead><tr><th>Name</th><th>Step</th><th>File</th><th>Fingerprint</th></tr></thead>
     <tbody>
 {%- for a in report.artifacts %}
-      <tr><td>{{ a.name }}</td><td><code>{{ a.step_id }}</code></td><td><code>{{ a.path }}</code></td><td><code class="hash">{{ a.sha256 }}</code></td></tr>
+      <tr><td>{{ a.name }}</td><td><code>{{ a.step_id }}</code></td><td><code>{{ a.file }}</code></td><td>{% if a.digest %}<code class="hash">{{ a.digest }}</code>{% else %}not recorded (opened content){% endif %}</td></tr>
 {%- endfor %}
     </tbody>
   </table>

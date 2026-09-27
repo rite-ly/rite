@@ -18,16 +18,24 @@
 
 #![warn(missing_docs)]
 
+pub mod bundle;
+mod canonical;
+pub mod commitment;
+mod digest;
 pub mod expression;
 pub mod ir;
 mod material;
 pub mod params;
 pub mod safe_path;
+#[cfg(test)]
+mod schema;
 pub mod transcript;
 mod types;
 
 pub use rite_sdk::BackendConfig;
 
+pub use canonical::{CanonicalJsonError, canonical_json, check_numbers};
+pub use digest::{DigestFormatError, Sha256Digest};
 pub use material::MaterialSource;
 
 pub use safe_path::{PathSafetyError, confine, is_safe_component, safe_join, validate_component};
@@ -45,6 +53,7 @@ pub use ir::{
 };
 
 pub use transcript::{
-    ErrorClass, ErrorRecord, Format, PLACEHOLDER_LIMIT, Prompt, ResponseRecord, StepFact,
-    StepOutcome, ValidatorSpec, compile_pattern,
+    ErrorClass, ErrorRecord, FACT_TYPES, FACT_VOCABULARY, Format, Level, PLACEHOLDER_LIMIT, Prompt,
+    ResponseRecord, StepFact, StepOutcome, TRANSCRIPT_FORMAT, TRANSCRIPT_SCHEMA, TranscriptHeader,
+    ValidatorSpec, compile_pattern,
 };

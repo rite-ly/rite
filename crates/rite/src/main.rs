@@ -2,6 +2,7 @@
 
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+mod bundle;
 mod check;
 mod common;
 mod console;
@@ -28,6 +29,10 @@ Lifecycle:
   rite verify <output-dir>        # verify integrity
   rite report <output-dir>        # generate audit report
 
+Evidence bundles:
+  rite bundle create <output-dir> --definition ceremony.rite.yaml -o <bundle>
+  rite bundle disclose <bundle> --level public -o <disclosure>
+
 Exit codes:
   0  Success
   1  A negative result or bad input (invalid ceremony, failed verification)
@@ -40,6 +45,10 @@ Lifecycle:
   rite check  ceremony.rite.yaml  # validate
   rite run    ceremony.rite.yaml  # execute with transcript
   rite verify <output-dir>        # verify integrity
+
+Evidence bundles:
+  rite bundle create <output-dir> --definition ceremony.rite.yaml -o <bundle>
+  rite bundle disclose <bundle> --level public -o <disclosure>
 
 Exit codes:
   0  Success
@@ -78,6 +87,14 @@ enum Commands {
     /// digests and reads each wrapped key back to confirm it was produced the
     /// way the transcript says.
     Verify(verify::Args),
+    /// Create and derive evidence bundles
+    ///
+    /// A bundle packages a run's transcript with the ceremony definition and
+    /// the artifacts, for keeping and for handing to an auditor.
+    Bundle {
+        #[command(subcommand)]
+        command: bundle::Command,
+    },
     /// Render a ceremony as a printable protocol
     ///
     /// Produces a self-contained HTML document that participants follow and
@@ -105,6 +122,7 @@ fn main() {
         Commands::Check(args) => check::run(&args),
         Commands::Run(args) => run::run(args),
         Commands::Verify(args) => verify::run(&args),
+        Commands::Bundle { command } => bundle::run(&command),
         #[cfg(feature = "render")]
         Commands::Script(args) => script::run(&args),
         #[cfg(feature = "render")]

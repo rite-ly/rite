@@ -368,6 +368,7 @@ impl SpanMap {
             ResolveError::UnknownParam { param, .. }
             | ResolveError::RequiredParamMissing(param)
             | ResolveError::ParamTypeMismatch { param, .. }
+            | ResolveError::ParamOutOfRange { param, .. }
             | ResolveError::InvalidDateFormat { param, .. } => self.params.get(param).copied(),
             ResolveError::UnknownMaterial { material, .. }
             | ResolveError::RequiredMaterialMissing(material)

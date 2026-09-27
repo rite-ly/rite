@@ -14,8 +14,8 @@ use rite_model::StepId;
 use crate::clock::{Clock, SystemClock};
 use crate::protocol::{ExecEvent, PromptId, Response, UiCommand};
 use crate::reporter::Reporter;
-use crate::transcript_sink::InMemorySink;
-use rite_model::StepFact;
+use crate::transcript_sink::{InMemorySink, JsonlFileSink, TranscriptSink};
+use rite_model::{Sha256Digest, StepFact, TranscriptHeader};
 
 /// Owns the channels and sink needed to build a [`Reporter`] for tests.
 ///
@@ -38,7 +38,7 @@ impl ReporterHarness {
         let (event_tx, event_rx) = unbounded();
         let (cmd_tx, cmd_rx) = unbounded();
         Self {
-            sink: InMemorySink::new(),
+            sink: begun_sink(),
             event_tx,
             _event_rx: event_rx,
             cmd_tx,
@@ -97,6 +97,55 @@ impl ReporterHarness {
 impl Default for ReporterHarness {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A header for tests: a fixed run id, not a dry run.
+#[must_use]
+pub fn test_header() -> TranscriptHeader {
+    TranscriptHeader::new("rite test", &"0".repeat(32), false)
+}
+
+/// An in-memory sink with [`test_header`] already written, ready to record
+/// facts.
+///
+/// # Panics
+///
+/// Never in practice: writing the first header to a fresh in-memory sink
+/// cannot fail.
+#[must_use]
+#[allow(clippy::expect_used)]
+pub fn begun_sink() -> InMemorySink {
+    let mut sink = InMemorySink::new();
+    sink.begin(&test_header())
+        .expect("a fresh in-memory sink takes a header");
+    sink
+}
+
+/// Write `transcript.jsonl` in `dir`: [`test_header`], then each fact at its
+/// default level and [`fixed_test_time`]. Returns the fingerprint.
+///
+/// # Errors
+///
+/// Returns the I/O error if the file cannot be created or written.
+pub fn write_transcript(
+    dir: &std::path::Path,
+    facts: &[StepFact],
+) -> std::io::Result<Sha256Digest> {
+    let mut sink = JsonlFileSink::create(dir)?;
+    sink.begin(&test_header())?;
+    for fact in facts {
+        sink.record(fixed_test_time(), fact.default_level(), fact)?;
+    }
+    sink.finalize()
+}
+
+/// A `CeremonyStarted` fact for tests, over a fixed template digest.
+#[must_use]
+pub fn ceremony_started(name: &str) -> StepFact {
+    StepFact::CeremonyStarted {
+        name: name.to_string(),
+        template: Sha256Digest::of(b"test ceremony"),
     }
 }
 

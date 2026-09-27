@@ -288,9 +288,9 @@ mod tests {
 
         // Simulate a runtime: send a couple of facts and a Continue prompt.
         event_tx
-            .send(fact_event(StepFact::CeremonyStarted {
-                name: "T".to_string(),
-            }))
+            .send(fact_event(rite_runtime::test_support::ceremony_started(
+                "T",
+            )))
             .expect("send fact");
         event_tx
             .send(ExecEvent::AwaitPrompt {

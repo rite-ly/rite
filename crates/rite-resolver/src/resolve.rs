@@ -96,6 +96,7 @@ pub(crate) fn resolve_ceremony(
         backends,
         execution_plan,
         after,
+        source_digest: ceremony.source_digest,
     };
 
     let mut result = ResolveResult::ok(resolved);
@@ -328,16 +329,25 @@ impl ResolveContext {
             // CLI/env/prompt inputs are commonly strings. Coerce them to declared scalar types
             // so users can pass --param threshold=5 and --param enabled=true naturally.
             ParameterType::Integer => {
-                if value.is_i64() || value.is_u64() {
-                    return Some(value.clone());
-                }
-                if let Some(s) = value.as_str() {
-                    if let Ok(i) = s.parse::<i64>() {
-                        return Some(serde_json::Value::Number(i.into()));
+                let number = if value.is_i64() || value.is_u64() {
+                    Some(value.clone())
+                } else if let Some(s) = value.as_str() {
+                    s.parse::<i64>()
+                        .map(serde_json::Value::from)
+                        .or_else(|_| s.parse::<u64>().map(serde_json::Value::from))
+                        .ok()
+                } else {
+                    None
+                };
+                if let Some(number) = number {
+                    if rite_model::check_numbers(&number).is_err() {
+                        self.add_error(ResolveError::ParamOutOfRange {
+                            param: id.clone(),
+                            value: number.to_string(),
+                        });
+                        return None;
                     }
-                    if let Ok(u) = s.parse::<u64>() {
-                        return Some(serde_json::Value::Number(u.into()));
-                    }
+                    return Some(number);
                 }
                 self.add_error(ResolveError::ParamTypeMismatch {
                     param: id.clone(),
@@ -1257,6 +1267,7 @@ mod tests {
             prerequisites: vec![],
             output: HashMap::new(),
             after: IndexMap::new(),
+            source_digest: rite_model::Sha256Digest::of(b"test"),
         }
     }
 
@@ -1478,6 +1489,35 @@ sections:
             .get(&ParamId::new("threshold"))
             .expect("threshold exists");
         assert_eq!(threshold.value, serde_json::json!(5));
+    }
+
+    #[test]
+    fn refuses_an_integer_input_beyond_the_transcript_range() {
+        let mut ceremony = minimal_ceremony();
+        ceremony.parameters.insert(
+            "serial".to_string(),
+            schema::Parameter {
+                param_type: ParameterType::Integer,
+                description: None,
+                default: None,
+            },
+        );
+
+        let mut inputs = CeremonyInputs::default();
+        inputs.parameters.insert(
+            "serial".to_string(),
+            serde_json::json!("12345678901234567890"),
+        );
+
+        let result = resolve_ceremony(ceremony, Some(&inputs));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::ParamOutOfRange { .. })),
+            "Errors: {:?}",
+            result.errors
+        );
     }
 
     #[test]

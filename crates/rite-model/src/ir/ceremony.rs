@@ -52,6 +52,10 @@ pub struct Ceremony {
 
     /// Post-ceremony duties, in declaration order.
     pub after: Vec<PostCeremonyDuty>,
+
+    /// Digest of the ceremony YAML this ceremony was resolved from. Covers
+    /// the template only: run-time inputs are merged into the fields above.
+    pub source_digest: crate::Sha256Digest,
 }
 
 /// A resolved role.

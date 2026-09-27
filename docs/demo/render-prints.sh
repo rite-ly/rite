@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# Render the showcase demo ceremony's printed script, transcript, and
-# post-ceremony report to docs/demo/, committed alongside the GIF as viewable
-# sample outputs. The ritely.io website copies these static files as needed.
+# Render the showcase demo ceremony's sample outputs to docs/demo/, committed
+# alongside the GIF: the printed script, the evidence bundle of one run, its
+# public disclosure, and the report of each. docs/demo/README.md describes
+# them. The ritely.io website copies these static files as needed.
 # Kept separate from record.sh so the prints (cheap, no tmux) can be refreshed
 # without re-recording the GIF. Run it from anywhere:
 #
@@ -10,14 +11,14 @@
 #
 # Requires the debug binary at target/debug/rite, so build it first:
 # cargo build -p rite. Regenerate whenever the showcase ceremony, the
-# script/report templates, or the vendored logo change.
+# script/report templates, the transcript format, or the vendored logo change.
 #
-# The script and report are branded with the project name and the logo
+# The script and reports are branded with the project name and the logo
 # vendored at docs/demo/logo.svg (see BRAND_NAME / LOGO below).
 #
-# The transcript and report come from a single headless run, so they agree on
-# the same fingerprint. Both embed that run's wall-clock timestamps, so each
-# regeneration produces a fresh diff.
+# The bundle, the disclosure and both reports come from a single headless run,
+# so they agree on the same fingerprint. They embed that run's wall-clock
+# timestamps and random values, so each regeneration produces a fresh diff.
 
 set -euo pipefail
 
@@ -49,14 +50,26 @@ trap 'rm -rf "$WORK"' EXIT
   -o "$SCRIPT_DIR/demo-script.html"
 echo "wrote $SCRIPT_DIR/demo-script.html"
 
-# A headless run produces the transcript; keep it and the report rendered from
-# it so the two agree on the same fingerprint.
+# One headless run, packed with the ceremony it ran from.
 "$RITE" run --frontend headless -o "$WORK" "$CEREMONY" >/dev/null
 OUT=$(ls -d "$WORK"/*/ | head -1)
-cp "$OUT/transcript.jsonl" "$SCRIPT_DIR/demo-transcript.jsonl"
-echo "wrote $SCRIPT_DIR/demo-transcript.jsonl"
-"$RITE" report "$OUT" \
+rm -rf "$SCRIPT_DIR/demo-bundle" "$SCRIPT_DIR/demo-disclosure"
+"$RITE" bundle create "$OUT" --definition "$CEREMONY" -o "$SCRIPT_DIR/demo-bundle" >/dev/null
+echo "wrote $SCRIPT_DIR/demo-bundle/"
+
+# Its public disclosure: every fact above public withheld, same fingerprint.
+"$RITE" bundle disclose "$SCRIPT_DIR/demo-bundle" --level public \
+  -o "$SCRIPT_DIR/demo-disclosure" >/dev/null
+echo "wrote $SCRIPT_DIR/demo-disclosure/"
+
+# A report of each: the complete record, and what the public sees.
+"$RITE" report "$SCRIPT_DIR/demo-bundle" \
   --brand-name "$BRAND_NAME" \
   --logo "$LOGO" \
   -o "$SCRIPT_DIR/demo-report.html"
 echo "wrote $SCRIPT_DIR/demo-report.html"
+"$RITE" report "$SCRIPT_DIR/demo-disclosure" \
+  --brand-name "$BRAND_NAME" \
+  --logo "$LOGO" \
+  -o "$SCRIPT_DIR/demo-disclosure-report.html"
+echo "wrote $SCRIPT_DIR/demo-disclosure-report.html"

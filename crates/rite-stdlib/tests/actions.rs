@@ -371,11 +371,11 @@ fn machine_info_records_a_snapshot_fact() {
     result.expect("capturing machine info completes");
 
     assert!(
-        harness.facts().iter().any(|f| matches!(
-            f,
-            StepFact::BackendOperation { kind, .. } if kind == "machine_info"
-        )),
-        "machine_info must record a machine_info BackendOperation fact"
+        harness
+            .facts()
+            .iter()
+            .any(|f| matches!(f, StepFact::MachineInfoRecorded { .. })),
+        "machine_info must record a MachineInfoRecorded fact"
     );
 }
 

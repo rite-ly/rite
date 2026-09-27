@@ -69,6 +69,8 @@ pub(crate) fn lower_ceremony(
     let ceremony_opt = match marked_yaml::from_node::<Ceremony>(&node) {
         Ok(mut c) => {
             coerce_ceremony_json_scalars(&mut c);
+            diags.extend(number_diagnostics(path, &c, &span_map));
+            c.source_digest = rite_model::Sha256Digest::of(yaml.as_bytes());
             Some(c)
         }
         Err(from_node_err) => {
@@ -574,6 +576,47 @@ fn coerce_ceremony_json_scalars(ceremony: &mut Ceremony) {
     }
 }
 
+/// Errors for numbers in step values and parameter defaults that the
+/// transcript cannot record: a number there reaches the transcript, which
+/// holds integers within `±(2^53 - 1)` only.
+fn number_diagnostics(
+    path: Option<&Path>,
+    ceremony: &Ceremony,
+    spans: &SpanMap,
+) -> Vec<Diagnostic> {
+    let mut diags = Vec::new();
+    let mut check = |value: &serde_json::Value, what: String, span: Option<Span>| {
+        if let Err(e) = rite_model::check_numbers(value) {
+            diags.push(Diagnostic {
+                path: path.map(Path::to_owned),
+                span,
+                severity: Severity::Error,
+                message: format!("{what}: {e}; numbers are integers within ±(2^53 - 1)"),
+            });
+        }
+    };
+    for section in ceremony.sections.values() {
+        for (name, step) in &section.steps {
+            let span = spans.steps.get(&StepId::new(name)).copied();
+            if let Some(with) = &step.with {
+                check(with, format!("step '{name}' `with`"), span);
+            }
+            if let Some(reads) = &step.reads {
+                check(reads, format!("step '{name}' `reads`"), span);
+            }
+        }
+    }
+    let mut params: Vec<_> = ceremony.parameters.iter().collect();
+    params.sort_by_key(|(name, _)| *name);
+    for (name, param) in params {
+        if let Some(default) = &param.default {
+            let span = spans.params.get(&ParamId::new(name)).copied();
+            check(default, format!("parameter '{name}' default"), span);
+        }
+    }
+    diags
+}
+
 /// Recursively coerce string scalars in a `serde_json::Value` to their proper types.
 fn coerce_yaml_scalars(value: &mut serde_json::Value) {
     coerce_yaml_scalars_at(value, 0);
@@ -703,6 +746,56 @@ sections:
             annotate(yaml, my_step),
             "      my_step:\n      ^^^^^^^",
             "step span must cover the full identifier"
+        );
+    }
+
+    #[test]
+    fn numbers_the_transcript_cannot_record_are_errors() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles:
+  alice: {}
+parameters:
+  serial:
+    type: integer
+    default: 9007199254740992
+sections:
+  main:
+    role: ${role.alice}
+    steps:
+      ratio:
+        action: attest
+        with:
+          statement: "ok"
+          weight: 1.5
+      fine:
+        action: attest
+        with:
+          statement: "ok"
+          count: 9007199254740991
+"#;
+        let (_, _, diags) = lower_ceremony(None, yaml);
+        let errors: Vec<(&str, &str)> = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .map(|d| {
+                let span = d.span.expect("a span");
+                (d.message.as_str(), span_text(yaml, span))
+            })
+            .collect();
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors.iter().any(|(m, at)| m.contains("step 'ratio'")
+                && m.contains("not an integer")
+                && *at == "ratio"),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|(m, at)| m.contains("parameter 'serial'")
+                && m.contains("beyond")
+                && *at == "serial"),
+            "{errors:?}"
         );
     }
 

@@ -1,6 +1,6 @@
 //! `export_public` action, export a public key from a backend keypair.
 
-use rite_model::{ActionType, StepFact, StepInputs};
+use rite_model::{ActionType, StepInputs};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, resolve_backend_key,
@@ -62,13 +62,12 @@ impl Action for ExportPublicAction {
         let fingerprint = compute_fingerprint(exported.as_bytes());
         let public_key = ArtifactValue::PublicKey(exported);
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "export_public".to_string(),
-            inputs: json!({ "source_artifact": source_ref.display_name() }),
-            outputs: json!({ "exported_key_fingerprint": fingerprint }),
-            fingerprint: Some(fingerprint),
-        })?;
+        reporter.backend_operation(
+            "export_public",
+            json!({ "source_artifact": source_ref.display_name() }),
+            json!({ "exported_key_fingerprint": fingerprint }),
+            Some(fingerprint),
+        )?;
 
         if let Some(produces) = &step.produces {
             reporter.log(

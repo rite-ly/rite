@@ -140,6 +140,17 @@ pub enum ResolveError {
         got: String,
     },
 
+    /// Integer parameter beyond the range the transcript records.
+    #[error(
+        "Parameter '{param}' is {value}, beyond ±(2^53 - 1), the integer range the transcript records"
+    )]
+    ParamOutOfRange {
+        /// The parameter ID.
+        param: ParamId,
+        /// The value received.
+        value: String,
+    },
+
     /// Parameter has invalid date format.
     #[error("Parameter '{param}' has invalid date format: '{value}' (expected YYYY-MM-DD)")]
     InvalidDateFormat {

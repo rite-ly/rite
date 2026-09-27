@@ -1,6 +1,6 @@
 //! `generate_key` action, produce a key through a backend.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, parse_params,
@@ -67,7 +67,6 @@ impl Action for GenerateKeyAction {
         })?;
 
         let backend_name = backend.name().to_string();
-        let backend_fingerprint = backend.fingerprint();
 
         let keystore = backend.as_keystore_mut().ok_or_else(|| {
             ActionError::Failed(format!(
@@ -106,18 +105,12 @@ impl Action for GenerateKeyAction {
             check_value: metadata.check_value.clone(),
         };
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "generate_key".to_string(),
-            inputs: requested(&typed, &policy),
-            outputs: produced(
-                &backend_name,
-                &backend_fingerprint,
-                &metadata,
-                public_key_fingerprint.as_deref(),
-            ),
-            fingerprint: public_key_fingerprint,
-        })?;
+        reporter.backend_operation(
+            "generate_key",
+            requested(&typed, &policy),
+            produced(&metadata, public_key_fingerprint.as_deref()),
+            public_key_fingerprint,
+        )?;
 
         let message = format!("{} {kind} generated", typed.algorithm);
         if let Some(produces) = &step.produces {
@@ -155,18 +148,8 @@ fn requested(typed: &GenerateKeyParams, policy: &KeyPolicy) -> serde_json::Value
 /// A keypair is named by the fingerprint of its public half and a symmetric
 /// key by its check value. Without one or the other the record says a key was
 /// made and nothing that identifies which.
-fn produced(
-    backend_name: &str,
-    backend_fingerprint: &str,
-    metadata: &KeyMetadata,
-    public_key_fingerprint: Option<&str>,
-) -> serde_json::Value {
+fn produced(metadata: &KeyMetadata, public_key_fingerprint: Option<&str>) -> serde_json::Value {
     let mut outputs = serde_json::Map::new();
-    outputs.insert("backend".to_string(), backend_name.into());
-    outputs.insert(
-        "backend_fingerprint".to_string(),
-        backend_fingerprint.into(),
-    );
     outputs.insert("key_id".to_string(), metadata.key_id.as_str().into());
     if let Some(fingerprint) = public_key_fingerprint {
         outputs.insert("public_key_fingerprint".to_string(), fingerprint.into());

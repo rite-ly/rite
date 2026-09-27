@@ -52,16 +52,27 @@ cargo fmt --all
 **Clippy**:
 ```sh
 cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p rite-stdlib --features piv,yubikey --all-targets -- -D warnings
+cargo clippy -p rite-pkcs11 --all-targets -- -D warnings
 ```
+
+The PIV and YubiKey actions compile only with their features, so the workspace command does not
+check them. On Linux they need `libpcsclite-dev`.
 
 **Tests**:
 ```sh
 cargo test --workspace
+cargo test -p rite-stdlib -p rite --features piv,yubikey
 ```
 
-**All at once**:
+**All at once**, the same commands as the CI lint and test jobs:
 ```sh
-cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+cargo fmt --all -- --check \
+  && cargo clippy --workspace --all-targets -- -D warnings \
+  && cargo clippy -p rite-stdlib --features piv,yubikey --all-targets -- -D warnings \
+  && cargo clippy -p rite-pkcs11 --all-targets -- -D warnings \
+  && cargo test --workspace \
+  && cargo test -p rite-stdlib -p rite --features piv,yubikey
 ```
 
 ## Testing

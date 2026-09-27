@@ -1,9 +1,9 @@
 //! UI state. Pure data, never reaches for I/O or terminal handles.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use chrono::{DateTime, Local, Timelike};
-use rite_model::{Prompt, StepId};
+use rite_model::{Prompt, RoleId, StepId};
 use rite_runtime::{Environment, ExecEvent, Icon, MaterialOverview, PromptId, SystemInfo};
 
 /// Maximum length of a deviation note. Anything longer is rejected before
@@ -26,6 +26,8 @@ pub struct Model {
     pub ceremony_materials: Vec<MaterialOverview>,
     /// Total number of steps in the execution plan, when known.
     pub ceremony_step_count: Option<usize>,
+    /// Role display names, from the `RoleDeclared` facts at ceremony start.
+    pub role_names: HashMap<RoleId, String>,
     /// Static build/host identity for the System tab. Populated from
     /// `UiSignal::SystemInfo`, emitted once at ceremony start.
     pub system_info: Option<SystemInfo>,
@@ -71,6 +73,7 @@ impl Default for Model {
             ceremony_description: None,
             ceremony_materials: Vec::new(),
             ceremony_step_count: None,
+            role_names: HashMap::new(),
             system_info: None,
             environment: None,
             screen: Screen::Step {

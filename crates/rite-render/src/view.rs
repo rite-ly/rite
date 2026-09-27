@@ -556,6 +556,8 @@ pub struct ReportView {
     pub duration: Option<String>,
     /// Transcript fingerprint.
     pub transcript_fingerprint: String,
+    /// What a disclosed transcript withholds, when it is one.
+    pub withheld: Option<String>,
     /// Failure summary, when the ceremony failed.
     pub failure: Option<FailureView>,
     /// Failed step attempts (retries), across all steps.
@@ -570,6 +572,16 @@ pub struct ReportView {
     pub steps: Vec<ExecStepView>,
     /// The `rite` version that produced the report.
     pub rite_version: String,
+}
+
+/// The line a report of a disclosed transcript carries on its face.
+fn withheld_notice(withheld: &crate::report::ReportWithheld) -> String {
+    format!(
+        "{} fact(s) withheld, recorded at {}. This report shows the disclosed part of the \
+         transcript; the fingerprint covers the complete record.",
+        withheld.facts,
+        withheld.levels.join(", ")
+    )
 }
 
 /// A failure summary in a report.
@@ -618,10 +630,10 @@ pub struct ArtifactView {
     pub name: String,
     /// Producing step id.
     pub step_id: String,
-    /// Path on disk.
-    pub path: String,
-    /// Lowercase hex SHA-256.
-    pub sha256: String,
+    /// File name under the run's `artifacts/` directory.
+    pub file: String,
+    /// `sha256:<hex>` of the file, `None` for opened content.
+    pub digest: Option<String>,
 }
 
 /// A role in the report's roles legend.
@@ -673,8 +685,8 @@ impl ReportView {
             .map(|a| ArtifactView {
                 name: a.name.clone(),
                 step_id: a.step_id.clone(),
-                path: a.path.clone(),
-                sha256: a.sha256.clone(),
+                file: a.file.clone(),
+                digest: a.digest.clone(),
             })
             .collect();
         let attempts = data
@@ -744,6 +756,7 @@ impl ReportView {
                 .duration_seconds
                 .map(|secs| crate::report::data::format_duration(Duration::seconds(secs))),
             transcript_fingerprint: data.transcript_fingerprint.clone(),
+            withheld: data.withheld.as_ref().map(withheld_notice),
             failure: data.failure.as_ref().map(|f| FailureView {
                 class: error_class_label(f.class).to_string(),
                 kind: f.kind.clone(),

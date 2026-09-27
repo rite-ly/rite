@@ -10,8 +10,9 @@ use std::hash::Hash;
 
 macro_rules! define_id {
     ($(#[$meta:meta])* $name:ident) => {
-        $(#[$meta])*
         #[derive(Clone, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(test, derive(schemars::JsonSchema))]
+        $(#[$meta])*
         #[serde(transparent)]
         pub struct $name(String);
 
@@ -60,11 +61,13 @@ macro_rules! define_id {
 
 define_id!(
     /// Unique identifier for a role in the ceremony.
+    #[cfg_attr(test, schemars(description = "A role's identifier, as written in the ceremony."))]
     RoleId
 );
 
 define_id!(
     /// Unique identifier for a step in the ceremony.
+    #[cfg_attr(test, schemars(description = "A step's identifier, as written in the ceremony."))]
     StepId
 );
 
@@ -75,16 +78,25 @@ define_id!(
 
 define_id!(
     /// Unique identifier for an act in the ceremony.
+    #[cfg_attr(test, schemars(description = "An act's identifier, as written in the ceremony."))]
     ActId
 );
 
 define_id!(
     /// Unique identifier for a parameter in the ceremony.
+    #[cfg_attr(
+        test,
+        schemars(description = "A parameter's identifier, as written in the ceremony.")
+    )]
     ParamId
 );
 
 define_id!(
     /// Unique identifier for a material in the ceremony.
+    #[cfg_attr(
+        test,
+        schemars(description = "A material's identifier, as written in the ceremony.")
+    )]
     MaterialId
 );
 

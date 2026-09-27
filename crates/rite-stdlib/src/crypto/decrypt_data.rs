@@ -1,6 +1,6 @@
 //! `decrypt_data` action, recover the content of an encrypted-data artifact.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, resolve_backend_key,
@@ -91,7 +91,7 @@ impl Action for DecryptDataAction {
             format!("Decrypting '{}' under {scheme}...", data_ref.display_name()),
         )?;
 
-        let (transport, backend_name, backend_fingerprint) =
+        let (transport, _) =
             crate::crypto::transport_backend(backend, &key_backend, "open a data key")?;
 
         // Taken from the container rather than assumed. The reader admits only
@@ -115,21 +115,20 @@ impl Action for DecryptDataAction {
 
         reporter.log(Icon::Checkmark, "Content decrypted")?;
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "decrypt_data".to_string(),
-            inputs: json!({
+        reporter.backend_operation(
+            "decrypt_data",
+            json!({
                 "scheme": scheme.to_string(),
                 "encrypted_data": data_ref.display_name(),
                 "encrypted_data_fingerprint": data_fingerprint,
                 "decryption_key": key_ref.display_name(),
                 "decryption_key_check_value": check_value.to_string(),
             }),
-            outputs: produced(&backend_name, &backend_fingerprint, plaintext.len()),
+            produced(plaintext.len()),
             // The artifact that was opened, which is what links this step to
             // the encrypt that produced it. The content names itself nowhere.
-            fingerprint: Some(data_fingerprint),
-        })?;
+            Some(data_fingerprint),
+        )?;
 
         let message = format!("{} bytes decrypted", plaintext.len());
         // The buffer moves from the cipher's wiping wrapper into the artifact's
@@ -160,10 +159,8 @@ impl Action for DecryptDataAction {
 /// protect, and hashing it would put a digest of a secret in the record. What
 /// links this step to the encrypt that produced it is the artifact fingerprint,
 /// which the fact carries on its own.
-fn produced(backend_name: &str, backend_fingerprint: &str, content_bytes: usize) -> Value {
+fn produced(content_bytes: usize) -> Value {
     json!({
-        "backend": backend_name,
-        "backend_fingerprint": backend_fingerprint,
         "content_bytes": content_bytes,
     })
 }

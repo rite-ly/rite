@@ -1,0 +1,26 @@
+{
+  "$schema": "https://ritely.io/schemas/0.6.0/bundle.schema.json",
+  "rite_bundle": 0,
+  "kind": "complete",
+  "fingerprint": "sha256:d8777b67f67b60ca085ac5b8fcf77115925b22414830ec99682aef9c05dff3af",
+  "files": [
+    {
+      "path": "transcript.jsonl",
+      "role": "transcript"
+    },
+    {
+      "path": "definition/ceremony.rite.yaml",
+      "role": "definition"
+    },
+    {
+      "path": "artifacts/root_cert.pem",
+      "role": "artifact",
+      "name": "root_cert"
+    },
+    {
+      "path": "artifacts/root_public_key.pem",
+      "role": "artifact",
+      "name": "root_public_key"
+    }
+  ]
+}

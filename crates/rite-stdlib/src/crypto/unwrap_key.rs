@@ -1,6 +1,6 @@
 //! `unwrap_key` action, unwrap a transport-wrapped key into a backend keypair.
 
-use rite_model::{ActionType, StepFact};
+use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, parse_params, resolve_backend_key,
@@ -89,7 +89,7 @@ impl Action for UnwrapKeyAction {
 
         reporter.log(Icon::Spinner, format!("Unwrapping key using {scheme}..."))?;
 
-        let (unwrap_backend, backend_name, backend_fingerprint) =
+        let (unwrap_backend, backend_name) =
             crate::crypto::transport_backend(backend, unwrapping_key.backend_name, "unwrap a key")?;
 
         let default_policy = installed_key_default_policy(expected);
@@ -143,10 +143,9 @@ impl Action for UnwrapKeyAction {
             }
         }
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "unwrap_key".to_string(),
-            inputs: json!({
+        reporter.backend_operation(
+"unwrap_key",
+json!({
                 "scheme": scheme.to_string(),
                 "unwrapping_key": unwrapping_key_ref.display_name(),
                 "wrapped_data": wrapped_data_ref.display_name(),
@@ -162,9 +161,7 @@ impl Action for UnwrapKeyAction {
                 // an auditor should not have to know the defaults.
                 "policy": crate::params::policy_json(&policy),
             }),
-            outputs: json!({
-                "backend": backend_name,
-                "backend_fingerprint": backend_fingerprint,
+json!({
                 "unwrapped_key_id": key_metadata.key_id.as_str(),
                 "unwrapped_key_algorithm": key_metadata.algorithm.to_string(),
                 "unwrapped_key_fingerprint": recovered_fingerprint,
@@ -172,8 +169,8 @@ impl Action for UnwrapKeyAction {
                 // record names the recovered key in whichever form it has one.
                 "unwrapped_key_check_value": key_metadata.check_value.as_ref().map(ToString::to_string),
             }),
-            fingerprint: recovered_fingerprint,
-        })?;
+recovered_fingerprint,
+)?;
 
         let unwrapped = ArtifactValue::BackendKey {
             backend_name: backend_name.clone(),

@@ -1,6 +1,6 @@
 //! `import_key` action, lift bytes the ceremony holds into a backend key.
 
-use rite_model::{ActionType, ArtifactRef, StepFact};
+use rite_model::{ActionType, ArtifactRef};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, parse_params, resolve_artifact_bytes,
@@ -79,7 +79,6 @@ impl Action for ImportKeyAction {
         let backend = backend
             .ok_or_else(|| ActionError::Failed("Backend required to import a key".to_string()))?;
         let backend_name = backend.name().to_string();
-        let backend_fingerprint = backend.fingerprint();
 
         let keystore = backend.as_keystore_mut().ok_or_else(|| {
             ActionError::Failed(format!(
@@ -115,24 +114,18 @@ impl Action for ImportKeyAction {
             &backend_name,
         )?;
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "import_key".to_string(),
-            inputs: requested(
+        reporter.backend_operation(
+            "import_key",
+            requested(
                 &typed,
                 &material_ref.display_name(),
                 passphrase_ref.map(ArtifactRef::display_name).as_deref(),
                 &label,
                 &policy,
             ),
-            outputs: produced(
-                &backend_name,
-                &backend_fingerprint,
-                &metadata,
-                imported_fingerprint.as_deref(),
-            ),
-            fingerprint: imported_identity,
-        })?;
+            produced(&metadata, imported_fingerprint.as_deref()),
+            imported_identity,
+        )?;
 
         let key = ArtifactValue::BackendKey {
             backend_name,
@@ -262,14 +255,10 @@ fn requested(
 /// A keypair is named by the fingerprint of its public half and a symmetric key
 /// by its check value, so exactly one of the two is present.
 fn produced(
-    backend_name: &str,
-    backend_fingerprint: &str,
     metadata: &rite_sdk::KeyMetadata,
     imported_fingerprint: Option<&str>,
 ) -> serde_json::Value {
     json!({
-        "backend": backend_name,
-        "backend_fingerprint": backend_fingerprint,
         "imported_key_id": metadata.key_id.as_str(),
         "imported_key_algorithm": metadata.algorithm.to_string(),
         "imported_key_fingerprint": imported_fingerprint,

@@ -1,6 +1,6 @@
 //! `piv_sign` action: sign data with a PIV smart card on-device key.
 
-use rite_model::{ActionType, Format, Prompt, StepFact, StepInputs, ValidatorSpec};
+use rite_model::{ActionType, Format, Prompt, StepInputs, ValidatorSpec};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, Response, StepInfo,
     StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
@@ -67,7 +67,6 @@ impl Action for PivSignAction {
         let backend = backend
             .ok_or_else(|| ActionError::Failed("Backend required for PIV signing".into()))?;
         let backend_name = backend.name().to_string();
-        let backend_fingerprint = backend.fingerprint();
 
         verify_pin(backend, &backend_name, reporter)?;
 
@@ -88,21 +87,18 @@ impl Action for PivSignAction {
             format!("Signature produced ({} bytes)", signature.len()),
         )?;
 
-        reporter.fact(StepFact::BackendOperation {
-            step: step.id.clone(),
-            kind: "piv_sign".to_string(),
-            inputs: json!({
+        reporter.backend_operation(
+            "piv_sign",
+            json!({
                 "slot": typed.slot,
                 "algorithm": typed.algorithm,
                 "input_artifact": input_ref.display_name(),
             }),
-            outputs: json!({
-                "backend": backend_name,
-                "backend_fingerprint": backend_fingerprint,
+            json!({
                 "signature_len": signature.len(),
             }),
-            fingerprint: Some(signature_fingerprint),
-        })?;
+            Some(signature_fingerprint),
+        )?;
 
         if let Some(produces) = &step.produces {
             reporter.log(
@@ -202,6 +198,7 @@ fn parse_sign_algorithm(s: &str) -> Result<SignAlgorithm, ActionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rite_model::StepFact;
     use rite_sdk::{BackendError, KeyId, PivBackend, PivDeviceInfo, PivSlotInfo, SignBackend};
 
     #[test]

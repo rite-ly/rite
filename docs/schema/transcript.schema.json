@@ -1,5 +1,5 @@
 {
-  "$id": "https://ritely.io/schemas/0.6.0/transcript.schema.json",
+  "$id": "https://ritely.io/schemas/0.7.0/transcript.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Rite transcript line (format 0, vocabulary 0)",
   "description": "One line of a transcript.jsonl file. The first line is the header; every other line records one fact, either complete or withheld. Each line is a JSON object on its own line, and the lines are chained: each line's chain value commits to the line and to every line before it.",

@@ -1,5 +1,5 @@
 {
-  "$id": "https://ritely.io/schemas/0.6.0/bundle.schema.json",
+  "$id": "https://ritely.io/schemas/0.7.0/bundle.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Rite bundle index (format 0)",
   "description": "The bundle.json index of an evidence bundle: what kind of bundle it is and which files it holds. It repeats no digest: every file other than the transcript is bound by a digest the transcript records, so a verifier checks the files against the transcript.",

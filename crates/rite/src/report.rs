@@ -9,10 +9,11 @@ use rite_runtime::read_verified_transcript;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
-    /// Transcript file or run output directory
+    /// Transcript file, run output directory, or evidence bundle
     ///
-    /// Accepts a `transcript.jsonl` file or the output directory produced by
-    /// `rite run` (which contains `transcript.jsonl`).
+    /// Accepts a `transcript.jsonl` file, or a directory that contains one: the
+    /// output directory of `rite run`, a bundle from `rite bundle create`, or a
+    /// disclosure from `rite bundle disclose`.
     pub transcript: PathBuf,
     /// Output path (`-` for stdout)
     ///

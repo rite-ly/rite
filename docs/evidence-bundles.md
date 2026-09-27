@@ -45,7 +45,7 @@ directory.
 
 ```json
 {
-  "$schema": "https://ritely.io/schemas/0.7.0/bundle.schema.json",
+  "$schema": "https://ritely.io/schemas/<release>/bundle.schema.json",
   "rite_bundle": 0,
   "kind": "complete",
   "fingerprint": "sha256:…",

@@ -11,14 +11,15 @@ fn resolve(rel: &str) -> rite_model::Ceremony {
     ceremony.unwrap_or_else(|| panic!("failed to resolve {rel}: {diags:?}"))
 }
 
-/// Snapshot a rendered document with the wall-clock timestamp normalized, so a
-/// diff only ever means a real rendering change, not a different run time. Only
-/// the report's `started_at` fallback (`Utc::now()` when there are no facts) is
-/// nondeterministic; fixture-supplied dates render literally so the snapshot
-/// still guards how they are formatted.
+/// Snapshot a rendered document with the wall-clock timestamp and the release
+/// version normalized, so a diff only ever means a real rendering change, not a
+/// different run time or release. Only the report's `started_at` fallback
+/// (`Utc::now()` when there are no facts) is nondeterministic; fixture-supplied
+/// dates render literally so the snapshot still guards how they are formatted.
 fn assert_html_snapshot(name: &str, html: &str) {
     insta::with_settings!({filters => vec![
         (r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC", "[DATETIME]"),
+        (r"Rite v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?", "Rite v[VERSION]"),
     ]}, {
         insta::assert_snapshot!(name, html);
     });

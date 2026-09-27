@@ -13,7 +13,7 @@ the same lines field by field.
 ## The header line
 
 ```json
-{"$schema":"https://ritely.io/schemas/0.7.0/transcript.schema.json","header":{"dry_run":false,"levels":{"confidential":30,"public":10,"restricted":20},"producer":"rite 0.7.0","rite_transcript":0,"run_id":"0ac4d127ee9b2b05447c9d241c3b5b0c","vocabulary":0},"chain":"sha256:…"}
+{"$schema":"https://ritely.io/schemas/<release>/transcript.schema.json","header":{"dry_run":false,"levels":{"confidential":30,"public":10,"restricted":20},"producer":"rite <release>","rite_transcript":0,"run_id":"0ac4d127ee9b2b05447c9d241c3b5b0c","vocabulary":0},"chain":"sha256:…"}
 ```
 
 | Member | Meaning |

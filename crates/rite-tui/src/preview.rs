@@ -18,7 +18,10 @@ use rite_runtime::{
     MaterialOverviewKind, PromptId, SystemInfo,
 };
 
-use crate::model::{LogLine, Model, PendingPrompt, Screen, StepTab, StepView};
+use crate::model::{
+    EnteredRow, LogLine, Model, PendingPrompt, RevealPhase, RowEntry, RowNotice, Screen, StepTab,
+    StepView,
+};
 use crate::view::view;
 
 /// Build a `DateTime<Local>` on the canonical preview date.
@@ -93,6 +96,8 @@ fn sample_overview() -> Model {
         },
         input: String::new(),
         rejection: None,
+        reveal: RevealPhase::Ready,
+        entry: RowEntry::default(),
     });
     m
 }
@@ -150,6 +155,8 @@ fn sample_with_prompt() -> Model {
         },
         input: "Bob Jo".to_string(),
         rejection: None,
+        reveal: RevealPhase::Ready,
+        entry: RowEntry::default(),
     });
     m
 }
@@ -273,6 +280,8 @@ fn preview_confirm_prompt() {
         },
         input: String::new(),
         rejection: None,
+        reveal: RevealPhase::Ready,
+        entry: RowEntry::default(),
     });
     let out = render(&m, 100, 24);
     eprintln!("--- step / confirm prompt (100x24) ---\n{out}");
@@ -397,4 +406,88 @@ fn preview_completed() {
     };
     let out = render(&m, 100, 24);
     eprintln!("--- completed (100x24) ---\n{out}");
+}
+
+/// A share in its window, through its three phases: announced without the
+/// value, shown with its rows numbered, then the question.
+#[test]
+fn preview_reveal_window() {
+    let value = "0410 67JM 1MR3 XT0S DGTW FBBV HP23 Q4A2 SQJH JE1Z 748W R4SB 8Y9M S20C 63T2 7JB9"
+        .replace(' ', "");
+    let mut m = sample_running();
+    m.pending_prompt = Some(PendingPrompt {
+        prompt_id: PromptId::new(3),
+        prompt: Prompt::Reveal {
+            label: "Recovery share 3".to_string(),
+            note: Some("Write in block capitals. The sheet goes in the envelope.".to_string()),
+            shown: rite_model::Shown::new(value, rite_model::RevealFormat::Paper32.layout()),
+        },
+        input: String::new(),
+        rejection: None,
+        reveal: RevealPhase::Ready,
+        entry: RowEntry::default(),
+    });
+    let ready = render(&m, 100, 24);
+    eprintln!("--- reveal / ready (100x24) ---\n{ready}");
+    assert!(ready.contains("Recovery share 3"));
+    assert!(ready.contains("not written to the transcript"));
+    assert!(ready.contains("Write in block capitals."));
+    assert!(!ready.contains("0410"), "announced, not shown");
+
+    for (phase, question) in [(RevealPhase::Shown, false), (RevealPhase::Confirm, true)] {
+        if let Some(p) = m.pending_prompt.as_mut() {
+            p.reveal = phase;
+        }
+        let out = render(&m, 100, 24);
+        eprintln!("--- reveal / {phase:?} (100x24) ---\n{out}");
+        assert!(out.contains("1  0410 67JM 1MR3 XT0S DGTW FBBV HP23 │ Q4A2"));
+        assert!(out.contains("2  SQJH JE1Z 748W R4SB 8Y9M S20C 63T2 │ 7JB9"));
+        assert_eq!(out.contains("not shown again"), question);
+    }
+}
+
+/// A share typed back: two rows of three, the second repaired, the third
+/// being typed.
+#[test]
+fn preview_enter_rows_window() {
+    let rows = [
+        "0410 67JM 1MR3 XT0S DGTW FBBV HP23 Q4A2",
+        "SQJH JE1Z 748W R4SB 8Y9M S20C 63T2 7JB9",
+    ];
+    let mut m = sample_running();
+    m.pending_prompt = Some(PendingPrompt {
+        prompt_id: PromptId::new(4),
+        prompt: Prompt::EnterRows {
+            label: "Recovery share 3".to_string(),
+            note: Some("Type from the sheet in the envelope.".to_string()),
+            format: rite_model::RevealFormat::Paper32,
+            rows: Some(3),
+            validator: None,
+        },
+        input: "0410 67".to_string(),
+        rejection: None,
+        reveal: RevealPhase::Ready,
+        entry: RowEntry {
+            rows: rows
+                .iter()
+                .map(|r| {
+                    let reads: String = r.chars().filter(|c| *c != ' ').collect();
+                    EnteredRow {
+                        typed: zeroize::Zeroizing::new((*r).to_string()),
+                        reads: zeroize::Zeroizing::new(reads),
+                    }
+                })
+                .collect(),
+            notice: Some(RowNotice::Repaired(
+                "row 2: character 7 was wrong and has been corrected; check it against the sheet"
+                    .to_string(),
+            )),
+        },
+    });
+    let out = render(&m, 100, 24);
+    eprintln!("--- enter rows (100x24) ---\n{out}");
+    assert!(out.contains("Recovery share 3"));
+    assert!(out.contains("1  0410 67JM 1MR3 XT0S DGTW FBBV HP23 │ Q4A2"));
+    assert!(out.contains("3  0410 67"));
+    assert!(out.contains("character 7 was wrong"));
 }

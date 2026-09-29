@@ -423,6 +423,22 @@ impl<'a> Reporter<'a> {
     /// [`ReporterError::Disconnected`] if the frontend went away, or
     /// [`ReporterError::Transcript`] if the fact cannot be recorded.
     pub fn prompt(&mut self, prompt: &Prompt) -> Result<Response, ReporterError> {
+        self.prompt_checked(prompt, |_| Ok(()))
+    }
+
+    /// [`prompt`](Self::prompt), with a check of the action's own after the
+    /// runtime's: a response it refuses is asked for again with the reason
+    /// attached, as a validator's refusal is. For a check only the action
+    /// can make, such as whether typed rows are a share.
+    ///
+    /// # Errors
+    ///
+    /// As [`prompt`](Self::prompt).
+    pub fn prompt_checked(
+        &mut self,
+        prompt: &Prompt,
+        mut check: impl FnMut(&Response) -> Result<(), String>,
+    ) -> Result<Response, ReporterError> {
         let step = self.current_step.clone();
         let prompt_id = self.allocate_prompt_id();
         let mut previous_rejection: Option<String> = None;
@@ -456,12 +472,12 @@ impl<'a> Reporter<'a> {
                             // Stale response from a previous prompt, drop.
                             continue;
                         }
-                        match validate(prompt, &response) {
+                        match validate(prompt, &response).and_then(|()| check(&response)) {
                             Ok(()) => {
                                 let record = response_to_record(&response);
                                 self.fact(StepFact::PromptAnswered {
                                     step: step.clone(),
-                                    prompt: prompt.clone(),
+                                    prompt: prompt.for_record(),
                                     response: record,
                                 })?;
                                 return Ok(response);
@@ -532,12 +548,23 @@ fn response_to_record(response: &Response) -> ResponseRecord {
 fn validate(prompt: &Prompt, response: &Response) -> Result<(), String> {
     match (prompt, response) {
         (Prompt::Confirm { .. }, Response::Bool(_))
-        | (Prompt::Continue { .. }, Response::Acknowledge) => Ok(()),
+        | (Prompt::Continue { .. } | Prompt::Reveal { .. }, Response::Acknowledge)
+        | (
+            Prompt::EnterRows {
+                validator: None, ..
+            },
+            Response::Secret(_),
+        ) => Ok(()),
 
         (Prompt::Text { validator, .. }, Response::Text(value)) => validator.check(value),
-        (Prompt::Secret { validator, .. }, Response::Secret(value)) => {
-            validator.check(value.expose_secret())
-        }
+        (
+            Prompt::Secret { validator, .. }
+            | Prompt::EnterRows {
+                validator: Some(validator),
+                ..
+            },
+            Response::Secret(value),
+        ) => validator.check(value.expose_secret()),
 
         (Prompt::Literal { expected, .. }, Response::Text(value)) => {
             if value == expected {

@@ -8,7 +8,7 @@
 //! - **Crypto**: `generate_key`, `export_public`, `wrap_key`, `unwrap_key`,
 //!   `sign_data`, `verify_signature`
 //! - **PKI**: `generate_csr`, `issue_certificate`
-//! - **Sharing**: `split_secret`, `combine_shares`
+//! - **Sharing**: `split_secret`, `combine_shares`, `reveal`, `enter_share`
 //!
 //! # Backend integration
 //!
@@ -82,7 +82,7 @@ pub use piv::YubikeyAttestSlotAction;
 pub use piv::{PivReadCertificateAction, PivSignAction};
 #[cfg(feature = "pki")]
 pub use pki::{GenerateCsrAction, IssueCertificateAction};
-pub use sharing::{CombineSharesAction, SplitSecretAction};
+pub use sharing::{CombineSharesAction, EnterShareAction, RevealAction, SplitSecretAction};
 #[cfg(feature = "verification")]
 pub use verification::{
     CheckValueAction, ClockCheckAction, ConfirmAction, HostInfoScope, MachineInfoAction,
@@ -123,7 +123,9 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
     // The arithmetic is dependency-free and the randomness comes from
     // whichever backend the step names, so sharing needs no feature either.
     registry.register(Arc::new(SplitSecretAction));
+    registry.register(Arc::new(RevealAction));
     registry.register(Arc::new(CombineSharesAction));
+    registry.register(Arc::new(EnterShareAction));
 
     #[cfg(feature = "crypto")]
     {

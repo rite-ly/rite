@@ -4,8 +4,8 @@ description: |
   Split a secret into three shares, of which any two recover it. Then
   recover it from two of them and compare it against what went in.
 
-  Demonstrates split_secret and combine_shares. The split is Shamir secret
-  sharing, and the transcript names the scheme so the secret can be
+  Demonstrates split_secret, reveal and combine_shares. The split is Shamir
+  secret sharing, and the transcript names the scheme so the secret can be
   recovered without Rite.
 
 backends:
@@ -43,6 +43,20 @@ sections:
           completes, every pair is combined and checked against the secret,
           so a share that leaves the room has been shown to work. The shares
           stay in memory and are never written to a file.
+
+      hand_over_share_3:
+        action: reveal
+        reads:
+          value: ${artifact.shares.share_3}
+        with:
+          message: "Recovery share 3"
+          note: "Write in block capitals. The sheet goes in the envelope, the envelope in the safe."
+          length: 32
+        description: |
+          Share 3 is shown on screen while the custodian copies it onto the
+          sheet printed for this step, then it is taken off the
+          screen. The transcript says the share was shown and nothing of
+          what it was.
 
       recover_from_two_shares:
         action: combine_shares

@@ -48,7 +48,7 @@ pub static ALL: &[ActionMeta] = &[
     ActionMeta {
         name: "enter_secret",
         short: "A person types a secret the ceremony holds and never records",
-        long: "A person types a secret the ceremony holds and never records: a passphrase, a PIN. Echo is off, the artifact under `creates:` is wiped from memory when the run ends, and the transcript says only that a secret was entered at this step. A later step names it in `reads:`; `import_key` takes it as `passphrase:` to open an encrypted private key. Takes the same `format:`, `length:`, `min_length:` and `max_length:` as `enter_value`.",
+        long: "A person types a secret the ceremony holds and never records: a passphrase, a PIN. Echo is off, the artifact under `creates:` is wiped from memory when the run ends, and the transcript says only that a secret was entered at this step. A later step names it in `reads:`; `import_key` takes it as `passphrase:` to open an encrypted private key. Takes the same `format:`, `length:`, `min_length:` and `max_length:` as `enter_value`, and `format: paper32` besides, for a value written on a sheet: it is typed a row at a time, each row checked as it comes, a wrong character corrected and named, and the artifact is the decoded bytes.",
     },
     ActionMeta {
         name: "generate_key",
@@ -89,6 +89,16 @@ pub static ALL: &[ActionMeta] = &[
         name: "combine_shares",
         short: "Reconstruct a secret from its shares",
         long: "Reads `shares:`, a list of at least two, each a share of a set `split_secret` made or a share a custodian typed back. Each share records how many are needed and which one it is, so the step takes no `with:` and too few shares is an error before anything is computed. Shares that disagree on the threshold or the secret's length are rejected; shares from a different split of the same shape cannot be told apart, which is why a recovery ends by checking what came back. The result stays in memory and is erased when the run ends.",
+    },
+    ActionMeta {
+        name: "reveal",
+        short: "Show a value on screen for a person to write down, then withdraw it",
+        long: "Reads `value:`, a share (`${artifact.shares.share_N}`) or any byte artifact, and shows it in a window, once: the window says it is coming, shows it on Enter, and asks whether every row is written down before it leaves the screen. `message:` is required and says what the value is and what to do with it. `format:` is `paper32` (the default: rows of 28 base-32 characters and 4 of parity, from an alphabet without I, L, O and U; a wrong character in a row is corrected, two unreadable ones recovered) or `hex`. The transcript records that the value was shown and nothing of it. `rite script` prints a page for the step, in the worksheets beside the script, rows of boxes with the parity cells set apart; `note:` is printed on it, and `length:` (in bytes, and for a share the secret's length, without the share's three header bytes) gives it exactly the right rows; the step then refuses a value of another size. A dry run walks the step; a real headless run stops at it, since no one is there to write.",
+    },
+    ActionMeta {
+        name: "enter_share",
+        short: "Type a share back from its sheet, row by row",
+        long: "Asks for the rows of a share written on a sheet `rite script` printed, one row at a time. Each row is checked as it is typed: in `paper32` (the default) a wrong character is corrected and named so the person checks the sheet, two unreadable ones (typed as `?`) are recovered, and a row that needs more is typed again. `format: hex` reads a sheet written in hex. Rows that are not a share are refused and asked for again. `message:` is required and says which sheet; `note:` is shown with the rows; `length:` (the secret's length in bytes) asks for exactly the right rows and refuses a share of another size. Creates a share that `combine_shares` reads as `${artifact.<name>}`. The transcript records the share's index and which rows were repaired, never the rows. A headless run stops at it, since no one is there to type.",
     },
     ActionMeta {
         name: "export_public",

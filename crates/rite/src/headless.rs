@@ -13,6 +13,9 @@
 //! - `Literal`: type the expected string
 //! - `Text`: fail, the operator must answer in `--frontend=console`
 //! - `Secret`: fail, never auto-answered
+//! - `Reveal`: acknowledge in a dry run, where the value is a placeholder
+//!   and nobody is meant to write it down; fail in a real run, where
+//!   showing it here would put a secret in a log with no one to read it
 //!
 //! All facts and signals are written to stderr so that stdout stays
 //! reserved for whatever the CLI invocation wants to emit (transcript
@@ -45,7 +48,11 @@ const PLACEHOLDER_SECRET: &str = "placeholder-secret";
 /// Returns an I/O error if stderr fails, or
 /// [`io::ErrorKind::InvalidInput`] when a prompt requires interactive
 /// input the defaults policy cannot satisfy (free-form text, secret).
-pub fn run(cmd_tx: &Sender<UiCommand>, event_rx: &Receiver<ExecEvent>) -> io::Result<()> {
+pub fn run(
+    cmd_tx: &Sender<UiCommand>,
+    event_rx: &Receiver<ExecEvent>,
+    rehearsal: bool,
+) -> io::Result<()> {
     let stderr = io::stderr();
     let mut stderr = stderr.lock();
 
@@ -59,7 +66,7 @@ pub fn run(cmd_tx: &Sender<UiCommand>, event_rx: &Receiver<ExecEvent>) -> io::Re
             ExecEvent::AwaitPrompt {
                 prompt_id, prompt, ..
             } => {
-                let response = default_response(&prompt)?;
+                let response = default_response(&prompt, rehearsal)?;
                 if cmd_tx
                     .send(UiCommand::PromptResponse {
                         prompt_id,
@@ -75,10 +82,43 @@ pub fn run(cmd_tx: &Sender<UiCommand>, event_rx: &Receiver<ExecEvent>) -> io::Re
     Ok(())
 }
 
-fn default_response(prompt: &Prompt) -> io::Result<Response> {
+fn default_response(prompt: &Prompt, rehearsal: bool) -> io::Result<Response> {
     match prompt {
         Prompt::Confirm { default, .. } => Ok(Response::Bool(default.unwrap_or(true))),
         Prompt::Continue { .. } => Ok(Response::Acknowledge),
+        // A value shown for writing down needs a person in front of the
+        // screen. A rehearsal walks the step; a real run stops here rather
+        // than print a secret to a log nobody is reading.
+        Prompt::Reveal { label, .. } => {
+            if rehearsal {
+                Ok(Response::Acknowledge)
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "'{label}' shows a value for someone to write down, and no one is \
+                         present in a headless run. Run with the TUI, or as a dry run."
+                    ),
+                ))
+            }
+        }
+        // Rows come off a sheet only a person holds. A rehearsal answers
+        // with a stand-in where the rule allows one; a share has no rule a
+        // made-up value satisfies, so a rehearsal stops there as a run does.
+        Prompt::EnterRows {
+            label, validator, ..
+        } => match validator {
+            Some(validator) if rehearsal => placeholder(validator, PLACEHOLDER_SECRET)
+                .map(|value| Response::Secret(SecretString::from(value)))
+                .ok_or_else(|| cannot_answer("rows", label)),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "'{label}' asks for rows typed from a sheet, and no one is present in a \
+                     headless run. Run with the TUI or the console."
+                ),
+            )),
+        },
         Prompt::Literal { expected, .. } => Ok(Response::Text(expected.clone())),
         // Free-form text: a placeholder that satisfies the prompt's rule
         // where one can be built. A pattern can't be answered generically, so
@@ -161,30 +201,39 @@ mod tests {
 
     #[test]
     fn confirm_default_yes() {
-        let resp = default_response(&Prompt::Confirm {
-            question: "go?".to_string(),
-            default: None,
-        })
+        let resp = default_response(
+            &Prompt::Confirm {
+                question: "go?".to_string(),
+                default: None,
+            },
+            false,
+        )
         .expect("response");
         assert!(matches!(resp, Response::Bool(true)));
     }
 
     #[test]
     fn confirm_explicit_no_default_honored() {
-        let resp = default_response(&Prompt::Confirm {
-            question: "destructive?".to_string(),
-            default: Some(false),
-        })
+        let resp = default_response(
+            &Prompt::Confirm {
+                question: "destructive?".to_string(),
+                default: Some(false),
+            },
+            false,
+        )
         .expect("response");
         assert!(matches!(resp, Response::Bool(false)));
     }
 
     #[test]
     fn literal_returns_expected() {
-        let resp = default_response(&Prompt::Literal {
-            label: "type 'attest'".to_string(),
-            expected: "attest".to_string(),
-        })
+        let resp = default_response(
+            &Prompt::Literal {
+                label: "type 'attest'".to_string(),
+                expected: "attest".to_string(),
+            },
+            false,
+        )
         .expect("response");
         match resp {
             Response::Text(t) => assert_eq!(t, "attest"),
@@ -194,16 +243,19 @@ mod tests {
 
     #[test]
     fn continue_is_acknowledged() {
-        let resp = default_response(&Prompt::Continue { hint: None }).expect("response");
+        let resp = default_response(&Prompt::Continue { hint: None }, false).expect("response");
         assert!(matches!(resp, Response::Acknowledge));
     }
 
     #[test]
     fn unconstrained_text_prompt_gets_placeholder() {
-        let resp = default_response(&Prompt::Text {
-            label: "entropy".to_string(),
-            validator: rite_model::ValidatorSpec::NonEmpty,
-        })
+        let resp = default_response(
+            &Prompt::Text {
+                label: "entropy".to_string(),
+                validator: rite_model::ValidatorSpec::NonEmpty,
+            },
+            false,
+        )
         .expect("response");
         match resp {
             Response::Text(t) => assert_eq!(t, PLACEHOLDER_TEXT),
@@ -213,20 +265,26 @@ mod tests {
 
     #[test]
     fn validated_text_prompt_fails_fast() {
-        let err = default_response(&Prompt::Text {
-            label: "serial".to_string(),
-            validator: rite_model::ValidatorSpec::Regex("[0-9]+".to_string()),
-        })
+        let err = default_response(
+            &Prompt::Text {
+                label: "serial".to_string(),
+                validator: rite_model::ValidatorSpec::Regex("[0-9]+".to_string()),
+            },
+            false,
+        )
         .expect_err("should fail");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
     fn secret_prompt_gets_placeholder() {
-        let resp = default_response(&Prompt::Secret {
-            label: "pin".to_string(),
-            validator: rite_model::ValidatorSpec::NonEmpty,
-        })
+        let resp = default_response(
+            &Prompt::Secret {
+                label: "pin".to_string(),
+                validator: rite_model::ValidatorSpec::NonEmpty,
+            },
+            false,
+        )
         .expect("response");
         assert!(matches!(resp, Response::Secret(_)));
     }
@@ -243,10 +301,13 @@ mod tests {
                 min_length: min,
                 max_length: max,
             };
-            let resp = default_response(&Prompt::Secret {
-                label: "pin".to_string(),
-                validator: validator.clone(),
-            })
+            let resp = default_response(
+                &Prompt::Secret {
+                    label: "pin".to_string(),
+                    validator: validator.clone(),
+                },
+                false,
+            )
             .expect("response");
             let Response::Secret(value) = resp else {
                 panic!("expected a secret");
@@ -257,26 +318,79 @@ mod tests {
 
     #[test]
     fn oversized_secret_prompt_fails_fast() {
-        let err = default_response(&Prompt::Secret {
-            label: "blob".to_string(),
-            validator: rite_model::ValidatorSpec::Format {
-                format: rite_model::Format::Text,
-                min_length: Some(rite_model::PLACEHOLDER_LIMIT + 1),
-                max_length: None,
+        let err = default_response(
+            &Prompt::Secret {
+                label: "blob".to_string(),
+                validator: rite_model::ValidatorSpec::Format {
+                    format: rite_model::Format::Text,
+                    min_length: Some(rite_model::PLACEHOLDER_LIMIT + 1),
+                    max_length: None,
+                },
             },
-        })
+            false,
+        )
         .expect_err("a stand-in that size is not built");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
     fn patterned_secret_prompt_fails_fast() {
-        let err = default_response(&Prompt::Secret {
-            label: "pin".to_string(),
-            validator: rite_model::ValidatorSpec::Regex("[0-9]{6}".to_string()),
-        })
+        let err = default_response(
+            &Prompt::Secret {
+                label: "pin".to_string(),
+                validator: rite_model::ValidatorSpec::Regex("[0-9]{6}".to_string()),
+            },
+            false,
+        )
         .expect_err("a placeholder cannot satisfy a pattern");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    /// A secret from a sheet gets a stand-in in a rehearsal; a share, which
+    /// has no rule a made-up value satisfies, stops the rehearsal too.
+    #[test]
+    fn rows_get_a_stand_in_in_a_rehearsal_only_when_a_rule_allows_one() {
+        let validator = rite_model::ValidatorSpec::Format {
+            format: rite_model::Format::Paper32,
+            min_length: Some(32),
+            max_length: Some(32),
+        };
+        let secret = Prompt::EnterRows {
+            label: "component".to_string(),
+            note: None,
+            format: rite_model::RevealFormat::Paper32,
+            rows: Some(2),
+            validator: Some(validator.clone()),
+        };
+        let Response::Secret(value) = default_response(&secret, true).expect("rehearsal") else {
+            panic!("expected rows as a secret");
+        };
+        assert!(validator.check(value.expose_secret()).is_ok());
+        assert!(default_response(&secret, false).is_err());
+
+        let share = Prompt::EnterRows {
+            label: "share".to_string(),
+            note: None,
+            format: rite_model::RevealFormat::Paper32,
+            rows: Some(2),
+            validator: None,
+        };
+        assert!(default_response(&share, true).is_err());
+    }
+
+    #[test]
+    fn a_reveal_is_acknowledged_in_a_rehearsal_and_refused_in_a_run() {
+        let prompt = Prompt::Reveal {
+            label: "Write down share 1".to_string(),
+            note: None,
+            shown: rite_model::Shown::default(),
+        };
+        assert!(matches!(
+            default_response(&prompt, true).expect("rehearsal"),
+            Response::Acknowledge
+        ));
+        let err = default_response(&prompt, false).expect_err("no one present");
+        assert!(err.to_string().contains("no one is present"), "{err}");
     }
 
     #[test]
@@ -284,7 +398,7 @@ mod tests {
         let (cmd_tx, cmd_rx) = unbounded::<UiCommand>();
         let (event_tx, event_rx) = unbounded::<ExecEvent>();
 
-        let driver = std::thread::spawn(move || run(&cmd_tx, &event_rx));
+        let driver = std::thread::spawn(move || run(&cmd_tx, &event_rx, false));
 
         // Simulate a runtime: send a couple of facts and a Continue prompt.
         event_tx

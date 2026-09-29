@@ -155,7 +155,7 @@ fn spawn_tick_thread(msg_tx: Sender<Msg>) {
 fn spawn_exec_forwarder(event_rx: Receiver<ExecEvent>, msg_tx: Sender<Msg>) {
     thread::spawn(move || {
         while let Ok(event) = event_rx.recv() {
-            if msg_tx.send(Msg::Exec(event)).is_err() {
+            if msg_tx.send(Msg::Exec(Box::new(event))).is_err() {
                 return;
             }
         }

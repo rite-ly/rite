@@ -136,11 +136,15 @@ held wiped in memory and, since no output names it, never written out.
 
 ### `split_and_combine.rite.yaml` — Splitting a Secret and Putting It Back
 
-Splits a secret into three shares of which any two recover it, recovers it
-from two, and compares the result against what went in. `split_secret` checks
-every pair of shares before the step completes, so a share that leaves the
-room has been shown to work. `combine_shares` takes its shares as a list, in
-any order; each share knows how many are needed, so too few is refused.
+Splits a secret into three shares of which any two recover it, hands one
+over, recovers the secret from two, and compares the result against what
+went in. `split_secret` checks every pair of shares before the step
+completes, so a share that leaves the room has been shown to work. `reveal`
+shows share 3 as rows of characters while its custodian copies it, then
+takes it off the screen; `rite script` prints the sheet for that step
+beside the script, rows of boxes with the parity cells shaded at the end of
+each. `combine_shares` takes its shares as a list, in any order; each share
+knows how many are needed, so too few is refused.
 
 What a share cannot tell is whether it belongs with the others: shares from
 two different splits give a wrong secret without complaint, which is why a
@@ -149,4 +153,17 @@ hand; a real recovery checks something derived from the secret instead.
 
 Shares and the recovered secret stay in memory and are never written to a
 file. The transcript names the scheme, the threshold and which shares went
-into the recovery, and nothing about the secret itself.
+into the recovery, and nothing about the secret itself. A dry run walks the
+`reveal` step; a real run needs a screen and a person. See
+`docs/secret-sharing.md`.
+
+### `recover_from_paper.rite.yaml` — Recovering a Secret from Paper
+
+Two custodians type their shares back from paper, the shares recover the
+secret, and the result is checked against a digest recorded at the split.
+`enter_share` takes a sheet row by row and checks each row as it is typed:
+a character copied wrong is corrected and its row named, a character that
+cannot be read is typed as `?` and recovered, and a row that needs more is
+typed again. The sheets are in `test_data/recovery_sheets.txt`; try
+changing a character in one. The example needs someone at the keyboard, so
+`rite run --dry-run` stops at the first sheet.

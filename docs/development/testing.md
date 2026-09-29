@@ -105,6 +105,11 @@ Everything under `examples/` is a test fixture. `crates/rite/tests/examples.rs` 
 the mock backend. New examples are covered automatically; they are discovered, not enumerated. An
 example that stops resolving or running is a failed build, so examples cannot rot.
 
+The one exception is an example with an `enter_share` step, which passes `rite check` and is left
+out of the dry run: no made-up value is a share, so the step stops a headless run. Such an example
+needs a test of its own that types its sheets back, as `crates/rite-stdlib/tests/actions.rs` does
+for `recover_from_paper`.
+
 ## What not to test
 
 These cost maintenance and catch nothing. Remove on sight; do not add.

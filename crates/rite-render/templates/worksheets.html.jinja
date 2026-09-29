@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ worksheets.title }} — Worksheets</title>
+  <style>
+{{ css | safe }}
+  </style>
+{%- if branding.accent %}
+  <style>:root { --accent: {{ branding.accent }}; }</style>
+{%- endif %}
+</head>
+<body class="theme-{{ theme }}">
+{%- for sheet in worksheets.sheets %}
+  <section class="sheet">
+    <header class="doc-header">
+{%- if branding.logo_data_uri %}
+      <img class="brand-logo" src="{{ branding.logo_data_uri }}" alt="">
+{%- endif %}
+{%- if branding.brand_name %}
+      <p class="brand-name">{{ branding.brand_name }}</p>
+{%- endif %}
+      <p class="doc-eyebrow">{{ worksheets.title }}{% if worksheets.ceremony_date %}, {{ worksheets.ceremony_date }}{% endif %}</p>
+      <h1>{{ sheet.worksheet.title }}</h1>
+    </header>
+{%- if sheet.worksheet.note %}
+    <p class="ws-note">{{ sheet.worksheet.note }}</p>
+{%- endif %}
+    <div class="worksheet">
+{%- for row in sheet.worksheet.rows %}
+      <div class="ws-line">
+        <span class="ws-row-number">{{ loop.index }}</span>
+{%- for n in row.groups %}
+        <span class="ws-group">{% for i in range(n) %}<span class="ws-box"></span>{% endfor %}</span>
+{%- endfor %}
+{%- if row.parity > 0 %}
+        <span class="ws-group ws-parity">{% for i in range(row.parity) %}<span class="ws-box"></span>{% endfor %}</span>
+{%- endif %}
+      </div>
+{%- endfor %}
+      <p class="ws-small">{% if not sheet.worksheet.exact %}Use as many rows as the value has, each ending in its parity cells. {% endif %}{{ sheet.worksheet.alphabet }}. {{ sheet.worksheet.algorithm }}{% if sheet.worksheet.rows[0].parity > 0 %}; the shaded cells at the end of each row are its parity{% endif %}.</p>
+    </div>
+  </section>
+{%- endfor %}
+</body>
+</html>

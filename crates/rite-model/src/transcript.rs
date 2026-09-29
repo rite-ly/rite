@@ -308,6 +308,17 @@ pub enum Format {
     /// Bytes as standard base64 with padding, as `openssl base64` writes it.
     #[cfg_attr(test, schemars(description = "Bytes as standard base64 with padding."))]
     Base64,
+    /// Bytes as paper32 rows, as `reveal` shows them and a sheet holds
+    /// them; typed a row at a time, a wrong character in a row corrected.
+    /// See [`crate::paper32`].
+    #[cfg_attr(
+        test,
+        schemars(
+            description = "Bytes as paper32 rows, typed a row at a time from a sheet, a wrong \
+            character in a row corrected."
+        )
+    )]
+    Paper32,
 }
 
 impl Format {
@@ -316,7 +327,7 @@ impl Format {
     pub fn is_encoding(self) -> bool {
         match self {
             Format::Text | Format::Digits | Format::Alphanumeric => false,
-            Format::Hex | Format::Base64 => true,
+            Format::Hex | Format::Base64 | Format::Paper32 => true,
         }
     }
 
@@ -324,7 +335,7 @@ impl Format {
     /// whatever decodes.
     fn accepts(self, c: char) -> bool {
         match self {
-            Format::Text | Format::Hex | Format::Base64 => true,
+            Format::Text | Format::Hex | Format::Base64 | Format::Paper32 => true,
             Format::Digits => c.is_ascii_digit(),
             Format::Alphanumeric => c.is_ascii_alphanumeric(),
         }
@@ -347,6 +358,11 @@ impl Format {
                 .map_err(|_| "value must be hex, two digits per byte".to_string()),
             Format::Base64 => base64ct::Base64::decode_vec(&compact)
                 .map_err(|_| "value must be standard base64, with padding".to_string()),
+            // Rows and positions only: a paper32 refusal names where to look
+            // on the sheet, never a character.
+            Format::Paper32 => crate::paper32::decode(value)
+                .map(|decoded| decoded.bytes.to_vec())
+                .map_err(|e| e.to_string()),
             Format::Text | Format::Digits | Format::Alphanumeric => {
                 Err(format!("{} is text and does not decode", self.describe()))
             }
@@ -362,6 +378,7 @@ impl Format {
             Format::Alphanumeric => "letters or digits",
             Format::Hex => "bytes as hex",
             Format::Base64 => "bytes as base64",
+            Format::Paper32 => "bytes as paper32 rows",
         }
     }
 
@@ -382,6 +399,7 @@ impl Format {
             Format::Digits => "0".repeat(length),
             Format::Hex => base16ct::lower::encode_string(&vec![0u8; length]),
             Format::Base64 => base64ct::Base64::encode_string(&vec![0u8; length]),
+            Format::Paper32 => crate::paper32::encode(&vec![0u8; length]),
         })
     }
 }
@@ -401,8 +419,10 @@ impl std::str::FromStr for Format {
             "alphanumeric" => Ok(Format::Alphanumeric),
             "hex" => Ok(Format::Hex),
             "base64" => Ok(Format::Base64),
+            "paper32" => Ok(Format::Paper32),
             other => Err(format!(
-                "unknown format '{other}': expected text, digits, alphanumeric, hex or base64"
+                "unknown format '{other}': expected text, digits, alphanumeric, hex, base64 \
+                 or paper32"
             )),
         }
     }
@@ -588,6 +608,132 @@ pub enum Prompt {
         #[cfg_attr(test, schemars(description = "The hint shown, if any."))]
         hint: Option<String>,
     },
+    /// Show a value while the prompt is up, and withdraw it when the
+    /// person acknowledges. What was shown is never recorded: the
+    /// transcript carries the label and the acknowledgement.
+    #[cfg_attr(
+        test,
+        schemars(
+            description = "A value shown for a person to write down, withdrawn when they \
+            acknowledge. The value is never recorded."
+        )
+    )]
+    Reveal {
+        /// What the value is and what to do with it, shown above it.
+        #[cfg_attr(test, schemars(description = "The label shown above the value."))]
+        label: String,
+        /// The step's `note:`, the same text the sheet carries.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(test, schemars(description = "The note shown with the value, if any."))]
+        note: Option<String>,
+        /// The value, laid out for writing down. Skipped when the prompt
+        /// is written to the transcript, and empty when one is read back.
+        #[serde(skip)]
+        shown: Shown,
+    },
+    /// Rows of a value a person types from a sheet, one at a time, each
+    /// checked as it is entered. The answer is a secret: the transcript
+    /// carries the label and that an answer was given, never the rows.
+    #[cfg_attr(
+        test,
+        schemars(
+            description = "A request for a value typed row by row from a sheet, each row \
+            checked as it is entered. The answer is never recorded."
+        )
+    )]
+    EnterRows {
+        /// What the value is, shown above the rows.
+        #[cfg_attr(test, schemars(description = "The label shown above the rows."))]
+        label: String,
+        /// The step's `note:`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(test, schemars(description = "The note shown with the rows, if any."))]
+        note: Option<String>,
+        /// The encoding the sheet was written in.
+        #[cfg_attr(test, schemars(description = "The encoding the sheet was written in."))]
+        format: crate::display::RevealFormat,
+        /// Rows expected, when the step knows the value's length; without
+        /// it a short row, or an empty row after full ones, ends the entry.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            test,
+            schemars(
+                description = "The number of rows asked for, when the value's length is known. \
+                Without it a short row, or an empty row after full ones, ends the entry."
+            )
+        )]
+        rows: Option<usize>,
+        /// The rule the rows as a whole must satisfy, which the runtime
+        /// checks and a rehearsal can build a stand-in for. `None` when the
+        /// step checks the value itself, as for a share, which no made-up
+        /// value is.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            test,
+            schemars(
+                description = "The check the whole value had to pass. Absent when the step \
+                checks the value itself, as for a share."
+            )
+        )]
+        validator: Option<ValidatorSpec>,
+    },
+}
+
+impl Prompt {
+    /// The prompt as the transcript records it: the same, except that a
+    /// value shown for writing down is left out, so no copy of it travels
+    /// with the fact.
+    #[must_use]
+    pub fn for_record(&self) -> Self {
+        match self {
+            Prompt::Reveal { label, note, .. } => Prompt::Reveal {
+                label: label.clone(),
+                note: note.clone(),
+                shown: Shown::default(),
+            },
+            other => other.clone(),
+        }
+    }
+}
+
+/// A value on screen for a person to write down, with the shape that
+/// lays it out. Wiped when dropped; printed as its size and format, never
+/// its characters.
+#[derive(Clone, Default)]
+pub struct Shown {
+    text: zeroize::Zeroizing<String>,
+    layout: crate::display::Layout,
+}
+
+impl Shown {
+    /// A value and the shape to show it in.
+    pub fn new(text: String, layout: crate::display::Layout) -> Self {
+        Self {
+            text: zeroize::Zeroizing::new(text),
+            layout,
+        }
+    }
+
+    /// The value as written.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The shape it is shown in.
+    pub fn layout(&self) -> &crate::display::Layout {
+        &self.layout
+    }
+}
+
+impl std::fmt::Debug for Shown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Shown({} characters, {})",
+            self.text.len(),
+            self.layout.format
+        )
+    }
 }
 
 /// Serializable, redacted form of a user response.

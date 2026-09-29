@@ -1,0 +1,85 @@
+version: "0.3"
+name: "Recovering a Secret from Paper"
+description: |
+  Two custodians bring the sheets their shares were written on. Each sheet
+  is typed back, row by row, the two shares recover the secret, and the
+  result is checked against a digest recorded when the secret was split.
+
+  Demonstrates enter_share and combine_shares. The sheets for this example
+  are in test_data/recovery_sheets.txt: shares 1 and 3 of a 2-of-3 split of
+  the secret split_and_combine uses.
+
+parameters:
+  expected_digest:
+    type: string
+    default: "17c130ea49ca769138601fbba7350589b67609bdcda7d8951bcd2800ccc79ac4"
+    description: |
+      SHA-256 of the secret, in hex, recorded when it was split and kept
+      apart from the shares. It says whether what comes back is the secret,
+      without anyone holding a copy of it.
+
+materials:
+  sheet_1:
+    type: physical
+    title: "Sheet for recovery share 1"
+    description: "Kept by the first custodian since the split."
+  sheet_3:
+    type: physical
+    title: "Sheet for recovery share 3"
+    description: "Kept by the third custodian since the split."
+
+roles:
+  officer:
+    name: "Ceremony officer"
+    person: "Alice Rivera"
+
+sections:
+  recover:
+    name: "Recover"
+    role: ${role.officer}
+    steps:
+      type_share_1_back:
+        action: enter_share
+        with:
+          message: "Recovery share 1"
+          note: "The first custodian reads from their sheet, or types it."
+          length: 32
+        creates: share_1
+        description: |
+          The sheet is typed back row by row. Each row is checked as it is
+          typed: a character copied wrong is corrected and named, for the
+          custodian to check on the sheet, and a row that cannot be repaired
+          is typed again. The transcript records which share came back and
+          which rows needed a repair, and nothing of the rows.
+
+      type_share_3_back:
+        action: enter_share
+        with:
+          message: "Recovery share 3"
+          note: "The third custodian reads from their sheet, or types it."
+          length: 32
+        creates: share_3
+
+      recover_the_secret:
+        action: combine_shares
+        reads:
+          shares:
+            - ${artifact.share_1}
+            - ${artifact.share_3}
+        creates: recovered
+        description: |
+          Two of the three are enough. Each share knows how many are needed
+          and which one it is, so the order does not matter. A share from a
+          different split gives a wrong secret without complaint, which is
+          why the next step checks the result.
+
+      confirm_it_is_the_secret:
+        action: check_value
+        with:
+          message: "The recovered secret has the digest recorded at the split."
+          actual: ${artifact.recovered | sha256 | hex}
+          expected: ${param.expected_digest}
+        description: |
+          A wallet recovery checks the address the device shows once the
+          phrase is restored instead; the principle is the same: something
+          observable, recorded apart from the shares.

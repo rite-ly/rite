@@ -24,6 +24,6 @@ pub mod report;
 mod structure;
 mod view;
 
-pub use engine::{Theme, render_report, render_script};
+pub use engine::{Theme, render_report, render_script, render_worksheets};
 pub use structure::{ActGroup, ScriptStructure, SectionGroup, build_script_structure};
-pub use view::{Branding, ReportView, ScriptView, validate_accent};
+pub use view::{Branding, ReportView, ScriptView, WorksheetsView, validate_accent};

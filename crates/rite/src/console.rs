@@ -205,12 +205,131 @@ fn read_response<R: BufRead, W: Write>(
             let _ = read_line(stdin)?;
             Ok(Response::Acknowledge)
         }
+        // A plain terminal cannot take a line back once printed. The value
+        // is announced, shown in its rows, and acknowledged only on a yes;
+        // the person is told to clear the screen, since the TUI is the
+        // frontend that withdraws it.
+        Prompt::Reveal { label, note, shown } => {
+            read_reveal(stdin, stdout, label, note.as_deref(), shown)
+        }
+        // Rows from a sheet, one line each, each checked as it comes: a
+        // repair is said at once for the person to check on the sheet, and
+        // a row that does not read is asked for again.
+        Prompt::EnterRows {
+            label,
+            note,
+            format,
+            rows,
+            ..
+        } => read_rows(stdin, stdout, label, note.as_deref(), *format, *rows),
         // Unknown future variants: refuse with an io::Error so the
         // runtime sees the rejection and we don't silently misanswer.
         _ => Err(io::Error::other(format!(
             "console driver does not know how to handle prompt: {prompt:?}"
         ))),
     }
+}
+
+fn read_reveal<R: BufRead, W: Write>(
+    stdin: &mut R,
+    stdout: &mut W,
+    label: &str,
+    note: Option<&str>,
+    shown: &rite_model::Shown,
+) -> io::Result<Response> {
+    writeln!(stdout, "{label}")?;
+    if let Some(note) = note {
+        writeln!(stdout, "{note}")?;
+    }
+    write!(
+        stdout,
+        "The value is shown once. Have the printed sheet and a pen ready, then \
+         press Enter to show it. "
+    )?;
+    stdout.flush()?;
+    let _ = read_line(stdin)?;
+    for (n, row) in shown.layout().rows(shown.text()).iter().enumerate() {
+        let n = n.saturating_add(1);
+        if row.parity.is_empty() {
+            writeln!(stdout, "  {n:>2}  {}", row.groups.join(" "))?;
+        } else {
+            writeln!(
+                stdout,
+                "  {n:>2}  {} | {}",
+                row.groups.join(" "),
+                row.parity
+            )?;
+        }
+    }
+    loop {
+        write!(
+            stdout,
+            "Is every row written down and checked? It is not shown again [y/N] "
+        )?;
+        stdout.flush()?;
+        if matches!(read_line(stdin)?.trim(), "y" | "Y" | "yes" | "Yes") {
+            break;
+        }
+    }
+    writeln!(
+        stdout,
+        "This terminal keeps the value on screen; clear it now."
+    )?;
+    Ok(Response::Acknowledge)
+}
+
+fn read_rows<R: BufRead, W: Write>(
+    stdin: &mut R,
+    stdout: &mut W,
+    label: &str,
+    note: Option<&str>,
+    format: rite_model::RevealFormat,
+    rows: Option<usize>,
+) -> io::Result<Response> {
+    writeln!(stdout, "{label}")?;
+    if let Some(note) = note {
+        writeln!(stdout, "{note}")?;
+    }
+    writeln!(
+        stdout,
+        "Type each row from the sheet and press Enter{}. Not written to the \
+         transcript.",
+        if rows.is_some() {
+            ""
+        } else {
+            "; an empty row when done, if the last row is full"
+        }
+    )?;
+    let mut typed: Vec<zeroize::Zeroizing<String>> = Vec::new();
+    while rows.is_none_or(|expected| typed.len() < expected) {
+        let number = typed.len().saturating_add(1);
+        write!(stdout, "  {number:>2}  ")?;
+        stdout.flush()?;
+        let line = zeroize::Zeroizing::new(read_line(stdin)?);
+        let row = line.trim_end_matches(['\n', '\r']);
+        if row.trim().is_empty() {
+            if rows.is_none() && !typed.is_empty() {
+                break;
+            }
+            continue;
+        }
+        let more = rows.is_some_and(|expected| number < expected);
+        match format.read_row(row, number, more) {
+            Ok(read) => {
+                if let Some(repair) = read.repair {
+                    writeln!(stdout, "      {repair}")?;
+                }
+                typed.push(zeroize::Zeroizing::new(row.to_string()));
+                // A short row is the last one.
+                if !read.full {
+                    break;
+                }
+            }
+            Err(reason) => writeln!(stdout, "      {reason}; type the row again")?,
+        }
+    }
+    let text: Vec<&str> = typed.iter().map(|row| row.as_str()).collect();
+    Ok(Response::Secret(SecretString::from(text.join("\n"))))
 }
 
 fn read_line<R: BufRead>(stdin: &mut R) -> io::Result<String> {
@@ -304,6 +423,67 @@ mod tests {
         let prompt = Prompt::Continue { hint: None };
         let resp = read_response(&mut stdin, &mut stdout, &prompt).expect("response");
         assert!(matches!(resp, Response::Acknowledge));
+    }
+
+    /// A row that does not read is asked for again; the rows go back as
+    /// typed, one per line, and an empty row ends an entry of no set length.
+    #[test]
+    fn rows_are_checked_one_at_a_time() {
+        use secrecy::ExposeSecret;
+        let text = rite_model::paper32::encode(&[0x5A; 35]);
+        let (first, second) = text.split_at(32);
+        let input = format!("{first}\nABCD\n{second}\n\n");
+        let mut stdin = std::io::Cursor::new(input.into_bytes());
+        let mut stdout: Vec<u8> = Vec::new();
+        let prompt = Prompt::EnterRows {
+            label: "Recovery share 3".to_string(),
+            note: None,
+            format: rite_model::RevealFormat::Paper32,
+            rows: None,
+            validator: None,
+        };
+        let resp = read_response(&mut stdin, &mut stdout, &prompt).expect("response");
+        let Response::Secret(rows) = resp else {
+            panic!("expected the rows as a secret");
+        };
+        assert_eq!(rows.expose_secret(), format!("{first}\n{second}"));
+        let shown = String::from_utf8(stdout).unwrap();
+        assert!(shown.contains("type the row again"), "{shown}");
+    }
+
+    /// Every row but the last is full: a short row where more are due is
+    /// asked for again, and a short row ends an entry of no set length.
+    #[test]
+    fn a_short_row_is_the_last_one() {
+        use secrecy::ExposeSecret;
+        let text = rite_model::paper32::encode(&[0x5A; 30]);
+        let (first, second) = text.split_at(32);
+        let rows_of = |rows| Prompt::EnterRows {
+            label: "Recovery share 3".to_string(),
+            note: None,
+            format: rite_model::RevealFormat::Paper32,
+            rows,
+            validator: None,
+        };
+
+        let mut stdin = std::io::Cursor::new(format!("{second}\n{first}\n{second}\n").into_bytes());
+        let mut stdout: Vec<u8> = Vec::new();
+        let Response::Secret(rows) =
+            read_response(&mut stdin, &mut stdout, &rows_of(Some(2))).expect("response")
+        else {
+            panic!("expected the rows as a secret");
+        };
+        assert_eq!(rows.expose_secret(), format!("{first}\n{second}"));
+        let shown = String::from_utf8(stdout).unwrap();
+        assert!(shown.contains("every row but the last has 32"), "{shown}");
+
+        let mut stdin = std::io::Cursor::new(format!("{first}\n{second}\n").into_bytes());
+        let Response::Secret(rows) =
+            read_response(&mut stdin, &mut Vec::new(), &rows_of(None)).expect("response")
+        else {
+            panic!("expected the rows as a secret");
+        };
+        assert_eq!(rows.expose_secret(), format!("{first}\n{second}"));
     }
 
     #[test]

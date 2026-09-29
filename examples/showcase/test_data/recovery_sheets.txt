@@ -1,0 +1,13 @@
+The two sheets recover_from_paper.rite.yaml asks for: shares 1 and 3 of a
+2-of-3 split of secret.txt, in paper32. Each row is 28 characters of data
+and, after the bar, 4 of parity. Type them in any case, with or without the
+spaces; try changing a character or typing ? for one, and see the row
+repaired.
+
+Recovery share 1
+  1  0410 2P86 N88E 54SN T4TH BE2N ZE9K | 4M2Q
+  2  BQB9 2YR2 X6S2 A3TG HDPG CPE3 GHE6 | PZTC
+
+Recovery share 3
+  1  0410 6GYT 5XRD PV4K M8FZ J395 T9Y8 | 3Y81
+  2  7FJK XCAT XGH6 JSK4 5885 YQAJ S4T5 | 1E5Q

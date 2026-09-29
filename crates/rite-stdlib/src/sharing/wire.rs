@@ -9,17 +9,16 @@
 //! Minus the first two bytes, this is the plain TSS share of
 //! draft-mcgrew-tss-03 section 3, `index || y`.
 
+use rite_model::SharingScheme;
+
 use super::gf256::{Share, ShareError};
 
 /// The version byte this layout starts with.
 const VERSION: u8 = 1;
 
-/// Bytes in front of the `y` values: version, threshold, index.
-const HEADER_LEN: usize = 3;
-
 /// Lay a share out as bytes.
 pub fn encode(share: &Share) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(HEADER_LEN.saturating_add(share.secret_len()));
+    let mut bytes = Vec::with_capacity(SharingScheme::RiteSssV1.share_len(share.secret_len()));
     bytes.push(VERSION);
     bytes.push(share.threshold());
     bytes.push(share.index());
@@ -62,6 +61,7 @@ mod tests {
         let share = Share::new(2, 3, vec![0xB9, 0xFA]).unwrap();
         let bytes = encode(&share);
         assert_eq!(bytes, [1, 2, 3, 0xB9, 0xFA]);
+        assert_eq!(bytes.len(), SharingScheme::RiteSssV1.share_len(2));
         assert_eq!(decode(&bytes).unwrap(), share);
     }
 

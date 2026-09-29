@@ -17,8 +17,10 @@ use crate::structure::build_script_structure;
 use base64ct::{Base64, Encoding};
 use chrono::{DateTime, Duration, Utc};
 use minijinja::HtmlEscape;
-use rite_model::expression::ExprValue;
-use rite_model::{Ceremony, MaterialKind, ParamId, RoleId, Step};
+use rite_model::expression::{ExprValue, Literal};
+use rite_model::{
+    ActionType, Ceremony, MaterialKind, ParamId, RevealFormat, RoleId, SharingScheme, Step,
+};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -200,6 +202,85 @@ pub struct StepView {
     pub preconditions: Vec<String>,
     /// Pre-built "Before step …" label for the preconditions box.
     pub precondition_label: Option<String>,
+    /// The sheet a `reveal` step hands its value over on.
+    pub worksheet: Option<WorksheetView>,
+}
+
+/// A sheet for a value written by hand: what the step says it is, and
+/// rows of boxes for the characters with the parity cells set apart.
+///
+/// The shape comes from the step's format, so it is known before the
+/// ceremony runs. The rows are exact when the step gives a `length:`, and
+/// a generous grid otherwise.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorksheetView {
+    /// The step's `message:`, the heading of the sheet.
+    pub title: String,
+    /// The step's `note:`.
+    pub note: Option<String>,
+    /// The rows, in writing order.
+    pub rows: Vec<WorksheetRow>,
+    /// Whether the rows are exact or a grid to use as needed.
+    pub exact: bool,
+    /// The alphabet, in words.
+    pub alphabet: String,
+    /// The encoding's name.
+    pub algorithm: String,
+}
+
+/// One row of boxes on a sheet.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorksheetRow {
+    /// Box counts per group of data characters.
+    pub groups: Vec<usize>,
+    /// Boxes for the parity characters; zero when there are none.
+    pub parity: usize,
+}
+
+/// The worksheets document: one page per value written by hand.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorksheetsView {
+    /// Ceremony title.
+    pub title: String,
+    /// The ceremony date, when a parameter supplies one.
+    pub ceremony_date: Option<String>,
+    /// One sheet per `reveal` step, in execution order.
+    pub sheets: Vec<SheetView>,
+}
+
+/// One page of the worksheets document.
+#[derive(Debug, Clone, Serialize)]
+pub struct SheetView {
+    /// The sheet.
+    pub worksheet: WorksheetView,
+}
+
+impl WorksheetsView {
+    /// The sheets a ceremony's `reveal` steps call for, or `None` when it
+    /// has none.
+    #[must_use]
+    pub fn from_ceremony(ceremony: &Ceremony) -> Option<Self> {
+        let script = ScriptView::from_ceremony(ceremony);
+        let sheets: Vec<SheetView> = script
+            .acts
+            .iter()
+            .flat_map(|act| &act.sections)
+            .flat_map(|section| &section.steps)
+            .filter_map(|step| {
+                step.worksheet.as_ref().map(|worksheet| SheetView {
+                    worksheet: worksheet.clone(),
+                })
+            })
+            .collect();
+        if sheets.is_empty() {
+            return None;
+        }
+        Some(Self {
+            title: script.title,
+            ceremony_date: script.ceremony_date,
+            sheets,
+        })
+    }
 }
 
 /// A declared output.
@@ -409,7 +490,92 @@ fn step_view(step: &Step, resolved: &Ceremony, abbrevs: &HashMap<RoleId, String>
         role_abbrev,
         preconditions: step.preconditions.clone(),
         precondition_label,
+        worksheet: worksheet_view(step, resolved),
     }
+}
+
+/// Rows when the length is not known: enough for a share of a 64-byte
+/// secret, 67 bytes, in either format (hex takes five rows of 32).
+const OPEN_ROWS: usize = 5;
+
+/// The sheet for a `reveal` step, from its definition alone.
+fn worksheet_view(step: &Step, resolved: &Ceremony) -> Option<WorksheetView> {
+    if step.action != ActionType::Reveal {
+        return None;
+    }
+    let literal = |key: &str| step.with.get(key).and_then(ExprValue::as_literal_string);
+    let format = literal("format").and_then(|name| name.parse::<RevealFormat>().ok());
+    let length = step.with.get("length").and_then(|v| match v {
+        ExprValue::Literal(Literal::Integer(n)) => usize::try_from(*n).ok(),
+        _ => None,
+    });
+
+    // A share is what a `split_secret` or an `enter_share` step created;
+    // the artifact's kind is not in the definition, but its producer is.
+    // `length:` counts the secret's bytes, and the sheet the share's.
+    let share = step
+        .reads_resolved
+        .as_ref()
+        .and_then(|inputs| inputs.get("value"))
+        .map(rite_model::ArtifactRef::artifact_id)
+        .is_some_and(|id| {
+            resolved
+                .execution_plan
+                .iter()
+                .filter(|s| s.creates.as_ref() == Some(&id))
+                .any(|s| matches!(s.action, ActionType::SplitSecret | ActionType::EnterShare))
+        });
+    let layout = RevealFormat::layout_for(format);
+    let characters = length.map(|len| {
+        let bytes = if share {
+            SharingScheme::RiteSssV1.share_len(len)
+        } else {
+            len
+        };
+        layout.format.characters(bytes)
+    });
+
+    // Rows of boxes: full rows, then whatever data is left with its own
+    // parity; or the open grid.
+    let row_len = layout.row.saturating_add(layout.parity).max(1);
+    let group = layout.group.max(1);
+    let row_of = |data: usize| {
+        let mut groups = Vec::new();
+        let mut left = data;
+        while left > 0 {
+            let take = left.min(group);
+            groups.push(take);
+            left = left.saturating_sub(take);
+        }
+        WorksheetRow {
+            groups,
+            parity: layout.parity,
+        }
+    };
+    let rows: Vec<WorksheetRow> = match characters {
+        Some(total) => {
+            let mut rows = Vec::new();
+            let mut left = total;
+            while left > 0 {
+                let take = left.min(row_len);
+                rows.push(row_of(take.saturating_sub(layout.parity)));
+                left = left.saturating_sub(take);
+            }
+            rows
+        }
+        None => (0..OPEN_ROWS).map(|_| row_of(layout.row)).collect(),
+    };
+
+    Some(WorksheetView {
+        title: literal("message")
+            .unwrap_or("Write the value shown on screen")
+            .to_string(),
+        note: literal("note").map(str::to_string),
+        rows,
+        exact: characters.is_some(),
+        alphabet: layout.alphabet,
+        algorithm: layout.algorithm,
+    })
 }
 
 /// Resolve the human-readable instruction for a step.

@@ -115,14 +115,6 @@ impl Action for SplitSecretAction {
 
         let message = format!("{}-of-{} shares made", typed.threshold, typed.shares);
         if let Some(produces) = &step.produces {
-            reporter.log(
-                Icon::Info,
-                format!(
-                    "Shares stored as artifact '{produces}', reached as '{produces}.share_1' \
-                     through '{produces}.share_{}'",
-                    typed.shares
-                ),
-            )?;
             // Each share's `y` moves out of the arithmetic's wiping buffer into
             // the artifact's, without a copy.
             let shares = set.into_shares().into_iter().map(|share| {

@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::display::RevealFormat;
 use crate::transcript::{Format, ValidatorSpec, compile_pattern};
 use crate::types::{ActionType, CertProfile, SharingScheme};
 use rite_sdk::{KeyAlgorithm, KeyUsages, SignAlgorithm, WrapScheme};
@@ -107,6 +108,7 @@ pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
             }
             errors
         }
+        ActionType::Reveal | ActionType::EnterShare => reveal(with),
         ActionType::UnwrapKey | ActionType::ImportKey => {
             let mut errors = key_identity(with, "expect_key");
             errors.extend(named_value(with, "algorithm", |name| {
@@ -115,7 +117,18 @@ pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
             }));
             errors
         }
-        ActionType::EnterValue | ActionType::EnterSecret => entry_shape(with),
+        ActionType::EnterSecret => entry_shape(with),
+        ActionType::EnterValue => {
+            let mut errors = entry_shape(with);
+            if with.get("format").and_then(serde_json::Value::as_str) == Some("paper32") {
+                errors.push(ParamError {
+                    message: "'paper32' is for a value from a sheet, which is a secret: use \
+                              enter_secret, or enter_share for a share"
+                        .to_string(),
+                });
+            }
+            errors
+        }
 
         ActionType::ClockCheck
         | ActionType::Confirm
@@ -133,6 +146,24 @@ pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
         | ActionType::CombineShares
         | ActionType::GenerateCsr => Vec::new(),
     }
+}
+
+/// `reveal` and `enter_share`: a format this build shows, and a length in
+/// bytes.
+fn reveal(with: &serde_json::Value) -> Vec<ParamError> {
+    let mut errors = named_value(with, "format", |name| {
+        name.parse::<RevealFormat>()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    });
+    if let Some(value) = with.get("length")
+        && value.as_u64().is_none_or(|n| n == 0)
+    {
+        errors.push(ParamError {
+            message: format!("'length' must be a positive integer of bytes, found {value}"),
+        });
+    }
+    errors
 }
 
 /// A share count or threshold: an integer from 2 to the scheme's limit.
@@ -263,7 +294,8 @@ impl FormatSpec {
                 })
             }
             _ => Err(format!(
-                "'format' must name a format (text, digits, alphanumeric, hex, base64) or be \
+                "'format' must name a format (text, digits, alphanumeric, hex, base64, \
+                 paper32) or be \
                  {{ pattern: \"...\" }}, found {value}"
             )),
         }
@@ -616,6 +648,19 @@ mod tests {
     }
 
     #[test]
+    fn reveal_checks_its_format_and_length() {
+        assert!(
+            check(
+                ActionType::Reveal,
+                &json!({"message": "Write this down", "format": "paper32", "length": 32})
+            )
+            .is_empty()
+        );
+        assert!(sole(ActionType::Reveal, &json!({"format": "words"})).contains("not a format"));
+        assert!(sole(ActionType::Reveal, &json!({"length": 0})).contains("positive integer"));
+    }
+
+    #[test]
     fn split_secret_counts_are_bounded_by_the_scheme() {
         assert!(
             check(
@@ -756,6 +801,16 @@ mod tests {
             .contains("'format' must name a format")
         );
         assert!(sole(ActionType::EnterSecret, &json!({"length": 0})).contains("positive integer"));
+        assert!(
+            sole(ActionType::EnterValue, &json!({"format": "paper32"})).contains("enter_secret")
+        );
+        assert!(
+            check(
+                ActionType::EnterSecret,
+                &json!({"format": "paper32", "length": 32})
+            )
+            .is_empty()
+        );
         assert!(
             sole(ActionType::EnterSecret, &json!({"length": "six"})).contains("positive integer")
         );

@@ -75,7 +75,7 @@ Run it:
 
 ```sh
 rite check  ceremony.rite.yaml   # validate
-rite script ceremony.rite.yaml   # generate script
+rite script ceremony.rite.yaml   # generate script, and sheets for values written by hand
 rite run    ceremony.rite.yaml   # execute
 ```
 

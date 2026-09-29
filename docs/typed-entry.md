@@ -85,6 +85,7 @@ rather than found later, and the rule is stated in the prompt before typing.
 | `alphanumeric` | ASCII letters and digits | the text |
 | `hex` | bytes, two digits per byte, either case | the decoded bytes |
 | `base64` | bytes, standard base64 with padding | the decoded bytes |
+| `paper32` | bytes as rows from a sheet, `enter_secret` only | the decoded bytes |
 | `{ pattern: "..." }` | whatever the regular expression accepts, in full | the text |
 
 Each format has one canonical representation, and that is what the step
@@ -123,10 +124,21 @@ echoed back by the message that refused it.
 The rule is part of the prompt, so it is recorded with it: the transcript says
 a six-digit secret was entered, which is what the definition already said.
 
-Encodings with a checksum and a wordlist, `bech32m` and `bip39`, are not in
-the vocabulary yet. They follow the same rule when they land: one canonical
-form each, which for a BIP-39 phrase is the normalized words rather than the
-entropy, since that is what a wallet takes.
+`paper32` is the encoding `reveal` shows and `rite script` prints a sheet for,
+described in [secret-sharing.md](secret-sharing.md). A value in it is typed a
+row at a time rather than on one line, and each row is checked as it comes: a
+wrong character is corrected and the row named, for the person to check on the
+sheet, and up to two characters typed as `?` are recovered. With `length:` the
+prompt asks for exactly the right rows; without it a short row, the last, or
+an empty row after full ones ends the entry. It is for `enter_secret` only: a
+value on a sheet is a secret, and `enter_value` would put it in the
+transcript. A share is typed back with `enter_share` instead, which checks
+that it is one.
+
+Encodings with a wordlist, such as `bip39`, are not in the vocabulary yet.
+They follow the same rule when they land: one canonical form each, which for
+a BIP-39 phrase is the normalized words rather than the entropy, since that
+is what a wallet takes.
 
 ## Dry runs
 
@@ -136,6 +148,10 @@ placeholder of that format at its shortest length, so a rehearsal walks
 through a PIN or a passphrase step as it walks through any other. A pattern
 cannot be answered generically, and a step carrying one fails fast in a dry
 run rather than being refused and asked again without end.
+
+A `paper32` secret gets a placeholder the same way, in a dry run only. A share
+typed back with `enter_share` gets none, since no made-up value is a share, so
+a dry run stops at that step.
 
 The placeholder is never the real passphrase, so an `import_key` that needs
 one fails in a dry run.

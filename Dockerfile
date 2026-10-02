@@ -70,7 +70,7 @@ COPY --from=builder-arm64 /out/rite-ls /rite-ls
 # system OpenSSL, so the image binary can carry the piv/yubikey smart-card
 # backends the static musl build cannot. It builds only `rite`; `rite-ls` is a
 # release-tarball artifact, not part of the image.
-FROM rust:1.98.1-slim-trixie@sha256:3999a7ff854f315cf5f2b9a58071cb71196fdfc2ccd32fa20eedce8e754fd62a AS builder-image
+FROM rust:1.99.0-slim-trixie@sha256:01dd4f9c24801cfc8ba9cf8a5dd6dcca451cd17d1ae73574edc22591de6e6816 AS builder-image
 WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpcsclite-dev \

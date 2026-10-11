@@ -26,8 +26,8 @@ Lifecycle:
   rite check  ceremony.rite.yaml  # validate
   rite script ceremony.rite.yaml  # generate script
   rite run    ceremony.rite.yaml  # execute with transcript
-  rite verify <output-dir>        # verify integrity
-  rite report <output-dir>        # generate audit report
+  rite verify <transcript-or-dir> # verify integrity
+  rite report <transcript-or-dir> # generate audit report
 
 Evidence bundles:
   rite bundle create <output-dir> --definition ceremony.rite.yaml -o <bundle>
@@ -44,7 +44,7 @@ const TOP_LEVEL_AFTER_HELP: &str = "\
 Lifecycle:
   rite check  ceremony.rite.yaml  # validate
   rite run    ceremony.rite.yaml  # execute with transcript
-  rite verify <output-dir>        # verify integrity
+  rite verify <transcript-or-dir> # verify integrity
 
 Evidence bundles:
   rite bundle create <output-dir> --definition ceremony.rite.yaml -o <bundle>
@@ -87,7 +87,10 @@ enum Commands {
     /// their recorded digests and reads each wrapped key back to confirm it was
     /// produced the way the transcript says. For a bundle, it also checks the
     /// index and the ceremony definition, and for a disclosure, that exactly
-    /// the facts above its level are withheld.
+    /// the facts above its level are withheld. Verification shows internal
+    /// consistency only: compare the printed fingerprint with the one the
+    /// operators wrote down to tie the transcript to the ceremony they
+    /// witnessed.
     Verify(verify::Args),
     /// Create and derive evidence bundles
     ///

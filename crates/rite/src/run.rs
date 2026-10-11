@@ -17,12 +17,12 @@ use crate::common::{
 /// Which frontend drives the ceremony.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Frontend {
-    /// Interactive terminal UI (TEA-style). Default when stdout is a TTY.
+    /// Interactive terminal interface; selected by default when stdout is a terminal.
     #[cfg(feature = "tui")]
     Tui,
-    /// Plain stdin/stdout driver. Reference implementation of the protocol.
+    /// Plain-text interface that reads from stdin and writes to stdout.
     Console,
-    /// Auto-answering driver for CI / smoke tests.
+    /// Automatically answer supported prompts; intended for CI and smoke tests.
     Headless,
 }
 
@@ -36,19 +36,19 @@ pub struct Args {
     /// Do not prompt for missing parameters
     #[arg(long)]
     pub no_prompt: bool,
-    /// Simulate without performing real operations
+    /// Rehearse with mock backends instead of using configured backends
     #[arg(long)]
     pub dry_run: bool,
-    /// Output directory (default: current directory)
+    /// Parent directory for run output (default: current directory)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
-    /// Do not write a transcript
+    /// Keep the transcript in memory instead of writing it to disk
     #[arg(long)]
     pub no_transcript: bool,
-    /// Frontend driver (auto-detected when omitted)
+    /// Interface for the ceremony (selected automatically when omitted)
     ///
-    /// When omitted, `tui` is used if stdout is a TTY and the `tui` feature is
-    /// built in, otherwise `console`.
+    /// Rite uses `tui` when stdout is a terminal and this build includes the
+    /// `tui` feature; otherwise it uses `console`.
     #[arg(long, value_enum)]
     pub frontend: Option<Frontend>,
 }

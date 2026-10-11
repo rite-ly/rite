@@ -1,11 +1,8 @@
 version: "0.3"
 name: "Release Signing with YubiKey PIV"
 description: |
-  Sign a release manifest with an on-device YubiKey PIV key (slot 9C).
-  The private key never leaves the device: the ceremony reads the signing
-  certificate from the slot, attests that the key was generated on-device
-  using the YubiKey F9 attestation key, and produces a detached signature
-  over the manifest.
+  Sign a release manifest with the PIV key in slot 9C. Read its certificate,
+  request a YubiKey attestation certificate, and produce a detached signature.
 
 backends:
   token:
@@ -57,11 +54,11 @@ sections:
       verify_time:
         action: clock_check
         with:
-          message: "Verify the system clock before recording timestamps"
+          message: "Verify the system clock before recording timestamps."
       confirm_token:
         action: confirm
         with:
-          message: "Confirm the correct YubiKey is inserted"
+          message: "Confirm the inserted YubiKey is assigned to this ceremony."
 
   read_and_attest:
     act: signing
@@ -82,7 +79,7 @@ sections:
         with:
           slot: "9c"
         creates: attestation_cert
-        description: "Prove the slot 9C key was generated on-device, never imported."
+        description: "Request the attestation certificate showing the slot 9C key was generated on the device."
 
   sign:
     act: signing
@@ -96,7 +93,7 @@ sections:
         with:
           slot: "9c"
           algorithm: ECDSA-SHA256
-          message: "Enter the PIV PIN to sign the release manifest"
+          message: "Enter the PIV PIN to authorize signing the release manifest."
         creates: manifest_signature
         description: "Produce a detached ECDSA-P256 signature over the manifest."
 

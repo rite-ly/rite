@@ -1,11 +1,10 @@
 version: "0.3"
 name: "Dice Entropy"
 description: |
-  Showcase verifiable ceremony randomness. A participant folds a physical dice
-  roll into the ceremony seed, then a self-signed certificate is issued whose
-  serial number is drawn from that seed. `rite verify` later re-derives the
-  seed, the dice contribution, and the serial from the transcript alone, so no
-  one has to trust the machine's randomness on its own.
+  Mix participant-supplied dice rolls into the ceremony seed, then issue a
+  certificate with a serial drawn from that seed. `rite verify` re-derives the
+  recorded entropy and serial from the transcript, so no one has to trust the
+  machine's randomness alone.
 
 backends:
   openssl:
@@ -14,7 +13,7 @@ backends:
 output:
   certificate:
     type: certificate
-    description: "Certificate whose serial number is drawn from the seed"
+    description: "Certificate with a serial derived from the ceremony seed"
 
 roles:
   operator:
@@ -29,7 +28,7 @@ sections:
       roll_dice:
         action: gather_entropy
         with:
-          instruction: "Roll a physical die 10 times and type the sequence (for example: 3 1 6 4 2 5 2 6 1 4)."
+          instruction: "Roll a die 10 times and enter the results in order (for example: 3 1 6 4 2 5 2 6 1 4)."
       generate_key:
         action: generate_key
         backend: openssl

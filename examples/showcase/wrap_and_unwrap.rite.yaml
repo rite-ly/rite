@@ -1,13 +1,12 @@
 version: "0.3"
 name: "Wrapping a Key for Transport"
 description: |
-  Wrap a key twice, under two different custody arrangements, and unwrap one of
-  them back.
+  Wrap a key under backend-held and external keys, then recover it. Also wraps
+  and recovers a symmetric key-encryption key (KEK).
 
-  Demonstrates wrap_key and unwrap_key. The input a wrap step reads is what
-  decides who can undo it: wrapping_key names a key this backend holds, so the
-  ceremony keeps the means to unwrap, while recipient names a public key held
-  by someone else, so only they can open the result.
+  The input a wrap step reads decides who can undo it: wrapping_key names a
+  key this backend holds, so the ceremony can unwrap the result; recipient
+  names a public key held by someone else, so only they can open it.
 
 backends:
   openssl:
@@ -27,7 +26,7 @@ materials:
     type: digital
     path: "test_keys/escrow_public.pem"
     title: "Escrow transport public key"
-    description: "Public key of a party outside this ceremony."
+    description: "Escrow holder's public transport key."
 
 output:
   wrapped_demo_key:
@@ -60,15 +59,12 @@ sections:
           algorithm: ECDSA-P256
           policy:
             extractable: true
+        # The default policy is a key that signs and never leaves, so a key
+        # does not become exportable because a later step wants it to.
         creates: demo_keypair
         description: |
-          The key that will be wrapped. Any key type will do.
-
-          policy: is what the key is allowed to be, in PKCS#11 terms. The
-          default is the restrictive one, a key that signs and never leaves,
-          so a key meant to be wrapped has to say extractable: true. Without
-          it the wrap step refuses, which is the point: a key does not quietly
-          become exportable because a later step wants it to be.
+          Generate a key that can be wrapped. `extractable: true` is required
+          because the private key will leave the backend under protection.
 
       generate_transport_key:
         action: generate_key
@@ -77,15 +73,12 @@ sections:
           algorithm: RSA-2048
           policy:
             usages: [wrap, unwrap]
+        # An EC or ML-KEM key works the same way: the recipient's key type
+        # selects the encapsulation.
         creates: transport_keypair
         description: |
-          A second key, held by this backend, that will wrap the first. An EC
-          or ML-KEM key would work equally well: the recipient's key type
-          selects the encapsulation, and the transcript records which one was
-          used.
-
-          Its usages say wrap and unwrap rather than the default sign and
-          verify, so this key can do the job below and cannot sign anything.
+          Generate an RSA transport key with wrap and unwrap usages. The
+          recipient key determines the encapsulation recorded in the transcript.
 
       generate_kek:
         action: generate_key
@@ -94,23 +87,13 @@ sections:
           algorithm: AES-256
           policy:
             extractable: true
+        # The key check value is what an HSM shows on its own display, so a
+        # custodian can compare the two without either side handling the key.
         creates: kek
         description: |
-          A symmetric key-encryption key. It has no public half, so it can
-          never appear as recipient, and its usages need no declaring: a
-          symmetric key defaults to wrap and unwrap, which is the only thing
-          Rite holds one for.
-
-          extractable: true is the one thing this ceremony does have to say.
-          A KEK that stays on this machine forever would not need it; this one
-          is wrapped and carried to a second backend in the act below, which is
-          what a cross-HSM import looks like, and a key that cannot leave
-          cannot be carried.
-
-          The transcript records it by a key check value, cmac-aes: followed
-          by six hex digits, rather than by a fingerprint. That is the value
-          an HSM prints on its own display, so a custodian can compare the two
-          without either side handling the key.
+          Generate an AES-256 KEK. It has no public half and is identified by
+          its CMAC-AES check value, not a fingerprint. It must be extractable
+          so it can be wrapped for transfer to another backend.
 
       read_back_the_kcv:
         action: oral_readback
@@ -120,11 +103,8 @@ sections:
             against what the device displays.
           value: "${artifact.kek.kcv | hex}"
         description: |
-          The check value is the whole point of having one: two people compare
-          a short string, and neither has to touch the key to do it.
-
-          On a real token the same step is what catches a key generated in the
-          wrong slot, on the wrong device, or from a previous ceremony.
+          Compare the key check value displayed by the backend with the value
+          read aloud by the second custodian.
 
   wrap:
     name: "Wrap Under Two Custodies"
@@ -138,9 +118,7 @@ sections:
           wrapping_key: ${artifact.transport_keypair}
         creates: wrapped_demo_key
         description: |
-          Wrap under a key this backend holds. Both keys must live on the same
-          backend, and the ceremony can unwrap the result itself, which the
-          next act does.
+          Wrap the key under the backend-held transport key.
 
       wrap_to_escrow:
         action: wrap_key
@@ -148,17 +126,13 @@ sections:
         reads:
           key_to_wrap: ${artifact.demo_keypair}
           recipient: ${artifact.escrow_pubkey}
+        # Pin the recipient to the fingerprint supplied out of band.
         with:
           expect_recipient: ${param.escrow_fingerprint}
         creates: escrowed_demo_key
         description: |
-          Wrap the same key to a public key held elsewhere. Nobody here can
-          open this one.
-
-          expect_recipient makes the step refuse a key that does not match the
-          fingerprint the ceremony declares. Without it the run would wrap to
-          whatever key it was handed and record that faithfully, which is not
-          the same as being right.
+          Wrap the key to the escrow public key. Confirm the recipient
+          fingerprint matches the value recorded for this ceremony.
 
       wrap_under_kek:
         action: wrap_key
@@ -166,22 +140,15 @@ sections:
         reads:
           key_to_wrap: ${artifact.demo_keypair}
           wrapping_key: ${artifact.kek}
+        # No scheme: the default CMS container also works under a symmetric
+        # key (a KEKRecipientInfo). It carries its algorithm identifiers, so
+        # rite verify reports the wrap as checked, and openssl cms -decrypt
+        # -secretkey opens it without Rite. scheme: AES-256-KWP or AES-256-KW
+        # write the raw bytes an HSM or KMS import may require; they carry no
+        # identifiers, so verify can only record what was invoked.
         creates: kek_wrapped_demo_key
         description: |
-          Wrap under the symmetric key. No scheme here, because the default
-          CMS container works for a symmetric key too: the recipient becomes a
-          KEKRecipientInfo naming the key both sides hold, and everything else
-          about the blob is what the other two wraps produce.
-
-          That is worth having. The blob carries its own algorithm
-          identifiers, so rite verify re-derives them and reports this wrap as
-          checked rather than merely recorded, and openssl cms -decrypt
-          -secretkey opens it years from now with no Rite binary present.
-
-          The raw alternatives are scheme: AES-256-KWP and AES-256-KW, for a
-          recipient that requires exactly those bytes, such as an HSM or KMS
-          import path. They carry no algorithm identifiers, so they name the
-          KEK size themselves and verify can only record what was invoked.
+          Wrap the key under the AES-256 KEK using the CMS container.
 
       wrap_the_kek_itself:
         action: wrap_key
@@ -191,9 +158,7 @@ sections:
           wrapping_key: ${artifact.transport_keypair}
         creates: wrapped_kek
         description: |
-          The symmetric key as the payload rather than as the wrapping key.
-          This is the blob that travels to a second HSM, and the act below
-          recovers it.
+          Wrap the KEK itself so it can be transferred to another backend.
 
   restore:
     name: "Unwrap It Back"
@@ -208,20 +173,14 @@ sections:
         with:
           label: "restored-demo-key"
           expect_key: "sha256:${artifact.demo_keypair.public | sha256 | hex}"
+        # No scheme: unwrap_key reads it from the wrapped artifact. expect_key
+        # is an expression over the original key, asserting the round trip; a
+        # restore ceremony puts the fingerprint the origin ceremony recorded
+        # here instead.
         creates: restored_keypair
         description: |
-          Unwrap and import under a new label. The scheme is not restated: it
-          comes from the wrapped artifact, so it cannot disagree with the bytes
-          being decrypted.
-
-          No algorithm here either, because a keypair names itself once its
-          DER parses. Declaring one would still be checked against what came
-          out, and the step below has to declare one.
-
-          expect_key names the key that must come out. Here it is written as an
-          expression over the key that went in, so the step asserts the round
-          trip. In a restore ceremony, where the original key is not present,
-          the same field carries the fingerprint the origin ceremony recorded.
+          Recover the keypair under a new label. `expect_key` checks that the
+          recovered public key matches the generated keypair.
 
       restore_the_kek:
         action: unwrap_key
@@ -229,18 +188,14 @@ sections:
         reads:
           unwrapping_key: ${artifact.transport_keypair}
           wrapped_data: ${artifact.wrapped_kek}
+        # A wrapped symmetric key does not say what it is, so algorithm: is
+        # required; a wrong one fails on the size. A key with no public half is
+        # named by its check value, not a fingerprint.
         with:
           algorithm: AES-256
           label: "restored-kek"
           expect_key: "cmac-aes:${artifact.kek.kcv | hex}"
         creates: restored_kek
         description: |
-          Recovering the symmetric key needs algorithm. Nothing travels with a
-          wrapped key saying what it is, and a 32-byte secret is not
-          distinguishable from any other 32 bytes, so the receiving ceremony
-          declares it the way it declares policy. Get it wrong and the step
-          fails on the size rather than importing something else.
-
-          expect_key is a check value here, not a fingerprint, because that is
-          how a key with no public half is named. The restored key defaults to
-          wrap and unwrap, following the declared algorithm.
+          Recover the AES-256 KEK and compare its check value with the value
+          recorded before wrapping.

@@ -77,7 +77,7 @@ fn long_instructions_render_as_paragraphs_and_bullets() {
     assert!(html.contains("<li>Wi-Fi and Bluetooth radios are disabled in firmware</li>"));
     // A multi-paragraph instruction yields more than one <p> in the action cell.
     assert!(html.contains(
-        "<p>Verify each of the following aloud, and have a witness confirm each before continuing:</p>"
+        "<p>Verify each item aloud and have a witness confirm it before continuing:</p>"
     ));
     // The literal bullet markers must not leak through as plain text.
     assert!(!html.contains("- All wired network interfaces"));

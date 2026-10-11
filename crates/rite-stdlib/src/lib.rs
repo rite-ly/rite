@@ -161,7 +161,6 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
 /// Build the default [`BackendFactory`] closure.
 ///
 /// Wraps [`default_backend_factory`] for convenience.
-#[must_use]
 pub fn stdlib_backend_factory() -> BackendFactory {
     default_backend_factory()
 }

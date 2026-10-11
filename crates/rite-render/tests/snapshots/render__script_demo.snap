@@ -582,7 +582,7 @@ code, .hash {
   </header>
   <section>
     <h2>Overview</h2>
-    <div class="overview"><p>Generate an offline root signing key on an air-gapped workstation, issue its self-signed certificate, and export the public half for distribution. Two roles perform and witness the ceremony, and each attests to what they saw.</p></div>
+    <div class="overview"><p>Generate an offline root key on an air-gapped workstation, issue its self-signed certificate, and export the public key. The crypto officer and witness attest to the ceremony.</p></div>
   </section>
 
   <section>
@@ -596,7 +596,7 @@ code, .hash {
     <h2>Preparation Checklist</h2>
     <h3>Prerequisites</h3>
     <ul class="checklist">
-      <li>Air-gapped workstation is powered on with all network interfaces physically disconnected.</li>
+      <li>The air-gapped workstation is powered on with all network interfaces physically disconnected.</li>
       <li>Both participants have verified each other&#x27;s identity against photo ID.</li>
     </ul>
   </section>
@@ -609,7 +609,7 @@ code, .hash {
       <tbody>
         <tr>
           <td class="step-num">1</td>
-          <td class="step-action"><p>Confirm and witness the air-gap before any key material exists.</p></td>
+          <td class="step-action"><p>Confirm and witness the air gap before any key material exists.</p></td>
           <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
         </tr>
       </tbody>
@@ -622,12 +622,12 @@ code, .hash {
       <tbody>
         <tr>
           <td class="step-num">2</td>
-          <td class="step-action"><p>Generate the root RSA-4096 keypair inside the air-gapped workstation.</p></td>
+          <td class="step-action"><p>Generate the RSA-4096 root keypair.</p></td>
           <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
         </tr>
         <tr>
           <td class="step-num">3</td>
-          <td class="step-action"><p>Build the certificate signing request for the root key.</p></td>
+          <td class="step-action"><p>Create a certificate signing request for the root key.</p></td>
           <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
         </tr>
         <tr>
@@ -637,7 +637,7 @@ code, .hash {
         </tr>
         <tr>
           <td class="step-num">5</td>
-          <td class="step-action"><p>Export the public key for distribution as a trust anchor.</p></td>
+          <td class="step-action"><p>Export the public key for distribution as the trust anchor.</p></td>
           <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
         </tr>
       </tbody>

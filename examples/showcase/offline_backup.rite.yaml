@@ -1,14 +1,11 @@
+# Deliberately maximalist: several acts, four roles, physical and digital
+# materials, and long instructions, to show how a dense script prints.
+# wrap_and_unwrap.rite.yaml is the example that explains wrapping.
 version: "0.3"
 name: "Offline Backup Key Ceremony"
 description: |
-  Generate an offline backup-wrapping key on an air-gapped workstation, escrow
-  it under the organization's transport key, and hand sealed backup media to a
-  designated custodian.
-
-  This example is intentionally maximalist. It exercises every part of the
-  printed script: multiple acts spanning several pages, physical and digital
-  materials, four roles, and long step instructions made of full paragraphs and
-  bullet lists. Use it to see how a dense, formal ceremony renders end to end.
+  Generate a backup-wrapping key on an isolated workstation, wrap it to the
+  escrow transport key, and transfer the sealed media to its custodian.
 
 backends:
   openssl:
@@ -106,21 +103,19 @@ sections:
     act: opening
     name: "Environment Verification"
     description: |
-      Establish a trusted starting state. Nothing in this section touches key
-      material; its purpose is to make the conditions of the ceremony explicit
-      and witnessed before anything irreversible happens.
+      Confirm the workstation, participants, and ceremony media before key
+      generation.
     role: ${role.crypto_officer}
     steps:
       verify_air_gap:
         action: confirm
         with:
           message: |
-            Confirm that the workstation is fully isolated from all networks.
-            This step establishes the trust boundary for the rest of the
-            ceremony, so do not rush it.
+            Confirm the workstation is isolated from all networks. This step
+            sets the trust boundary for the rest of the ceremony.
 
-            Verify each of the following aloud, and have a witness confirm each
-            before continuing:
+            Verify each item aloud and have a witness confirm it before
+            continuing:
             - All wired network interfaces are physically disconnected
             - Wi-Fi and Bluetooth radios are disabled in firmware
             - No external storage is attached except the ceremony media
@@ -139,13 +134,10 @@ sections:
         action: confirm
         with:
           message: |
-            Inspect the tamper-evident bag holding the ceremony USB media and
-            confirm that its seal is intact and its number matches the inventory
-            sheet.
-
-            If the seal is broken, the number does not match, or anything looks
-            irregular, halt the ceremony immediately and record a deviation. Do
-            not open the bag until both witnesses agree the seal is sound.
+            Check that the seal of the media bag is intact and its number
+            matches the inventory sheet. If either check fails or anything
+            looks irregular, halt the ceremony and record a deviation. Open
+            the bag only once both witnesses agree the seal is sound.
       readback_bag_serial:
         action: oral_readback
         with:
@@ -157,10 +149,8 @@ sections:
     act: generation
     name: "Key Generation"
     description: |
-      Generate the backup-wrapping keypair inside the workstation. The private
-      key is created in memory and never displayed. Wrapping later serialises
-      it to DER in process memory, so nothing written to the ceremony media
-      holds it in plaintext.
+      Generate the backup-wrapping keypair. Record its fingerprint before
+      wrapping the private key to the escrow transport key.
     role: ${role.crypto_officer}
     steps:
       generate_backup_key:
@@ -174,10 +164,7 @@ sections:
             extractable: true
         creates: backup_keypair
         description: |
-          Generate the backup-wrapping keypair. Watch the screen with both
-          witnesses while the key is produced.
-
-          When generation completes, confirm together that:
+          Generate the backup-wrapping keypair. With both witnesses, confirm:
           - The algorithm shown on screen matches ECDSA-P256
           - The fingerprint displayed is copied onto the worksheet exactly
           - No private-key bytes are printed to the terminal at any point
@@ -187,11 +174,8 @@ sections:
         reads: "${artifact.backup_keypair}"
         creates: backup_key
         description: |
-          Export the public half of the backup key. The exported file contains
-          no secret material and is safe to copy off the workstation.
-
-          The crypto officer states the output filename aloud and a witness
-          confirms it is written to the ceremony media and not to internal disk.
+          Export the public key. Read the output filename aloud; a witness
+          confirms it is copied to ceremony media, not internal disk.
       readback_fingerprint:
         action: oral_readback
         with:
@@ -204,8 +188,7 @@ sections:
     act: protection
     name: "Escrow Wrapping"
     description: |
-      Wrap the private key under the escrow transport key so it can be archived
-      without ever existing in plaintext outside the device.
+      Wrap the private key to the escrow transport key for archival.
     role: ${role.crypto_officer}
     steps:
       wrap_backup_key:
@@ -224,7 +207,7 @@ sections:
 
           Before continuing, confirm with the witnesses that:
           - The escrow key fingerprint matches the value on the worksheet
-          - The wrapped output is written only to the ceremony media
+          - The wrapped output is copied to ceremony media and not retained on another disk
 
   media:
     act: protection
@@ -236,10 +219,8 @@ sections:
         action: confirm
         with:
           message: |
-            Write the wrapped backup file to each of the ceremony USB sticks in
-            turn. Produce the number of copies named in the ceremony parameters.
-
-            For every copy:
+            Write the wrapped backup to each USB stick. Produce the number of
+            copies specified for this ceremony. For each copy:
             - Verify the file size and name match the original
             - Eject the stick cleanly before removing it
             - Hand the stick to a witness for independent labeling
@@ -247,11 +228,9 @@ sections:
         action: confirm
         with:
           message: |
-            Place each written USB stick, and the completed worksheet, into a
-            separate tamper-evident bag. Record each bag serial on the worksheet
-            and have a witness countersign.
-
-            Confirm before closing each bag that:
+            Put each USB stick and the completed worksheet in separate
+            tamper-evident bags. Record each bag number on the worksheet and
+            have a witness countersign. Before sealing, confirm:
             - The bag number is legible and recorded
             - Exactly one stick (or the worksheet) is inside
             - Both witnesses have seen the contents before sealing
@@ -259,7 +238,7 @@ sections:
   attestation:
     act: closing
     name: "Witness Attestation"
-    description: "Each participant attests, on the record and on the page, to what they observed during the ceremony."
+    description: "Record each participant's attestation."
     steps:
       witness1_attest:
         action: attest
@@ -281,16 +260,14 @@ sections:
     act: closing
     name: "Custody Transfer"
     description: |
-      Transfer the sealed backup copies to the custodian, who confirms receipt
-      against the recorded bag serials.
+      Transfer the sealed media to the custodian and verify each bag number.
     role: ${role.custodian}
     steps:
       handover_media:
         action: confirm
         with:
           message: |
-            The custodian takes possession of the sealed backup copies and
-            confirms, in front of both witnesses, that:
+            The custodian takes the sealed copies. With both witnesses, confirm:
             - The number of sealed bags matches the number of copies produced
             - Each bag serial matches the worksheet entry
             - No seal shows any sign of tampering
@@ -313,4 +290,4 @@ after:
     location: "Per the backup distribution policy"
   notify:
     type: notify_stakeholders
-    description: "Inform the backup operations team that a new wrapped backup key is available and update the recovery runbook with its fingerprint."
+    description: "Notify backup operations and update the recovery runbook with the key fingerprint."

@@ -1,11 +1,9 @@
 version: "0.3"
 name: "Detached Signature over a Release Manifest"
 description: |
-  Sign a document with a ceremony key, then verify the signature back.
-
-  Demonstrates sign_data and verify_signature. The signing step needs the
-  private key, so it names a backend. The verification step needs only the
-  public key, so it names none.
+  Sign a release manifest with a ceremony key and verify the detached
+  signature. Signing uses the backend that holds the private key; verification
+  needs only the public key.
 
 backends:
   openssl:
@@ -15,7 +13,7 @@ materials:
   manifest:
     type: digital
     path: "test_data/release_manifest.txt"
-    description: "The document to be signed."
+    description: "Release manifest to sign."
 
 output:
   manifest_signature:
@@ -41,7 +39,7 @@ sections:
         with:
           algorithm: ECDSA-P256
         creates: signing_keypair
-        description: "Generate the keypair that will sign the manifest."
+        description: "Generate the ECDSA-P256 signing keypair."
 
       sign_manifest:
         action: sign_data
@@ -52,11 +50,10 @@ sections:
         with:
           message: "Signing the release manifest."
         creates: manifest_signature
+        # An ECDSA-P256 key signs with ECDSA-SHA256. `algorithm:` matters only
+        # for an RSA key, which can sign under PKCS#1 v1.5 or PSS.
         description: |
-          Produce a detached signature. No algorithm field, so it follows from
-          the key: an ECDSA-P256 key signs with ECDSA-SHA256. Naming an
-          algorithm is only useful for an RSA key, which can sign under either
-          PKCS#1 v1.5 or PSS.
+          Sign the manifest with the algorithm selected from the key.
 
   confirm:
     name: "Verify the Signature"
@@ -70,10 +67,11 @@ sections:
           signature: ${artifact.manifest_signature}
         with:
           message: "Checking the signature against the signing key."
+        # The same step checks a signature made on a smart card, or one that
+        # arrived from outside the ceremony.
         description: |
-          Verify in software, with no backend field. The same step shape would
-          check a signature made on a smart card, or one that arrived from
-          outside the ceremony.
+          Verify the detached signature with the keypair's public key. No
+          backend is needed for this check.
 
       witness_confirms:
         action: confirm

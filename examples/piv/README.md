@@ -1,63 +1,50 @@
 # PIV / YubiKey Ceremonies
 
-Examples that drive a hardware PIV smart card (such as a YubiKey) where the
-private key never leaves the device.
+Examples using a PIV smart card, such as a YubiKey. The private key stays on
+the device.
 
-These ceremonies require a `rite` binary with the hardware backends. The
-prebuilt macOS and Windows release binaries (including `brew install rite`) and
-the Docker image (`ghcr.io/rite-ly/rite`) already include them. Only the static
-musl Linux tarballs leave them out, so on Linux from a tarball build from source:
+These ceremonies need a `rite` binary built with the `piv` and `yubikey`
+features. The macOS and Windows release binaries (including `brew install rite`)
+and the Docker image (`ghcr.io/rite-ly/rite`) include them. Static musl Linux binaries do not; build from source on Linux:
 
 ```sh
 cargo build -p rite --features piv,yubikey
 ```
 
-The `piv` and `yubikey` features link the PC/SC system library (`libpcsclite`
-on Linux; built in on macOS and Windows) and are off in the default feature set.
+On Linux, the build needs `libpcsclite-dev`. PC/SC is built into macOS and
+Windows.
 
-## Ceremonies
+## `yubikey_signing.rite.yaml`: Release signing with PIV
 
-### `yubikey_signing.rite.yaml`: Release Signing with YubiKey PIV
+Signs a release manifest with the key in PIV slot 9C. The ceremony reads its
+certificate, requests a Yubico F9 attestation certificate showing the key was
+generated on the device and not imported, signs the manifest with the PIN, and
+records witness and operator attestations. Slot 9C must already contain the
+signing key and certificate.
 
-Signs a release manifest with an on-device key in PIV slot 9C. Demonstrates:
-
-- Reading the signing certificate from the slot (`piv_read_certificate`)
-- Proving the key was generated on-device, never imported
-  (`yubikey_attest_slot`, the Yubico F9 attestation)
-- A PIN-protected detached signature over the manifest (`piv_sign`)
-- Witness and operator attestation in the closing act
-
-The ceremony assumes slot 9C is already provisioned with the signing key and its
-certificate.
-
-## Running
-
-Validate the ceremony (no hardware needed):
+Check the definition without a card:
 
 ```sh
 cargo run -p rite --features piv,yubikey -- check examples/piv/yubikey_signing.rite.yaml
 ```
 
-Execute with a real YubiKey inserted:
+Run it with the YubiKey inserted:
 
 ```sh
 cargo run -p rite --features piv,yubikey -- run examples/piv/yubikey_signing.rite.yaml
 ```
 
-### Dry run
+### Rehearse without a device
 
-`--dry-run` substitutes a mock backend so the ceremony can be rehearsed without a
-device:
+`--dry-run` substitutes a mock backend, which supplies placeholder
+certificates and a synthetic slot key. The ceremony can complete without a
+YubiKey, but its signature and attestation certificate are synthetic and are
+not evidence of a real device:
 
 ```sh
 cargo run -p rite --features piv,yubikey -- run --dry-run --frontend headless \
   examples/piv/yubikey_signing.rite.yaml
 ```
 
-The dry run walks the whole ceremony, including `piv_sign`: the mock returns
-placeholder certificates and lazily mints a synthetic stand-in signing key for
-the slot, so the rehearsal completes without a device. The signatures and
-attestation certificates it produces are clearly synthetic, never real evidence.
-See [`docs/development/hardware-backends.md`](../../docs/development/hardware-backends.md)
-for the manual hardware verification procedure (real on-card signing and
-attestation-root verification).
+For manual verification of real on-card signing and the attestation root, see
+[hardware backends](../../docs/development/hardware-backends.md).

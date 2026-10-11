@@ -1,8 +1,8 @@
 version: "0.3"
 name: "Root CA Key Generation"
 description: |
-  Generate the offline root CA keypair on an air-gapped machine.
-  The private key is wrapped with a transport public key and stored as an encrypted backup.
+  Generate an offline RSA-4096 root CA key, issue its self-signed certificate,
+  and wrap the private key to the transport public key for backup.
 
 backends:
   openssl:
@@ -60,7 +60,7 @@ sections:
       verify_time:
         action: clock_check
         with:
-          message: "Verify system clock before recording timestamps"
+          message: "Verify the system clock before recording timestamps."
       record_machine:
         action: machine_info
         with:
@@ -70,7 +70,7 @@ sections:
       verify_air_gap:
         action: confirm
         with:
-          message: "Confirm the workstation has no active network connections"
+          message: "Confirm all network interfaces are disconnected and disabled."
 
   keygen:
     act: key_generation
@@ -86,7 +86,7 @@ sections:
             # Wrapped for backup below, which a key may not be unless it says so.
             extractable: true
         creates: root_ca_keypair
-        description: "Generate RSA-4096 root CA keypair."
+        description: "Generate the RSA-4096 root CA keypair."
       generate_root_csr:
         action: generate_csr
         backend: openssl
@@ -95,7 +95,7 @@ sections:
         with:
           subject: "CN=Root CA,O=Example Org"
         creates: root_ca_csr
-        description: "Generate a certificate signing request for the root CA key."
+        description: "Create a certificate signing request for the root CA key."
       issue_root_cert:
         action: issue_certificate
         backend: openssl
@@ -120,7 +120,7 @@ sections:
           key_to_wrap: ${artifact.root_ca_keypair}
           recipient: ${artifact.transport_pubkey}
         creates: wrapped_root_ca_key
-        description: "Encrypt the root CA private key with the transport public key."
+        description: "Wrap the root CA private key to the transport public key."
 
   attestation:
     act: closing

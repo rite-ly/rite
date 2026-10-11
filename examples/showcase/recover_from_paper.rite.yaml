@@ -1,32 +1,27 @@
 version: "0.3"
 name: "Recovering a Secret from Paper"
 description: |
-  Two custodians bring the sheets their shares were written on. Each sheet
-  is typed back, row by row, the two shares recover the secret, and the
-  result is checked against a digest recorded when the secret was split.
-
-  Demonstrates enter_share and combine_shares. The sheets for this example
-  are in test_data/recovery_sheets.txt: shares 1 and 3 of a 2-of-3 split of
-  the secret split_and_combine uses.
+  Enter shares 1 and 3 from the included sheets, recover the secret, and check
+  it against the digest recorded at the split. The sheets are in
+  `test_data/recovery_sheets.txt`; they match `split_and_combine.rite.yaml`.
 
 parameters:
   expected_digest:
     type: string
     default: "17c130ea49ca769138601fbba7350589b67609bdcda7d8951bcd2800ccc79ac4"
     description: |
-      SHA-256 of the secret, in hex, recorded when it was split and kept
-      apart from the shares. It says whether what comes back is the secret,
-      without anyone holding a copy of it.
+      SHA-256 digest recorded at the split and kept separate from the shares.
+      It lets the custodians check the recovery without retaining the secret.
 
 materials:
   sheet_1:
     type: physical
     title: "Sheet for recovery share 1"
-    description: "Kept by the first custodian since the split."
+    description: "Recovery share 1 worksheet."
   sheet_3:
     type: physical
     title: "Sheet for recovery share 3"
-    description: "Kept by the third custodian since the split."
+    description: "Recovery share 3 worksheet."
 
 roles:
   officer:
@@ -42,21 +37,19 @@ sections:
         action: enter_share
         with:
           message: "Recovery share 1"
-          note: "The first custodian reads from their sheet, or types it."
+          note: "Enter the rows from the first custodian's worksheet."
           length: 32
         creates: share_1
         description: |
-          The sheet is typed back row by row. Each row is checked as it is
-          typed: a character copied wrong is corrected and named, for the
-          custodian to check on the sheet, and a row that cannot be repaired
-          is typed again. The transcript records which share came back and
-          which rows needed a repair, and nothing of the rows.
+          Enter the first custodian's share, one row at a time. Check any
+          corrected characters against the sheet. The transcript records the
+          share index and repaired rows, not the share contents.
 
       type_share_3_back:
         action: enter_share
         with:
           message: "Recovery share 3"
-          note: "The third custodian reads from their sheet, or types it."
+          note: "Enter the rows from the third custodian's worksheet."
           length: 32
         creates: share_3
 
@@ -67,11 +60,11 @@ sections:
             - ${artifact.share_1}
             - ${artifact.share_3}
         creates: recovered
+        # Each share records the threshold and its own index, so the order
+        # of the list does not matter.
         description: |
-          Two of the three are enough. Each share knows how many are needed
-          and which one it is, so the order does not matter. A share from a
-          different split gives a wrong secret without complaint, which is
-          why the next step checks the result.
+          Recover the secret from shares 1 and 3. Shares from different splits
+          can produce an incorrect result, so the next step checks the digest.
 
       confirm_it_is_the_secret:
         action: check_value
@@ -80,6 +73,6 @@ sections:
           actual: ${artifact.recovered | sha256 | hex}
           expected: ${param.expected_digest}
         description: |
-          A wallet recovery checks the address the device shows once the
-          phrase is restored instead; the principle is the same: something
-          observable, recorded apart from the shares.
+          Compare the recovered secret's digest with the value recorded at the
+          split. A real wallet recovery could instead verify the address shown
+          by the restored device.

@@ -277,6 +277,83 @@ fn enter_value_refuses_paper32() {
     assert!(error.to_string().contains("enter_secret"), "{error}");
 }
 
+/// A recovery phrase is asked for a word per row, the count from
+/// `length:`; a phrase whose checksum fails is refused and asked for again,
+/// and the artifact is the entropy, not the words.
+#[test]
+fn enter_secret_in_bip39_takes_words_and_holds_the_entropy() {
+    let entropy = [0x7F_u8; 32];
+    let phrase = rite_model::bip39::encode(&entropy).unwrap();
+    let mut swapped: Vec<&str> = phrase.split(' ').collect();
+    swapped.swap(0, 2);
+    let mut harness = ReporterHarness::new();
+    harness.enqueue_response(Response::Secret(SecretString::from(swapped.join("\n"))));
+    harness.enqueue_retry(Response::Secret(SecretString::from(
+        phrase.split(' ').collect::<Vec<_>>().join("\n"),
+    )));
+    let state = make_state();
+    let step = creating_step("type_the_phrase", "phrase");
+
+    let result = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        EnterSecretAction
+            .execute(
+                &step,
+                &ctx,
+                &serde_json::json!({
+                    "message": "The recovery phrase",
+                    "format": "bip39",
+                    "length": 24,
+                }),
+                &mut reporter,
+                None,
+            )
+            .expect("the second answer has the right checksum")
+    };
+    match produced(&result.artifacts, "phrase") {
+        ArtifactValue::Secret(secret) => assert_eq!(secret.expose_secret().as_slice(), entropy),
+        other => panic!("enter_secret must produce a Secret, got {other:?}"),
+    }
+    let prompt = harness
+        .facts()
+        .iter()
+        .find_map(|fact| match fact {
+            StepFact::PromptAnswered { prompt, .. } => Some(prompt.clone()),
+            _ => None,
+        })
+        .expect("the prompt is recorded");
+    match prompt {
+        Prompt::EnterRows { rows, format, .. } => {
+            assert_eq!(rows, Some(24));
+            assert_eq!(format, rite_model::RevealFormat::Bip39);
+        }
+        other => panic!("expected rows, got {other:?}"),
+    }
+    let serialized = serde_json::to_string(harness.facts()).unwrap();
+    assert!(!serialized.contains("legal winner"), "{serialized}");
+}
+
+/// A recovery phrase is a secret, so `enter_value` refuses it.
+#[test]
+fn enter_value_refuses_bip39() {
+    let mut harness = ReporterHarness::new();
+    let state = make_state();
+    let step = creating_step("type_the_phrase", "phrase");
+    let ctx = state.handler_context();
+    let mut reporter = harness.reporter(step.id.clone());
+    let error = EnterValueAction
+        .execute(
+            &step,
+            &ctx,
+            &serde_json::json!({ "message": "Phrase", "format": "bip39" }),
+            &mut reporter,
+            None,
+        )
+        .expect_err("a phrase is a secret");
+    assert!(error.to_string().contains("enter_secret"), "{error}");
+}
+
 #[test]
 fn enter_secret_refuses_a_step_that_holds_the_secret_nowhere() {
     let mut harness = ReporterHarness::new();
@@ -1749,6 +1826,67 @@ fn reveal_shows_a_share_and_records_only_that_it_was_shown() {
     assert!(!serialized.contains(&expected[..20]), "{serialized}");
     // A 32-byte secret is a 35-byte share: two rows of 32.
     assert_eq!(expected.len(), 64);
+}
+
+/// `bip39` shows entropy as its words and counts `length:` in words. A
+/// share is not a wallet's entropy and is refused, as is entropy of a
+/// length no phrase has.
+#[test]
+fn reveal_in_bip39_shows_entropy_and_refuses_a_share() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let mut harness = ReporterHarness::new();
+    let (state, shares) = split(&mut backend, &mut harness, &[0x42; 32], 2, 3);
+    let state = state
+        .with_material(ArtifactId::new("shares"), shares)
+        .with_material(
+            ArtifactId::new("entropy"),
+            ArtifactValue::Secret(SecretBox::new(Box::new(vec![0x42; 32]))),
+        )
+        .with_material(
+            ArtifactId::new("odd"),
+            ArtifactValue::Secret(SecretBox::new(Box::new(vec![0x42; 15]))),
+        );
+    let reading = |id: &str, property: Option<&str>| {
+        let map = HashMap::from([(
+            "value".to_string(),
+            NamedInput::One(ArtifactRef::Produced {
+                id: ArtifactId::new(id),
+                property: property.map(str::to_string),
+            }),
+        )]);
+        StepInfo::new(
+            StepId::new("show"),
+            None,
+            None,
+            None,
+            Some(StepInputs::Named(map)),
+        )
+    };
+    let run = |harness: &mut ReporterHarness, step: &StepInfo, length: u64| {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        RevealAction.execute(
+            step,
+            &ctx,
+            &serde_json::json!({ "message": "Type these in", "format": "bip39", "length": length }),
+            &mut reporter,
+            None,
+        )
+    };
+
+    harness.enqueue_response(Response::Acknowledge);
+    run(&mut harness, &reading("entropy", None), 24).expect("32 bytes are 24 words");
+    let err = run(&mut harness, &reading("entropy", None), 12).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("value 'entropy' is 24 words; the step says length: 12"),
+        "{err}"
+    );
+    let err = run(&mut harness, &reading("shares", Some("share_1")), 24).unwrap_err();
+    assert!(err.to_string().contains("is a share"), "{err}");
+    // 15 bytes round up to 12 words, so only the encoding refuses them.
+    let err = run(&mut harness, &reading("odd", None), 12).unwrap_err();
+    assert!(err.to_string().contains("16 to 32 bytes"), "{err}");
 }
 
 /// The sheet is printed for `length:` bytes before the run. A value of

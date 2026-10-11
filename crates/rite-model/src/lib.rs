@@ -18,6 +18,7 @@
 
 #![warn(missing_docs)]
 
+pub mod bip39;
 pub mod bundle;
 mod canonical;
 pub mod commitment;

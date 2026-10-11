@@ -10,8 +10,8 @@
 //! `rite script` prints the sheet for it.
 
 use rite_model::display::hex_upper;
-use rite_model::paper32;
 use rite_model::{ActionType, Prompt, RevealFormat, Shown};
+use rite_model::{bip39, paper32};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, Response, StepInfo,
     StepResult, parse_params, resolve_artifact_bytes, resolve_share,
@@ -28,6 +28,8 @@ use crate::params::RevealParams;
 ///
 /// A share is shown as the rows of its wire layout, any other byte
 /// artifact as the rows of its bytes; `format: hex` shows either as hex.
+/// `format: bip39` shows a byte artifact as a wallet's recovery phrase, a
+/// word per row, and refuses a share, which is not a wallet's entropy.
 pub struct RevealAction;
 
 impl Action for RevealAction {
@@ -53,7 +55,7 @@ impl Action for RevealAction {
         let text = if is_share {
             let held = resolve_share(ctx.artifacts, &id, input.property())
                 .map_err(|e| ActionError::Failed(format!("value '{name}': {e}")))?;
-            check_length(typed.length, held.y().len(), &name)?;
+            check_length(typed.length, held.y().len(), layout.format, &name)?;
             let share = gf256::Share::new(held.threshold(), held.index(), held.y().to_vec())
                 .map_err(|e| ActionError::Failed(format!("value '{name}' is not a share: {e}")))?;
             match layout.format {
@@ -62,15 +64,26 @@ impl Action for RevealAction {
                     let bytes = Zeroizing::new(super::wire::encode(&share));
                     hex_upper(&bytes)
                 }
+                RevealFormat::Bip39 => {
+                    return Err(ActionError::Failed(format!(
+                        "value '{name}' is a share, written in paper32 or hex; bip39 is for \
+                         the secret the shares combine into"
+                    )));
+                }
                 other => return Err(unsupported(other)),
             }
         } else {
             let bytes = resolve_artifact_bytes(ctx.artifacts, &id, input.property())
                 .map_err(|e| ActionError::Failed(format!("value '{name}': {e}")))?;
-            check_length(typed.length, bytes.len(), &name)?;
+            check_length(typed.length, bytes.len(), layout.format, &name)?;
             match layout.format {
                 RevealFormat::Paper32 => paper32::encode(bytes),
                 RevealFormat::Hex => hex_upper(bytes),
+                // Moved out, not copied: `Shown` wipes it from here on.
+                RevealFormat::Bip39 => std::mem::take(
+                    &mut *bip39::encode(bytes)
+                        .map_err(|e| ActionError::Failed(format!("value '{name}': {e}")))?,
+                ),
                 other => return Err(unsupported(other)),
             }
         };
@@ -98,16 +111,23 @@ impl Action for RevealAction {
     }
 }
 
-/// The sheet was printed for `length:` bytes; a value of another size does
-/// not fit it, and the person finds out at the last row. Refuse before
-/// anything is shown. For a share, the length is the secret's, as the
-/// sheet counts it.
-fn check_length(declared: Option<u64>, actual: usize, name: &str) -> Result<(), ActionError> {
+/// The sheet was printed for `length:`, in the format's unit; a value of
+/// another size does not fit it, and the person finds out at the last row.
+/// Refuse before anything is shown. For a share, the length is the
+/// secret's, as the sheet counts it.
+fn check_length(
+    declared: Option<u64>,
+    bytes: usize,
+    format: RevealFormat,
+    name: &str,
+) -> Result<(), ActionError> {
+    let actual = format.length_of(bytes);
     match declared {
         Some(declared) if u64::try_from(actual).ok() != Some(declared) => {
             Err(ActionError::Failed(format!(
-                "value '{name}' is {actual} bytes; the step says length: {declared}, and the \
-                 sheet was printed for that"
+                "value '{name}' is {actual} {unit}; the step says length: {declared}, and the \
+                 sheet was printed for that",
+                unit = format.unit()
             )))
         }
         _ => Ok(()),

@@ -117,6 +117,24 @@ fn a_reveal_step_gets_a_worksheet_page_shaped_by_its_format() {
     );
 }
 
+/// A phrase shown in `bip39` gets a row per word, as long as the longest
+/// word, and no parity.
+#[test]
+fn a_phrase_gets_a_row_per_word() {
+    let ceremony = resolve("examples/showcase/recovery_phrase.rite.yaml");
+    let html = render_worksheets(&ceremony, &Branding::default(), Theme::Formal)
+        .unwrap()
+        .expect("the example writes a share and shows a phrase");
+    // The share's two rows of 32, then 24 words of 8 boxes.
+    assert_eq!(html.matches("<div class=\"ws-line\">").count(), 2 + 24);
+    assert_eq!(
+        html.matches("<span class=\"ws-box\"></span>").count(),
+        64 + 24 * 8
+    );
+    assert_eq!(html.matches("class=\"ws-group ws-parity\"").count(), 2);
+    assert!(html.contains("Words from the BIP-39 English list"));
+}
+
 /// A share typed back with `enter_share` is a share as much as one a
 /// split made, so a sheet that shows it again has the share's boxes.
 #[test]

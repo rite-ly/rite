@@ -96,6 +96,18 @@ are in `test_data/recovery_sheets.txt`; try changing a character in one. This
 example needs a person at the keyboard; `rite run --dry-run` stops at the first
 share.
 
+### `recovery_phrase.rite.yaml`
+
+A hardware wallet's 24-word recovery phrase is entered, split two of three,
+recovered from two shares, and shown again as words to enter on a spare
+device. `enter_secret` with `format: bip39` checks each word against the BIP-39
+English list and the last word's checksum, and keeps the 32 bytes of entropy
+the words encode, so each share is two rows of paper32 rather than ten.
+`reveal` with `format: bip39` shows the recovered entropy as numbered words,
+and `rite script` prints a 24-row sheet for it. A dry run enters the all-zero
+phrase (`abandon` 23 times, then `art`). See
+[typed entry](../../docs/typed-entry.md).
+
 ## Run an example
 
 From the repository root:

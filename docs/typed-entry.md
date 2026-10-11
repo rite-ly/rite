@@ -86,6 +86,7 @@ rather than found later, and the rule is stated in the prompt before typing.
 | `hex` | bytes, two digits per byte, either case | the decoded bytes |
 | `base64` | bytes, standard base64 with padding | the decoded bytes |
 | `paper32` | bytes as rows from a sheet, `enter_secret` only | the decoded bytes |
+| `bip39` | a wallet's recovery phrase, a word per row, `enter_secret` only | the entropy |
 | `{ pattern: "..." }` | whatever the regular expression accepts, in full | the text |
 
 Each format has one canonical representation, and that is what the step
@@ -98,7 +99,7 @@ ceremony uses. A pattern is anchored at both ends, so `[0-9]+` accepts `1234`
 and not `abc1234`.
 
 `length`, or `min_length` and `max_length`, bound the value in the format's
-own unit: characters for text, bytes for an encoding. `format: hex` with
+own unit: characters for text, bytes for an encoding, words for `bip39`. `format: hex` with
 `length: 32` asks for a 32-byte key, however it is grouped.
 
 ```yaml
@@ -135,10 +136,43 @@ value on a sheet is a secret, and `enter_value` would put it in the
 transcript. A share is typed back with `enter_share` instead, which checks
 that it is one.
 
-Encodings with a wordlist, such as `bip39`, are not in the vocabulary yet.
-They follow the same rule when they land: one canonical form each, which for
-a BIP-39 phrase is the normalized words rather than the entropy, since that
-is what a wallet takes.
+`bip39` is a hardware wallet's recovery phrase, typed a word at a time in
+the order the wallet shows it:
+
+```yaml
+type_the_phrase:
+  action: enter_secret
+  role: officer
+  with:
+    message: "The recovery phrase shown on the wallet"
+    format: bip39
+    length: 24
+  creates: phrase
+```
+
+Each word is checked against the BIP-39 English list as it is typed, in
+either case, and its first four letters are enough, since the list keeps
+them unique and metal backup plates carry only those. A word not in the
+list is asked for again, named by its position and never repeated. The
+last word carries a checksum of the others, so a wrong word or two words
+swapped are refused once the phrase is in. `length:` counts words: 12, 15,
+18, 21 or 24, and `rite check` refuses any other.
+
+The artifact is the entropy the words encode, 32 bytes for 24 words, as
+for every other encoding. A split of it is two rows of paper32 per share,
+where the words would take ten. `reveal` with `format: bip39` turns it
+back into the words, so a phrase that was typed in, split and recovered
+can be typed into a device again; see [secret-sharing.md](secret-sharing.md).
+
+The list is English only. A wallet derives its keys from the words, not
+from the entropy, so the same entropy in another language's list is a
+different wallet. English is what hardware wallets use. Another language
+would be its own format at both ends, never a setting that could differ
+between the step that took the phrase in and the one that gives it back.
+
+The phrase alone is the wallet only when the wallet has no passphrase.
+A passphrase, sometimes called a 25th word, is neither in the words nor in
+the entropy; a ceremony that needs it takes it with its own `enter_secret`.
 
 ## Dry runs
 

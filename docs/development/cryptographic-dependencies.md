@@ -68,6 +68,15 @@ It is a module rather than a crate. A crate in this workspace hides an
 optional dependency behind a feature; this code has none and is always in the
 binary.
 
+## Checksums inside an encoding
+
+`rite-model/src/bip39.rs` hashes a secret with `sha2`: a BIP-39 phrase ends
+in the leading bits of the SHA-256 digest of its entropy. The digest is part
+of the encoding, as paper32's parity is, and BIP-39 fixes the function, so
+no provider could substitute another. It proves nothing and leaves the
+function: a typed phrase either carries its checksum or is refused. `sha2`
+is already how `rite-model` computes the transcript's commitments.
+
 ## Device bindings are not providers
 
 `cryptoki` in `rite-pkcs11`, and `yubikey` in `rite-piv`, sit outside the

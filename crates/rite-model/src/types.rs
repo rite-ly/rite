@@ -579,6 +579,41 @@ impl ActionType {
         }
     }
 
+    /// Whether the artifact this action creates is shares of a secret, which
+    /// `rite check` and `rite script` tell from the step that made it, since
+    /// the definition does not say what kind an artifact is.
+    pub fn creates_shares(self) -> bool {
+        match self {
+            ActionType::SplitSecret | ActionType::EnterShare => true,
+            ActionType::ClockCheck
+            | ActionType::Confirm
+            | ActionType::CheckValue
+            | ActionType::OralReadback
+            | ActionType::Reveal
+            | ActionType::MachineInfo
+            | ActionType::EnterValue
+            | ActionType::EnterSecret
+            | ActionType::GenerateKey
+            | ActionType::WrapKey
+            | ActionType::UnwrapKey
+            | ActionType::ImportKey
+            | ActionType::EncryptData
+            | ActionType::DecryptData
+            | ActionType::CombineShares
+            | ActionType::ExportPublic
+            | ActionType::SignData
+            | ActionType::VerifySignature
+            | ActionType::GenerateCsr
+            | ActionType::IssueCertificate
+            | ActionType::PivReadCertificate
+            | ActionType::PivSign
+            | ActionType::YubikeyAttestSlot
+            | ActionType::Attest
+            | ActionType::GatherEntropy
+            | ActionType::TpmAttest => false,
+        }
+    }
+
     /// Returns the `with:` field names that are required for this action.
     ///
     /// The resolver reports a diagnostic for each missing field.

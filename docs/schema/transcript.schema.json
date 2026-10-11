@@ -142,6 +142,11 @@
           "description": "Bytes as paper32 rows, typed a row at a time from a sheet, a wrong character in a row corrected.",
           "type": "string",
           "const": "paper32"
+        },
+        {
+          "description": "A BIP-39 recovery phrase in the English list, typed a word at a time; the value is its entropy, and a length counts words.",
+          "type": "string",
+          "const": "bip39"
         }
       ]
     },
@@ -458,6 +463,11 @@
           "description": "Two hexadecimal digits per byte, in rows of 32.",
           "type": "string",
           "const": "hex"
+        },
+        {
+          "description": "Words from the BIP-39 English list, one per row, for a wallet's recovery phrase.",
+          "type": "string",
+          "const": "bip39"
         }
       ]
     },

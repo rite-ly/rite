@@ -108,7 +108,8 @@ pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
             }
             errors
         }
-        ActionType::Reveal | ActionType::EnterShare => reveal(with),
+        ActionType::Reveal => reveal(with),
+        ActionType::EnterShare => enter_share(with),
         ActionType::UnwrapKey | ActionType::ImportKey => {
             let mut errors = key_identity(with, "expect_key");
             errors.extend(named_value(with, "algorithm", |name| {
@@ -118,17 +119,7 @@ pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
             errors
         }
         ActionType::EnterSecret => entry_shape(with),
-        ActionType::EnterValue => {
-            let mut errors = entry_shape(with);
-            if with.get("format").and_then(serde_json::Value::as_str) == Some("paper32") {
-                errors.push(ParamError {
-                    message: "'paper32' is for a value from a sheet, which is a secret: use \
-                              enter_secret, or enter_share for a share"
-                        .to_string(),
-                });
-            }
-            errors
-        }
+        ActionType::EnterValue => enter_value(with),
 
         ActionType::ClockCheck
         | ActionType::Confirm
@@ -148,21 +139,72 @@ pub fn check(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
     }
 }
 
+/// `enter_value`: the entry shape, and no format whose value is a secret,
+/// since the transcript carries what this step was answered.
+fn enter_value(with: &serde_json::Value) -> Vec<ParamError> {
+    let mut errors = entry_shape(with);
+    let rows = match with.get("format").map(FormatSpec::from_json) {
+        Some(Ok(FormatSpec::Named(format))) => format.rows(),
+        _ => None,
+    };
+    if let Some(rows) = rows {
+        errors.push(ParamError {
+            message: format!(
+                "'{rows}' is for a value written down, which is a secret: use enter_secret"
+            ),
+        });
+    }
+    errors
+}
+
+/// `enter_share`: as `reveal`, and a share is never words.
+fn enter_share(with: &serde_json::Value) -> Vec<ParamError> {
+    let mut errors = reveal(with);
+    let format = shown_format(with);
+    if format.is_words() {
+        errors.push(ParamError {
+            message: format!(
+                "a share is written in paper32 or hex; '{format}' is for the secret the shares \
+                 combine into"
+            ),
+        });
+    }
+    errors
+}
+
+/// The format a `reveal` or `enter_share` step names, or the default; one
+/// that does not parse is reported by [`reveal`].
+fn shown_format(with: &serde_json::Value) -> RevealFormat {
+    with.get("format")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|name| name.parse().ok())
+        .unwrap_or(RevealFormat::Paper32)
+}
+
 /// `reveal` and `enter_share`: a format this build shows, and a length in
-/// bytes.
+/// the format's unit, bytes or the words of a phrase.
 fn reveal(with: &serde_json::Value) -> Vec<ParamError> {
     let mut errors = named_value(with, "format", |name| {
         name.parse::<RevealFormat>()
             .map(|_| ())
             .map_err(|e| e.to_string())
     });
-    if let Some(value) = with.get("length")
-        && value.as_u64().is_none_or(|n| n == 0)
-    {
-        errors.push(ParamError {
-            message: format!("'length' must be a positive integer of bytes, found {value}"),
-        });
-    }
+    let format = shown_format(with);
+    let Some(value) = with.get("length") else {
+        return errors;
+    };
+    let message = match value.as_u64().and_then(|n| usize::try_from(n).ok()) {
+        None | Some(0) => Some(format!(
+            "'length' must be a positive integer of {}, found {value}",
+            format.unit()
+        )),
+        Some(n) if format.is_words() && !crate::bip39::is_phrase_len(n) => Some(format!(
+            "'length' counts words for '{format}', and a phrase has {}, found {value}",
+            crate::bip39::PHRASE_LENGTHS
+        )),
+        Some(_) => None,
+    };
+    errors.extend(message.map(|message| ParamError { message }));
     errors
 }
 
@@ -295,7 +337,7 @@ impl FormatSpec {
             }
             _ => Err(format!(
                 "'format' must name a format (text, digits, alphanumeric, hex, base64, \
-                 paper32) or be \
+                 paper32, bip39) or be \
                  {{ pattern: \"...\" }}, found {value}"
             )),
         }
@@ -363,6 +405,17 @@ impl EntryShape {
         {
             return Err(format!(
                 "'min_length' is {min} and 'max_length' is {max}, so no value fits"
+            ));
+        }
+        // Bounds that hold no phrase length describe no phrase.
+        if format == Some(Format::Bip39)
+            && !crate::bip39::phrase_lengths().any(|n| {
+                min_length.is_none_or(|min| n >= min) && max_length.is_none_or(|max| n <= max)
+            })
+        {
+            return Err(format!(
+                "a BIP-39 phrase has {} words, and the length given holds none of them",
+                crate::bip39::PHRASE_LENGTHS
             ));
         }
         match format {
@@ -658,6 +711,24 @@ mod tests {
         );
         assert!(sole(ActionType::Reveal, &json!({"format": "words"})).contains("not a format"));
         assert!(sole(ActionType::Reveal, &json!({"length": 0})).contains("positive integer"));
+        assert!(
+            check(
+                ActionType::Reveal,
+                &json!({"format": "bip39", "length": 24})
+            )
+            .is_empty()
+        );
+        assert!(
+            sole(
+                ActionType::Reveal,
+                &json!({"format": "bip39", "length": 32})
+            )
+            .contains("counts words")
+        );
+        assert!(
+            sole(ActionType::EnterShare, &json!({"format": "bip39"}))
+                .contains("a share is written")
+        );
     }
 
     #[test]
@@ -813,6 +884,35 @@ mod tests {
         );
         assert!(
             sole(ActionType::EnterSecret, &json!({"length": "six"})).contains("positive integer")
+        );
+        assert!(sole(ActionType::EnterValue, &json!({"format": "bip39"})).contains("enter_secret"));
+        assert!(
+            check(
+                ActionType::EnterSecret,
+                &json!({"format": "bip39", "length": 24})
+            )
+            .is_empty()
+        );
+        assert!(
+            check(
+                ActionType::EnterSecret,
+                &json!({"format": "bip39", "min_length": 12, "max_length": 24})
+            )
+            .is_empty()
+        );
+        assert!(
+            sole(
+                ActionType::EnterSecret,
+                &json!({"format": "bip39", "length": 32})
+            )
+            .contains("12, 15, 18, 21 or 24")
+        );
+        assert!(
+            sole(
+                ActionType::EnterSecret,
+                &json!({"format": "bip39", "min_length": 13, "max_length": 14})
+            )
+            .contains("12, 15, 18, 21 or 24")
         );
         assert!(check(ActionType::EnterSecret, &json!({"message": "PIN"})).is_empty());
         assert!(

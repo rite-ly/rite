@@ -512,7 +512,8 @@ fn worksheet_view(step: &Step, resolved: &Ceremony) -> Option<WorksheetView> {
 
     // A share is what a `split_secret` or an `enter_share` step created;
     // the artifact's kind is not in the definition, but its producer is.
-    // `length:` counts the secret's bytes, and the sheet the share's.
+    // `length:` counts the secret's bytes, and the sheet the share's; for a
+    // phrase it counts words.
     let share = step
         .reads_resolved
         .as_ref()
@@ -523,14 +524,14 @@ fn worksheet_view(step: &Step, resolved: &Ceremony) -> Option<WorksheetView> {
                 .execution_plan
                 .iter()
                 .filter(|s| s.creates.as_ref() == Some(&id))
-                .any(|s| matches!(s.action, ActionType::SplitSecret | ActionType::EnterShare))
+                .any(|s| s.action.creates_shares())
         });
     let layout = RevealFormat::layout_for(format);
     let characters = length.map(|len| {
         let bytes = if share {
             SharingScheme::RiteSssV1.share_len(len)
         } else {
-            len
+            layout.format.bytes_for(len)
         };
         layout.format.characters(bytes)
     });
@@ -552,18 +553,23 @@ fn worksheet_view(step: &Step, resolved: &Ceremony) -> Option<WorksheetView> {
             parity: layout.parity,
         }
     };
-    let rows: Vec<WorksheetRow> = match characters {
-        Some(total) => {
-            let mut rows = Vec::new();
-            let mut left = total;
-            while left > 0 {
-                let take = left.min(row_len);
-                rows.push(row_of(take.saturating_sub(layout.parity)));
-                left = left.saturating_sub(take);
-            }
-            rows
+    let rows: Vec<WorksheetRow> = if let Some(total) = characters {
+        let mut rows = Vec::new();
+        let mut left = total;
+        while left > 0 {
+            let take = left.min(row_len);
+            rows.push(row_of(take.saturating_sub(layout.parity)));
+            left = left.saturating_sub(take);
         }
-        None => (0..OPEN_ROWS).map(|_| row_of(layout.row)).collect(),
+        rows
+    } else {
+        // An open phrase gets a row for each word of the longest.
+        let open = if layout.format.is_words() {
+            rite_model::bip39::MAX_WORDS
+        } else {
+            OPEN_ROWS
+        };
+        (0..open).map(|_| row_of(layout.row)).collect()
     };
 
     Some(WorksheetView {

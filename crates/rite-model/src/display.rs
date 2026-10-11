@@ -7,6 +7,9 @@
 //! group for the eye, what the alphabet is and what the encoding is
 //! called. Only the number of rows depends on the value, and a sheet does
 //! not need it when every row has the same shape.
+//!
+//! `bip39` is words rather than characters: one word per row, numbered
+//! as a wallet asks for them, so the rows are the length.
 
 use std::fmt;
 use std::str::FromStr;
@@ -14,7 +17,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::paper32;
+use crate::{bip39, paper32};
 
 /// An encoding a value is shown in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +47,17 @@ pub enum RevealFormat {
         schemars(description = "Two hexadecimal digits per byte, in rows of 32.")
     )]
     Hex,
+    /// Words from the BIP-39 English list, one per row, as a hardware
+    /// wallet shows its recovery phrase and takes it back. For entropy of
+    /// 16 to 32 bytes in steps of 4. See [`bip39`].
+    #[cfg_attr(
+        test,
+        schemars(
+            description = "Words from the BIP-39 English list, one per row, for a wallet's \
+            recovery phrase."
+        )
+    )]
+    Bip39,
 }
 
 impl RevealFormat {
@@ -52,6 +66,40 @@ impl RevealFormat {
         match self {
             RevealFormat::Paper32 => "paper32",
             RevealFormat::Hex => "hex",
+            RevealFormat::Bip39 => "bip39",
+        }
+    }
+
+    /// Whether the value is words, one per row, rather than characters.
+    pub fn is_words(self) -> bool {
+        match self {
+            RevealFormat::Paper32 | RevealFormat::Hex => false,
+            RevealFormat::Bip39 => true,
+        }
+    }
+
+    /// What `length:` counts in this format, as a person reads it.
+    pub fn unit(self) -> &'static str {
+        match self {
+            RevealFormat::Paper32 | RevealFormat::Hex => "bytes",
+            RevealFormat::Bip39 => "words",
+        }
+    }
+
+    /// A value of `bytes` bytes in this format's unit: bytes, or the words
+    /// of a phrase.
+    pub fn length_of(self, bytes: usize) -> usize {
+        match self {
+            RevealFormat::Paper32 | RevealFormat::Hex => bytes,
+            RevealFormat::Bip39 => bip39::words_for(bytes),
+        }
+    }
+
+    /// The bytes a `length:` in this format's unit stands for.
+    pub fn bytes_for(self, length: usize) -> usize {
+        match self {
+            RevealFormat::Paper32 | RevealFormat::Hex => length,
+            RevealFormat::Bip39 => bip39::bytes_for(length),
         }
     }
 
@@ -75,6 +123,18 @@ impl RevealFormat {
                 parity: 0,
                 alphabet: "Digits 0 to 9 and letters A to F".to_string(),
                 algorithm: "Hexadecimal, two characters per byte".to_string(),
+            },
+            RevealFormat::Bip39 => Layout {
+                format: self,
+                group: bip39::WORD_MAX,
+                row: bip39::WORD_MAX,
+                parity: 0,
+                alphabet: "Words from the BIP-39 English list, one per row; the first four \
+                           letters are enough"
+                    .to_string(),
+                algorithm: "BIP-39, English: 11 bits per word, the last word carrying a \
+                            SHA-256 checksum"
+                    .to_string(),
             },
         }
     }
@@ -115,6 +175,10 @@ impl RevealFormat {
     /// What is wrong with the row, in words, for the person to fix.
     pub fn read_row(self, text: &str, row: usize, more: bool) -> Result<TypedRow, String> {
         let read = self.read_one_row(text, row)?;
+        // A word is a whole row however long it is.
+        if self.is_words() {
+            return Ok(read);
+        }
         let full = self.layout().row.saturating_add(self.layout().parity);
         let characters = read.text.chars().count();
         if more && characters < full {
@@ -155,6 +219,13 @@ impl RevealFormat {
                     full: false,
                 })
             }
+            RevealFormat::Bip39 => bip39::read_word(text, row)
+                .map(|text| TypedRow {
+                    text,
+                    repair: None,
+                    full: true,
+                })
+                .map_err(|e| e.to_string()),
         }
     }
 
@@ -195,6 +266,12 @@ impl RevealFormat {
                     repaired: Vec::new(),
                 })
             }
+            RevealFormat::Bip39 => bip39::decode(text)
+                .map(|decoded| TypedValue {
+                    bytes: decoded.bytes,
+                    repaired: Vec::new(),
+                })
+                .map_err(|e| e.to_string()),
         }
     }
 
@@ -207,6 +284,8 @@ impl RevealFormat {
                 symbols.saturating_add(rows.saturating_mul(paper32::ROW_PARITY))
             }
             RevealFormat::Hex => bytes.saturating_mul(2),
+            // A row of boxes per word, as long as the longest word.
+            RevealFormat::Bip39 => bip39::words_for(bytes).saturating_mul(bip39::WORD_MAX),
         }
     }
 }
@@ -262,7 +341,7 @@ pub struct UnknownRevealFormat(pub String);
 
 impl fmt::Display for UnknownRevealFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "'{}' is not a format; use paper32 or hex", self.0)
+        write!(f, "'{}' is not a format; use paper32, hex or bip39", self.0)
     }
 }
 
@@ -275,6 +354,7 @@ impl FromStr for RevealFormat {
         match s {
             "paper32" => Ok(RevealFormat::Paper32),
             "hex" => Ok(RevealFormat::Hex),
+            "bip39" => Ok(RevealFormat::Bip39),
             other => Err(UnknownRevealFormat(other.to_string())),
         }
     }
@@ -306,8 +386,17 @@ impl Default for Layout {
 
 impl Layout {
     /// Split a written value into rows, each its data in groups and its
-    /// parity, for a screen to style each part.
+    /// parity, for a screen to style each part. Words are a row each.
     pub fn rows<'a>(&self, text: &'a str) -> Vec<Row<'a>> {
+        if self.format.is_words() {
+            return text
+                .split_whitespace()
+                .map(|word| Row {
+                    groups: vec![word],
+                    parity: "",
+                })
+                .collect();
+        }
         let row_len = self.row.saturating_add(self.parity).max(1);
         text.as_bytes()
             .chunks(row_len)
@@ -430,7 +519,33 @@ mod tests {
         assert_eq!(RevealFormat::Hex.to_string(), "hex");
         assert_eq!(
             "words".parse::<RevealFormat>().unwrap_err().to_string(),
-            "'words' is not a format; use paper32 or hex"
+            "'words' is not a format; use paper32, hex or bip39"
+        );
+        assert_eq!("bip39".parse(), Ok(RevealFormat::Bip39));
+    }
+
+    #[test]
+    fn a_phrase_is_a_word_per_row() {
+        let phrase = bip39::encode(&[0u8; 32]).unwrap();
+        let rows = RevealFormat::Bip39.layout().rows(&phrase);
+        assert_eq!(rows.len(), 24);
+        assert_eq!(rows[23].groups, ["art"]);
+        assert_eq!(rows[0].parity, "");
+        assert_eq!(RevealFormat::Bip39.rows(32), 24);
+        assert_eq!(RevealFormat::Bip39.rows(16), 12);
+        assert_eq!(RevealFormat::Bip39.length_of(32), 24);
+        assert_eq!(RevealFormat::Bip39.bytes_for(24), 32);
+
+        // A short word is a whole row, and the count says where the phrase ends.
+        let row = RevealFormat::Bip39.read_row("ART", 24, false).unwrap();
+        assert_eq!(row.text.as_str(), "art");
+        assert!(row.full);
+        assert!(RevealFormat::Bip39.read_row("zoo", 1, true).unwrap().full);
+        assert!(RevealFormat::Bip39.read_row("abandonx", 1, true).is_err());
+        let typed: Vec<&str> = phrase.split(' ').collect();
+        assert_eq!(
+            *RevealFormat::Bip39.decode(&typed.join("\n")).unwrap().bytes,
+            [0u8; 32]
         );
     }
 }

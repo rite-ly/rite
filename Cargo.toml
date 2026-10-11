@@ -98,6 +98,8 @@ must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 module_name_repetitions = "allow"
+# Wants `assert_eq!(x, [])` for `assert!(x.is_empty())`, which needs the element type spelled out
+assert_is_empty = "allow"
 # Proactive correctness
 # Note: allow-unwrap-in-tests / allow-expect-in-tests are set in clippy.toml
 unwrap_used = "warn"

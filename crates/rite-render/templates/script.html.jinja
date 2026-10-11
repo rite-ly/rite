@@ -141,10 +141,8 @@
     <div class="fingerprint-record">
       <p class="fp-label">sha256</p>
       <div class="fingerprint-grid">
-        <p class="fingerprint-prefix">__ __ __ __ __ __ __ __</p>
-        <p class="fingerprint-prefix">__ __ __ __ __ __ __ __</p>
-        <p class="fingerprint-remainder">__ __ __ __ __ __ __ __</p>
-        <p class="fingerprint-remainder">__ __ __ __ __ __ __ __</p>
+        <div class="fingerprint-line fingerprint-prefix">{% for i in range(8) %}<span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span>{% endfor %}</div>
+        <div class="fingerprint-line fingerprint-remainder">{% for i in range(8) %}<span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span>{% endfor %}</div>
       </div>
     </div>
   </section>

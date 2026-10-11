@@ -345,8 +345,8 @@ ul.checklist li .item-desc {
 }
 .ws-box {
   display: inline-block;
-  width: 0.95em;
-  height: 1.35em;
+  width: 1em;
+  height: 1.7em;
   border: 1px solid #000;
 }
 .ws-parity {
@@ -408,21 +408,14 @@ ul.duty-items li {
   font-size: 0.7rem;
   color: var(--muted);
 }
-.fingerprint-grid p {
-  margin: 5px 0;
-  font-family: "SF Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
-  white-space: nowrap;
+.fingerprint-line {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  margin: 9px 0;
 }
-.fingerprint-prefix {
-  font-size: 1.05rem;
-  font-weight: 700;
-  letter-spacing: 0.3em;
-  color: var(--accent);
-}
-.fingerprint-remainder {
-  font-size: 0.92rem;
-  color: var(--muted);
-  letter-spacing: 0.28em;
+.fingerprint-remainder .ws-box {
+  border-color: var(--muted);
 }
 
 /* === Signatures === */
@@ -682,10 +675,8 @@ code, .hash {
     <div class="fingerprint-record">
       <p class="fp-label">sha256</p>
       <div class="fingerprint-grid">
-        <p class="fingerprint-prefix">__ __ __ __ __ __ __ __</p>
-        <p class="fingerprint-prefix">__ __ __ __ __ __ __ __</p>
-        <p class="fingerprint-remainder">__ __ __ __ __ __ __ __</p>
-        <p class="fingerprint-remainder">__ __ __ __ __ __ __ __</p>
+        <div class="fingerprint-line fingerprint-prefix"><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span></div>
+        <div class="fingerprint-line fingerprint-remainder"><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span></div>
       </div>
     </div>
   </section>

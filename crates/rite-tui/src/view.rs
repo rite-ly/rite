@@ -1068,10 +1068,11 @@ fn render_completed(fingerprint: Option<&str>, frame: &mut Frame<'_>, area: Rect
 /// value to paper sees the same shape they see in the script.
 const EMPHASIZED_HEX: usize = 32;
 
-/// Render the fingerprint as space-separated hex pairs, split across two
-/// aligned lines: the emphasized first [`EMPHASIZED_HEX`] characters on top,
-/// the rest indented underneath. Two lines avoid the mid-value wrap that a
-/// single line hits at 32 spaced byte pairs plus the `sha256:` label.
+/// Render the fingerprint as space-separated groups of four hex characters,
+/// split across two aligned lines: the emphasized first [`EMPHASIZED_HEX`]
+/// characters on top, the rest indented underneath. The groups are the ones
+/// of the boxes on the printed script, so each line is copied box group by
+/// box group.
 fn fingerprint_lines(fp: &str, bold: Style) -> Vec<Line<'_>> {
     let (prefix, hex) = fp.split_once(':').unwrap_or(("", fp));
     let (emph, rest) = if hex.len() >= EMPHASIZED_HEX {
@@ -1087,20 +1088,20 @@ fn fingerprint_lines(fp: &str, bold: Style) -> Vec<Line<'_>> {
     let indent = " ".repeat(label.chars().count());
     let mut lines = vec![Line::from(vec![
         Span::raw(label),
-        Span::styled(space_hex_pairs(emph), bold),
+        Span::styled(space_hex_groups(emph), bold),
     ])];
     if !rest.is_empty() {
         lines.push(Line::from(vec![
             Span::raw(indent),
-            Span::raw(space_hex_pairs(rest)),
+            Span::raw(space_hex_groups(rest)),
         ]));
     }
     lines
 }
 
-fn space_hex_pairs(hex: &str) -> String {
+fn space_hex_groups(hex: &str) -> String {
     hex.as_bytes()
-        .chunks(2)
+        .chunks(4)
         .map(|c| String::from_utf8_lossy(c).into_owned())
         .collect::<Vec<_>>()
         .join(" ")
@@ -1177,4 +1178,30 @@ fn plain_block() -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_style(theme::border())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn a_fingerprint_is_two_lines_of_eight_groups_of_four() {
+        let fingerprint = format!("sha256:{}", "0123456789abcdef".repeat(4));
+        let lines = fingerprint_lines(&fingerprint, Style::default());
+        let [first, second] = lines.as_slice() else {
+            panic!("expected two lines, got {}", lines.len());
+        };
+        assert_eq!(
+            text(first),
+            "sha256: 0123 4567 89ab cdef 0123 4567 89ab cdef"
+        );
+        assert_eq!(
+            text(second),
+            "        0123 4567 89ab cdef 0123 4567 89ab cdef"
+        );
+    }
 }

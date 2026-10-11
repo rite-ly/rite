@@ -104,7 +104,10 @@ fn a_reveal_step_gets_a_worksheet_page_shaped_by_its_format() {
     assert!(!html.contains("Use as many rows"));
 
     let script = render_script(&ceremony, &Branding::default(), Theme::Formal).unwrap();
-    assert!(!script.contains("<span class=\"ws-box\">"));
+    assert!(
+        !script.contains("<div class=\"ws-line\">"),
+        "the script carries no worksheet rows"
+    );
 
     let none = resolve("examples/showcase/encrypt_and_decrypt.rite.yaml");
     assert!(

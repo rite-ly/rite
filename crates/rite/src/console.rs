@@ -290,15 +290,21 @@ fn read_rows<R: BufRead, W: Write>(
     if let Some(note) = note {
         writeln!(stdout, "{note}")?;
     }
+    let (lead, open) = if format.is_words() {
+        (
+            "Type each word in order and press Enter; the first four letters are enough",
+            "; an empty line when done",
+        )
+    } else {
+        (
+            "Type each row from the sheet and press Enter",
+            "; an empty row when done, if the last row is full",
+        )
+    };
     writeln!(
         stdout,
-        "Type each row from the sheet and press Enter{}. Not written to the \
-         transcript.",
-        if rows.is_some() {
-            ""
-        } else {
-            "; an empty row when done, if the last row is full"
-        }
+        "{lead}{}. Not written to the transcript.",
+        if rows.is_some() { "" } else { open }
     )?;
     let mut typed: Vec<zeroize::Zeroizing<String>> = Vec::new();
     while rows.is_none_or(|expected| typed.len() < expected) {

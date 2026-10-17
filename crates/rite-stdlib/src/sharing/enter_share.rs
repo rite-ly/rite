@@ -46,6 +46,11 @@ impl Action for EnterShareAction {
             ));
         };
         let format = typed.format.unwrap_or(RevealFormat::Paper32);
+        if format.is_words() {
+            return Err(ActionError::Failed(format!(
+                "a share is written in paper32 or hex, not {format}"
+            )));
+        }
         let length = typed
             .length
             .map(|n| usize::try_from(n).unwrap_or(usize::MAX));

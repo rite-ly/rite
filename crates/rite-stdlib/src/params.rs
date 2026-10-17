@@ -418,16 +418,18 @@ pub struct RevealParams {
     /// What the value is and what to do with it, shown above it and
     /// printed on the sheet.
     pub message: String,
-    /// The encoding: `paper32` (the default) or `hex`.
+    /// The encoding: `paper32` (the default), `hex`, or `bip39` for a
+    /// wallet's recovery phrase.
     #[serde(default)]
     pub format: Option<rite_model::RevealFormat>,
     /// Text printed on the sheet: where it goes, who keeps it.
     #[serde(default)]
     pub note: Option<String>,
-    /// The value's length in bytes, when the author knows it, so the sheet
-    /// has exactly the right number of boxes; a value of another size is
-    /// refused. For a share, the secret's length, not counting the three
-    /// bytes a share carries in front of it.
+    /// The value's length in the format's unit, words for `bip39` and
+    /// bytes otherwise, when the author knows it, so the sheet has exactly
+    /// the right number of rows; a value of another size is refused. For
+    /// a share, the secret's length, not counting the three bytes a share
+    /// carries in front of it.
     #[serde(default)]
     pub length: Option<u64>,
 }

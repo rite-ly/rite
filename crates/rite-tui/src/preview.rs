@@ -491,3 +491,71 @@ fn preview_enter_rows_window() {
     assert!(out.contains("3  0410 67"));
     assert!(out.contains("character 7 was wrong"));
 }
+
+/// A phrase is shown in three columns numbered down each, as a wallet's
+/// recovery card is, so 24 words take eight lines and fit a 24-line
+/// terminal.
+#[test]
+fn preview_reveal_phrase_window() {
+    let phrase = rite_model::bip39::encode(&[0x7F; 32]).unwrap().to_string();
+    let mut m = sample_running();
+    m.pending_prompt = Some(PendingPrompt {
+        prompt_id: PromptId::new(5),
+        prompt: Prompt::Reveal {
+            label: "Type these words into the spare device, in order".to_string(),
+            note: None,
+            shown: rite_model::Shown::new(phrase, rite_model::RevealFormat::Bip39.layout()),
+        },
+        input: String::new(),
+        rejection: None,
+        reveal: RevealPhase::Shown,
+        entry: RowEntry::default(),
+    });
+    let out = render(&m, 100, 24);
+    eprintln!("--- reveal phrase (100x24) ---\n{out}");
+    let first = out
+        .lines()
+        .find(|l| l.contains(" 1  legal"))
+        .expect("word 1 is shown");
+    assert!(first.contains(" 9  legal"), "{first}");
+    assert!(first.contains("17  legal"), "{first}");
+    assert!(out.contains("24  title"));
+    assert!(out.contains("Enter: written down"));
+}
+
+/// A phrase typed back fills the same columns, the word being typed in
+/// its place, and says words rather than rows.
+#[test]
+fn preview_enter_phrase_window() {
+    let phrase = rite_model::bip39::encode(&[0x7F; 32]).unwrap();
+    let mut m = sample_running();
+    m.pending_prompt = Some(PendingPrompt {
+        prompt_id: PromptId::new(6),
+        prompt: Prompt::EnterRows {
+            label: "The recovery phrase shown on the wallet".to_string(),
+            note: None,
+            format: rite_model::RevealFormat::Bip39,
+            rows: Some(24),
+            validator: None,
+        },
+        input: "wor".to_string(),
+        rejection: None,
+        reveal: RevealPhase::Ready,
+        entry: RowEntry {
+            rows: phrase
+                .split(' ')
+                .take(10)
+                .map(|w| EnteredRow {
+                    typed: zeroize::Zeroizing::new(w.to_string()),
+                    reads: zeroize::Zeroizing::new(w.to_string()),
+                })
+                .collect(),
+            notice: None,
+        },
+    });
+    let out = render(&m, 100, 24);
+    eprintln!("--- enter phrase (100x24) ---\n{out}");
+    assert!(out.contains("Type each word in order"));
+    assert!(out.contains("11  wor▏"));
+    assert!(out.contains("Enter: next word"));
+}

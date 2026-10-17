@@ -38,7 +38,7 @@
 {%- endif %}
       </div>
 {%- endfor %}
-      <p class="ws-small">{% if not sheet.worksheet.exact %}Use as many rows as the value has, each ending in its parity cells. {% endif %}{{ sheet.worksheet.alphabet }}. {{ sheet.worksheet.algorithm }}{% if sheet.worksheet.rows[0].parity > 0 %}; the shaded cells at the end of each row are its parity{% endif %}.</p>
+      <p class="ws-small">{% if not sheet.worksheet.exact %}Use as many rows as the value has{% if sheet.worksheet.rows[0].parity > 0 %}, each ending in its parity cells{% endif %}. {% endif %}{{ sheet.worksheet.alphabet }}. {{ sheet.worksheet.algorithm }}{% if sheet.worksheet.rows[0].parity > 0 %}; the shaded cells at the end of each row are its parity{% endif %}.</p>
     </div>
   </section>
 {%- endfor %}

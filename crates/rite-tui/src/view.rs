@@ -374,12 +374,16 @@ fn render_enter_rows(pending: &PendingPrompt, frame: &mut Frame<'_>, area: Rect)
         return;
     };
     let layout = format.layout();
+    let what = if format.is_words() { "word" } else { "row" };
     let mut lines = vec![
         Line::from(""),
-        Line::from(
+        Line::from(if format.is_words() {
+            "Type each word in order and press Enter; each word is checked as it comes, \
+             and its first four letters are enough. Not written to the transcript."
+        } else {
             "Type each row from the sheet and press Enter; each row is checked as it \
-             comes. Not written to the transcript.",
-        ),
+             comes. Not written to the transcript."
+        }),
     ];
     if let Some(note) = note {
         lines.push(Line::from(""));
@@ -389,23 +393,42 @@ fn render_enter_rows(pending: &PendingPrompt, frame: &mut Frame<'_>, area: Rect)
         )));
     }
     lines.push(Line::from(""));
-    for (n, row) in pending.entry.rows.iter().enumerate() {
-        if let Some(laid_out) = layout.rows(&row.reads).first() {
-            lines.push(row_line(n, laid_out));
-        }
-    }
     let current = pending.entry.rows.len();
-    if rows.is_none_or(|expected| current < expected) {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{:>3}  ", current.saturating_add(1)),
-                theme::footer(),
-            ),
-            Span::styled(
-                format!("{}▏", pending.input),
-                theme::text().add_modifier(Modifier::BOLD),
-            ),
-        ]));
+    let open = rows.is_none_or(|expected| current < expected);
+    if format.is_words() {
+        let mut cells: Vec<_> = pending
+            .entry
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(n, row)| word_cell(n, &row.reads, false))
+            .collect();
+        if open {
+            cells.push(word_cell(current, &pending.input, true));
+        }
+        // Room for the longest phrase when the step gives no count.
+        lines.extend(word_grid(
+            cells,
+            rows.unwrap_or(rite_model::bip39::MAX_WORDS),
+        ));
+    } else {
+        for (n, row) in pending.entry.rows.iter().enumerate() {
+            if let Some(laid_out) = layout.rows(&row.reads).first() {
+                lines.push(row_line(n, laid_out));
+            }
+        }
+        if open {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{:>3}  ", current.saturating_add(1)),
+                    theme::footer(),
+                ),
+                Span::styled(
+                    format!("{}▏", pending.input),
+                    theme::text().add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
     }
     match &pending.entry.notice {
         Some(RowNotice::Repaired(repair)) => {
@@ -415,7 +438,7 @@ fn render_enter_rows(pending: &PendingPrompt, frame: &mut Frame<'_>, area: Rect)
         Some(RowNotice::Refused(reason)) => {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                format!("{reason}; type the row again"),
+                format!("{reason}; type the {what} again"),
                 theme::text().add_modifier(Modifier::ITALIC),
             )));
         }
@@ -431,9 +454,9 @@ fn render_enter_rows(pending: &PendingPrompt, frame: &mut Frame<'_>, area: Rect)
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         if rows.is_some() {
-            "Enter: next row  ·  Backspace: back  ·  Esc: abort"
+            format!("Enter: next {what}  ·  Backspace: back  ·  Esc: abort")
         } else {
-            "Enter: next row, or done on an empty one  ·  Esc: abort"
+            format!("Enter: next {what}, or done on an empty one  ·  Esc: abort")
         },
         theme::footer(),
     )));
@@ -528,6 +551,17 @@ fn render_prompt(pending: &PendingPrompt, frame: &mut Frame<'_>, area: Rect) {
 /// the data in groups, the parity set apart, as the sheet lays it out.
 /// Owned spans, since the prompt outlives no borrow of the model here.
 fn shown_lines(shown: &rite_model::Shown) -> Vec<Line<'static>> {
+    if shown.layout().format.is_words() {
+        let cells: Vec<_> = shown
+            .layout()
+            .rows(shown.text())
+            .iter()
+            .enumerate()
+            .map(|(n, row)| word_cell(n, row.groups.first().copied().unwrap_or_default(), false))
+            .collect();
+        let total = cells.len();
+        return word_grid(cells, total);
+    }
     shown
         .layout()
         .rows(shown.text())
@@ -535,6 +569,44 @@ fn shown_lines(shown: &rite_model::Shown) -> Vec<Line<'static>> {
         .enumerate()
         .map(|(n, row)| row_line(n, row))
         .collect()
+}
+
+/// Columns a phrase is laid out in, numbered down each as a wallet's
+/// recovery card is: 24 words take eight lines, 12 take four.
+const WORD_COLUMNS: usize = 3;
+
+/// Width of a word's cell: its number, the longest word, a cursor, and the
+/// gap before the next column.
+const WORD_CELL: usize = 3 + 2 + rite_model::bip39::WORD_MAX + 1 + 4;
+
+/// One word of a phrase, numbered from `n + 1`, padded to its cell; with
+/// `cursor`, the word being typed.
+fn word_cell(n: usize, word: &str, cursor: bool) -> Vec<Span<'static>> {
+    let number = format!("{:>3}  ", n.saturating_add(1));
+    let word = if cursor {
+        format!("{word}▏")
+    } else {
+        word.to_string()
+    };
+    let pad = WORD_CELL.saturating_sub(number.chars().count().saturating_add(word.chars().count()));
+    vec![
+        Span::styled(number, theme::footer()),
+        Span::styled(word, theme::text().add_modifier(Modifier::BOLD)),
+        Span::raw(" ".repeat(pad)),
+    ]
+}
+
+/// Cells in columns of equal height, filled down each column, with room
+/// for `total` cells.
+fn word_grid(cells: Vec<Vec<Span<'static>>>, total: usize) -> Vec<Line<'static>> {
+    let height = total.max(cells.len()).div_ceil(WORD_COLUMNS).max(1);
+    let mut lines: Vec<Vec<Span<'static>>> = vec![Vec::new(); height];
+    for (i, cell) in cells.into_iter().enumerate() {
+        if let Some(line) = i.checked_rem(height).and_then(|row| lines.get_mut(row)) {
+            line.extend(cell);
+        }
+    }
+    lines.into_iter().map(Line::from).collect()
 }
 
 /// One row of a value, numbered from `n + 1`, in groups, the parity apart.

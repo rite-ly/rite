@@ -283,7 +283,8 @@ pub enum ValidatorSpec {
 /// Each format has one canonical representation, which is what an entry step
 /// keeps: the text as typed for a text format, the decoded bytes for an
 /// encoding. An encoding is forgiving of the grouping a person types it in,
-/// so whitespace is dropped before decoding.
+/// so whitespace is dropped before decoding, except between the words of a
+/// `bip39` phrase, where it separates them.
 #[non_exhaustive]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,6 +320,17 @@ pub enum Format {
         )
     )]
     Paper32,
+    /// A BIP-39 recovery phrase in the English list, typed a word at a
+    /// time; the value is the entropy it encodes, and a length counts
+    /// words. See [`crate::bip39`].
+    #[cfg_attr(
+        test,
+        schemars(
+            description = "A BIP-39 recovery phrase in the English list, typed a word at a \
+            time; the value is its entropy, and a length counts words."
+        )
+    )]
+    Bip39,
 }
 
 impl Format {
@@ -327,15 +339,36 @@ impl Format {
     pub fn is_encoding(self) -> bool {
         match self {
             Format::Text | Format::Digits | Format::Alphanumeric => false,
-            Format::Hex | Format::Base64 | Format::Paper32 => true,
+            Format::Hex | Format::Base64 | Format::Paper32 | Format::Bip39 => true,
         }
+    }
+
+    /// The encoding a value in this format is typed in a row at a time,
+    /// from a sheet or a device's screen; `None` for a value typed on one
+    /// line. Such a value is a secret, and only `enter_secret` takes it.
+    #[must_use]
+    pub fn rows(self) -> Option<crate::RevealFormat> {
+        match self {
+            Format::Paper32 => Some(crate::RevealFormat::Paper32),
+            Format::Bip39 => Some(crate::RevealFormat::Bip39),
+            Format::Text | Format::Digits | Format::Alphanumeric | Format::Hex | Format::Base64 => {
+                None
+            }
+        }
+    }
+
+    /// A decoded value of `bytes` bytes in the format's unit: the words of
+    /// a phrase for `bip39`, the bytes for another encoding.
+    #[must_use]
+    pub fn length_of(self, bytes: usize) -> usize {
+        self.rows().map_or(bytes, |rows| rows.length_of(bytes))
     }
 
     /// Whether a text format accepts this character. An encoding accepts
     /// whatever decodes.
     fn accepts(self, c: char) -> bool {
         match self {
-            Format::Text | Format::Hex | Format::Base64 | Format::Paper32 => true,
+            Format::Text | Format::Hex | Format::Base64 | Format::Paper32 | Format::Bip39 => true,
             Format::Digits => c.is_ascii_digit(),
             Format::Alphanumeric => c.is_ascii_alphanumeric(),
         }
@@ -361,7 +394,11 @@ impl Format {
             // Rows and positions only: a paper32 refusal names where to look
             // on the sheet, never a character.
             Format::Paper32 => crate::paper32::decode(value)
-                .map(|decoded| decoded.bytes.to_vec())
+                .map(|mut decoded| std::mem::take(&mut *decoded.bytes))
+                .map_err(|e| e.to_string()),
+            // Positions only, as for paper32: the words are the secret.
+            Format::Bip39 => crate::bip39::decode(value)
+                .map(|mut decoded| std::mem::take(&mut *decoded.bytes))
                 .map_err(|e| e.to_string()),
             Format::Text | Format::Digits | Format::Alphanumeric => {
                 Err(format!("{} is text and does not decode", self.describe()))
@@ -379,6 +416,7 @@ impl Format {
             Format::Hex => "bytes as hex",
             Format::Base64 => "bytes as base64",
             Format::Paper32 => "bytes as paper32 rows",
+            Format::Bip39 => "BIP-39 words",
         }
     }
 
@@ -400,6 +438,13 @@ impl Format {
             Format::Hex => base16ct::lower::encode_string(&vec![0u8; length]),
             Format::Base64 => base64ct::Base64::encode_string(&vec![0u8; length]),
             Format::Paper32 => crate::paper32::encode(&vec![0u8; length]),
+            // The shortest phrase of at least `length` words.
+            Format::Bip39 => {
+                let words = crate::bip39::phrase_lengths().find(|&n| n >= length)?;
+                crate::bip39::encode(&vec![0u8; crate::bip39::bytes_for(words)])
+                    .ok()?
+                    .to_string()
+            }
         })
     }
 }
@@ -420,9 +465,10 @@ impl std::str::FromStr for Format {
             "hex" => Ok(Format::Hex),
             "base64" => Ok(Format::Base64),
             "paper32" => Ok(Format::Paper32),
+            "bip39" => Ok(Format::Bip39),
             other => Err(format!(
-                "unknown format '{other}': expected text, digits, alphanumeric, hex, base64 \
-                 or paper32"
+                "unknown format '{other}': expected text, digits, alphanumeric, hex, base64, \
+                 paper32 or bip39"
             )),
         }
     }
@@ -467,7 +513,7 @@ impl ValidatorSpec {
                 // the value may be a secret, and this runs before the step
                 // holds it.
                 let length = if format.is_encoding() {
-                    Zeroizing::new(format.decode(value)?).len()
+                    format.length_of(Zeroizing::new(format.decode(value)?).len())
                 } else {
                     if !value.chars().all(|c| format.accepts(c)) {
                         return Err(format!("value must be {hint}"));

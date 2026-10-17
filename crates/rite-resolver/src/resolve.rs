@@ -10,7 +10,7 @@ use crate::schema;
 use indexmap::IndexMap;
 use rite_model::expression::RefType;
 use rite_model::expression::{
-    ExprError, Expression, Reference, parse_expr_value, parse_expression_detailed,
+    ExprError, ExprValue, Expression, Reference, parse_expr_value, parse_expression_detailed,
 };
 use rite_model::{
     Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind,
@@ -1094,8 +1094,23 @@ impl ResolveContext {
         materials: &HashMap<String, schema::Material>,
     ) {
         let mut available: HashSet<String> = materials.keys().cloned().collect();
+        // Artifacts that are shares, by the step that made them. The order
+        // is the plan's, so the producer is known before any reader.
+        let mut shares: HashSet<ArtifactId> = HashSet::new();
 
         for step in execution_plan {
+            if let Some(message) = phrase_of_a_share(step, &shares) {
+                self.add_error(ResolveError::InvalidWithValue {
+                    step: step.id.clone(),
+                    action: step.action,
+                    message,
+                });
+            }
+            if step.action.creates_shares()
+                && let Some(created) = &step.creates
+            {
+                shares.insert(created.clone());
+            }
             for input in &step.reads {
                 if let ArtifactRef::Produced { id, .. } = input
                     && !available.contains(id.as_str())
@@ -1167,6 +1182,28 @@ impl ResolveContext {
             None
         }
     }
+}
+
+/// A `reveal` step that shows a share as a recovery phrase: refused at run
+/// time, since a share's bytes are not a wallet's entropy, and caught here
+/// so the ceremony does not stop after the split has run.
+fn phrase_of_a_share(step: &Step, shares: &HashSet<ArtifactId>) -> Option<String> {
+    if step.action != ActionType::Reveal
+        || step
+            .with
+            .get("format")
+            .and_then(ExprValue::as_literal_string)
+            != Some("bip39")
+    {
+        return None;
+    }
+    let value = step.reads_resolved.as_ref()?.get("value")?.artifact_id();
+    shares.contains(&value).then(|| {
+        format!(
+            "'{value}' is a share, written in paper32 or hex; 'format: bip39' is for the secret \
+             the shares combine into"
+        )
+    })
 }
 
 /// Whether a step's `reads:` map names this input.
@@ -2372,6 +2409,69 @@ sections:
             "{:?}",
             result.errors
         );
+    }
+
+    /// A share shown as a phrase would stop the run at the step, after the
+    /// split; the check finds it from the step that made the artifact.
+    #[test]
+    fn a_share_is_not_shown_as_a_phrase() {
+        let mut ceremony = minimal_ceremony();
+        let step = |action, with, reads, creates: Option<&str>| {
+            let mut body = make_step_body();
+            body.action = action;
+            body.with = Some(with);
+            body.reads = reads;
+            body.creates = creates.map(str::to_string);
+            body
+        };
+        let steps = &mut ceremony.sections.get_mut("main").unwrap().steps;
+        steps.insert(
+            "type_the_phrase".to_string(),
+            step(
+                ActionType::EnterSecret,
+                serde_json::json!({ "message": "Phrase", "format": "bip39" }),
+                None,
+                Some("phrase"),
+            ),
+        );
+        steps.insert(
+            "split".to_string(),
+            step(
+                ActionType::SplitSecret,
+                serde_json::json!({ "threshold": 2, "shares": 3 }),
+                Some(serde_json::json!({ "secret": "${artifact.phrase}" })),
+                Some("shares"),
+            ),
+        );
+        for (id, value) in [
+            ("show_a_share", "${artifact.shares.share_1}"),
+            ("show_the_phrase", "${artifact.phrase}"),
+        ] {
+            steps.insert(
+                id.to_string(),
+                step(
+                    ActionType::Reveal,
+                    serde_json::json!({ "message": "Words", "format": "bip39" }),
+                    Some(serde_json::json!({ "value": value })),
+                    None,
+                ),
+            );
+        }
+
+        let result = resolve_ceremony(ceremony, None);
+        let refused: Vec<&str> = result
+            .errors
+            .iter()
+            .filter_map(|e| match e {
+                ResolveError::InvalidWithValue { step, message, .. }
+                    if message.contains("is a share") =>
+                {
+                    Some(step.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(refused, ["show_a_share"], "{:?}", result.errors);
     }
 
     #[test]

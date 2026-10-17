@@ -144,11 +144,12 @@ fn default_response(prompt: &Prompt, rehearsal: bool) -> io::Result<Response> {
 fn placeholder(validator: &ValidatorSpec, unconstrained: &str) -> Option<String> {
     match validator {
         ValidatorSpec::NonEmpty => Some(unconstrained.to_string()),
+        // The shortest length the rule allows: every format's placeholder
+        // is at least as long as asked, so asking for the maximum would
+        // overshoot one that rounds up, as a phrase's word count does.
         ValidatorSpec::Format {
-            format,
-            min_length,
-            max_length,
-        } => format.placeholder(min_length.or(*max_length).unwrap_or(1).max(1)),
+            format, min_length, ..
+        } => format.placeholder(min_length.unwrap_or(1).max(1)),
         // A pattern and a named predicate, and whatever the model adds next.
         _ => None,
     }
@@ -295,6 +296,12 @@ mod tests {
             (rite_model::Format::Digits, Some(6), Some(8)),
             (rite_model::Format::Base64, Some(32), None),
             (rite_model::Format::Hex, None, None),
+            (rite_model::Format::Hex, None, Some(4)),
+            // A phrase rounds up to a word count; only a maximum must not
+            // be overshot, and one above 24 words must not be asked for.
+            (rite_model::Format::Bip39, None, Some(14)),
+            (rite_model::Format::Bip39, None, Some(30)),
+            (rite_model::Format::Bip39, Some(13), Some(15)),
         ] {
             let validator = rite_model::ValidatorSpec::Format {
                 format,

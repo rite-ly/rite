@@ -98,16 +98,38 @@ rather than guessed at. The encoding is called paper32.
 `reveal` shows any byte artifact, not only a share, in the same rows;
 `format: hex` shows either as two characters per byte instead.
 
+`format: bip39` shows a secret as a wallet's recovery phrase, a numbered
+word per row, in the order a wallet asks for them. It is for what
+`enter_secret` with `format: bip39` took in, entropy of 16 to 32 bytes in
+steps of 4, most often recovered from shares:
+
+```yaml
+show_the_phrase:
+  action: reveal
+  reads:
+    value: ${artifact.recovered}
+  with:
+    message: "Type these words into the spare device, in order"
+    format: bip39
+    length: 24
+```
+
+A share is refused, since its bytes are not a wallet's entropy, and so is
+a value of any other length. Nothing records which format a secret was
+typed in, so the step names it; a phrase recovered and shown as paper32 by
+mistake is rows of characters, not words, and does not go unnoticed.
+
 `rite script` prints a sheet for every `reveal` step, one page each, in a
 document of its own beside the script, `<name>.worksheets.html`, since a
 sheet is printed once and kept with the value while the script is copied
 for everyone in the room: rows of boxes in groups of four with the parity
 cells shaded at the end of each row, the encoding named in small print and
 the step's `note:` beneath the heading. Give `length:` (the value's size
-in bytes, and for a share the secret's, as on `enter_share`) and the sheet
-has exactly the right rows, and the step refuses a value of another size
-before showing it; leave it out and the sheet has five rows to use as
-needed.
+in bytes, and for a share the secret's, as on `enter_share`; for `bip39`
+the number of words) and the sheet has exactly the right rows, and the
+step refuses a value of another size before showing it; leave it out and
+the sheet has five rows to use as needed, or 24 for a phrase. A phrase's
+sheet is a row of eight boxes per word, the longest word in the list.
 
 A dry run walks a `reveal` step. A real run without a screen, under
 `--frontend headless`, stops at it: no one is there to write, and printing

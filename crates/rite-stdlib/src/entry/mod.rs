@@ -9,7 +9,7 @@
 //! transcript.
 
 use rite_model::params::EntryShape;
-use rite_model::{ActionType, Format, Prompt, RevealFormat, ValidatorSpec};
+use rite_model::{ActionType, Prompt, RevealFormat, ValidatorSpec};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, Response, StepInfo,
     StepResult, parse_params,
@@ -39,12 +39,10 @@ impl Action for EnterValueAction {
         _backend: Option<&mut dyn Backend>,
     ) -> Result<StepResult, ActionError> {
         let (label, validator) = entry(params)?;
-        if rows_of(&validator).is_some() {
-            return Err(ActionError::Failed(
-                "'paper32' is for a value from a sheet, which is a secret: use enter_secret, \
-                 or enter_share for a share"
-                    .to_string(),
-            ));
+        if let Some((format, _)) = rows_of(&validator) {
+            return Err(ActionError::Failed(format!(
+                "'{format}' is for a value written down, which is a secret: use enter_secret"
+            )));
         }
         let response = reporter.prompt(&Prompt::Text {
             label,
@@ -100,8 +98,9 @@ impl Action for EnterSecretAction {
             )
         })?;
         let (label, validator) = entry(params)?;
-        // A value from a sheet is typed a row at a time, each row checked
-        // as it comes; anything else on one line with echo off.
+        // A value from a sheet or a wallet's screen is typed a row at a
+        // time, each row checked as it comes; anything else on one line
+        // with echo off.
         let prompt = match rows_of(&validator) {
             Some((format, rows)) => Prompt::EnterRows {
                 label,
@@ -155,20 +154,18 @@ fn entry(params: &serde_json::Value) -> Result<(String, ValidatorSpec), ActionEr
     Ok((label, validator))
 }
 
-/// The sheet encoding a rule reads rows of, and how many rows when the
-/// length is exact; `None` for a value typed on one line.
+/// The encoding a rule reads rows of, and how many rows when the length is
+/// exact; `None` for a value typed on one line.
 fn rows_of(validator: &ValidatorSpec) -> Option<(RevealFormat, Option<usize>)> {
     match validator {
         ValidatorSpec::Format {
-            format: Format::Paper32,
+            format,
             min_length,
             max_length,
         } => {
+            let rows = format.rows()?;
             let exact = min_length.filter(|&min| Some(min) == *max_length);
-            Some((
-                RevealFormat::Paper32,
-                exact.map(|n| RevealFormat::Paper32.rows(n)),
-            ))
+            Some((rows, exact.map(|n| rows.rows(rows.bytes_for(n)))))
         }
         _ => None,
     }

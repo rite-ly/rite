@@ -6,7 +6,7 @@
 
 use crate::report::ReportData;
 use crate::view::{Branding, ReportView, ScriptView, WorksheetsView, render_prose_html};
-use minijinja::value::Value;
+use minijinja::value::{Serde, Value};
 use minijinja::{Environment, context};
 use rite_model::Ceremony;
 
@@ -88,8 +88,8 @@ pub fn render_script(
     let env = environment()?;
     let template = env.get_template("script.html")?;
     template.render(context! {
-        script => view,
-        branding => branding,
+        script => Serde(view),
+        branding => Serde(branding),
         css => theme.css(),
         theme => theme.as_str(),
     })
@@ -114,8 +114,8 @@ pub fn render_worksheets(
     let template = env.get_template("worksheets.html")?;
     template
         .render(context! {
-            worksheets => view,
-            branding => branding,
+            worksheets => Serde(view),
+            branding => Serde(branding),
             css => theme.css(),
             theme => theme.as_str(),
         })
@@ -136,8 +136,8 @@ pub fn render_report(
     let env = environment()?;
     let template = env.get_template("report.html")?;
     template.render(context! {
-        report => view,
-        branding => branding,
+        report => Serde(view),
+        branding => Serde(branding),
         css => theme.css(),
         theme => theme.as_str(),
     })

@@ -24,7 +24,7 @@ hand_over_share_1:
     value: ${artifact.shares.share_1}
   with:
     message: "Share 1, for the first custodian's envelope"
-    length: 32
+    length: 35
 
 recover_the_seed:
   action: combine_shares
@@ -60,9 +60,12 @@ for why that is the one primitive not taken from a provider.
 ## What a share is
 
 A share is three things: how many shares recover the secret, which share
-this is (1, 2, 3, and so on), and one value per byte of the secret. The
-split creates one artifact holding every share, and a later step names one
-as `${artifact.shares.share_2}` under its `reads:`. Nowhere else: a share
+this is (1, 2, 3, and so on), and one value per byte of the secret. Written
+down, it is three bytes longer than the secret, a version byte coming first:
+35 bytes for a 32-byte secret, which is the `length:` that `reveal` and
+`enter_share` take. The split creates one artifact holding every share,
+and a later step names one as `${artifact.shares.share_2}` under its
+`reads:`. Nowhere else: a share
 never appears in `with:`, in a `description:` or in a message, because an
 expression makes a copy the run does not wipe and a message is recorded in
 the transcript. A step that shows or combines a share borrows it and gives
@@ -125,9 +128,8 @@ sheet is printed once and kept with the value while the script is copied
 for everyone in the room: rows of boxes in groups of four with the parity
 cells shaded at the end of each row, the encoding named in small print and
 the step's `note:` beneath the heading. Give `length:` (the value's size
-in bytes, and for a share the secret's, as on `enter_share`; for `bip39`
-the number of words) and the sheet has exactly the right rows, and the
-step refuses a value of another size before showing it; leave it out and
+in bytes, or for `bip39` the number of words) and the sheet has exactly
+the right rows, and the step refuses a value of another size before showing it; leave it out and
 the sheet has five rows to use as needed, or 24 for a phrase. A phrase's
 sheet is a row of eight boxes per word, the longest word in the list.
 
@@ -145,7 +147,7 @@ type_share_back:
   action: enter_share
   with:
     message: "Recovery share 3"
-    length: 32
+    length: 35
   creates: share_from_bag_3
 ```
 
@@ -157,7 +159,7 @@ When all the rows are in, rows that are not a share, from a different
 sheet say, are refused and asked for again.
 
 `message` is required and says which sheet. `note:` is shown with the
-rows. `length:` is the secret's length in bytes, as on the `reveal` step
+rows. `length:` is the share's length in bytes, as on the `reveal` step
 that wrote the sheet: the prompt then asks for exactly the right rows, and
 a share of another size is refused. Every row but the last is full, so a
 short row is the last one; without `length:`, it ends the entry, and so

@@ -135,10 +135,10 @@ fn a_phrase_gets_a_row_per_word() {
     assert!(html.contains("Words from the BIP-39 English list"));
 }
 
-/// A share typed back with `enter_share` is a share as much as one a
-/// split made, so a sheet that shows it again has the share's boxes.
+/// A sheet is sized from `length:` alone, which counts a share with its
+/// header: 35 bytes are two rows of 32, whichever step made the share.
 #[test]
-fn a_typed_back_share_shown_again_gets_the_share_s_boxes() {
+fn a_share_s_sheet_counts_its_header() {
     let ceremony = resolve("crates/rite-render/tests/fixtures/reissue_a_sheet.rite.yaml");
     let html = render_worksheets(&ceremony, &Branding::default(), Theme::Formal)
         .unwrap()

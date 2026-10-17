@@ -17,10 +17,8 @@ use crate::structure::build_script_structure;
 use base64ct::{Base64, Encoding};
 use chrono::{DateTime, Duration, Utc};
 use minijinja::HtmlEscape;
-use rite_model::expression::{ExprValue, Literal};
-use rite_model::{
-    ActionType, Ceremony, MaterialKind, ParamId, RevealFormat, RoleId, SharingScheme, Step,
-};
+use rite_model::expression::ExprValue;
+use rite_model::{ActionType, Ceremony, MaterialKind, ParamId, RevealFormat, RoleId, Step};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -490,7 +488,7 @@ fn step_view(step: &Step, resolved: &Ceremony, abbrevs: &HashMap<RoleId, String>
         role_abbrev,
         preconditions: step.preconditions.clone(),
         precondition_label,
-        worksheet: worksheet_view(step, resolved),
+        worksheet: worksheet_view(step),
     }
 }
 
@@ -499,42 +497,22 @@ fn step_view(step: &Step, resolved: &Ceremony, abbrevs: &HashMap<RoleId, String>
 const OPEN_ROWS: usize = 5;
 
 /// The sheet for a `reveal` step, from its definition alone.
-fn worksheet_view(step: &Step, resolved: &Ceremony) -> Option<WorksheetView> {
+fn worksheet_view(step: &Step) -> Option<WorksheetView> {
     if step.action != ActionType::Reveal {
         return None;
     }
     let literal = |key: &str| step.with.get(key).and_then(ExprValue::as_literal_string);
     let format = literal("format").and_then(|name| name.parse::<RevealFormat>().ok());
-    let length = step.with.get("length").and_then(|v| match v {
-        ExprValue::Literal(Literal::Integer(n)) => usize::try_from(*n).ok(),
-        _ => None,
-    });
+    let length = step
+        .with
+        .get("length")
+        .and_then(ExprValue::as_literal_integer)
+        .and_then(|n| usize::try_from(n).ok());
 
-    // A share is what a `split_secret` or an `enter_share` step created;
-    // the artifact's kind is not in the definition, but its producer is.
-    // `length:` counts the secret's bytes, and the sheet the share's; for a
-    // phrase it counts words.
-    let share = step
-        .reads_resolved
-        .as_ref()
-        .and_then(|inputs| inputs.get("value"))
-        .map(rite_model::ArtifactRef::artifact_id)
-        .is_some_and(|id| {
-            resolved
-                .execution_plan
-                .iter()
-                .filter(|s| s.creates.as_ref() == Some(&id))
-                .any(|s| s.action.creates_shares())
-        });
+    // `length:` counts the value as shown: a share with its header, a
+    // phrase in words.
     let layout = RevealFormat::layout_for(format);
-    let characters = length.map(|len| {
-        let bytes = if share {
-            SharingScheme::RiteSssV1.share_len(len)
-        } else {
-            layout.format.bytes_for(len)
-        };
-        layout.format.characters(bytes)
-    });
+    let characters = length.map(|len| layout.format.characters(layout.format.bytes_for(len)));
 
     // Rows of boxes: full rows, then whatever data is left with its own
     // parity; or the open grid.

@@ -7,7 +7,7 @@
 //! one are asked for again. The transcript records the share's index and
 //! which rows were repaired, never the rows.
 
-use rite_model::{ActionType, Prompt, RevealFormat, SharingScheme};
+use rite_model::{ActionType, Prompt, RevealFormat};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, Response, Share, ShareSet,
     StepInfo, StepResult, parse_params,
@@ -63,7 +63,7 @@ impl Action for EnterShareAction {
             label: typed.message.clone(),
             note: typed.note.clone(),
             format,
-            rows: length.map(|n| format.rows(SharingScheme::RiteSssV1.share_len(n))),
+            rows: length.map(|n| format.rows(n)),
             validator: None,
         };
         let response = reporter.prompt_checked(&prompt, |response| {
@@ -74,12 +74,12 @@ impl Action for EnterShareAction {
             let share = wire::decode(&value.bytes)
                 .map_err(|e| format!("these rows are not a share: {e}"))?;
             if let Some(length) = length
-                && share.secret_len() != length
+                && value.bytes.len() != length
             {
                 return Err(format!(
-                    "this share is of a {}-byte secret, and the step says length: {length}; \
-                     check it is the right sheet",
-                    share.secret_len()
+                    "this share is {} bytes, and the step says length: {length}; check it is \
+                     the right sheet",
+                    value.bytes.len()
                 ));
             }
             read = Some((share, value.repaired));

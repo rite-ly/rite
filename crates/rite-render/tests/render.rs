@@ -135,6 +135,17 @@ fn a_phrase_gets_a_row_per_word() {
     assert!(html.contains("Words from the BIP-39 English list"));
 }
 
+#[test]
+fn worksheets_snapshot() {
+    // A sheet is filled in by hand and kept with the value, so its whole
+    // layout is guarded: a share with parity and a phrase, one page each.
+    let ceremony = resolve("examples/showcase/recovery_phrase.rite.yaml");
+    let html = render_worksheets(&ceremony, &Branding::default(), Theme::Formal)
+        .unwrap()
+        .expect("the example writes a share and shows a phrase");
+    assert_html_snapshot("worksheets_recovery_phrase", &html);
+}
+
 /// A sheet is sized from `length:` alone, which counts a share with its
 /// header: 35 bytes are two rows of 32, whichever step made the share.
 #[test]

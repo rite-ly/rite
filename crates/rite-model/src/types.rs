@@ -362,13 +362,22 @@ impl SharingScheme {
         }
     }
 
+    /// The bytes in front of a share's values: for `rite-sss/v1`, a
+    /// version, a threshold and an index.
+    #[must_use]
+    pub fn header_len(self) -> usize {
+        match self {
+            SharingScheme::RiteSssV1 => 3,
+        }
+    }
+
     /// The length in bytes of one share of a secret of `secret_len` bytes,
-    /// as a sheet or a transport holds it: for `rite-sss/v1`, a version, a
-    /// threshold and an index in front of one byte per byte of the secret.
+    /// as a sheet or a transport holds it: the header, then one byte per
+    /// byte of the secret.
     #[must_use]
     pub fn share_len(self, secret_len: usize) -> usize {
         match self {
-            SharingScheme::RiteSssV1 => secret_len.saturating_add(3),
+            SharingScheme::RiteSssV1 => secret_len.saturating_add(self.header_len()),
         }
     }
 }
@@ -580,8 +589,8 @@ impl ActionType {
     }
 
     /// Whether the artifact this action creates is shares of a secret, which
-    /// `rite check` and `rite script` tell from the step that made it, since
-    /// the definition does not say what kind an artifact is.
+    /// `rite check` tells from the step that made it, since the definition
+    /// does not say what kind an artifact is.
     pub fn creates_shares(self) -> bool {
         match self {
             ActionType::SplitSecret | ActionType::EnterShare => true,

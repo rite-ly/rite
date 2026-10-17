@@ -38,7 +38,7 @@ sections:
         with:
           message: "Recovery share 1"
           note: "Enter the rows from the first custodian's worksheet."
-          length: 32
+          length: 35
         creates: share_1
         description: |
           Enter the first custodian's share, one row at a time. Check any
@@ -50,7 +50,7 @@ sections:
         with:
           message: "Recovery share 3"
           note: "Enter the rows from the third custodian's worksheet."
-          length: 32
+          length: 35
         creates: share_3
 
       recover_the_secret:

@@ -337,6 +337,14 @@ impl ExprValue {
         }
     }
 
+    /// Get the value as a literal integer, if it is one.
+    pub fn as_literal_integer(&self) -> Option<i64> {
+        match self {
+            ExprValue::Literal(Literal::Integer(n)) => Some(*n),
+            _ => None,
+        }
+    }
+
     /// Get a field from an Object variant.
     pub fn get(&self, key: &str) -> Option<&ExprValue> {
         match self {

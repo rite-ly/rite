@@ -1925,12 +1925,13 @@ fn reveal_refuses_a_value_whose_length_is_not_the_declared_one() {
         )
     };
 
-    // The length counts the secret's bytes, as the sheet does, not the
-    // share's three header bytes.
-    let err = run(&mut harness, 35).unwrap_err();
+    // The length counts the share as shown, with its three header bytes.
+    let err = run(&mut harness, 32).unwrap_err();
     assert!(
-        err.to_string()
-            .contains("value 'shares.share_2' is 32 bytes; the step says length: 35"),
+        err.to_string().contains(
+            "value 'shares.share_2' is 35 bytes (a share is its secret plus 3 header bytes); \
+             the step says length: 32"
+        ),
         "{err}"
     );
     assert!(
@@ -1942,7 +1943,7 @@ fn reveal_refuses_a_value_whose_length_is_not_the_declared_one() {
     );
 
     harness.enqueue_response(Response::Acknowledge);
-    run(&mut harness, 32).expect("the right length is shown");
+    run(&mut harness, 35).expect("the right length is shown");
 }
 
 /// Run `enter_share` with `with:`, answering its prompt from the queue, into
@@ -1997,7 +1998,7 @@ fn a_share_typed_back_with_a_slip_combines() {
     let result = enter_share(
         &state,
         &mut harness,
-        &serde_json::json!({ "message": "Recovery share 3", "length": 32 }),
+        &serde_json::json!({ "message": "Recovery share 3", "length": 35 }),
     )
     .expect("enter_share completes");
 
@@ -2063,7 +2064,7 @@ fn rows_that_are_not_the_share_are_asked_for_again() {
     let result = enter_share(
         &make_state(),
         &mut harness,
-        &serde_json::json!({ "message": "Recovery share 1", "length": 32 }),
+        &serde_json::json!({ "message": "Recovery share 1", "length": 35 }),
     )
     .expect("the third answer is the share");
     match produced(&result.artifacts, "typed") {
@@ -2114,7 +2115,7 @@ fn recover_from_the_sheets(slip: Option<usize>) -> (Vec<u8>, Vec<StepFact>) {
         let result = enter_share(
             &state,
             &mut harness,
-            &serde_json::json!({ "message": name, "length": 32 }),
+            &serde_json::json!({ "message": name, "length": 35 }),
         )
         .expect("the sheet reads as a share");
         let (_, share) = result.artifacts.into_iter().next().expect("one artifact");

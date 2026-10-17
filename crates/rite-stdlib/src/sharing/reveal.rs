@@ -10,7 +10,7 @@
 //! `rite script` prints the sheet for it.
 
 use rite_model::display::hex_upper;
-use rite_model::{ActionType, Prompt, RevealFormat, Shown};
+use rite_model::{ActionType, Prompt, RevealFormat, SharingScheme, Shown};
 use rite_model::{bip39, paper32};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, Response, StepInfo,
@@ -20,7 +20,6 @@ use rite_sdk::Backend;
 use zeroize::Zeroizing;
 
 use super::gf256;
-use super::paper;
 use crate::params::RevealParams;
 
 /// Show a value in a chosen encoding, and take it off the screen once the
@@ -52,40 +51,42 @@ impl Action for RevealAction {
 
         let layout = RevealFormat::layout_for(typed.format);
         let is_share = matches!(ctx.artifacts.get(&id), Some(ArtifactValue::Shares(_)));
-        let text = if is_share {
+        // A share is shown as its wire bytes, header first; from there it is
+        // bytes like any other value.
+        let wire;
+        let (bytes, hint): (&[u8], String) = if is_share {
             let held = resolve_share(ctx.artifacts, &id, input.property())
                 .map_err(|e| ActionError::Failed(format!("value '{name}': {e}")))?;
-            check_length(typed.length, held.y().len(), layout.format, &name)?;
+            if layout.format.is_words() {
+                return Err(ActionError::Failed(format!(
+                    "value '{name}' is a share, written in paper32 or hex; {} is for the \
+                     secret the shares combine into",
+                    layout.format
+                )));
+            }
             let share = gf256::Share::new(held.threshold(), held.index(), held.y().to_vec())
                 .map_err(|e| ActionError::Failed(format!("value '{name}' is not a share: {e}")))?;
-            match layout.format {
-                RevealFormat::Paper32 => paper::encode(&share),
-                RevealFormat::Hex => {
-                    let bytes = Zeroizing::new(super::wire::encode(&share));
-                    hex_upper(&bytes)
-                }
-                RevealFormat::Bip39 => {
-                    return Err(ActionError::Failed(format!(
-                        "value '{name}' is a share, written in paper32 or hex; bip39 is for \
-                         the secret the shares combine into"
-                    )));
-                }
-                other => return Err(unsupported(other)),
-            }
+            wire = Zeroizing::new(super::wire::encode(&share));
+            let hint = format!(
+                " (a share is its secret plus {} header bytes)",
+                SharingScheme::RiteSssV1.header_len()
+            );
+            (&wire, hint)
         } else {
             let bytes = resolve_artifact_bytes(ctx.artifacts, &id, input.property())
                 .map_err(|e| ActionError::Failed(format!("value '{name}': {e}")))?;
-            check_length(typed.length, bytes.len(), layout.format, &name)?;
-            match layout.format {
-                RevealFormat::Paper32 => paper32::encode(bytes),
-                RevealFormat::Hex => hex_upper(bytes),
-                // Moved out, not copied: `Shown` wipes it from here on.
-                RevealFormat::Bip39 => std::mem::take(
-                    &mut *bip39::encode(bytes)
-                        .map_err(|e| ActionError::Failed(format!("value '{name}': {e}")))?,
-                ),
-                other => return Err(unsupported(other)),
-            }
+            (bytes, String::new())
+        };
+        check_length(typed.length, bytes.len(), layout.format, &name, &hint)?;
+        let text = match layout.format {
+            RevealFormat::Paper32 => paper32::encode(bytes),
+            RevealFormat::Hex => hex_upper(bytes),
+            // Moved out, not copied: `Shown` wipes it from here on.
+            RevealFormat::Bip39 => std::mem::take(
+                &mut *bip39::encode(bytes)
+                    .map_err(|e| ActionError::Failed(format!("value '{name}': {e}")))?,
+            ),
+            other => return Err(unsupported(other)),
         };
 
         let format = layout.format;
@@ -113,20 +114,21 @@ impl Action for RevealAction {
 
 /// The sheet was printed for `length:`, in the format's unit; a value of
 /// another size does not fit it, and the person finds out at the last row.
-/// Refuse before anything is shown. For a share, the length is the
-/// secret's, as the sheet counts it.
+/// Refuse before anything is shown. `hint` follows the value's size in the
+/// message.
 fn check_length(
     declared: Option<u64>,
     bytes: usize,
     format: RevealFormat,
     name: &str,
+    hint: &str,
 ) -> Result<(), ActionError> {
     let actual = format.length_of(bytes);
     match declared {
         Some(declared) if u64::try_from(actual).ok() != Some(declared) => {
             Err(ActionError::Failed(format!(
-                "value '{name}' is {actual} {unit}; the step says length: {declared}, and the \
-                 sheet was printed for that",
+                "value '{name}' is {actual} {unit}{hint}; the step says length: {declared}, \
+                 and the sheet was printed for that",
                 unit = format.unit()
             )))
         }

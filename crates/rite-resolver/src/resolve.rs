@@ -17,7 +17,7 @@ use rite_model::{
     MaterialSource, Metadata, NamedInput, Output, OutputId, ParamId, Parameter, PostCeremonyDuty,
     RetryPolicy, Role, RoleId, Section, SectionId, Step, StepId, StepInputs, SymbolTable,
 };
-use rite_model::{ActionType, BackendUsage, DutyType, ParameterType};
+use rite_model::{ActionType, BackendUsage, DutyType, ParameterType, RevealFormat, SharingScheme};
 use std::collections::{HashMap, HashSet};
 
 /// Schema versions this resolver understands.
@@ -1096,10 +1096,10 @@ impl ResolveContext {
         let mut available: HashSet<String> = materials.keys().cloned().collect();
         // Artifacts that are shares, by the step that made them. The order
         // is the plan's, so the producer is known before any reader.
-        let mut shares: HashSet<ArtifactId> = HashSet::new();
+        let mut shares = ShareLengths::new();
 
         for step in execution_plan {
-            if let Some(message) = phrase_of_a_share(step, &shares) {
+            for message in check_shown_share(step, &mut shares) {
                 self.add_error(ResolveError::InvalidWithValue {
                     step: step.id.clone(),
                     action: step.action,
@@ -1109,7 +1109,9 @@ impl ResolveContext {
             if step.action.creates_shares()
                 && let Some(created) = &step.creates
             {
-                shares.insert(created.clone());
+                // `enter_share` declares the share's length; a split does not.
+                let declared = literal_length(step).map(|n| (n, step.id.clone()));
+                shares.insert(created.clone(), declared);
             }
             for input in &step.reads {
                 if let ArtifactRef::Produced { id, .. } = input
@@ -1184,26 +1186,73 @@ impl ResolveContext {
     }
 }
 
-/// A `reveal` step that shows a share as a recovery phrase: refused at run
-/// time, since a share's bytes are not a wallet's entropy, and caught here
-/// so the ceremony does not stop after the split has run.
-fn phrase_of_a_share(step: &Step, shares: &HashSet<ArtifactId>) -> Option<String> {
-    if step.action != ActionType::Reveal
-        || step
-            .with
-            .get("format")
-            .and_then(ExprValue::as_literal_string)
-            != Some("bip39")
-    {
-        return None;
+/// The length a share artifact is first declared with, and the step that
+/// declares it. Every share of a split is the same size, so one entry
+/// stands for the whole set.
+type ShareLengths = HashMap<ArtifactId, Option<(u64, StepId)>>;
+
+/// What a `reveal` of a share says about it that cannot hold: a share
+/// shown as a recovery phrase, a length no share has, or a length other
+/// than one an earlier step gave the same share. Each is refused at run
+/// time; caught here, the ceremony does not stop halfway through. The first
+/// length declared for a share is recorded for the steps after it.
+fn check_shown_share(step: &Step, shares: &mut ShareLengths) -> Vec<String> {
+    if step.action != ActionType::Reveal {
+        return Vec::new();
     }
-    let value = step.reads_resolved.as_ref()?.get("value")?.artifact_id();
-    shares.contains(&value).then(|| {
-        format!(
-            "'{value}' is a share, written in paper32 or hex; 'format: bip39' is for the secret \
-             the shares combine into"
-        )
-    })
+    let Some(value) = step
+        .reads_resolved
+        .as_ref()
+        .and_then(|inputs| inputs.get("value"))
+        .map(ArtifactRef::artifact_id)
+    else {
+        return Vec::new();
+    };
+    let Some(known) = shares.get_mut(&value) else {
+        return Vec::new();
+    };
+    let format = step
+        .with
+        .get("format")
+        .and_then(ExprValue::as_literal_string)
+        .and_then(|name| name.parse::<RevealFormat>().ok());
+    if let Some(format) = format
+        && format.is_words()
+    {
+        return vec![format!(
+            "'{value}' is a share, written in paper32 or hex; 'format: {format}' is for the \
+             secret the shares combine into"
+        )];
+    }
+    let Some(length) = literal_length(step) else {
+        return Vec::new();
+    };
+    let header = SharingScheme::RiteSssV1.header_len();
+    if usize::try_from(length).is_ok_and(|n| n <= header) {
+        return vec![format!(
+            "'length' is {length}; a share is its secret plus {header} header bytes, so it is \
+             longer than {header}"
+        )];
+    }
+    match known {
+        Some((declared, at)) if *declared != length => vec![format!(
+            "'{value}' has length: {declared} at step '{at}', and this step says length: \
+             {length}; a share is the same size on every sheet"
+        )],
+        Some(_) => Vec::new(),
+        None => {
+            *known = Some((length, step.id.clone()));
+            Vec::new()
+        }
+    }
+}
+
+/// A step's `length:`, when it is written as a number.
+fn literal_length(step: &Step) -> Option<u64> {
+    step.with
+        .get("length")?
+        .as_literal_integer()
+        .and_then(|n| u64::try_from(n).ok())
 }
 
 /// Whether a step's `reads:` map names this input.
@@ -2472,6 +2521,90 @@ sections:
             })
             .collect();
         assert_eq!(refused, ["show_a_share"], "{:?}", result.errors);
+    }
+
+    #[test]
+    fn a_share_s_length_is_checked_before_the_run() {
+        let mut ceremony = minimal_ceremony();
+        let step = |action, with, reads, creates: Option<&str>| {
+            let mut body = make_step_body();
+            body.action = action;
+            body.with = Some(with);
+            body.reads = reads;
+            body.creates = creates.map(str::to_string);
+            body
+        };
+        let steps = &mut ceremony.sections.get_mut("main").unwrap().steps;
+        steps.insert(
+            "split".to_string(),
+            step(
+                ActionType::SplitSecret,
+                serde_json::json!({ "threshold": 2, "shares": 3 }),
+                Some(serde_json::json!({ "secret": "${material.secret}" })),
+                Some("shares"),
+            ),
+        );
+        steps.insert(
+            "type_short".to_string(),
+            step(
+                ActionType::EnterShare,
+                serde_json::json!({ "message": "Share", "length": 3 }),
+                None,
+                Some("short"),
+            ),
+        );
+        steps.insert(
+            "type_worn".to_string(),
+            step(
+                ActionType::EnterShare,
+                serde_json::json!({ "message": "Share", "length": 35 }),
+                None,
+                Some("worn"),
+            ),
+        );
+        for (id, value, length) in [
+            ("show_split_short", "${artifact.shares.share_1}", 3),
+            ("show_split", "${artifact.shares.share_2}", 35),
+            ("show_split_other", "${artifact.shares.share_3}", 32),
+            ("show_worn_other", "${artifact.worn}", 32),
+            ("show_worn", "${artifact.worn}", 35),
+        ] {
+            steps.insert(
+                id.to_string(),
+                step(
+                    ActionType::Reveal,
+                    serde_json::json!({ "message": "Share", "length": length }),
+                    Some(serde_json::json!({ "value": value })),
+                    None,
+                ),
+            );
+        }
+
+        let result = resolve_ceremony(ceremony, None);
+        let mut refused: Vec<&str> = result
+            .errors
+            .iter()
+            .filter_map(|e| match e {
+                ResolveError::InvalidWithValue { step, message, .. }
+                    if message.contains("header bytes") || message.contains("every sheet") =>
+                {
+                    Some(step.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        refused.sort_unstable();
+        assert_eq!(
+            refused,
+            [
+                "show_split_other",
+                "show_split_short",
+                "show_worn_other",
+                "type_short"
+            ],
+            "{:?}",
+            result.errors
+        );
     }
 
     #[test]

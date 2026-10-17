@@ -15,7 +15,7 @@ sections:
         action: enter_share
         with:
           message: "Recovery share 2, worn sheet"
-          length: 32
+          length: 35
         creates: share_2
 
       write_the_new_sheet:
@@ -24,4 +24,4 @@ sections:
           value: ${artifact.share_2}
         with:
           message: "Recovery share 2"
-          length: 32
+          length: 35

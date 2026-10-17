@@ -427,9 +427,8 @@ pub struct RevealParams {
     pub note: Option<String>,
     /// The value's length in the format's unit, words for `bip39` and
     /// bytes otherwise, when the author knows it, so the sheet has exactly
-    /// the right number of rows; a value of another size is refused. For
-    /// a share, the secret's length, not counting the three bytes a share
-    /// carries in front of it.
+    /// the right number of rows; a value of another size is refused. A
+    /// share counts the three header bytes in front of its secret.
     #[serde(default)]
     pub length: Option<u64>,
 }
@@ -446,9 +445,9 @@ pub struct EnterShareParams {
     /// Shown with the rows: where the sheet came from, who types it.
     #[serde(default)]
     pub note: Option<String>,
-    /// The secret's length in bytes, when the author knows it, so the
-    /// prompt asks for exactly the right rows; a share of another size is
-    /// refused.
+    /// The share's length in bytes, its secret's plus three header bytes,
+    /// when the author knows it, so the prompt asks for exactly the right
+    /// rows; a share of another size is refused.
     #[serde(default)]
     pub length: Option<u64>,
 }

@@ -157,7 +157,8 @@ fn enter_value(with: &serde_json::Value) -> Vec<ParamError> {
     errors
 }
 
-/// `enter_share`: as `reveal`, and a share is never words.
+/// `enter_share`: as `reveal`, and a share is never words and is longer
+/// than its header.
 fn enter_share(with: &serde_json::Value) -> Vec<ParamError> {
     let mut errors = reveal(with);
     let format = shown_format(with);
@@ -166,6 +167,18 @@ fn enter_share(with: &serde_json::Value) -> Vec<ParamError> {
             message: format!(
                 "a share is written in paper32 or hex; '{format}' is for the secret the shares \
                  combine into"
+            ),
+        });
+    }
+    // Zero is reported by `reveal`.
+    let header = SharingScheme::RiteSssV1.header_len();
+    if let Some(n) = with.get("length").and_then(serde_json::Value::as_u64)
+        && usize::try_from(n).is_ok_and(|n| (1..=header).contains(&n))
+    {
+        errors.push(ParamError {
+            message: format!(
+                "'length' is {n}; a share is its secret plus {header} header bytes, so it is \
+                 longer than {header}"
             ),
         });
     }
@@ -729,6 +742,9 @@ mod tests {
             sole(ActionType::EnterShare, &json!({"format": "bip39"}))
                 .contains("a share is written")
         );
+        assert!(check(ActionType::EnterShare, &json!({"length": 35})).is_empty());
+        assert!(sole(ActionType::EnterShare, &json!({"length": 3})).contains("longer than 3"));
+        assert!(sole(ActionType::EnterShare, &json!({"length": 0})).contains("positive integer"));
     }
 
     #[test]

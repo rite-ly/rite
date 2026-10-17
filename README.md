@@ -167,6 +167,8 @@ Both bundle the `rite-ls` language server. For other LSP-aware editors, run `rit
     - [ ] TPM 2.0
     - [ ] PKCS#11
   - [ ] Plugin system for out-of-process backends
+- [x] **Secret sharing** — Shamir split and combine, shares written on paper and typed back ([secret sharing](docs/secret-sharing.md))
+- [x] **Typed entry** — values and secrets read at the keyboard, BIP-39 phrases included ([typed entry](docs/typed-entry.md))
 - [x] **Evidence and verification**
   - [x] Transcript generation and `rite verify`
   - [x] Evidence bundles (`rite bundle create`) and verifiable partial disclosure (`rite bundle disclose`)
@@ -175,6 +177,7 @@ Both bundle the `rite-ls` language server. For other LSP-aware editors, run `rit
   - [ ] RFC3161 trusted timestamps
 - [x] **Output formats**
   - [x] Script and report generation (`rite script`, `rite report`)
+  - [x] Printed worksheets for values written by hand
   - [x] Themeable output via template engine (not yet user-configurable)
 - [x] **IDE support** — VS Code, IntelliJ
   - [x] Language server: diagnostics, completion, hover, go-to-definition, references, symbols

@@ -9,7 +9,8 @@ use rite_sdk::{Backend, KeyAlgorithm, KeySpec};
 use secrecy::ExposeSecret;
 use serde_json::json;
 
-use crate::params::{ImportKeyParams, installed_key_default_policy};
+use crate::params::installed_key_default_policy;
+use rite_model::params::ImportKeyParams;
 
 /// Install key material the ceremony already holds as a key of a named
 /// algorithm.

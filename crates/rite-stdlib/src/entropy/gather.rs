@@ -7,7 +7,7 @@ use rite_runtime::{
 };
 use rite_sdk::Backend;
 
-use crate::params::GatherEntropyParams;
+use rite_model::params::GatherEntropyParams;
 
 /// Default instruction. Dice is only a suggestion: the operator may type any
 /// random value, and the method can be made mandatory by overriding

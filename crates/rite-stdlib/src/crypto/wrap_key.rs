@@ -8,7 +8,7 @@ use rite_runtime::{
 use rite_sdk::{Backend, WrapScheme};
 use serde_json::json;
 
-use crate::params::WrapKeyParams;
+use rite_model::params::WrapKeyParams;
 
 /// Wrap a key for transport, producing a wrapped-key artifact.
 ///

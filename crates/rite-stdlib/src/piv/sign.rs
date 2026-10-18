@@ -9,7 +9,7 @@ use rite_sdk::{Backend, SignAlgorithm};
 use secrecy::ExposeSecret;
 use serde_json::json;
 
-use super::params::PivSignParams;
+use rite_model::params::PivSignParams;
 
 /// Sign data using a PIV smart card on-device key.
 pub struct PivSignAction;

@@ -8,7 +8,7 @@ use rite_runtime::{
 use rite_sdk::{Backend, CertificateDer};
 use serde_json::json;
 
-use super::params::AttestSlotParams;
+use rite_model::params::AttestSlotParams;
 
 /// Generate a `YubiKey` attestation certificate for a PIV slot.
 ///

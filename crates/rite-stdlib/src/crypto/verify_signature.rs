@@ -9,7 +9,7 @@ use rite_sdk::Backend;
 use serde_json::json;
 
 use super::sign_data::resolve_sign_algorithm;
-use crate::params::VerifySignatureParams;
+use rite_model::params::VerifySignatureParams;
 
 /// Verify a signature over data, given the signer's public key.
 ///

@@ -44,7 +44,7 @@ use x509_cert::{
     time::Validity,
 };
 
-use crate::params::IssueCertificateParams;
+use rite_model::params::IssueCertificateParams;
 
 use super::oids::{
     sig_profile_for_algorithm, verifiable_algorithm_names, verifiable_sign_algorithm,

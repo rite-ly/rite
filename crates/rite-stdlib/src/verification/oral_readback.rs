@@ -7,7 +7,7 @@ use rite_runtime::{
 };
 use rite_sdk::Backend;
 
-use crate::params::{OralReadbackParams, ReadbackFormat};
+use rite_model::params::{OralReadbackParams, ReadbackFormat};
 
 /// NATO phonetic alphabet mapping.
 const NATO_ALPHABET: &[(&str, &str)] = &[

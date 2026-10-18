@@ -8,7 +8,7 @@ use rite_runtime::{
 use rite_sdk::{Backend, KeyAlgorithm, KeyMetadata, KeyPolicy, KeySpec};
 use serde_json::json;
 
-use crate::params::GenerateKeyParams;
+use rite_model::params::GenerateKeyParams;
 
 /// Generate a cryptographic key via the configured backend.
 ///

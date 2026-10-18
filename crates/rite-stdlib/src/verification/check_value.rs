@@ -23,7 +23,7 @@ use rite_runtime::{
 use rite_sdk::Backend;
 use subtle::ConstantTimeEq;
 
-use crate::params::CheckValueParams;
+use rite_model::params::CheckValueParams;
 
 /// Automatic value comparison action.
 pub struct CheckValueAction;

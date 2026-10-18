@@ -6,7 +6,7 @@ use rite_runtime::{
 };
 use rite_sdk::Backend;
 
-use crate::params::AttestParams;
+use rite_model::params::AttestParams;
 
 const DEFAULT_STATEMENT: &str = "I attest to the accuracy of the above";
 

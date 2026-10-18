@@ -8,7 +8,7 @@ use rite_runtime::{
 use rite_sdk::{Backend, KeyAlgorithm, SignAlgorithm, SignBackend};
 use serde_json::json;
 
-use crate::params::SignDataParams;
+use rite_model::params::SignDataParams;
 
 /// Sign data with a key the backend holds.
 ///

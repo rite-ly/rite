@@ -4,7 +4,6 @@
 //! the relevant `rite-sdk` capability traits (`CertStoreBackend`, `SignBackend`,
 //! `PivBackend`, `YubikeyBackend`). Slot-hint parsing is shared from `rite-piv`.
 
-mod params;
 mod read_certificate;
 mod sign;
 

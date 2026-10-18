@@ -7,8 +7,8 @@ use rite_runtime::{
 };
 use rite_sdk::Backend;
 
-use crate::params::MachineInfoParams;
 use crate::verification::host::{HostInfoScope, gather_host_info};
+use rite_model::params::MachineInfoParams;
 
 /// Capture hostname, machine ID, CPU model, OS information, and a
 /// snapshot of platform security features as transcript evidence.

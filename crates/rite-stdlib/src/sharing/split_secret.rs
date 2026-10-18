@@ -10,7 +10,7 @@ use serde_json::json;
 use zeroize::Zeroizing;
 
 use super::gf256;
-use crate::params::SplitSecretParams;
+use rite_model::params::SplitSecretParams;
 
 /// Split a secret into shares of which a threshold reconstruct it.
 ///

@@ -12,6 +12,30 @@
 //! checking, and that question is answered by the action handler instead, at
 //! the point where a backend exists to ask.
 
+mod attestation;
+mod crypto;
+mod entropy;
+mod entry;
+mod piv;
+mod pki;
+mod sharing;
+mod verification;
+
+pub use attestation::AttestParams;
+pub use crypto::{
+    EncryptDataParams, GenerateKeyParams, ImportKeyParams, KeyPolicyParams, SignDataParams,
+    UnwrapKeyParams, VerifySignatureParams, WrapKeyParams,
+};
+pub use entropy::GatherEntropyParams;
+pub use entry::EntryParams;
+pub use piv::{AttestSlotParams, PivReadCertificateParams, PivSignParams};
+pub use pki::{GenerateCsrParams, IssueCertificateParams};
+pub use sharing::{EnterShareParams, RevealParams, SplitSecretParams};
+pub use verification::{
+    CheckValueParams, ClockCheckParams, ConfirmParams, MachineInfoParams, OralReadbackParams,
+    ReadbackFormat,
+};
+
 use serde::{Deserialize, Serialize};
 
 use crate::display::RevealFormat;
@@ -941,5 +965,119 @@ mod tests {
             )
             .is_empty()
         );
+    }
+}
+
+#[cfg(test)]
+mod schema_drift_tests {
+    use super::*;
+    use crate::ActionType;
+    use std::collections::BTreeSet;
+
+    /// The keys a params struct actually accepts.
+    ///
+    /// Every struct here derives `Default` and `Serialize` and none uses
+    /// `skip_serializing_if`, so serializing a default value names every field
+    /// serde will read.
+    fn serde_keys<T: serde::Serialize>(value: T) -> BTreeSet<String> {
+        serde_json::to_value(value)
+            .expect("params structs serialize")
+            .as_object()
+            .expect("params structs are objects")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    fn declared(action: ActionType) -> BTreeSet<String> {
+        action
+            .known_with_fields()
+            .iter()
+            .map(|field| (*field).to_string())
+            .collect()
+    }
+
+    /// `known_with_fields` stands in for these structs across a crate boundary
+    /// the resolver cannot see over, so nothing but this test makes the two
+    /// agree. The dangerous direction is silent: a field added here and not
+    /// there is rejected as unknown, and one removed here and left there goes
+    /// back to being dropped without a word.
+    #[test]
+    fn every_params_struct_matches_the_fields_the_model_declares() {
+        for (action, keys) in [
+            (
+                ActionType::ClockCheck,
+                serde_keys(ClockCheckParams::default()),
+            ),
+            (ActionType::Confirm, serde_keys(ConfirmParams::default())),
+            (
+                ActionType::CheckValue,
+                serde_keys(CheckValueParams {
+                    actual: String::new(),
+                    expected: String::new(),
+                    message: None,
+                    sensitive: false,
+                }),
+            ),
+            (
+                ActionType::OralReadback,
+                serde_keys(OralReadbackParams::default()),
+            ),
+            (
+                ActionType::MachineInfo,
+                serde_keys(MachineInfoParams::default()),
+            ),
+            (ActionType::Attest, serde_keys(AttestParams::default())),
+            (
+                ActionType::GatherEntropy,
+                serde_keys(GatherEntropyParams::default()),
+            ),
+            (ActionType::EnterValue, serde_keys(EntryParams::default())),
+            (ActionType::EnterSecret, serde_keys(EntryParams::default())),
+            (
+                ActionType::GenerateKey,
+                serde_keys(GenerateKeyParams::default()),
+            ),
+            (ActionType::WrapKey, serde_keys(WrapKeyParams::default())),
+            (
+                ActionType::UnwrapKey,
+                serde_keys(UnwrapKeyParams::default()),
+            ),
+            (
+                ActionType::ImportKey,
+                serde_keys(ImportKeyParams::default()),
+            ),
+            (
+                ActionType::EncryptData,
+                serde_keys(EncryptDataParams::default()),
+            ),
+            (ActionType::SignData, serde_keys(SignDataParams::default())),
+            (
+                ActionType::VerifySignature,
+                serde_keys(VerifySignatureParams::default()),
+            ),
+            (ActionType::Reveal, serde_keys(RevealParams::default())),
+            (
+                ActionType::EnterShare,
+                serde_keys(EnterShareParams::default()),
+            ),
+            (
+                ActionType::SplitSecret,
+                serde_keys(SplitSecretParams::default()),
+            ),
+            (
+                ActionType::GenerateCsr,
+                serde_keys(GenerateCsrParams {
+                    subject: String::new(),
+                    san: None,
+                }),
+            ),
+            (
+                ActionType::IssueCertificate,
+                serde_keys(IssueCertificateParams::default()),
+            ),
+        ] {
+            assert_eq!(keys, declared(action), "{action}");
+        }
     }
 }

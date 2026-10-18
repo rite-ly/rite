@@ -8,7 +8,7 @@ use rite_runtime::{
 use rite_sdk::{Backend, CertRef, CertificateDer};
 use serde_json::json;
 
-use super::params::PivReadCertificateParams;
+use rite_model::params::PivReadCertificateParams;
 
 /// Read an X.509 certificate from a PIV smart card slot.
 //

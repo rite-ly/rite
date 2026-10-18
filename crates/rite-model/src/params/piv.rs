@@ -1,4 +1,4 @@
-//! Parameter types for PIV and `YubiKey` ceremony actions.
+//! Params for the PIV and `YubiKey` actions.
 
 use serde::{Deserialize, Serialize};
 
@@ -36,7 +36,6 @@ fn default_sign_algorithm() -> String {
 }
 
 /// Parameters for the `yubikey_attest_slot` action.
-#[cfg(feature = "yubikey")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttestSlotParams {
     /// PIV slot to attest (e.g., `9a`, `9c`, `9d`, `9e`).

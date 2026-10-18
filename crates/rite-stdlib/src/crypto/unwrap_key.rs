@@ -8,7 +8,8 @@ use rite_runtime::{
 use rite_sdk::{Backend, KeyAlgorithm};
 use serde_json::json;
 
-use crate::params::{UnwrapKeyParams, installed_key_default_policy};
+use crate::params::installed_key_default_policy;
+use rite_model::params::UnwrapKeyParams;
 
 /// Unwrap a key inside the receiving backend.
 ///

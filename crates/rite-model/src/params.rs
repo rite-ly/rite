@@ -349,9 +349,12 @@ impl FormatSpec {
                 })
             }
             _ => Err(format!(
-                "'format' must name a format (text, digits, alphanumeric, hex, base64, \
-                 paper32, bip39) or be \
-                 {{ pattern: \"...\" }}, found {value}"
+                "'format' must name a format ({}) or be {{ pattern: \"...\" }}, found {value}",
+                Format::ALL
+                    .iter()
+                    .map(|format| format.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )),
         }
     }

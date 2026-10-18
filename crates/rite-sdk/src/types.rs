@@ -8,6 +8,7 @@ use std::fmt;
 
 use crate::backend::BackendError;
 use crate::key_material::PublicKeyDer;
+use crate::names::names;
 
 /// Opaque key identifier (backend-specific).
 ///
@@ -328,25 +329,21 @@ impl KeyAlgorithm {
     }
 }
 
-impl fmt::Display for KeyAlgorithm {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            KeyAlgorithm::Rsa2048 => write!(f, "RSA-2048"),
-            KeyAlgorithm::Rsa4096 => write!(f, "RSA-4096"),
-            KeyAlgorithm::EcdsaP256 => write!(f, "ECDSA-P256"),
-            KeyAlgorithm::EcdsaP384 => write!(f, "ECDSA-P384"),
-            KeyAlgorithm::Ed25519 => write!(f, "Ed25519"),
-            KeyAlgorithm::MlDsa44 => write!(f, "ML-DSA-44"),
-            KeyAlgorithm::MlDsa65 => write!(f, "ML-DSA-65"),
-            KeyAlgorithm::MlDsa87 => write!(f, "ML-DSA-87"),
-            KeyAlgorithm::MlKem512 => write!(f, "ML-KEM-512"),
-            KeyAlgorithm::MlKem768 => write!(f, "ML-KEM-768"),
-            KeyAlgorithm::MlKem1024 => write!(f, "ML-KEM-1024"),
-            KeyAlgorithm::Aes128 => write!(f, "AES-128"),
-            KeyAlgorithm::Aes256 => write!(f, "AES-256"),
-        }
-    }
-}
+names!(KeyAlgorithm {
+    Rsa2048 => "RSA-2048",
+    Rsa4096 => "RSA-4096",
+    EcdsaP256 => "ECDSA-P256",
+    EcdsaP384 => "ECDSA-P384",
+    Ed25519 => "Ed25519",
+    MlDsa44 => "ML-DSA-44",
+    MlDsa65 => "ML-DSA-65",
+    MlDsa87 => "ML-DSA-87",
+    MlKem512 => "ML-KEM-512",
+    MlKem768 => "ML-KEM-768",
+    MlKem1024 => "ML-KEM-1024",
+    Aes128 => "AES-128",
+    Aes256 => "AES-256",
+});
 
 /// Error returned when parsing an SDK algorithm identifier from a string fails.
 ///
@@ -354,43 +351,6 @@ impl fmt::Display for KeyAlgorithm {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("unknown value: {0:?}")]
 pub struct ParseError(String);
-
-impl std::str::FromStr for KeyAlgorithm {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "RSA-2048" => Ok(Self::Rsa2048),
-            "RSA-4096" => Ok(Self::Rsa4096),
-            "ECDSA-P256" => Ok(Self::EcdsaP256),
-            "ECDSA-P384" => Ok(Self::EcdsaP384),
-            "Ed25519" => Ok(Self::Ed25519),
-            "ML-DSA-44" => Ok(Self::MlDsa44),
-            "ML-DSA-65" => Ok(Self::MlDsa65),
-            "ML-DSA-87" => Ok(Self::MlDsa87),
-            "ML-KEM-512" => Ok(Self::MlKem512),
-            "ML-KEM-768" => Ok(Self::MlKem768),
-            "ML-KEM-1024" => Ok(Self::MlKem1024),
-            "AES-128" => Ok(Self::Aes128),
-            "AES-256" => Ok(Self::Aes256),
-            _ => Err(ParseError(s.to_owned())),
-        }
-    }
-}
-
-impl From<KeyAlgorithm> for String {
-    fn from(a: KeyAlgorithm) -> String {
-        a.to_string()
-    }
-}
-
-impl TryFrom<String> for KeyAlgorithm {
-    type Error = ParseError;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        s.parse()
-    }
-}
 
 bitflags::bitflags! {
     /// Key usage flags. Maps to PKCS#11 `CKA_SIGN`, `CKA_VERIFY`, etc.
@@ -683,52 +643,16 @@ impl SignAlgorithm {
     }
 }
 
-impl fmt::Display for SignAlgorithm {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SignAlgorithm::RsaPkcs1Sha256 => write!(f, "RSA-PKCS1-SHA256"),
-            SignAlgorithm::RsaPssSha256 => write!(f, "RSA-PSS-SHA256"),
-            SignAlgorithm::EcdsaSha256 => write!(f, "ECDSA-SHA256"),
-            SignAlgorithm::EcdsaSha384 => write!(f, "ECDSA-SHA384"),
-            SignAlgorithm::Ed25519 => write!(f, "Ed25519"),
-            SignAlgorithm::MlDsa44 => write!(f, "ML-DSA-44"),
-            SignAlgorithm::MlDsa65 => write!(f, "ML-DSA-65"),
-            SignAlgorithm::MlDsa87 => write!(f, "ML-DSA-87"),
-        }
-    }
-}
-
-impl std::str::FromStr for SignAlgorithm {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "RSA-PKCS1-SHA256" => Ok(Self::RsaPkcs1Sha256),
-            "RSA-PSS-SHA256" => Ok(Self::RsaPssSha256),
-            "ECDSA-SHA256" => Ok(Self::EcdsaSha256),
-            "ECDSA-SHA384" => Ok(Self::EcdsaSha384),
-            "Ed25519" => Ok(Self::Ed25519),
-            "ML-DSA-44" => Ok(Self::MlDsa44),
-            "ML-DSA-65" => Ok(Self::MlDsa65),
-            "ML-DSA-87" => Ok(Self::MlDsa87),
-            _ => Err(ParseError(s.to_owned())),
-        }
-    }
-}
-
-impl From<SignAlgorithm> for String {
-    fn from(a: SignAlgorithm) -> String {
-        a.to_string()
-    }
-}
-
-impl TryFrom<String> for SignAlgorithm {
-    type Error = ParseError;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        s.parse()
-    }
-}
+names!(SignAlgorithm {
+    RsaPkcs1Sha256 => "RSA-PKCS1-SHA256",
+    RsaPssSha256 => "RSA-PSS-SHA256",
+    EcdsaSha256 => "ECDSA-SHA256",
+    EcdsaSha384 => "ECDSA-SHA384",
+    Ed25519 => "Ed25519",
+    MlDsa44 => "ML-DSA-44",
+    MlDsa65 => "ML-DSA-65",
+    MlDsa87 => "ML-DSA-87",
+});
 
 /// An ASN.1 object identifier in dotted-decimal form.
 ///
@@ -1174,50 +1098,15 @@ impl WrapScheme {
     }
 }
 
-impl fmt::Display for WrapScheme {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            WrapScheme::CmsAes256Gcm => write!(f, "CMS-AES-256-GCM"),
-            WrapScheme::RsaOaepSha256 => write!(f, "RSA-OAEP-SHA256"),
-            WrapScheme::RsaAesKeyWrapSha256 => write!(f, "RSA-AES-KEY-WRAP-SHA256"),
-            WrapScheme::Aes128Kw => write!(f, "AES-128-KW"),
-            WrapScheme::Aes256Kw => write!(f, "AES-256-KW"),
-            WrapScheme::Aes128Kwp => write!(f, "AES-128-KWP"),
-            WrapScheme::Aes256Kwp => write!(f, "AES-256-KWP"),
-        }
-    }
-}
-
-impl std::str::FromStr for WrapScheme {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "CMS-AES-256-GCM" => Ok(Self::CmsAes256Gcm),
-            "RSA-OAEP-SHA256" => Ok(Self::RsaOaepSha256),
-            "RSA-AES-KEY-WRAP-SHA256" => Ok(Self::RsaAesKeyWrapSha256),
-            "AES-128-KW" => Ok(Self::Aes128Kw),
-            "AES-256-KW" => Ok(Self::Aes256Kw),
-            "AES-128-KWP" => Ok(Self::Aes128Kwp),
-            "AES-256-KWP" => Ok(Self::Aes256Kwp),
-            _ => Err(ParseError(s.to_owned())),
-        }
-    }
-}
-
-impl From<WrapScheme> for String {
-    fn from(a: WrapScheme) -> String {
-        a.to_string()
-    }
-}
-
-impl TryFrom<String> for WrapScheme {
-    type Error = ParseError;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        s.parse()
-    }
-}
+names!(WrapScheme {
+    CmsAes256Gcm => "CMS-AES-256-GCM",
+    RsaOaepSha256 => "RSA-OAEP-SHA256",
+    RsaAesKeyWrapSha256 => "RSA-AES-KEY-WRAP-SHA256",
+    Aes128Kw => "AES-128-KW",
+    Aes256Kw => "AES-256-KW",
+    Aes128Kwp => "AES-128-KWP",
+    Aes256Kwp => "AES-256-KWP",
+});
 
 /// Bytes in a container, the scheme that produced them, and what that
 /// operation actually did.
@@ -1854,6 +1743,39 @@ mod tests {
             let deserialized: SignAlgorithm = serde_json::from_str(expected).unwrap();
             assert_eq!(deserialized, variant, "deserialize {expected}");
         }
+    }
+
+    /// `ALL` and the names come from one list, so this holds by
+    /// construction; it pins that every name parses back to its value.
+    #[test]
+    fn every_name_parses_back() {
+        for &value in KeyAlgorithm::ALL {
+            assert_eq!(value.as_str().parse::<KeyAlgorithm>(), Ok(value));
+        }
+        for &value in SignAlgorithm::ALL {
+            assert_eq!(value.as_str().parse::<SignAlgorithm>(), Ok(value));
+        }
+        for &value in WrapScheme::ALL {
+            assert_eq!(value.as_str().parse::<WrapScheme>(), Ok(value));
+        }
+    }
+
+    #[cfg(feature = "schemars")]
+    #[test]
+    fn the_schema_lists_every_name() {
+        let schema = schemars::schema_for!(WrapScheme);
+        assert_eq!(
+            schema.get("enum"),
+            Some(&serde_json::json!([
+                "CMS-AES-256-GCM",
+                "RSA-OAEP-SHA256",
+                "RSA-AES-KEY-WRAP-SHA256",
+                "AES-128-KW",
+                "AES-256-KW",
+                "AES-128-KWP",
+                "AES-256-KWP"
+            ]))
+        );
     }
 
     #[test]

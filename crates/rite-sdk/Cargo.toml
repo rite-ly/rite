@@ -18,6 +18,12 @@ thiserror = { workspace = true }
 bitflags = { workspace = true }
 x509-cert = { workspace = true }
 zeroize = { workspace = true }
+schemars = { workspace = true, optional = true }
+
+[features]
+# A JSON Schema for each algorithm name enum, for crates that validate
+# ceremony files against one.
+schemars = ["dep:schemars"]
 
 [dev-dependencies]
 # Only to decode the RFC 4134 example, which the test carries in the base64

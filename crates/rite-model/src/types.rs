@@ -272,6 +272,7 @@ pub enum CertProfile {
     /// Self-signed CA at the top of a chain.
     RootCa,
     /// CA below another, constrained by `path_len`.
+    #[serde(alias = "intermediate_ca")]
     SubCa,
     /// TLS server certificate.
     TlsServer,
@@ -281,15 +282,36 @@ pub enum CertProfile {
     EndEntity,
 }
 
+impl CertProfile {
+    /// Every profile, in declaration order.
+    pub const ALL: &'static [CertProfile] = &[
+        CertProfile::RootCa,
+        CertProfile::SubCa,
+        CertProfile::TlsServer,
+        CertProfile::CodeSigning,
+        CertProfile::EndEntity,
+    ];
+
+    /// `intermediate_ca` is `sub_ca` under the name the PKI world more often
+    /// uses for it.
+    const ALIASES: &'static [(&'static str, CertProfile)] =
+        &[("intermediate_ca", CertProfile::SubCa)];
+
+    /// The name a ceremony writes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CertProfile::RootCa => "root_ca",
+            CertProfile::SubCa => "sub_ca",
+            CertProfile::TlsServer => "tls_server",
+            CertProfile::CodeSigning => "code_signing",
+            CertProfile::EndEntity => "end_entity",
+        }
+    }
+}
+
 impl fmt::Display for CertProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CertProfile::RootCa => write!(f, "root_ca"),
-            CertProfile::SubCa => write!(f, "sub_ca"),
-            CertProfile::TlsServer => write!(f, "tls_server"),
-            CertProfile::CodeSigning => write!(f, "code_signing"),
-            CertProfile::EndEntity => write!(f, "end_entity"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -297,16 +319,28 @@ impl std::str::FromStr for CertProfile {
     type Err = UnknownCertProfile;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "root_ca" => Ok(Self::RootCa),
-            // `intermediate_ca` is the same shape under the name the PKI
-            // world more often uses for it.
-            "sub_ca" | "intermediate_ca" => Ok(Self::SubCa),
-            "tls_server" => Ok(Self::TlsServer),
-            "code_signing" => Ok(Self::CodeSigning),
-            "end_entity" => Ok(Self::EndEntity),
-            _ => Err(UnknownCertProfile),
-        }
+        Self::ALL
+            .iter()
+            .map(|&profile| (profile.as_str(), profile))
+            .chain(Self::ALIASES.iter().copied())
+            .find(|(name, _)| *name == s)
+            .map(|(_, profile)| profile)
+            .ok_or(UnknownCertProfile)
+    }
+}
+
+impl schemars::JsonSchema for CertProfile {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "CertProfile".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let names: Vec<&str> = Self::ALL
+            .iter()
+            .map(|profile| profile.as_str())
+            .chain(Self::ALIASES.iter().map(|(alias, _)| *alias))
+            .collect();
+        schemars::json_schema!({ "type": "string", "enum": names })
     }
 }
 
@@ -316,10 +350,18 @@ pub struct UnknownCertProfile;
 
 impl fmt::Display for UnknownCertProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "supported profiles: root_ca, sub_ca, tls_server, code_signing, end_entity"
-        )
+        let names: Vec<&str> = CertProfile::ALL.iter().map(|p| p.as_str()).collect();
+        write!(f, "supported profiles: {}", names.join(", "))
+    }
+}
+
+/// Names as a person reads a list of alternatives: `a, b or c`.
+pub(crate) fn either<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let names: Vec<&str> = names.collect();
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+        Some((last, _)) => (*last).to_string(),
+        None => String::new(),
     }
 }
 
@@ -340,6 +382,9 @@ pub enum SharingScheme {
 }
 
 impl SharingScheme {
+    /// Every scheme, in declaration order.
+    pub const ALL: &'static [SharingScheme] = &[SharingScheme::RiteSssV1];
+
     /// The name a ceremony writes and the transcript records.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -398,10 +443,22 @@ impl std::str::FromStr for SharingScheme {
     type Err = UnknownSharingScheme;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "rite-sss/v1" => Ok(Self::RiteSssV1),
-            _ => Err(UnknownSharingScheme),
-        }
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|scheme| scheme.as_str() == s)
+            .ok_or(UnknownSharingScheme)
+    }
+}
+
+impl schemars::JsonSchema for SharingScheme {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SharingScheme".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let names: Vec<&str> = Self::ALL.iter().map(|scheme| scheme.as_str()).collect();
+        schemars::json_schema!({ "type": "string", "enum": names })
     }
 }
 
@@ -419,7 +476,8 @@ pub struct UnknownSharingScheme;
 
 impl fmt::Display for UnknownSharingScheme {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "supported sharing schemes: rite-sss/v1")
+        let names: Vec<&str> = SharingScheme::ALL.iter().map(|s| s.as_str()).collect();
+        write!(f, "supported sharing schemes: {}", names.join(", "))
     }
 }
 
@@ -1236,6 +1294,78 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Each vocabulary's `ALL` is written by hand. The matches fail to compile
+    /// when a variant is added, which puts the error next to the list; the
+    /// assertions then check that each name parses back and is the name serde
+    /// writes, since `as_str` and the serde derive are separate spellings.
+    #[test]
+    fn every_vocabulary_lists_every_value_under_its_serde_name() {
+        use crate::{Format, RevealFormat};
+
+        fn check<T>(all: &[T])
+        where
+            T: Copy + PartialEq + std::fmt::Debug + std::fmt::Display + Serialize,
+            T: std::str::FromStr,
+        {
+            for &value in all {
+                let name = value.to_string();
+                assert!(
+                    matches!(name.parse::<T>(), Ok(parsed) if parsed == value),
+                    "{name}"
+                );
+                assert_eq!(serde_json::to_value(value).unwrap(), name.as_str());
+            }
+        }
+
+        for profile in CertProfile::ALL {
+            match profile {
+                CertProfile::RootCa
+                | CertProfile::SubCa
+                | CertProfile::TlsServer
+                | CertProfile::CodeSigning
+                | CertProfile::EndEntity => {}
+            }
+        }
+        for scheme in SharingScheme::ALL {
+            match scheme {
+                SharingScheme::RiteSssV1 => {}
+            }
+        }
+        for format in RevealFormat::ALL {
+            match format {
+                RevealFormat::Paper32 | RevealFormat::Hex | RevealFormat::Bip39 => {}
+            }
+        }
+        for format in Format::ALL {
+            match format {
+                Format::Text
+                | Format::Digits
+                | Format::Alphanumeric
+                | Format::Hex
+                | Format::Base64
+                | Format::Paper32
+                | Format::Bip39 => {}
+            }
+        }
+        check(CertProfile::ALL);
+        check(SharingScheme::ALL);
+        check(RevealFormat::ALL);
+        check(Format::ALL);
+    }
+
+    /// serde accepts the alias, so the schema does too.
+    #[test]
+    fn a_cert_profile_alias_is_in_the_schema_and_parses() {
+        let schema = schemars::schema_for!(CertProfile);
+        let names = schema.get("enum").and_then(|e| e.as_array()).unwrap();
+        assert!(names.iter().any(|name| name == "intermediate_ca"));
+        assert_eq!(
+            serde_json::from_value::<CertProfile>(serde_json::json!("intermediate_ca")).unwrap(),
+            CertProfile::SubCa
+        );
+        assert_eq!("intermediate_ca".parse(), Ok(CertProfile::SubCa));
     }
 
     #[test]

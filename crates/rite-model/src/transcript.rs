@@ -286,54 +286,69 @@ pub enum ValidatorSpec {
 /// so whitespace is dropped before decoding, except between the words of a
 /// `bip39` phrase, where it separates them.
 #[non_exhaustive]
-#[cfg_attr(test, derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(test, schemars(description = "What kind of value a person types."))]
+#[schemars(description = "What kind of value a person types.")]
 pub enum Format {
     /// Anything the person can type.
-    #[cfg_attr(test, schemars(description = "Anything the person can type."))]
+    #[schemars(description = "Anything the person can type.")]
     Text,
     /// `0` to `9`.
-    #[cfg_attr(test, schemars(description = "Decimal digits only."))]
+    #[schemars(description = "Decimal digits only.")]
     Digits,
     /// ASCII letters and digits.
-    #[cfg_attr(test, schemars(description = "ASCII letters and digits."))]
+    #[schemars(description = "ASCII letters and digits.")]
     Alphanumeric,
     /// Bytes as hexadecimal, in either case, two digits per byte.
-    #[cfg_attr(
-        test,
-        schemars(description = "Bytes as hexadecimal, in either case, two digits per byte.")
-    )]
+    #[schemars(description = "Bytes as hexadecimal, in either case, two digits per byte.")]
     Hex,
     /// Bytes as standard base64 with padding, as `openssl base64` writes it.
-    #[cfg_attr(test, schemars(description = "Bytes as standard base64 with padding."))]
+    #[schemars(description = "Bytes as standard base64 with padding.")]
     Base64,
     /// Bytes as paper32 rows, as `reveal` shows them and a sheet holds
     /// them; typed a row at a time, a wrong character in a row corrected.
     /// See [`crate::paper32`].
-    #[cfg_attr(
-        test,
-        schemars(
-            description = "Bytes as paper32 rows, typed a row at a time from a sheet, a wrong \
+    #[schemars(
+        description = "Bytes as paper32 rows, typed a row at a time from a sheet, a wrong \
             character in a row corrected."
-        )
     )]
     Paper32,
     /// A BIP-39 recovery phrase in the English list, typed a word at a
     /// time; the value is the entropy it encodes, and a length counts
     /// words. See [`crate::bip39`].
-    #[cfg_attr(
-        test,
-        schemars(
-            description = "A BIP-39 recovery phrase in the English list, typed a word at a \
+    #[schemars(
+        description = "A BIP-39 recovery phrase in the English list, typed a word at a \
             time; the value is its entropy, and a length counts words."
-        )
     )]
     Bip39,
 }
 
 impl Format {
+    /// Every format, in declaration order.
+    pub const ALL: &'static [Format] = &[
+        Format::Text,
+        Format::Digits,
+        Format::Alphanumeric,
+        Format::Hex,
+        Format::Base64,
+        Format::Paper32,
+        Format::Bip39,
+    ];
+
+    /// The name a ceremony writes.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Format::Text => "text",
+            Format::Digits => "digits",
+            Format::Alphanumeric => "alphanumeric",
+            Format::Hex => "hex",
+            Format::Base64 => "base64",
+            Format::Paper32 => "paper32",
+            Format::Bip39 => "bip39",
+        }
+    }
+
     /// Whether the value stands for bytes, which is what the step then keeps.
     #[must_use]
     pub fn is_encoding(self) -> bool {
@@ -454,23 +469,26 @@ impl Format {
 /// entry itself is not bounded by it.
 pub const PLACEHOLDER_LIMIT: usize = 64 * 1024;
 
+impl std::fmt::Display for Format {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl std::str::FromStr for Format {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "text" => Ok(Format::Text),
-            "digits" => Ok(Format::Digits),
-            "alphanumeric" => Ok(Format::Alphanumeric),
-            "hex" => Ok(Format::Hex),
-            "base64" => Ok(Format::Base64),
-            "paper32" => Ok(Format::Paper32),
-            "bip39" => Ok(Format::Bip39),
-            other => Err(format!(
-                "unknown format '{other}': expected text, digits, alphanumeric, hex, base64, \
-                 paper32 or bip39"
-            )),
-        }
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|format| format.as_str() == s)
+            .ok_or_else(|| {
+                format!(
+                    "unknown format '{s}': expected {}",
+                    crate::types::either(Format::ALL.iter().map(|format| format.as_str()))
+                )
+            })
     }
 }
 

@@ -1,0 +1,40 @@
+# Rite live image package list
+# See: https://live-team.pages.debian.net/live-manual/html/live-manual/customizing-package-installation.en.html
+#
+# live-boot, live-config and live-config-systemd are added by live-build.
+# This list holds only what the image needs beyond them.
+
+# Architecture-specific GRUB bootloader
+#if ARCHITECTURES arm64
+grub-efi-arm64
+#endif
+
+#if ARCHITECTURES amd64
+grub-efi-amd64
+#endif
+
+# Required by live-config to create the rite user (a recommends, not installed
+# with --apt-recommends false).
+user-setup
+
+# The rite user powers the machine off through a sudo rule limited to
+# systemctl poweroff and reboot (see setup-hook.sh).
+sudo
+less
+
+# Tab completion for rite in the session shell.
+bash-completion
+
+# Display stack: cage (wlroots kiosk compositor) runs foot fullscreen. dbus and
+# libpam-systemd let logind open the session and set XDG_RUNTIME_DIR; without
+# them cage exits at once ("XDG_RUNTIME_DIR is not set"). Neither is pulled in
+# by live-config-systemd under --apt-recommends false.
+#
+# fonts-dejavu-core provides the TrueType font that foot's "monospace" alias
+# resolves to through fontconfig. A minimal image ships none otherwise.
+dbus
+libpam-systemd
+cage
+foot
+foot-terminfo
+fonts-dejavu-core

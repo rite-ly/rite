@@ -1,0 +1,95 @@
+#!/bin/bash
+# /usr/lib/rite/rite-session
+# The operator's screen: shows the ceremonies on this medium, where outputs go
+# and the command that runs a ceremony. With one ceremony and the outputs
+# partition mounted, Enter runs that command; otherwise the operator runs it
+# from the shell. A shell follows. Leaving the shell ends the session, and
+# rite-session.service starts it again.
+#
+# Everything runs from the outputs directory: rite run writes to the current
+# directory by default, so a command typed without --output still writes to the
+# stick.
+
+# Ctrl-C ends whatever runs in the foreground, not this script: rite-kiosk takes
+# any non-zero status from it for a display failure. A trap, unlike ignoring the
+# signal, is not passed on to the commands the script runs.
+trap ':' INT
+
+CEREMONY_LIST=/rite/ceremonies
+OUTPUTS=/rite/outputs
+
+cd "$OUTPUTS" || cd ~ || exit 0
+clear
+if [[ -n "${RITE_SESSION_NOTICE:-}" ]]; then
+    echo "$RITE_SESSION_NOTICE"
+    echo ""
+fi
+echo "Rite ceremony environment ($(rite --version))"
+echo ""
+
+CEREMONIES=()
+if [[ -f "$CEREMONY_LIST" ]]; then
+    mapfile -t CEREMONIES < "$CEREMONY_LIST"
+fi
+
+# The SHA-256 shown is the digest the transcript records for the definition.
+case ${#CEREMONIES[@]} in
+    0)
+        echo "No ceremony on this medium. It was booted from a base ISO, or the"
+        echo "image was not built with build-img."
+        ;;
+    1)
+        echo "Ceremony:  ${CEREMONIES[0]}"
+        echo "SHA-256:   $(sha256sum "${CEREMONIES[0]}" | cut -d' ' -f1)"
+        ;;
+    *)
+        echo "Ceremonies:"
+        for ceremony in "${CEREMONIES[@]}"; do
+            echo "  $ceremony"
+            echo "    SHA-256: $(sha256sum "$ceremony" | cut -d' ' -f1)"
+        done
+        ;;
+esac
+echo ""
+
+OUTPUTS_MOUNTED=false
+if mountpoint -q "$OUTPUTS"; then
+    OUTPUTS_MOUNTED=true
+    echo "Outputs:   $OUTPUTS (RITE-OUT partition on this medium)"
+elif [[ -s /run/rite/outputs-error ]]; then
+    echo "WARNING: the RITE-OUT partition could not be mounted:"
+    echo "  $(cat /run/rite/outputs-error)"
+    echo "Outputs in $OUTPUTS are lost at power off."
+else
+    echo "WARNING: no RITE-OUT partition. Outputs in $OUTPUTS are lost at power off."
+fi
+echo ""
+
+case ${#CEREMONIES[@]} in
+    0) ;;
+    1)
+        echo "Command:   rite run ${CEREMONIES[0]}"
+        echo "           (in the shell, add flags such as --dry-run or --role as needed)"
+        echo ""
+        if [[ "$OUTPUTS_MOUNTED" == true ]]; then
+            # Ctrl-D makes read fail, which opens the shell rather than the
+            # ceremony.
+            if read -r -p "Press Enter to run it, or type 'shell' for a shell: " answer \
+                && [[ -z "$answer" ]]; then
+                rite run "${CEREMONIES[0]}"
+            fi
+        else
+            echo "Without the outputs partition, the ceremony does not start from here."
+            echo "To run it anyway, knowing its outputs will be lost, type the command."
+        fi
+        ;;
+    *)
+        echo "Run one with:  rite run <ceremony file>"
+        ;;
+esac
+
+echo ""
+echo "Type 'poweroff' to shut down, 'exit' to return to the start screen."
+echo ""
+bash
+exit 0

@@ -1,0 +1,34 @@
+# The ceremony session on tty1, run as the rite user. rite-kiosk starts it
+# inside cage + foot, or on the text console when the graphical session cannot
+# start. The session restarts when the operator leaves its shell, with no start
+# limit: a stopped unit would leave no console at all.
+[Unit]
+Description=Rite ceremony session
+After=systemd-user-sessions.service dbus.socket systemd-logind.service
+Wants=dbus.socket systemd-logind.service
+ConditionPathExists=/dev/tty1
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStartPre=+/usr/lib/rite/mount-outputs
+ExecStart=/usr/lib/rite/rite-kiosk
+Restart=always
+RestartSec=1
+User=rite
+WorkingDirectory=~
+PAMName=rite-session
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+# All three streams on the terminal: on the text console, bash is interactive
+# and shows its prompts only when stdin and stderr are both a terminal.
+StandardInput=tty-fail
+StandardOutput=tty
+StandardError=tty
+UtmpIdentifier=tty1
+UtmpMode=user
+
+[Install]
+WantedBy=multi-user.target

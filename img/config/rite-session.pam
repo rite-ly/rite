@@ -1,0 +1,7 @@
+# PAM stack for rite-session.service. systemd runs only the account and session
+# phases for a service with User= set; pam_systemd registers the logind session
+# that cage needs for the display and input devices.
+auth      required  pam_unix.so nullok
+account   required  pam_unix.so
+session   required  pam_unix.so
+session   required  pam_systemd.so

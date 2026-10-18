@@ -1,0 +1,11 @@
+# ~/.bashrc of the rite user, installed through /etc/skel.
+# The session shell is interactive but not a login shell, so it reads only this
+# file, and Debian does not enable completion for it by default.
+
+[[ $- == *i* ]] || return
+
+. /usr/share/bash-completion/bash_completion
+
+PS1='rite:\w\$ '
+alias poweroff='sudo systemctl poweroff'
+alias reboot='sudo systemctl reboot'

@@ -336,6 +336,10 @@ jobs:
           subject-name: ghcr.io/rite-ly/rite
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
+          # A storage record lists the image in the organization's artifact
+          # metadata. Nothing reads it, and it would need the
+          # artifact-metadata: write permission.
+          create-storage-record: false
 
   release:
     name: Create Release

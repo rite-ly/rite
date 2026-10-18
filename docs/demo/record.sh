@@ -76,7 +76,7 @@ wait_for "start the ceremony";     sleep "$PAUSE"; key Enter
 
 # Step 1 - verify_air_gap
 wait_for "start step 1";                sleep "$PAUSE"; key Enter
-wait_for "isolated from all networks";  sleep "$PAUSE"; key "y"
+wait_for "network interfaces are disconnected"; sleep "$PAUSE"; key "y"
 
 # Steps 2-5 - keypair / CSR / certificate / public-key export (run automatically)
 wait_for "start step 2";                sleep "$PAUSE"; key Enter

@@ -1,13 +1,17 @@
 //! Params for the key and data actions.
 
+use rite_sdk::{KeyAlgorithm, KeyUsages, SignAlgorithm, WrapScheme};
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 
 /// Params for `generate_key` action.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct GenerateKeyParams {
     /// Cryptographic algorithm (e.g., `"RSA-4096"`, `"ECDSA-P256"`).
     #[serde(default = "default_algorithm")]
-    pub algorithm: String,
+    pub algorithm: KeyAlgorithm,
     /// What the key is permitted to do, and whether it may leave the backend.
     #[serde(default)]
     pub policy: Option<KeyPolicyParams>,
@@ -16,7 +20,8 @@ pub struct GenerateKeyParams {
     pub slot: Option<String>,
 }
 
-/// The `policy:` block, mirroring [`KeyPolicy`] field for field.
+/// The `policy:` block, mirroring [`KeyPolicy`](rite_sdk::KeyPolicy) field
+/// for field.
 ///
 /// Every field is optional and falls back to the restrictive choice: a
 /// persistent, sensitive, non-extractable key. The usages fall back to what the
@@ -29,7 +34,9 @@ pub struct GenerateKeyParams {
 /// This is PKCS#11 vocabulary: what the token permits. The `KeyUsage`
 /// extension in a certificate is a different thing, settled by `profile:` on
 /// `issue_certificate`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct KeyPolicyParams {
     /// Key survives the session. `CKA_TOKEN`.
     #[serde(default)]
@@ -47,7 +54,7 @@ pub struct KeyPolicyParams {
     /// Operations the key is permitted to perform: `sign`, `verify`,
     /// `encrypt`, `decrypt`, `wrap`, `unwrap`, `derive`.
     #[serde(default)]
-    pub usages: Option<Vec<String>>,
+    pub usages: Option<Vec<KeyUsage>>,
 }
 
 impl KeyPolicyParams {
@@ -56,28 +63,14 @@ impl KeyPolicyParams {
     /// The base is the caller's to choose, because what a key may do when the
     /// ceremony says nothing follows from its algorithm: see
     /// [`KeyPolicy::default_for`](rite_sdk::KeyPolicy::default_for).
-    ///
-    /// # Errors
-    ///
-    /// Returns the offending name if `usages` holds one that is not a PKCS#11
-    /// usage. Resolution rejects those first, so reaching this means the step
-    /// was built without going through it.
-    pub fn resolve_from(
-        &self,
-        defaults: &rite_sdk::KeyPolicy,
-    ) -> Result<rite_sdk::KeyPolicy, String> {
-        let usages = match &self.usages {
-            None => defaults.usages,
-            Some(names) => {
-                let mut usages = rite_sdk::KeyUsages::empty();
-                for name in names {
-                    usages |= rite_sdk::KeyUsages::usage_named(name)
-                        .ok_or_else(|| format!("unknown key usage '{name}'"))?;
-                }
-                usages
-            }
-        };
-        Ok(rite_sdk::KeyPolicy {
+    #[must_use]
+    pub fn resolve_from(&self, defaults: &rite_sdk::KeyPolicy) -> rite_sdk::KeyPolicy {
+        let usages = self.usages.as_ref().map_or(defaults.usages, |usages| {
+            usages
+                .iter()
+                .fold(KeyUsages::empty(), |all, usage| all | usage.0)
+        });
+        rite_sdk::KeyPolicy {
             persistent: self.persistent.unwrap_or(defaults.persistent),
             sensitive: self.sensitive.unwrap_or(defaults.sensitive),
             extractable: self.extractable.unwrap_or(defaults.extractable),
@@ -85,12 +78,57 @@ impl KeyPolicyParams {
                 .wrap_with_trusted_only
                 .unwrap_or(defaults.wrap_with_trusted_only),
             usages,
+        }
+    }
+}
+
+/// One name under `policy: { usages: [...] }`, a PKCS#11 usage.
+///
+/// What the token permits the key to do. The X.509 `KeyUsage` extension is a
+/// different thing and comes from `profile:` on `issue_certificate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+pub struct KeyUsage(KeyUsages);
+
+impl KeyUsage {
+    /// The one usage this name stands for.
+    #[must_use]
+    pub fn usage(self) -> KeyUsages {
+        self.0
+    }
+}
+
+impl From<KeyUsage> for String {
+    fn from(usage: KeyUsage) -> String {
+        usage.0.describe()
+    }
+}
+
+impl TryFrom<String> for KeyUsage {
+    type Error = String;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        KeyUsages::usage_named(&name).map(KeyUsage).ok_or_else(|| {
+            format!(
+                "unknown key usage '{name}'. Supported: {}",
+                KeyUsages::all_names().join(", ")
+            )
         })
     }
 }
 
-fn default_algorithm() -> String {
-    "RSA-4096".to_string()
+impl JsonSchema for KeyUsage {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "KeyUsage".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        super::schema::names(KeyUsages::all_names().into_iter())
+    }
+}
+
+fn default_algorithm() -> KeyAlgorithm {
+    KeyAlgorithm::Rsa4096
 }
 
 impl Default for GenerateKeyParams {
@@ -104,7 +142,9 @@ impl Default for GenerateKeyParams {
 }
 
 /// Params for `wrap_key` action.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct WrapKeyParams {
     /// The wrapping scheme, defaulting to `"CMS-AES-256-GCM"`.
     ///
@@ -123,7 +163,7 @@ pub struct WrapKeyParams {
     /// KEK size, because the RFC 3394 and RFC 5649 object identifiers are
     /// per-size and the output carries neither.
     #[serde(default)]
-    pub scheme: Option<rite_sdk::WrapScheme>,
+    pub scheme: Option<WrapScheme>,
     /// The recipient's expected fingerprint, `"sha256:<hex>"` over its SPKI
     /// DER, for a step that reads `recipient:`.
     ///
@@ -131,12 +171,25 @@ pub struct WrapKeyParams {
     /// was present" into a value the ceremony committed to in advance. On
     /// mismatch the step fails: a key wrapped to the wrong recipient cannot be
     /// unwrapped again.
+    //
+    // A value in any other shape can never equal what the runtime computes,
+    // which renders every fingerprint in lowercase, so the step would fail in
+    // the room, after the keys exist.
     #[serde(default)]
+    #[schemars(
+        regex(pattern = r"^sha256:[0-9a-f]{64}$"),
+        extend(
+            "x-message" = "'expect_recipient' must be a fingerprint of the form \
+                'sha256:<64 lowercase hex digits>'"
+        )
+    )]
     pub expect_recipient: Option<String>,
 }
 
 /// Params for `sign_data` action.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct SignDataParams {
     /// Signature algorithm. Defaults to the one implied by the key.
     ///
@@ -145,28 +198,39 @@ pub struct SignDataParams {
     /// key type admits exactly one algorithm, so naming it only restates the
     /// key.
     #[serde(default)]
-    pub algorithm: Option<String>,
+    pub algorithm: Option<SignAlgorithm>,
     /// Optional display message.
     #[serde(default)]
     pub message: Option<String>,
 }
 
 /// Params for `verify_signature` action.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct VerifySignatureParams {
     /// Signature algorithm. Defaults to the one implied by the public key.
     ///
     /// Required when checking an RSA-PSS signature, since an RSA key alone
     /// does not say which scheme was used.
     #[serde(default)]
-    pub algorithm: Option<String>,
+    pub algorithm: Option<SignAlgorithm>,
     /// Optional display message.
     #[serde(default)]
     pub message: Option<String>,
 }
 
+/// The identity of a key a ceremony declares in advance, in whichever form
+/// the key has one.
+///
+/// A value in neither form can never equal what the runtime computes, so the
+/// mismatch is reported before the room rather than during it.
+const KEY_IDENTITY: &str = r"^(sha256:[0-9a-f]{64}|cmac-aes:[0-9a-f]{6})$";
+
 /// Params for `unwrap_key` action.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct UnwrapKeyParams {
     /// What the ceremony is restoring, as a key algorithm name.
     ///
@@ -176,7 +240,7 @@ pub struct UnwrapKeyParams {
     /// length. Optional for a keypair, which names itself once its DER parses,
     /// and checked against what came out when given.
     #[serde(default)]
-    pub algorithm: Option<String>,
+    pub algorithm: Option<KeyAlgorithm>,
     /// The expected identity of the recovered key: `"sha256:<hex>"` over its
     /// SPKI DER for a keypair, `"cmac-aes:<hex>"` for a symmetric key.
     ///
@@ -184,10 +248,14 @@ pub struct UnwrapKeyParams {
     /// recorded. On mismatch the step fails rather than importing a key the
     /// ceremony did not mean to restore.
     #[serde(default)]
+    #[schemars(
+        regex(pattern = KEY_IDENTITY),
+        extend("x-message" = EXPECT_KEY_MESSAGE)
+    )]
     pub expect_key: Option<String>,
-    /// Label for the unwrapped key (defaults to `"unwrapped-key"`).
-    #[serde(default)]
-    pub label: Option<String>,
+    /// Label for the unwrapped key.
+    #[serde(default = "unwrapped_key_label")]
+    pub label: String,
     /// What the recovered key is permitted to do, and whether it may leave
     /// the backend again.
     ///
@@ -199,8 +267,29 @@ pub struct UnwrapKeyParams {
     pub policy: Option<KeyPolicyParams>,
 }
 
+const EXPECT_KEY_MESSAGE: &str = "'expect_key' must name the key either as \
+    'sha256:<64 lowercase hex digits>', the fingerprint of a public key, or as \
+    'cmac-aes:<6 lowercase hex digits>', the check value of a symmetric key";
+
+fn unwrapped_key_label() -> String {
+    "unwrapped-key".to_string()
+}
+
+impl Default for UnwrapKeyParams {
+    fn default() -> Self {
+        Self {
+            algorithm: None,
+            expect_key: None,
+            label: unwrapped_key_label(),
+            policy: None,
+        }
+    }
+}
+
 /// Params for `import_key` action.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ImportKeyParams {
     /// What the bytes are, as a key algorithm name.
     ///
@@ -209,7 +298,7 @@ pub struct ImportKeyParams {
     /// as PKCS#8 DER. `unwrap_key` can leave this out for a keypair because the
     /// artifact it reads carries a description; an artifact of plain bytes
     /// carries nothing.
-    pub algorithm: String,
+    pub algorithm: KeyAlgorithm,
     /// The expected identity of the imported key: `"sha256:<hex>"` over its
     /// SPKI DER for a keypair, `"cmac-aes:<hex>"` for a symmetric key.
     ///
@@ -217,10 +306,14 @@ pub struct ImportKeyParams {
     /// learns only afterwards. Where it is known it is the only evidence
     /// available about material this ceremony did not itself produce.
     #[serde(default)]
+    #[schemars(
+        regex(pattern = KEY_IDENTITY),
+        extend("x-message" = EXPECT_KEY_MESSAGE)
+    )]
     pub expect_key: Option<String>,
-    /// Label for the imported key (defaults to `"imported-key"`).
-    #[serde(default)]
-    pub label: Option<String>,
+    /// Label for the imported key.
+    #[serde(default = "imported_key_label")]
+    pub label: String,
     /// What the imported key is permitted to do, and whether it may leave the
     /// backend again.
     ///
@@ -230,14 +323,34 @@ pub struct ImportKeyParams {
     pub policy: Option<KeyPolicyParams>,
 }
 
+fn imported_key_label() -> String {
+    "imported-key".to_string()
+}
+
 /// Params for `encrypt_data` action.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct EncryptDataParams {
     /// The container, defaulting to `"CMS-AES-256-GCM"`.
     ///
     /// The only value this action accepts today. It is written out rather than
     /// implied because a second content cipher means a second container, and a
     /// ceremony that names the one it used stays readable when there are two.
+    //
+    // Narrower than `wrap_key`'s vocabulary on purpose: the container is the
+    // only thing `encrypt_data` writes.
     #[serde(default)]
-    pub scheme: Option<rite_sdk::WrapScheme>,
+    #[schemars(schema_with = "content_schemes")]
+    pub scheme: Option<WrapScheme>,
+}
+
+/// The schemes that carry content, which are the ones `encrypt_data` writes.
+fn content_schemes(_: &mut SchemaGenerator) -> Schema {
+    super::schema::names(
+        WrapScheme::ALL
+            .iter()
+            .filter(|scheme| scheme.carries_content())
+            .map(|scheme| scheme.as_str()),
+    )
 }

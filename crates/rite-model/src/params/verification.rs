@@ -1,9 +1,12 @@
 //! Params for the verification actions.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Params for `clock_check` action.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ClockCheckParams {
     /// Message to display before showing the time.
     #[serde(default)]
@@ -11,7 +14,9 @@ pub struct ClockCheckParams {
 }
 
 /// Params for `confirm` action.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ConfirmParams {
     /// Message to display for confirmation.
     #[serde(default)]
@@ -33,6 +38,13 @@ pub enum ReadbackFormat {
 }
 
 impl ReadbackFormat {
+    /// Every format, in declaration order.
+    pub const ALL: &'static [ReadbackFormat] = &[
+        ReadbackFormat::NatoPhonetic,
+        ReadbackFormat::Hex,
+        ReadbackFormat::Raw,
+    ];
+
     /// Short label suitable for transcript display.
     #[must_use]
     pub fn label(self) -> &'static str {
@@ -44,8 +56,26 @@ impl ReadbackFormat {
     }
 }
 
+/// The names serde accepts, the `nato` alias among them.
+impl JsonSchema for ReadbackFormat {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ReadbackFormat".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        super::schema::names(
+            ReadbackFormat::ALL
+                .iter()
+                .map(|format| format.label())
+                .chain(["nato"]),
+        )
+    }
+}
+
 /// Params for `oral_readback` action.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct OralReadbackParams {
     /// Instruction shown before the readback, as on the other verification
     /// actions.
@@ -66,7 +96,9 @@ pub struct OralReadbackParams {
 ///
 /// Machine-verified comparison of two values. Use this when both values are known
 /// to the system and comparison is deterministic (e.g., hash verification).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CheckValueParams {
     /// The computed or actual value to verify (required).
     pub actual: String,
@@ -82,7 +114,9 @@ pub struct CheckValueParams {
 
 /// Params for `machine_info` action.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct MachineInfoParams {
     /// Include hashed machine ID in evidence (default: true).
     #[serde(default = "default_true")]

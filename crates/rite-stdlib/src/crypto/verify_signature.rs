@@ -61,7 +61,7 @@ impl Action for VerifySignatureAction {
             ))
         })?;
 
-        let algorithm = resolve_sign_algorithm(typed.algorithm.as_deref(), key_algorithm)?;
+        let algorithm = resolve_sign_algorithm(typed.algorithm, key_algorithm)?;
 
         let data_id = data_ref.artifact_id();
         let data =

@@ -9,7 +9,7 @@ use rite_sdk::{Backend, SignAlgorithm};
 use secrecy::ExposeSecret;
 use serde_json::json;
 
-use rite_model::params::PivSignParams;
+use rite_model::params::{PIV_SIGN_ALGORITHMS, PivSignParams};
 
 /// Sign data using a PIV smart card on-device key.
 pub struct PivSignAction;
@@ -43,7 +43,7 @@ impl Action for PivSignAction {
         // Validate slot and algorithm early.
         let piv_slot = rite_piv::ops::slot_from_hint(&typed.slot)
             .map_err(|e| ActionError::Failed(format!("Invalid PIV slot: {e}")))?;
-        let sign_algorithm = parse_sign_algorithm(&typed.algorithm)?;
+        let sign_algorithm = piv_sign_algorithm(typed.algorithm)?;
 
         // Resolve the single input artifact to sign.
         let input_ref = step
@@ -169,30 +169,19 @@ fn verify_pin(
     Ok(())
 }
 
-/// The action-level allowlist, applied on top of the SDK's parsing. RSA-PSS is
-/// absent because PIV cards apply a raw RSA operation and the client-side PSS
-/// encoding is not implemented; Ed25519 and ML-DSA because no PIV card does them.
-const SUPPORTED_ALGORITHMS: [SignAlgorithm; 3] = [
-    SignAlgorithm::EcdsaSha256,
-    SignAlgorithm::EcdsaSha384,
-    SignAlgorithm::RsaPkcs1Sha256,
-];
-
-/// Parse an algorithm name from the DSL and check it against the allowlist.
-fn parse_sign_algorithm(s: &str) -> Result<SignAlgorithm, ActionError> {
-    s.parse()
-        .ok()
-        .filter(|algorithm| SUPPORTED_ALGORITHMS.contains(algorithm))
-        .ok_or_else(|| {
-            let supported = SUPPORTED_ALGORITHMS
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            ActionError::Failed(format!(
-                "Unsupported signing algorithm: {s}. Supported: {supported}"
-            ))
-        })
+/// Check an algorithm against what a PIV card performs.
+fn piv_sign_algorithm(algorithm: SignAlgorithm) -> Result<SignAlgorithm, ActionError> {
+    if PIV_SIGN_ALGORITHMS.contains(&algorithm) {
+        return Ok(algorithm);
+    }
+    let supported = PIV_SIGN_ALGORITHMS
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(ActionError::Failed(format!(
+        "Unsupported signing algorithm: {algorithm}. Supported: {supported}"
+    )))
 }
 
 #[cfg(test)]
@@ -202,44 +191,25 @@ mod tests {
     use rite_sdk::{BackendError, KeyId, PivBackend, PivDeviceInfo, PivSlotInfo, SignBackend};
 
     #[test]
-    fn parse_sign_algorithm_valid() {
-        assert_eq!(
-            parse_sign_algorithm("ECDSA-SHA256").unwrap(),
-            SignAlgorithm::EcdsaSha256
-        );
-        assert_eq!(
-            parse_sign_algorithm("ECDSA-SHA384").unwrap(),
-            SignAlgorithm::EcdsaSha384
-        );
-        assert_eq!(
-            parse_sign_algorithm("RSA-PKCS1-SHA256").unwrap(),
-            SignAlgorithm::RsaPkcs1Sha256
-        );
+    fn piv_sign_algorithm_accepts_what_a_card_performs() {
+        for algorithm in PIV_SIGN_ALGORITHMS {
+            assert_eq!(piv_sign_algorithm(algorithm).unwrap(), algorithm);
+        }
     }
 
     #[test]
-    fn parse_sign_algorithm_invalid() {
-        let err = parse_sign_algorithm("SHA256-WITH-VIBES").unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("SHA256-WITH-VIBES"));
-        assert!(msg.contains("Supported:"));
-    }
-
-    #[test]
-    fn parse_sign_algorithm_rejects_algorithms_no_piv_card_offers() {
-        // Each of these parses as a `SignAlgorithm`, so only the action-level
+    fn piv_sign_algorithm_rejects_algorithms_no_piv_card_offers() {
+        // Each of these is a `SignAlgorithm`, so only the action-level
         // allowlist stands between them and a card that cannot perform them.
         // PIV does raw RSA and the client-side PSS encoding is not implemented;
         // Ed25519 and ML-DSA have no PIV key reference at all.
-        for name in ["RSA-PSS-SHA256", "Ed25519", "ML-DSA-87"] {
-            assert!(
-                name.parse::<SignAlgorithm>().is_ok(),
-                "{name} must be a known algorithm for this test to mean anything"
-            );
-            assert!(
-                parse_sign_algorithm(name).is_err(),
-                "{name} must be refused"
-            );
+        for algorithm in [
+            SignAlgorithm::RsaPssSha256,
+            SignAlgorithm::Ed25519,
+            SignAlgorithm::MlDsa87,
+        ] {
+            let message = piv_sign_algorithm(algorithm).unwrap_err().to_string();
+            assert!(message.contains("Supported:"), "{message}");
         }
     }
 

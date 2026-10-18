@@ -18,18 +18,22 @@ mod entropy;
 mod entry;
 mod piv;
 mod pki;
+mod schema;
 mod sharing;
 mod verification;
 
 pub use attestation::AttestParams;
 pub use crypto::{
-    EncryptDataParams, GenerateKeyParams, ImportKeyParams, KeyPolicyParams, SignDataParams,
-    UnwrapKeyParams, VerifySignatureParams, WrapKeyParams,
+    EncryptDataParams, GenerateKeyParams, ImportKeyParams, KeyPolicyParams, KeyUsage,
+    SignDataParams, UnwrapKeyParams, VerifySignatureParams, WrapKeyParams,
 };
 pub use entropy::GatherEntropyParams;
 pub use entry::EntryParams;
-pub use piv::{AttestSlotParams, PivReadCertificateParams, PivSignParams};
+pub use piv::{
+    AttestSlotParams, PIV_SIGN_ALGORITHMS, PIV_SLOT, PivReadCertificateParams, PivSignParams,
+};
 pub use pki::{GenerateCsrParams, IssueCertificateParams};
+pub use schema::{KEYWORDS, generator, with_schema};
 pub use sharing::{EnterShareParams, RevealParams, SplitSecretParams};
 pub use verification::{
     CheckValueParams, ClockCheckParams, ConfirmParams, MachineInfoParams, OralReadbackParams,
@@ -381,6 +385,41 @@ impl FormatSpec {
                     .join(", ")
             )),
         }
+    }
+}
+
+/// A format name, or an object holding only a pattern.
+impl schemars::JsonSchema for FormatSpec {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "FormatSpec".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let named = generator.subschema_for::<Format>();
+        schemars::json_schema!({
+            "oneOf": [
+                named,
+                {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "A regular expression the whole value must match.",
+                        }
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": false,
+                }
+            ],
+            "x-message": format!(
+                "'format' must name a format ({}) or be {{ pattern: \"...\" }}",
+                Format::ALL
+                    .iter()
+                    .map(|format| format.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        })
     }
 }
 
@@ -969,115 +1008,91 @@ mod tests {
 }
 
 #[cfg(test)]
-mod schema_drift_tests {
+mod schema_tests {
     use super::*;
     use crate::ActionType;
+    use serde_json::Value;
     use std::collections::BTreeSet;
 
-    /// The keys a params struct actually accepts.
-    ///
-    /// Every struct here derives `Default` and `Serialize` and none uses
-    /// `skip_serializing_if`, so serializing a default value names every field
-    /// serde will read.
-    fn serde_keys<T: serde::Serialize>(value: T) -> BTreeSet<String> {
-        serde_json::to_value(value)
-            .expect("params structs serialize")
-            .as_object()
-            .expect("params structs are objects")
-            .keys()
-            .cloned()
-            .collect()
+    /// The keys an action's schema accepts: the properties of the object it
+    /// closes with `additionalProperties: false`.
+    fn accepted(action: ActionType) -> BTreeSet<String> {
+        let schema = with_schema(action).to_value();
+        let closed =
+            |object: &Value| object.get("additionalProperties") == Some(&Value::Bool(false));
+        let target = |object: &Value| -> Option<Value> {
+            let name = object.get("$ref")?.as_str()?.strip_prefix("#/$defs/")?;
+            schema.get("$defs")?.get(name).cloned()
+        };
+        let mut candidates = vec![schema.clone()];
+        candidates.extend(target(&schema));
+        if let Some(Value::Array(all)) = schema.get("allOf") {
+            candidates.extend(all.iter().filter_map(target));
+        }
+        let object = candidates
+            .into_iter()
+            .find(closed)
+            .unwrap_or_else(|| panic!("{action}'s schema is not closed"));
+        object
+            .get("properties")
+            .and_then(Value::as_object)
+            .map(|properties| properties.keys().cloned().collect())
+            .unwrap_or_default()
     }
 
-    fn declared(action: ActionType) -> BTreeSet<String> {
-        action
-            .known_with_fields()
-            .iter()
-            .map(|field| (*field).to_string())
-            .collect()
-    }
-
-    /// `known_with_fields` stands in for these structs across a crate boundary
-    /// the resolver cannot see over, so nothing but this test makes the two
-    /// agree. The dangerous direction is silent: a field added here and not
-    /// there is rejected as unknown, and one removed here and left there goes
-    /// back to being dropped without a word.
+    /// `known_with_fields` is what the resolver reads until it validates
+    /// against the schema, so the two must agree for every action.
     #[test]
-    fn every_params_struct_matches_the_fields_the_model_declares() {
-        for (action, keys) in [
-            (
-                ActionType::ClockCheck,
-                serde_keys(ClockCheckParams::default()),
-            ),
-            (ActionType::Confirm, serde_keys(ConfirmParams::default())),
-            (
-                ActionType::CheckValue,
-                serde_keys(CheckValueParams {
-                    actual: String::new(),
-                    expected: String::new(),
-                    message: None,
-                    sensitive: false,
-                }),
-            ),
-            (
-                ActionType::OralReadback,
-                serde_keys(OralReadbackParams::default()),
-            ),
-            (
-                ActionType::MachineInfo,
-                serde_keys(MachineInfoParams::default()),
-            ),
-            (ActionType::Attest, serde_keys(AttestParams::default())),
-            (
-                ActionType::GatherEntropy,
-                serde_keys(GatherEntropyParams::default()),
-            ),
-            (ActionType::EnterValue, serde_keys(EntryParams::default())),
-            (ActionType::EnterSecret, serde_keys(EntryParams::default())),
-            (
-                ActionType::GenerateKey,
-                serde_keys(GenerateKeyParams::default()),
-            ),
-            (ActionType::WrapKey, serde_keys(WrapKeyParams::default())),
-            (
-                ActionType::UnwrapKey,
-                serde_keys(UnwrapKeyParams::default()),
-            ),
-            (
-                ActionType::ImportKey,
-                serde_keys(ImportKeyParams::default()),
-            ),
-            (
-                ActionType::EncryptData,
-                serde_keys(EncryptDataParams::default()),
-            ),
-            (ActionType::SignData, serde_keys(SignDataParams::default())),
-            (
-                ActionType::VerifySignature,
-                serde_keys(VerifySignatureParams::default()),
-            ),
-            (ActionType::Reveal, serde_keys(RevealParams::default())),
-            (
-                ActionType::EnterShare,
-                serde_keys(EnterShareParams::default()),
-            ),
-            (
-                ActionType::SplitSecret,
-                serde_keys(SplitSecretParams::default()),
-            ),
-            (
-                ActionType::GenerateCsr,
-                serde_keys(GenerateCsrParams {
-                    subject: String::new(),
-                    san: None,
-                }),
-            ),
-            (
-                ActionType::IssueCertificate,
-                serde_keys(IssueCertificateParams::default()),
-            ),
-        ] {
-            assert_eq!(keys, declared(action), "{action}");
+    fn every_schema_accepts_the_fields_the_model_declares() {
+        for &action in ActionType::ALL {
+            let declared: BTreeSet<String> = action
+                .known_with_fields()
+                .iter()
+                .map(|field| (*field).to_string())
+                .collect();
+            assert_eq!(accepted(action), declared, "{action}");
+        }
+    }
+
+    /// Every keyword a generated schema uses is one [`KEYWORDS`] names, so a
+    /// validator for that set alone checks every schema.
+    #[test]
+    fn every_schema_keeps_to_the_keywords() {
+        fn walk(value: &Value, path: &str, found: &mut Vec<String>) {
+            let Value::Object(object) = value else {
+                return;
+            };
+            for (key, child) in object {
+                if !KEYWORDS.contains(&key.as_str()) {
+                    found.push(format!("{path}/{key}"));
+                }
+                let here = format!("{path}/{key}");
+                match (key.as_str(), child) {
+                    // Names map to schemas.
+                    ("properties" | "$defs", Value::Object(map)) => {
+                        for (name, schema) in map {
+                            walk(schema, &format!("{here}/{name}"), found);
+                        }
+                    }
+                    // Lists of schemas.
+                    ("allOf" | "oneOf", Value::Array(items)) => {
+                        for (index, item) in items.iter().enumerate() {
+                            walk(item, &format!("{here}/{index}"), found);
+                        }
+                    }
+                    // One schema.
+                    ("items" | "if" | "then" | "not" | "additionalProperties", _) => {
+                        walk(child, &here, found);
+                    }
+                    // Values and annotations hold data, not schemas.
+                    _ => {}
+                }
+            }
+        }
+        for &action in ActionType::ALL {
+            let mut found = Vec::new();
+            walk(&with_schema(action).to_value(), "", &mut found);
+            assert!(found.is_empty(), "{action} uses {found:?}");
         }
     }
 }

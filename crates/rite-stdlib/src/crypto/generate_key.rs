@@ -26,10 +26,7 @@ impl Action for GenerateKeyAction {
         let Ok(typed) = parse_params::<GenerateKeyParams>(params) else {
             return Vec::new();
         };
-        let Ok(algorithm) = typed.algorithm.parse::<KeyAlgorithm>() else {
-            return Vec::new();
-        };
-        unavailable_here(algorithm).into_iter().collect()
+        unavailable_here(typed.algorithm).into_iter().collect()
     }
 
     fn execute(
@@ -42,9 +39,7 @@ impl Action for GenerateKeyAction {
     ) -> Result<StepResult, ActionError> {
         let typed: GenerateKeyParams = parse_params(params)?;
 
-        let key_algorithm: KeyAlgorithm = typed.algorithm.parse().map_err(|_| {
-            ActionError::Failed(format!("Unsupported algorithm: '{}'", typed.algorithm))
-        })?;
+        let key_algorithm = typed.algorithm;
 
         // An AES key is not a keypair, and a step's own log line is read in
         // the room.
@@ -80,9 +75,7 @@ impl Action for GenerateKeyAction {
         let defaults = KeyPolicy::default_for(key_algorithm);
         let policy = match &typed.policy {
             None => defaults,
-            Some(declared) => declared
-                .resolve_from(&defaults)
-                .map_err(ActionError::Failed)?,
+            Some(declared) => declared.resolve_from(&defaults),
         };
         let spec = KeySpec {
             algorithm: key_algorithm,
@@ -135,7 +128,7 @@ impl Action for GenerateKeyAction {
 /// reading the transcript should not have to know the defaults.
 fn requested(typed: &GenerateKeyParams, policy: &KeyPolicy) -> serde_json::Value {
     let mut inputs = serde_json::Map::new();
-    inputs.insert("algorithm".to_string(), typed.algorithm.clone().into());
+    inputs.insert("algorithm".to_string(), typed.algorithm.as_str().into());
     if let Some(slot) = &typed.slot {
         inputs.insert("slot".to_string(), slot.clone().into());
     }

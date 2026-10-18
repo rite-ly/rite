@@ -5,7 +5,7 @@ use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, parse_params, resolve_backend_key,
 };
-use rite_sdk::{Backend, KeyAlgorithm};
+use rite_sdk::Backend;
 use serde_json::json;
 
 use crate::params::installed_key_default_policy;
@@ -34,21 +34,9 @@ impl Action for UnwrapKeyAction {
     ) -> Result<StepResult, ActionError> {
         let typed: UnwrapKeyParams = parse_params(params)?;
 
-        // What the ceremony says it is restoring. `rite check` has already
-        // refused an unknown name, so a parse failure here is a run reaching
-        // the backend with something that never passed the resolver.
-        let expected = typed
-            .algorithm
-            .as_deref()
-            .map(str::parse::<KeyAlgorithm>)
-            .transpose()
-            .map_err(|e| ActionError::Failed(format!("Unknown key algorithm: {e}")))?;
-
-        let label = typed
-            .label
-            .as_deref()
-            .unwrap_or("unwrapped-key")
-            .to_string();
+        // What the ceremony says it is restoring.
+        let expected = typed.algorithm;
+        let label = typed.label.clone();
 
         let unwrapping_key_ref = step.required_named_input("unwrapping_key", "unwrap_key")?;
         let wrapped_data_ref = step.required_named_input("wrapped_data", "unwrap_key")?;
@@ -96,9 +84,7 @@ impl Action for UnwrapKeyAction {
         let default_policy = installed_key_default_policy(expected);
         let policy = match &typed.policy {
             None => default_policy,
-            Some(declared) => declared
-                .resolve_from(&default_policy)
-                .map_err(ActionError::Failed)?,
+            Some(declared) => declared.resolve_from(&default_policy),
         };
 
         reporter.log(Icon::Spinner, "Unwrapping key using backend...")?;

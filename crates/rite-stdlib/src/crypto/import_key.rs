@@ -41,9 +41,7 @@ impl Action for ImportKeyAction {
     ) -> Result<StepResult, ActionError> {
         let typed: ImportKeyParams = parse_params(params)?;
 
-        let algorithm: KeyAlgorithm = typed.algorithm.parse().map_err(|_| {
-            ActionError::Failed(format!("Unsupported algorithm: '{}'", typed.algorithm))
-        })?;
+        let algorithm = typed.algorithm;
 
         let material_ref = step.required_named_input("key_material", "import_key")?;
         let material_id = material_ref.artifact_id();
@@ -62,10 +60,7 @@ impl Action for ImportKeyAction {
             .map(|reference| resolve_passphrase(ctx, reference))
             .transpose()?;
 
-        let label = typed
-            .label
-            .clone()
-            .unwrap_or_else(|| "imported-key".to_string());
+        let label = typed.label.clone();
 
         let kind = if algorithm.is_symmetric() {
             "key"
@@ -87,7 +82,7 @@ impl Action for ImportKeyAction {
             ))
         })?;
 
-        let policy = declared_policy(&typed, algorithm)?;
+        let policy = declared_policy(&typed, algorithm);
 
         let spec = KeySpec {
             algorithm,
@@ -155,16 +150,11 @@ impl Action for ImportKeyAction {
 
 /// What an imported key may do, which is the ceremony's claim exactly as at
 /// unwrap: nothing travels with raw material saying what it is for.
-fn declared_policy(
-    typed: &ImportKeyParams,
-    algorithm: KeyAlgorithm,
-) -> Result<rite_sdk::KeyPolicy, ActionError> {
+fn declared_policy(typed: &ImportKeyParams, algorithm: KeyAlgorithm) -> rite_sdk::KeyPolicy {
     let defaults = installed_key_default_policy(Some(algorithm));
     match &typed.policy {
-        None => Ok(defaults),
-        Some(declared) => declared
-            .resolve_from(&defaults)
-            .map_err(ActionError::Failed),
+        None => defaults,
+        Some(declared) => declared.resolve_from(&defaults),
     }
 }
 

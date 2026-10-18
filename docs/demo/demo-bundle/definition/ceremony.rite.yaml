@@ -1,9 +1,9 @@
 version: "0.3"
 name: "Demo: Root Signing Key Ceremony"
 description: |
-  Generate an offline root signing key on an air-gapped workstation, issue its
-  self-signed certificate, and export the public half for distribution. Two
-  roles perform and witness the ceremony, and each attests to what they saw.
+  Generate an offline root key on an air-gapped workstation, issue its
+  self-signed certificate, and export the public key. The crypto officer and
+  witness attest to the ceremony.
 
 backends:
   openssl:
@@ -26,7 +26,7 @@ roles:
     person: "Bob Tanaka"
 
 prerequisites:
-  - "Air-gapped workstation is powered on with all network interfaces physically disconnected."
+  - "The air-gapped workstation is powered on with all network interfaces physically disconnected."
   - "Both participants have verified each other's identity against photo ID."
 
 sections:
@@ -38,12 +38,10 @@ sections:
         action: confirm
         with:
           message: >
-            Confirm the workstation is isolated from all networks before any
-            key material exists: all wired interfaces are physically
-            disconnected, Wi-Fi and Bluetooth radios are disabled, and no
-            storage is attached except the ceremony media. Verify each item
-            aloud and have the witness confirm.
-        description: "Confirm and witness the air-gap before any key material exists."
+            Confirm all network interfaces are disconnected, Wi-Fi and Bluetooth
+            are disabled, and no storage is attached except the ceremony media.
+            Verify each item aloud and have the witness confirm.
+        description: "Confirm and witness the air gap before any key material exists."
 
   keygen:
     name: "Key Generation"
@@ -55,7 +53,7 @@ sections:
         with:
           algorithm: RSA-4096
         creates: root_keypair
-        description: "Generate the root RSA-4096 keypair inside the air-gapped workstation."
+        description: "Generate the RSA-4096 root keypair."
       generate_root_csr:
         action: generate_csr
         backend: openssl
@@ -64,7 +62,7 @@ sections:
         with:
           subject: "CN=Example Root CA,O=Example Org"
         creates: root_csr
-        description: "Build the certificate signing request for the root key."
+        description: "Create a certificate signing request for the root key."
       issue_root_cert:
         action: issue_certificate
         backend: openssl
@@ -81,7 +79,7 @@ sections:
         backend: openssl
         reads: ${artifact.root_keypair}
         creates: root_public_key
-        description: "Export the public key for distribution as a trust anchor."
+        description: "Export the public key for distribution as the trust anchor."
 
   attestation:
     name: "Witness Attestation"

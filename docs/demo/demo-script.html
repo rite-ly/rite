@@ -306,6 +306,59 @@ ul.checklist li .item-desc {
   color: var(--muted);
 }
 
+/* === Worksheets: one sheet per page, printed once === */
+.sheet {
+  break-after: page;
+}
+.sheet:last-child {
+  break-after: auto;
+}
+.worksheet {
+  border: 1px solid var(--hair);
+  padding: 18px 20px;
+  margin: 24px 0;
+}
+.ws-note {
+  margin: 18px 0 0 0;
+  color: var(--muted);
+}
+.ws-line {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 7px;
+  margin: 7px 0;
+}
+.ws-row-number {
+  width: 1.4em;
+  color: var(--muted);
+  font-size: 0.85em;
+  text-align: right;
+}
+.ws-group {
+  display: inline-flex;
+  gap: 2px;
+}
+.ws-box {
+  display: inline-block;
+  width: 1em;
+  height: 1.7em;
+  border: 1px solid #000;
+}
+.ws-parity {
+  margin-left: 6px;
+}
+.ws-parity .ws-box {
+  background: var(--tint);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.ws-small {
+  margin: 8px 0 0 0;
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
 /* === Duties === */
 .duties-intro {
   color: var(--muted);
@@ -351,21 +404,14 @@ ul.duty-items li {
   font-size: 0.7rem;
   color: var(--muted);
 }
-.fingerprint-grid p {
-  margin: 5px 0;
-  font-family: "SF Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
-  white-space: nowrap;
+.fingerprint-line {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  margin: 9px 0;
 }
-.fingerprint-prefix {
-  font-size: 1.05rem;
-  font-weight: 700;
-  letter-spacing: 0.3em;
-  color: var(--accent);
-}
-.fingerprint-remainder {
-  font-size: 0.92rem;
-  color: var(--muted);
-  letter-spacing: 0.28em;
+.fingerprint-remainder .ws-box {
+  border-color: var(--muted);
 }
 
 /* === Signatures === */
@@ -509,7 +555,9 @@ code, .hash {
   .duty,
   .signature-block,
   .fingerprint-record,
-  .preconditions {
+  .preconditions,
+  .worksheet,
+  .sheet {
     break-inside: avoid;
   }
   /* Keep a section heading, and the intro line beneath it, with the first
@@ -532,7 +580,7 @@ code, .hash {
   </header>
   <section>
     <h2>Overview</h2>
-    <div class="overview"><p>Generate an offline root signing key on an air-gapped workstation, issue its self-signed certificate, and export the public half for distribution. Two roles perform and witness the ceremony, and each attests to what they saw.</p></div>
+    <div class="overview"><p>Generate an offline root key on an air-gapped workstation, issue its self-signed certificate, and export the public key. The crypto officer and witness attest to the ceremony.</p></div>
   </section>
 
   <section>
@@ -546,7 +594,7 @@ code, .hash {
     <h2>Preparation Checklist</h2>
     <h3>Prerequisites</h3>
     <ul class="checklist">
-      <li>Air-gapped workstation is powered on with all network interfaces physically disconnected.</li>
+      <li>The air-gapped workstation is powered on with all network interfaces physically disconnected.</li>
       <li>Both participants have verified each other&#x27;s identity against photo ID.</li>
     </ul>
   </section>
@@ -559,7 +607,7 @@ code, .hash {
       <tbody>
         <tr>
           <td class="step-num">1</td>
-          <td class="step-action"><p>Confirm and witness the air-gap before any key material exists.</p></td>
+          <td class="step-action"><p>Confirm and witness the air gap before any key material exists.</p></td>
           <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
         </tr>
       </tbody>
@@ -572,12 +620,12 @@ code, .hash {
       <tbody>
         <tr>
           <td class="step-num">2</td>
-          <td class="step-action"><p>Generate the root RSA-4096 keypair inside the air-gapped workstation.</p></td>
+          <td class="step-action"><p>Generate the RSA-4096 root keypair.</p></td>
           <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
         </tr>
         <tr>
           <td class="step-num">3</td>
-          <td class="step-action"><p>Build the certificate signing request for the root key.</p></td>
+          <td class="step-action"><p>Create a certificate signing request for the root key.</p></td>
           <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
         </tr>
         <tr>
@@ -587,7 +635,7 @@ code, .hash {
         </tr>
         <tr>
           <td class="step-num">5</td>
-          <td class="step-action"><p>Export the public key for distribution as a trust anchor.</p></td>
+          <td class="step-action"><p>Export the public key for distribution as the trust anchor.</p></td>
           <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
         </tr>
       </tbody>
@@ -625,10 +673,8 @@ code, .hash {
     <div class="fingerprint-record">
       <p class="fp-label">sha256</p>
       <div class="fingerprint-grid">
-        <p class="fingerprint-prefix">__ __ __ __ __ __ __ __</p>
-        <p class="fingerprint-prefix">__ __ __ __ __ __ __ __</p>
-        <p class="fingerprint-remainder">__ __ __ __ __ __ __ __</p>
-        <p class="fingerprint-remainder">__ __ __ __ __ __ __ __</p>
+        <div class="fingerprint-line fingerprint-prefix"><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span></div>
+        <div class="fingerprint-line fingerprint-remainder"><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span><span class="ws-group"><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span><span class="ws-box"></span></span></div>
       </div>
     </div>
   </section>

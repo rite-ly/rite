@@ -306,6 +306,59 @@ ul.checklist li .item-desc {
   color: var(--muted);
 }
 
+/* === Worksheets: one sheet per page, printed once === */
+.sheet {
+  break-after: page;
+}
+.sheet:last-child {
+  break-after: auto;
+}
+.worksheet {
+  border: 1px solid var(--hair);
+  padding: 18px 20px;
+  margin: 24px 0;
+}
+.ws-note {
+  margin: 18px 0 0 0;
+  color: var(--muted);
+}
+.ws-line {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 7px;
+  margin: 7px 0;
+}
+.ws-row-number {
+  width: 1.4em;
+  color: var(--muted);
+  font-size: 0.85em;
+  text-align: right;
+}
+.ws-group {
+  display: inline-flex;
+  gap: 2px;
+}
+.ws-box {
+  display: inline-block;
+  width: 1em;
+  height: 1.7em;
+  border: 1px solid #000;
+}
+.ws-parity {
+  margin-left: 6px;
+}
+.ws-parity .ws-box {
+  background: var(--tint);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.ws-small {
+  margin: 8px 0 0 0;
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
 /* === Duties === */
 .duties-intro {
   color: var(--muted);
@@ -351,21 +404,14 @@ ul.duty-items li {
   font-size: 0.7rem;
   color: var(--muted);
 }
-.fingerprint-grid p {
-  margin: 5px 0;
-  font-family: "SF Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
-  white-space: nowrap;
+.fingerprint-line {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  margin: 9px 0;
 }
-.fingerprint-prefix {
-  font-size: 1.05rem;
-  font-weight: 700;
-  letter-spacing: 0.3em;
-  color: var(--accent);
-}
-.fingerprint-remainder {
-  font-size: 0.92rem;
-  color: var(--muted);
-  letter-spacing: 0.28em;
+.fingerprint-remainder .ws-box {
+  border-color: var(--muted);
 }
 
 /* === Signatures === */
@@ -509,7 +555,9 @@ code, .hash {
   .duty,
   .signature-block,
   .fingerprint-record,
-  .preconditions {
+  .preconditions,
+  .worksheet,
+  .sheet {
     break-inside: avoid;
   }
   /* Keep a section heading, and the intro line beneath it, with the first
@@ -533,18 +581,18 @@ code, .hash {
 
   <div class="summary-box">
     <p><strong>Status:</strong> <span class="status-completed">Completed</span></p>
-    <p><strong>Started:</strong> 2026-09-27 11:04:20 UTC</p>
-    <p><strong>Completed:</strong> 2026-09-27 11:04:21 UTC</p>
+    <p><strong>Started:</strong> 2026-10-18 09:17:09 UTC</p>
+    <p><strong>Completed:</strong> 2026-10-18 09:17:10 UTC</p>
     <p><strong>Duration:</strong> 0s</p>
-    <p><strong>Transcript fingerprint:</strong> <code>sha256:cf9408d058017a4225cc2da1c6c241a554bb119675af2adc8d26a0c40e6ca8cb</code></p>
+    <p><strong>Transcript fingerprint:</strong> <code>sha256:d60c6216002488430f24d6242d776d5d94f45ac8c8adaeaabc22dab40b98ddce</code></p>
     <p><strong>Disclosure:</strong> 14 fact(s) withheld, recorded at restricted, confidential. This report shows the disclosed part of the transcript; the fingerprint covers the complete record.</p>
   </div>
   <h2>Artifacts</h2>
   <table class="artifacts">
     <thead><tr><th>Name</th><th>Step</th><th>File</th><th>Fingerprint</th></tr></thead>
     <tbody>
-      <tr><td>root_cert</td><td><code>issue_root_cert</code></td><td><code>root_cert.pem</code></td><td><code class="hash">sha256:8cdbf8fd0f37fb34e5a5bdafbcce710e4f310391945d2228a8abe528b9c7b8c4</code></td></tr>
-      <tr><td>root_public_key</td><td><code>export_public_key</code></td><td><code>root_public_key.pem</code></td><td><code class="hash">sha256:1ff0c0eaafdb80dbd0ce24f9534256154df6e981c9774b65996482dd69320e99</code></td></tr>
+      <tr><td>root_cert</td><td><code>issue_root_cert</code></td><td><code>root_cert.pem</code></td><td><code class="hash">sha256:e4ee1558be8ac4917bb506d7eb62d00ce407878ae14e1166fe65f42d35c25d4d</code></td></tr>
+      <tr><td>root_public_key</td><td><code>export_public_key</code></td><td><code>root_public_key.pem</code></td><td><code class="hash">sha256:36a60cd6cf743afdc7bc6cbbd389fc4763256bd5c08aeb84ef733ddf1b14a66b</code></td></tr>
     </tbody>
   </table>
   <h2>Roles</h2>
@@ -556,16 +604,16 @@ code, .hash {
   <table class="execution-log">
     <thead><tr><th class="step-num">Label</th><th>Step</th><th class="role">Role</th><th>Started</th><th>Completed</th><th>Outcome</th></tr></thead>
     <tbody>
-      <tr><td class="step-num">1</td><td><code>verify_air_gap</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-09-27 11:04:20 UTC</td><td>2026-09-27 11:04:20 UTC</td><td>completed, Verification confirmed</td></tr>
-      <tr><td class="step-num">2</td><td><code>generate_root_key</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-09-27 11:04:20 UTC</td><td>2026-09-27 11:04:21 UTC</td><td>completed, RSA-4096 keypair generated</td></tr>
-      <tr><td class="step-num">3</td><td><code>generate_root_csr</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-09-27 11:04:21 UTC</td><td>2026-09-27 11:04:21 UTC</td><td>completed, PKCS#10 CSR generated</td></tr>
-      <tr><td class="step-num">4</td><td><code>issue_root_cert</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-09-27 11:04:21 UTC</td><td>2026-09-27 11:04:21 UTC</td><td>completed, X.509 certificate issued from CSR</td></tr>
-      <tr><td class="step-num">5</td><td><code>export_public_key</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-09-27 11:04:21 UTC</td><td>2026-09-27 11:04:21 UTC</td><td>completed, Public key exported</td></tr>
-      <tr><td class="step-num">6</td><td><code>witness_attest</code></td><td class="role"><abbr title="Witness">Wi</abbr></td><td>2026-09-27 11:04:21 UTC</td><td>2026-09-27 11:04:21 UTC</td><td>completed, Attestation recorded for Witness</td></tr>
-      <tr><td class="step-num">7</td><td><code>officer_attest</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-09-27 11:04:21 UTC</td><td>2026-09-27 11:04:21 UTC</td><td>completed, Attestation recorded for Crypto Officer</td></tr>
+      <tr><td class="step-num">1</td><td><code>verify_air_gap</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:09 UTC</td><td>completed, Verification confirmed</td></tr>
+      <tr><td class="step-num">2</td><td><code>generate_root_key</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:09 UTC</td><td>completed, RSA-4096 keypair generated</td></tr>
+      <tr><td class="step-num">3</td><td><code>generate_root_csr</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:09 UTC</td><td>completed, PKCS#10 CSR generated</td></tr>
+      <tr><td class="step-num">4</td><td><code>issue_root_cert</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:09 UTC</td><td>completed, X.509 certificate issued from CSR</td></tr>
+      <tr><td class="step-num">5</td><td><code>export_public_key</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:09 UTC</td><td>completed, Public key exported</td></tr>
+      <tr><td class="step-num">6</td><td><code>witness_attest</code></td><td class="role"><abbr title="Witness">Wi</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:09 UTC</td><td>completed, Attestation recorded for Witness</td></tr>
+      <tr><td class="step-num">7</td><td><code>officer_attest</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:10 UTC</td><td>completed, Attestation recorded for Crypto Officer</td></tr>
     </tbody>
   </table>
 
-  <div class="report-footer">Generated by Rite v0.7.0</div>
+  <div class="report-footer">Generated by Rite v0.7.1</div>
 </body>
 </html>

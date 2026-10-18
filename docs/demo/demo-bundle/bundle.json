@@ -1,8 +1,8 @@
 {
-  "$schema": "https://ritely.io/schemas/0.7.0/bundle.schema.json",
+  "$schema": "https://ritely.io/schemas/0.7.1/bundle.schema.json",
   "rite_bundle": 0,
   "kind": "complete",
-  "fingerprint": "sha256:cf9408d058017a4225cc2da1c6c241a554bb119675af2adc8d26a0c40e6ca8cb",
+  "fingerprint": "sha256:d60c6216002488430f24d6242d776d5d94f45ac8c8adaeaabc22dab40b98ddce",
   "files": [
     {
       "path": "transcript.jsonl",

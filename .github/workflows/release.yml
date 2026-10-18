@@ -242,14 +242,19 @@ jobs:
           name: image-digest-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
-          retention-days: 1
+          # Kept until the merge job is approved, which can be days after the
+          # build.
+          retention-days: 7
 
   # Assemble the per-arch digests into the tagged multi-arch manifest list and
-  # attest the resulting index.
+  # attest the resulting index. Until this job runs, the images are on ghcr.io
+  # by digest only, with no tag; the `docker` environment holds the approval,
+  # after the draft release exists.
   merge-image:
     name: Merge and push image manifest
-    needs: [validate, build-image]
+    needs: [build-image, release]
     runs-on: ubuntu-latest
+    environment: docker
     permissions:
       contents: read
       packages: write
@@ -334,7 +339,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [validate, build-native, build-linux-musl, merge-image]
+    needs: [validate, build-native, build-linux-musl, build-image]
     runs-on: ubuntu-latest
     permissions:
       contents: write

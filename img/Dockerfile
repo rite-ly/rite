@@ -10,7 +10,7 @@
 # The three share one image because they need the same tooling (live-build,
 # squashfs-tools, xorriso, dosfstools, mtools).
 
-FROM debian:trixie-20260316@sha256:55a15a112b42be10bfc8092fcc40b6748dc236f7ef46a358d9392b339e9d60e8
+FROM debian:trixie-20261005@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
 
 ARG TARGETARCH
 

@@ -818,6 +818,30 @@ impl RunBackends<'_> {
 /// answered prompt do not close the gate: a retried attempt simply prompts
 /// again. A retriable error within the step's [`RetryPolicy`] prompts the
 /// operator; any other failure terminates the run.
+/// Check the evaluated `with:` block against the action's schema.
+///
+/// The resolver checked what was literal; an expression's value is known
+/// only now. It is refused in the same words a literal one would be, before
+/// the handler or a backend sees it, so a handler can rely on its params
+/// having the shape the schema describes. Every value is known here, so
+/// nothing is deferred.
+fn check_params(action: ActionType, params: &serde_json::Value) -> Result<(), ActionError> {
+    let check = rite_model::validate::params_check(action)
+        .map_err(|error| ActionError::Failed(error.to_string()))?;
+    let mut messages: Vec<String> = Vec::new();
+    for violation in check.validate(params) {
+        let message = check.message(action, params, &violation);
+        if !messages.contains(&message) {
+            messages.push(message);
+        }
+    }
+    if messages.is_empty() {
+        Ok(())
+    } else {
+        Err(ActionError::Failed(messages.join("; ")))
+    }
+}
+
 fn execute_step_with_retry(
     handler: &dyn Action,
     step: &Step,
@@ -834,12 +858,13 @@ fn execute_step_with_retry(
         // Backend acquisition is part of the attempt: a failed lazy
         // initialization (device unplugged, daemon down) carries the same
         // retriability semantics as a backend error inside the handler.
-        let attempt_result = match &step_info.backend {
-            Some(name) => backends.acquire(name, reporter).and_then(|backend| {
-                handler.execute(step_info, ctx, params, reporter, Some(backend))
-            }),
-            None => handler.execute(step_info, ctx, params, reporter, None),
-        };
+        let attempt_result =
+            check_params(step.action, params).and_then(|()| match &step_info.backend {
+                Some(name) => backends.acquire(name, reporter).and_then(|backend| {
+                    handler.execute(step_info, ctx, params, reporter, Some(backend))
+                }),
+                None => handler.execute(step_info, ctx, params, reporter, None),
+            });
 
         let action_err = match attempt_result {
             Ok(result) => return Ok(result),
@@ -1774,6 +1799,56 @@ sections:
                 _ => None,
             })
             .collect()
+    }
+
+    /// A value an expression produced is checked against the schema when the
+    /// step runs, in the words a literal one gets at `rite check`, and the
+    /// handler never sees it.
+    #[test]
+    fn an_evaluated_value_the_schema_refuses_fails_the_step_before_the_handler() {
+        let yaml = r#"
+version: "0.3"
+name: "Evaluated"
+roles:
+  participant:
+    person: "Alice"
+parameters:
+  n: { type: integer, default: 3 }
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      work:
+        action: attest
+        silent: true
+        with:
+          statement: "${param.n}"
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("an expression is deferred at resolution");
+        // Would complete if it ran.
+        let action = FlakyAction::new(0, transient, BeforeFail::Nothing);
+        let (result, facts, confirms) = drive(ceremony, action, true);
+
+        assert!(result.is_err());
+        assert_eq!(confirms, 0, "a value that is wrong stays wrong on retry");
+        let error = facts
+            .iter()
+            .find_map(|f| match f {
+                StepFact::StepAttemptFailed { error, .. } => Some(error.message.clone()),
+                _ => None,
+            })
+            .expect("the attempt is recorded");
+        assert_eq!(
+            error,
+            "Step 'work' failed: 'with.statement' must be a string, found 3"
+        );
+        assert!(
+            !facts
+                .iter()
+                .any(|f| matches!(f, StepFact::StepCompleted { .. }))
+        );
     }
 
     #[test]

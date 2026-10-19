@@ -195,36 +195,6 @@ pub enum ResolveError {
         action: ActionType,
     },
 
-    /// Step `with:` block is missing a required field for its action.
-    #[error("Step '{step}': action '{action}' requires 'with.{field}'")]
-    MissingWithField {
-        /// The step ID.
-        step: StepId,
-        /// The action whose parameter is missing.
-        action: ActionType,
-        /// The missing `with:` field name.
-        field: &'static str,
-    },
-
-    /// Step `with:` block names a key the action does not have.
-    ///
-    /// Serde ignores an unknown key, so an unreported one is dropped in
-    /// silence and the step quietly does something other than what its author
-    /// wrote. A typo and a field that no longer exists fail the same way and
-    /// are reported the same way.
-    #[error(
-        "Step '{step}': action '{action}' has no '{field}' parameter. Accepted: {}",
-        .action.known_with_fields().join(", ")
-    )]
-    UnknownWithField {
-        /// The step ID.
-        step: StepId,
-        /// The action whose block holds the key.
-        action: ActionType,
-        /// The key that is not a parameter.
-        field: String,
-    },
-
     /// Step `with:` block holds a field that only means something alongside a
     /// `reads:` input the step does not name.
     ///

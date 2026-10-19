@@ -658,7 +658,7 @@ impl ResolveContext {
             });
         }
         if accepted {
-            self.validate_step_with_values(id, action, with);
+            self.validate_step_cross_field(id, action, with);
         }
     }
 
@@ -679,13 +679,13 @@ impl ResolveContext {
         }
     }
 
-    /// Check the literal `with:` values against the rules that hold in every
-    /// build.
+    /// Check the literal `with:` values against the rules over several
+    /// values, which a schema cannot say.
     ///
     /// Values still carrying an expression have nothing to check yet, so the
     /// literal projection is what gets inspected and an absent field is never
     /// reported.
-    fn validate_step_with_values(
+    fn validate_step_cross_field(
         &mut self,
         id: &StepId,
         action: ActionType,
@@ -694,7 +694,7 @@ impl ResolveContext {
         let Some(literal) = rite_model::expression::literal_expr_value(with) else {
             return;
         };
-        for error in rite_model::params::check(action, &literal) {
+        for error in rite_model::params::cross_field(action, &literal) {
             self.add_error(ResolveError::InvalidWithValue {
                 step: id.clone(),
                 action,

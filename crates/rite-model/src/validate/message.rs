@@ -138,6 +138,12 @@ impl ParamsCheck {
                 }
             }
             keyword => {
+                // A `oneOf` of constants is an enumeration whose values each
+                // carry a description, and reads as one.
+                let keyword = &self
+                    .constants(&violation.schema_path)
+                    .filter(|_| matches!(keyword, Keyword::OneOf { .. }))
+                    .map_or_else(|| keyword.clone(), |options| Keyword::Enum { options });
                 let sentence = x_message(&self.schema, &violation.schema_path)
                     .map_or_else(|| sentence(keyword, &field, value), str::to_string);
                 match value {
@@ -148,6 +154,17 @@ impl ParamsCheck {
                 }
             }
         }
+    }
+
+    /// The values of the `oneOf` at `keyword`, when every alternative is a
+    /// `const`.
+    fn constants(&self, keyword: &Pointer) -> Option<Vec<Value>> {
+        keyword
+            .lookup(&self.schema)?
+            .as_array()?
+            .iter()
+            .map(|alternative| alternative.get("const").cloned())
+            .collect()
     }
 
     /// The keys the object whose `additionalProperties` is at `keyword`
@@ -417,6 +434,225 @@ mod tests {
                 (Pointer::parse("/b"), Anchor::Key)
             ]
         );
+    }
+
+    /// What the schema refuses and accepts, case by case: each refusal fails
+    /// in the room if it reaches it, after keys exist.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn the_schema_refuses_values_wrong_in_every_build() {
+        for (action, with, says) in [
+            (
+                ActionType::SignData,
+                json!({"algorithm": "RSA-PSS-SHA1"}),
+                "expected one of",
+            ),
+            (
+                ActionType::IssueCertificate,
+                json!({"profile": "wildcard"}),
+                "expected one of",
+            ),
+            (
+                ActionType::UnwrapKey,
+                json!({"algorithm": "AES-192"}),
+                "expected one of",
+            ),
+            (
+                ActionType::WrapKey,
+                json!({"scheme": "CMS-RSA-CBC"}),
+                "expected one of",
+            ),
+            (
+                ActionType::EncryptData,
+                json!({"scheme": "CMS-RSA-CBC"}),
+                "must be",
+            ),
+            (
+                ActionType::GenerateKey,
+                json!({"algorithm": 4096}),
+                "must be a string",
+            ),
+            // The runtime renders every fingerprint in lowercase, so an
+            // uppercase one would never match the key it names.
+            (
+                ActionType::WrapKey,
+                json!({"expect_recipient": format!("sha256:{}", "AB".repeat(32))}),
+                "lowercase",
+            ),
+            (
+                ActionType::UnwrapKey,
+                json!({"expect_key": "cmac-aes:763CBC"}),
+                "lowercase",
+            ),
+            // A check value is three bytes, so a fingerprint's length under
+            // the check value's prefix is not one.
+            (
+                ActionType::UnwrapKey,
+                json!({"expect_key": format!("cmac-aes:{}", "ab".repeat(32))}),
+                "6 lowercase hex digits",
+            ),
+            (
+                ActionType::UnwrapKey,
+                json!({"expect_key": "763cbc"}),
+                "cmac-aes:",
+            ),
+            (
+                ActionType::Reveal,
+                json!({"message": "m", "format": "words"}),
+                "expected one of",
+            ),
+            (
+                ActionType::Reveal,
+                json!({"message": "m", "length": 0}),
+                "the least is 1",
+            ),
+            (
+                ActionType::Reveal,
+                json!({"message": "m", "format": "bip39", "length": 32}),
+                "counts words",
+            ),
+            (
+                ActionType::EnterShare,
+                json!({"message": "m", "length": 3}),
+                "longer than 3",
+            ),
+            (
+                ActionType::SplitSecret,
+                json!({"threshold": 1, "shares": 3}),
+                "the least is 2",
+            ),
+            (
+                ActionType::SplitSecret,
+                json!({"threshold": "two", "shares": 3}),
+                "an integer",
+            ),
+            (
+                ActionType::SplitSecret,
+                json!({"scheme": "sss/v9", "threshold": 2, "shares": 3}),
+                "rite-sss/v1",
+            ),
+            (
+                ActionType::EnterValue,
+                json!({"message": "m", "format": {"pattern": "[0-9]+"}, "length": 6}),
+                "a pattern says the whole shape",
+            ),
+            (
+                ActionType::EnterSecret,
+                json!({"message": "m", "format": "emoji"}),
+                "must name a format",
+            ),
+            (
+                ActionType::EnterSecret,
+                json!({"message": "m", "format": {"regex": "[0-9]+"}}),
+                "must name a format",
+            ),
+            (
+                ActionType::EnterSecret,
+                json!({"message": "m", "length": "six"}),
+                "an integer",
+            ),
+            (
+                ActionType::EnterValue,
+                json!({"message": "m", "format": "bip39"}),
+                "enter_secret",
+            ),
+            (
+                ActionType::OralReadback,
+                json!({"format": "nato_phonetik"}),
+                "expected one of",
+            ),
+            (
+                ActionType::PivSign,
+                json!({"algorithm": "Ed25519"}),
+                "expected one of",
+            ),
+            (
+                ActionType::PivReadCertificate,
+                json!({"slot": "9b"}),
+                "PIV slot",
+            ),
+            (
+                ActionType::IssueCertificate,
+                json!({"path_len": 300}),
+                "the most is 255",
+            ),
+            (
+                ActionType::GenerateKey,
+                json!({"policy": {"extractable": "yes"}}),
+                "true or false",
+            ),
+        ] {
+            let found = messages(action, &with);
+            assert!(
+                found.iter().any(|message| message.contains(says)),
+                "{action} {with}: {found:?}"
+            );
+        }
+    }
+
+    /// The values the old checks accepted, the schema accepts.
+    #[test]
+    fn the_schema_accepts_the_vocabulary() {
+        let fingerprint = format!("sha256:{}", "ab".repeat(32));
+        for (action, with) in [
+            (ActionType::GenerateKey, json!({"algorithm": "RSA-4096"})),
+            (ActionType::SignData, json!({"algorithm": "RSA-PSS-SHA256"})),
+            (ActionType::IssueCertificate, json!({"profile": "root_ca"})),
+            (
+                ActionType::IssueCertificate,
+                json!({"profile": "intermediate_ca"}),
+            ),
+            (ActionType::WrapKey, json!({"scheme": "AES-256-KW"})),
+            (
+                ActionType::WrapKey,
+                json!({"expect_recipient": fingerprint.clone()}),
+            ),
+            (
+                ActionType::EncryptData,
+                json!({"scheme": "CMS-AES-256-GCM"}),
+            ),
+            (ActionType::UnwrapKey, json!({"expect_key": fingerprint})),
+            (
+                ActionType::UnwrapKey,
+                json!({"algorithm": "AES-256", "expect_key": "cmac-aes:763cbc"}),
+            ),
+            (
+                ActionType::GenerateKey,
+                json!({"policy": {"usages": ["sign", "verify", "wrap", "unwrap", "derive"]}}),
+            ),
+            (
+                ActionType::Reveal,
+                json!({"message": "m", "format": "paper32", "length": 32}),
+            ),
+            (
+                ActionType::Reveal,
+                json!({"message": "m", "format": "bip39", "length": 24}),
+            ),
+            (
+                ActionType::EnterShare,
+                json!({"message": "m", "length": 35}),
+            ),
+            (
+                ActionType::SplitSecret,
+                json!({"threshold": 2, "shares": 100}),
+            ),
+            (
+                ActionType::EnterSecret,
+                json!({"message": "m", "format": "paper32", "length": 32}),
+            ),
+            (ActionType::OralReadback, json!({"format": "nato"})),
+            (
+                ActionType::PivSign,
+                json!({"slot": "piv:9d", "algorithm": "ECDSA-SHA384"}),
+            ),
+            (ActionType::PivReadCertificate, json!({"slot": "8a"})),
+        ] {
+            assert_eq!(
+                messages(action, &with),
+                Vec::<String>::new(),
+                "{action} {with}"
+            );
+        }
     }
 
     #[test]

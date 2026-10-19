@@ -681,106 +681,6 @@ impl ActionType {
         }
     }
 
-    /// Returns the `with:` field names that are required for this action.
-    ///
-    /// The resolver reports a diagnostic for each missing field.
-    ///
-    /// TODO: Replace the stringly-typed `with: serde_json::Value` in `schema::StepBody` with a
-    /// typed `WithFields` enum (one variant per action, carrying its required fields as named
-    /// struct members). Serde would then enforce required fields at parse time and this method
-    /// would no longer be needed. This is a breaking change to the schema and lowering layers.
-    pub fn required_with_fields(self) -> &'static [&'static str] {
-        match self {
-            ActionType::CheckValue => &["actual", "expected"],
-            ActionType::GenerateCsr => &["subject"],
-            // Raw material carries no description, so the ceremony declares
-            // what it is lifting rather than the step guessing.
-            ActionType::ImportKey => &["algorithm"],
-            ActionType::SplitSecret => &["threshold", "shares"],
-            // The label is what the person sees at the keyboard or on the
-            // sheet, and there is no default that names what it is.
-            ActionType::EnterValue
-            | ActionType::EnterSecret
-            | ActionType::Reveal
-            | ActionType::EnterShare => &["message"],
-
-            ActionType::ClockCheck
-            | ActionType::Confirm
-            | ActionType::OralReadback
-            | ActionType::MachineInfo
-            | ActionType::GenerateKey
-            | ActionType::WrapKey
-            | ActionType::UnwrapKey
-            | ActionType::ExportPublic
-            | ActionType::SignData
-            | ActionType::VerifySignature
-            | ActionType::Attest
-            | ActionType::GatherEntropy
-            | ActionType::TpmAttest
-            | ActionType::PivReadCertificate
-            | ActionType::PivSign
-            | ActionType::YubikeyAttestSlot
-            | ActionType::EncryptData
-            | ActionType::DecryptData
-            | ActionType::CombineShares
-            | ActionType::IssueCertificate => &[],
-        }
-    }
-
-    /// Every `with:` key this action accepts.
-    ///
-    /// Nothing else may appear under `with:`. Serde ignores a key it does not
-    /// know, so without this a misspelled field, or one that used to exist, is
-    /// dropped in silence and the ceremony quietly stops doing what its author
-    /// wrote. That is the failure this list exists to prevent, and it covers
-    /// typos and removed fields alike rather than naming them one at a time.
-    ///
-    /// Required keys are the subset in
-    /// [`required_with_fields`](Self::required_with_fields); the rest are
-    /// optional. Nested keys are not listed: only the top level of the block
-    /// is checked, because a nested shape belongs to the handler's own params
-    /// type.
-    pub fn known_with_fields(self) -> &'static [&'static str] {
-        match self {
-            ActionType::ClockCheck | ActionType::Confirm => &["message"],
-            ActionType::CheckValue => &["actual", "expected", "message", "sensitive"],
-            ActionType::OralReadback => &["value", "format", "characters", "message"],
-            ActionType::Reveal | ActionType::EnterShare => &["message", "format", "note", "length"],
-            ActionType::MachineInfo => &[
-                "include_machine_id",
-                "include_cpu",
-                "include_os",
-                "include_security_features",
-                "message",
-            ],
-            ActionType::EnterValue | ActionType::EnterSecret => {
-                &["message", "format", "length", "min_length", "max_length"]
-            }
-            ActionType::GenerateKey => &["algorithm", "policy", "slot"],
-            ActionType::WrapKey => &["scheme", "expect_recipient"],
-            ActionType::UnwrapKey | ActionType::ImportKey => {
-                &["algorithm", "expect_key", "label", "policy"]
-            }
-            ActionType::EncryptData => &["scheme"],
-            ActionType::SplitSecret => &["scheme", "threshold", "shares"],
-            ActionType::SignData | ActionType::VerifySignature => &["algorithm", "message"],
-            ActionType::Attest => &["statement"],
-            ActionType::GatherEntropy => &["instruction"],
-            ActionType::IssueCertificate => &["profile", "validity_days", "issuer_cn", "path_len"],
-            ActionType::GenerateCsr => &["subject", "san"],
-            ActionType::PivReadCertificate | ActionType::YubikeyAttestSlot => &["slot", "message"],
-            ActionType::PivSign => &["slot", "algorithm", "message"],
-            // `export_public` and `decrypt_data` take their inputs through
-            // `reads:` alone, and `tpm_attest` has no handler in any build yet,
-            // so none of the three has a `with:` shape to accept. For the last,
-            // `unsupported_actions` is what reports the step itself.
-            ActionType::ExportPublic
-            | ActionType::DecryptData
-            | ActionType::CombineShares
-            | ActionType::TpmAttest => &[],
-        }
-    }
-
     /// Returns the `reads:` inputs this action requires, and the groups from
     /// which exactly one input must be named.
     ///
@@ -1273,29 +1173,6 @@ mod tests {
         }
     }
 
-    /// `ActionType::ALL` is written by hand, so it can fall behind the enum.
-    ///
-    /// The match below is exhaustive, so adding a variant fails to compile
-    /// here. That is the whole mechanism: it puts a compiler error next to the
-    /// list an author has to extend. The name check then catches a variant
-    /// listed twice, and `rite-ls` compares its own catalogue against `ALL`,
-    /// which is what catches one left out.
-    /// A required field the action does not accept would be reported as
-    /// unknown, which is the opposite of the message intended, and nothing
-    /// makes the two lists agree on their own.
-    #[test]
-    fn every_required_field_is_also_a_known_field() {
-        for action in ActionType::ALL {
-            let known = action.known_with_fields();
-            for field in action.required_with_fields() {
-                assert!(
-                    known.contains(field),
-                    "{action} requires '{field}' and does not accept it"
-                );
-            }
-        }
-    }
-
     /// Each vocabulary's `ALL` is written by hand. The matches fail to compile
     /// when a variant is added, which puts the error next to the list; the
     /// assertions then check that each name parses back and is the name serde
@@ -1368,6 +1245,13 @@ mod tests {
         assert_eq!("intermediate_ca".parse(), Ok(CertProfile::SubCa));
     }
 
+    /// `ActionType::ALL` is written by hand, so it can fall behind the enum.
+    ///
+    /// The match below is exhaustive, so adding a variant fails to compile
+    /// here. That is the whole mechanism: it puts a compiler error next to the
+    /// list an author has to extend. The name check then catches a variant
+    /// listed twice, and `rite-ls` compares its own catalogue against `ALL`,
+    /// which is what catches one left out.
     #[test]
     fn all_lists_every_action_type() {
         for action in ActionType::ALL {

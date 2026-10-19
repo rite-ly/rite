@@ -195,11 +195,11 @@ pub trait Action: Send + Sync {
     /// out, without executing the step.
     ///
     /// Only build-relative findings belong here. Whether a value is one the
-    /// action accepts at all is settled by
-    /// [`rite_model::params::check`], which the resolver runs, so that an
-    /// editor linking no backend reports it too. What is left for a handler is
-    /// the question only a linked binary can answer: whether the feature,
-    /// backend or library that would carry the value out is present.
+    /// action accepts at all is settled by the action's schema, which the
+    /// resolver checks, so that an editor linking no backend reports it too.
+    /// What is left for a handler is the question only a linked binary can
+    /// answer: whether the feature, backend or library that would carry the
+    /// value out is present.
     ///
     /// `params` holds the literal part of the block, as produced by
     /// [`literal_expr_value`](rite_model::expression::literal_expr_value): a

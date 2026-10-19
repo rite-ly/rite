@@ -12,6 +12,7 @@ use rite_model::expression::RefType;
 use rite_model::expression::{
     ExprError, ExprValue, Expression, Reference, parse_expr_value, parse_expression_detailed,
 };
+use rite_model::validate::{Anchor, Pointer};
 use rite_model::{
     Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind,
     MaterialSource, Metadata, NamedInput, Output, OutputId, ParamId, Parameter, PostCeremonyDuty,
@@ -551,8 +552,8 @@ impl ResolveContext {
                 };
 
                 self.validate_step_backend(&id, step, ceremony);
+                self.validate_step_with(&id, step.action, &with_json, &resolved.with);
                 self.validate_step_with_fields(&id, step);
-                self.validate_step_with_values(&id, step.action, &resolved.with);
                 self.validate_step_reads(&id, step);
 
                 steps.push(resolved);
@@ -605,32 +606,64 @@ impl ResolveContext {
         }
     }
 
+    /// Check a step's `with:` block against its action's schema.
+    ///
+    /// The block is checked as written, where an expression is a string. A
+    /// violation at or below a value still carrying an expression is
+    /// dropped: that value belongs to run time and is checked when the step
+    /// runs. A misspelled key whose value is an expression is still reported,
+    /// since the key is known now.
+    ///
+    /// The rules over several values that a schema cannot say run only on a
+    /// block the schema accepts, so they can rely on its shape.
+    fn validate_step_with(
+        &mut self,
+        id: &StepId,
+        action: ActionType,
+        raw: &serde_json::Value,
+        with: &rite_model::expression::ExprValue,
+    ) {
+        let check = match rite_model::validate::params_check(action) {
+            Ok(check) => check,
+            Err(error) => {
+                self.add_error(ResolveError::SchemaViolation {
+                    step: id.clone(),
+                    field: Pointer::root(),
+                    anchor: Anchor::Key,
+                    keyword: "$schema".to_string(),
+                    message: error.to_string(),
+                });
+                return;
+            }
+        };
+        let mut reported = HashSet::new();
+        let mut accepted = true;
+        for violation in check.validate(raw) {
+            if is_deferred(with, &violation.instance_path) {
+                continue;
+            }
+            accepted = false;
+            let message = check.message(action, raw, &violation);
+            // Two keywords can say the same thing about one entry.
+            if !reported.insert(message.clone()) {
+                continue;
+            }
+            let (field, anchor) = violation.anchor();
+            self.add_error(ResolveError::SchemaViolation {
+                step: id.clone(),
+                field,
+                anchor,
+                keyword: violation.keyword.name().to_string(),
+                message,
+            });
+        }
+        if accepted {
+            self.validate_step_with_values(id, action, with);
+        }
+    }
+
     fn validate_step_with_fields(&mut self, id: &StepId, step: &schema::StepBody) {
         let with_obj = step.with.as_ref().and_then(|w| w.as_object());
-
-        for field in step.action.required_with_fields() {
-            if !with_obj.is_some_and(|m| m.contains_key(*field)) {
-                self.add_error(ResolveError::MissingWithField {
-                    step: id.clone(),
-                    action: step.action,
-                    field,
-                });
-            }
-        }
-
-        // Keys are checked before values, and by name rather than through the
-        // literal projection, so a misspelling is caught even where its value
-        // is an expression that resolution cannot see into.
-        let known = step.action.known_with_fields();
-        for field in with_obj.into_iter().flatten().map(|(name, _)| name) {
-            if !known.contains(&field.as_str()) {
-                self.add_error(ResolveError::UnknownWithField {
-                    step: id.clone(),
-                    action: step.action,
-                    field: field.clone(),
-                });
-            }
-        }
 
         // A parameter that belongs to one branch of an `exactly_one_of` group
         // is inert on the other, where it would be parsed and never read.
@@ -1331,8 +1364,47 @@ fn is_valid_date(s: &str) -> bool {
     day <= max_day
 }
 
+/// Whether the entry at `at` in a `with:` block is, or sits inside, a value
+/// still carrying an expression: an `Expr` or `Interpolated` node on the way
+/// down in the lowered block. Decided from the parse, never by looking for
+/// `${` in a string.
+fn is_deferred(with: &rite_model::expression::ExprValue, at: &Pointer) -> bool {
+    use rite_model::expression::ExprValue;
+    let mut node = with;
+    for segment in at.segments() {
+        node = match node {
+            ExprValue::Expr(_) | ExprValue::Interpolated(_) => return true,
+            ExprValue::Object(map) => match map.get(segment) {
+                Some(child) => child,
+                None => return false,
+            },
+            ExprValue::Array(items) => {
+                match segment.parse::<usize>().ok().and_then(|i| items.get(i)) {
+                    Some(child) => child,
+                    None => return false,
+                }
+            }
+            ExprValue::Literal(_) => return false,
+        };
+    }
+    matches!(node, ExprValue::Expr(_) | ExprValue::Interpolated(_))
+}
+
 #[cfg(test)]
 mod tests {
+    /// The schema violations reported on one step, as their messages.
+    fn schema_messages(errors: &[ResolveError], at: &str) -> Vec<String> {
+        errors
+            .iter()
+            .filter_map(|e| match e {
+                ResolveError::SchemaViolation { step, message, .. } if step.as_str() == at => {
+                    Some(message.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     use super::*;
     use crate::schema::{PostCeremonyDutyBody, RoleDefinition, SectionBody, StepBody};
     use rite_model::{ActionType, BackendConfig};
@@ -2106,26 +2178,14 @@ sections:
 
         let result = resolve_ceremony(ceremony, None);
         assert!(result.is_err());
-        let missing: Vec<&str> = result
-            .errors
-            .iter()
-            .filter_map(|e| {
-                if let ResolveError::MissingWithField { step, field, .. } = e
-                    && step.as_str() == "chk"
-                {
-                    Some(*field)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let missing = schema_messages(&result.errors, "chk");
         assert!(
-            missing.contains(&"actual"),
-            "expected 'actual' missing: {missing:?}"
+            missing.contains(&"action 'check_value' requires 'with.actual'".to_string()),
+            "{missing:?}"
         );
         assert!(
-            missing.contains(&"expected"),
-            "expected 'expected' missing: {missing:?}"
+            missing.contains(&"action 'check_value' requires 'with.expected'".to_string()),
+            "{missing:?}"
         );
     }
 
@@ -2143,12 +2203,7 @@ sections:
             .insert("chk".to_string(), step);
 
         let result = resolve_ceremony(ceremony, None);
-        assert!(
-            !result
-                .errors
-                .iter()
-                .any(|e| matches!(e, ResolveError::MissingWithField { .. }))
-        );
+        assert!(schema_messages(&result.errors, "chk").is_empty());
     }
 
     /// Resolve a `wrap_key` step reading exactly the given inputs.
@@ -2186,18 +2241,12 @@ sections:
                 .insert("s".to_string(), step);
 
             let result = resolve_ceremony(ceremony, None);
-            let message = result
-                .errors
-                .iter()
-                .find_map(|e| match e {
-                    ResolveError::UnknownWithField { field, action, .. } => {
-                        Some(format!("{field}|{}", action.known_with_fields().join(", ")))
-                    }
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("{action} accepted {with}: {:?}", result.errors));
+            let messages = schema_messages(&result.errors, "s");
+            let [message] = messages.as_slice() else {
+                panic!("{action} accepted {with}: {:?}", result.errors);
+            };
             assert!(
-                message.contains('|') && !message.ends_with('|'),
+                message.contains("Accepted: ") && !message.ends_with("Accepted: "),
                 "the message lists what the action does accept: {message}"
             );
         }
@@ -2219,11 +2268,12 @@ sections:
             .insert("gen".to_string(), step);
 
         let result = resolve_ceremony(ceremony, None);
-        assert!(
-            result
-                .errors
-                .iter()
-                .any(|e| matches!(e, ResolveError::UnknownWithField { .. })),
+        assert_eq!(
+            schema_messages(&result.errors, "gen"),
+            [
+                "action 'generate_key' has no 'algorythm' parameter. Accepted: algorithm, policy, \
+                 slot"
+            ],
             "{:?}",
             result.errors
         );
@@ -2246,19 +2296,13 @@ sections:
 
         let result = resolve_ceremony(ceremony, None);
         assert!(result.is_err());
-        let message = result
-            .errors
-            .iter()
-            .find_map(|e| match e {
-                ResolveError::InvalidWithValue { step, message, .. } if step.as_str() == "gen" => {
-                    Some(message.clone())
-                }
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("expected InvalidWithValue, got {:?}", result.errors));
-        assert!(message.contains("unknown key algorithm"), "{message}");
+        let messages = schema_messages(&result.errors, "gen");
+        let [message] = messages.as_slice() else {
+            panic!("expected one schema violation, got {:?}", result.errors);
+        };
+        assert!(message.contains("expected one of: RSA-2048"), "{message}");
         assert!(
-            message.contains("algorithm"),
+            message.contains("'with.algorithm'"),
             "the message names the field it is about: {message}"
         );
     }
@@ -2586,6 +2630,7 @@ sections:
             .iter()
             .filter_map(|e| match e {
                 ResolveError::InvalidWithValue { step, message, .. }
+                | ResolveError::SchemaViolation { step, message, .. }
                     if message.contains("header bytes") || message.contains("every sheet") =>
                 {
                     Some(step.as_str())

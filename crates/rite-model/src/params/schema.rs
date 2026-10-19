@@ -118,6 +118,7 @@ impl ActionType {
             | ActionType::CombineShares
             | ActionType::TpmAttest => json_schema!({
                 "type": "object",
+                "properties": {},
                 "additionalProperties": false,
             }),
         }

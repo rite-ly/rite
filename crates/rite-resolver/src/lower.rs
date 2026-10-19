@@ -1,15 +1,17 @@
 //! YAML lowering: parse the Node tree, extract source spans, and deserialize ceremony types.
 
 use crate::diagnostic::{
-    Diagnostic, ReferenceContext, ReferenceEntry, ReferenceTarget, Severity, Span, SpanMap,
-    UnparsedExpression,
+    Diagnostic, FieldSpan, ReferenceContext, ReferenceEntry, ReferenceTarget, Severity, Span,
+    SpanMap, UnparsedExpression,
 };
 use crate::error::ResolveError;
 use crate::schema::Ceremony;
 use marked_yaml::Node;
 use marked_yaml::types::MarkedScalarNode;
 use rite_model::expression::{Expression, RefType};
+use rite_model::validate::Pointer;
 use rite_model::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Maximum nesting depth accepted in ceremony YAML.
@@ -30,7 +32,10 @@ pub(crate) fn lower_ceremony(
     let mut diags = Vec::new();
 
     // Step A: parse YAML into a Node tree.
-    let node = match marked_yaml::parse_yaml(0, yaml) {
+    // A quoted scalar is a string in YAML, so it is never read as a number
+    // or a boolean.
+    let options = marked_yaml::LoaderOptions::default().prevent_coercion(true);
+    let node = match marked_yaml::parse_yaml_with_options(0, yaml, options) {
         Ok(n) => n,
         Err(load_err) => {
             diags.push(load_error_to_diagnostic(path, &load_err));
@@ -39,7 +44,7 @@ pub(crate) fn lower_ceremony(
     };
 
     // Reject pathological nesting before any recursive walk over the tree.
-    // `from_node` (Step C), `coerce_yaml_scalars`, and the expression parsing
+    // `from_node` (Step C), `typed_json`, and the expression parsing
     // downstream all recurse over this structure; a crafted file with hundreds
     // of nested sequences/mappings would otherwise overflow the stack and
     // abort the process — fatal for `rite-ls`, which re-parses on every
@@ -68,7 +73,7 @@ pub(crate) fn lower_ceremony(
     // Step C: serde deserialization from the same Node tree.
     let ceremony_opt = match marked_yaml::from_node::<Ceremony>(&node) {
         Ok(mut c) => {
-            coerce_ceremony_json_scalars(&mut c);
+            type_json_scalars(&mut c, &node);
             diags.extend(number_diagnostics(path, &c, &span_map));
             c.source_digest = rite_model::Sha256Digest::of(yaml.as_bytes());
             Some(c)
@@ -335,6 +340,39 @@ impl<'src> Lowerer<'src> {
                 }
             }
         }
+        if let Some((key, with_node)) = step_map.iter().find(|(key, _)| key.as_str() == "with") {
+            let mut fields = HashMap::new();
+            self.record_fields(&mut fields, Pointer::root(), Some(key), with_node);
+            self.span_map
+                .with_fields
+                .insert(StepId::new(step_id_scalar.as_str()), fields);
+        }
+    }
+
+    /// Record the key and value span of `node` and of everything under it,
+    /// by JSON pointer. The depth guard has run, so the recursion is bounded.
+    fn record_fields(
+        &self,
+        fields: &mut HashMap<Pointer, FieldSpan>,
+        at: Pointer,
+        key: Option<&MarkedScalarNode>,
+        node: &Node,
+    ) {
+        let value = match node.as_scalar() {
+            Some(scalar) => self.scalar_to_span(scalar),
+            None => node_to_span(node),
+        };
+        if let Some(map) = node.as_mapping() {
+            for (child_key, child) in map.iter() {
+                self.record_fields(fields, at.join(child_key.as_str()), Some(child_key), child);
+            }
+        } else if let Some(items) = node.as_sequence() {
+            for (index, child) in items.iter().enumerate() {
+                self.record_fields(fields, at.join(&index.to_string()), None, child);
+            }
+        }
+        let key = key.and_then(|key| self.scalar_to_span(key));
+        fields.insert(at, FieldSpan { key, value });
     }
 
     fn walk_reads(&mut self, reads_node: &Node, step_context: &ReferenceContext) {
@@ -553,26 +591,79 @@ fn extract_load_error_location(err: &marked_yaml::LoadError) -> Option<(usize, u
     }
 }
 
-/// Apply YAML core schema type coercion to all `serde_json::Value` fields in a ceremony.
+/// Give the `serde_json::Value` fields of a ceremony their YAML types.
 ///
-/// `marked-yaml` deserializes all YAML scalars as strings. Fields typed as `serde_json::Value`
-/// (`with`, `reads`, parameter defaults) need integer/boolean/null values coerced from their
-/// string representations, mirroring what `serde_yaml` did automatically via YAML core schema.
-fn coerce_ceremony_json_scalars(ceremony: &mut Ceremony) {
-    for section in ceremony.sections.values_mut() {
-        for step in section.steps.values_mut() {
-            if let Some(ref mut with) = step.with {
-                coerce_yaml_scalars(with);
+/// `marked-yaml` deserializes every scalar into a `Value` as a string. The
+/// node tree still knows which scalars were quoted, so these fields are
+/// rebuilt from it: a plain scalar takes its YAML core schema type and a
+/// quoted one stays a string, as YAML says. `"0042"` is text and `0042` a
+/// number.
+fn type_json_scalars(ceremony: &mut Ceremony, node: &Node) {
+    let Some(root) = node.as_mapping() else {
+        return;
+    };
+    for (section_id, section_node) in root
+        .get_mapping("sections")
+        .into_iter()
+        .flat_map(|m| m.iter())
+    {
+        let Some(section) = ceremony.sections.get_mut(section_id.as_str()) else {
+            continue;
+        };
+        let steps = section_node
+            .as_mapping()
+            .and_then(|m| m.get_mapping("steps"));
+        for (step_id, step_node) in steps.into_iter().flat_map(|m| m.iter()) {
+            let (Some(step), Some(fields)) = (
+                section.steps.get_mut(step_id.as_str()),
+                step_node.as_mapping(),
+            ) else {
+                continue;
+            };
+            if let Some(with) = fields.get_node("with") {
+                step.with = Some(typed_json(with));
             }
-            if let Some(ref mut reads) = step.reads {
-                coerce_yaml_scalars(reads);
+            if let Some(reads) = fields.get_node("reads") {
+                step.reads = Some(typed_json(reads));
             }
         }
     }
-    for param in ceremony.parameters.values_mut() {
-        if let Some(ref mut default) = param.default {
-            coerce_yaml_scalars(default);
+    for (name, param_node) in root
+        .get_mapping("parameters")
+        .into_iter()
+        .flat_map(|m| m.iter())
+    {
+        let default = param_node.as_mapping().and_then(|m| m.get_node("default"));
+        if let (Some(param), Some(default)) = (ceremony.parameters.get_mut(name.as_str()), default)
+        {
+            param.default = Some(typed_json(default));
         }
+    }
+}
+
+/// A node as JSON, each plain scalar typed by the YAML core schema.
+///
+/// The depth guard in `lower_ceremony` has rejected trees nested past
+/// [`MAX_YAML_DEPTH`], so the recursion is bounded.
+fn typed_json(node: &Node) -> serde_json::Value {
+    if let Some(scalar) = node.as_scalar() {
+        let text = scalar.as_str();
+        let typed = if scalar.may_coerce() {
+            coerce_scalar(text)
+        } else {
+            None
+        };
+        typed.unwrap_or_else(|| serde_json::Value::String(text.to_string()))
+    } else if let Some(map) = node.as_mapping() {
+        serde_json::Value::Object(
+            map.iter()
+                .map(|(key, value)| (key.as_str().to_string(), typed_json(value)))
+                .collect(),
+        )
+    } else if let Some(items) = node.as_sequence() {
+        serde_json::Value::Array(items.iter().map(typed_json).collect())
+    } else {
+        serde_json::Value::Null
     }
 }
 
@@ -615,41 +706,6 @@ fn number_diagnostics(
         }
     }
     diags
-}
-
-/// Recursively coerce string scalars in a `serde_json::Value` to their proper types.
-fn coerce_yaml_scalars(value: &mut serde_json::Value) {
-    coerce_yaml_scalars_at(value, 0);
-}
-
-/// Depth-tracking worker for [`coerce_yaml_scalars`].
-///
-/// The depth guard in `lower_ceremony` already rejects trees nested past
-/// [`MAX_YAML_DEPTH`], so the cap here is a defensive backstop: values deeper
-/// than the cap are left uncoerced rather than recursed into.
-fn coerce_yaml_scalars_at(value: &mut serde_json::Value, depth: usize) {
-    if depth >= MAX_YAML_DEPTH {
-        return;
-    }
-    let child_depth = depth.saturating_add(1);
-    match value {
-        serde_json::Value::String(s) => {
-            if let Some(coerced) = coerce_scalar(s) {
-                *value = coerced;
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            for v in arr {
-                coerce_yaml_scalars_at(v, child_depth);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for v in map.values_mut() {
-                coerce_yaml_scalars_at(v, child_depth);
-            }
-        }
-        _ => {}
-    }
 }
 
 /// Try to coerce a YAML scalar string to its typed JSON equivalent.
@@ -1201,6 +1257,56 @@ sections:
                 .expect("test_step should exist")
                 .with
                 .is_some()
+        );
+    }
+
+    /// A quoted scalar is a string, whatever it looks like; a plain one takes
+    /// its YAML type.
+    #[test]
+    fn a_quoted_value_stays_a_string() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles: {}
+parameters:
+  pin: { type: string, default: "0042" }
+sections:
+  s:
+    steps:
+      step:
+        action: check_value
+        with:
+          actual: "0042"
+          expected: '1'
+          message: "true"
+          sensitive: true
+          nested: { count: 7, label: "7", list: [1, "1", ~] }
+        reads:
+          n: 5
+"#;
+        let (ceremony, _, _) = lower_ceremony(None, yaml);
+        let ceremony = ceremony.expect("should parse");
+        let step = &ceremony
+            .sections
+            .get("s")
+            .unwrap()
+            .steps
+            .get("step")
+            .unwrap();
+        assert_eq!(
+            step.with,
+            Some(serde_json::json!({
+                "actual": "0042",
+                "expected": "1",
+                "message": "true",
+                "sensitive": true,
+                "nested": { "count": 7, "label": "7", "list": [1, "1", null] },
+            }))
+        );
+        assert_eq!(step.reads, Some(serde_json::json!({ "n": 5 })));
+        assert_eq!(
+            ceremony.parameters.get("pin").unwrap().default,
+            Some(serde_json::json!("0042"))
         );
     }
 

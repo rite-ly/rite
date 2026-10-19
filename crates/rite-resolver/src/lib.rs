@@ -534,6 +534,143 @@ sections:
         );
     }
 
+    /// Each schema violation points at the entry it is about: the value that
+    /// is wrong, the key that is unknown, or the `with:` key of a block
+    /// missing a field.
+    #[test]
+    fn schema_diagnostics_point_at_the_field() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles:
+  alice: {}
+sections:
+  main:
+    role: "${role.alice}"
+    steps:
+      bad_value:
+        action: issue_certificate
+        with:
+          validity_days: ten
+      bad_key:
+        action: confirm
+        with:
+          message: "Ready"
+          statment: "typo"
+      bad_item:
+        action: oral_readback
+        with:
+          format: nato_phonetik
+      missing:
+        action: check_value
+        with:
+          actual: "a"
+      missing_block:
+        action: enter_value
+"#;
+        let (_, _, diags) = analyze_str(None, yaml);
+        let found: Vec<(String, String)> = diags
+            .iter()
+            .filter(|d| d.message.contains("'with") || d.message.contains("parameter"))
+            .map(|d| {
+                let span = d.span.expect("a schema diagnostic has a span");
+                (span_text(yaml, span).to_string(), d.message.clone())
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (
+                    "ten".to_string(),
+                    "Step 'bad_value': 'with.validity_days' must be an integer, found 'ten'"
+                        .to_string()
+                ),
+                (
+                    "statment".to_string(),
+                    "Step 'bad_key': action 'confirm' has no 'statment' parameter. Accepted: \
+                     message"
+                        .to_string()
+                ),
+                (
+                    "nato_phonetik".to_string(),
+                    "Step 'bad_item': 'with.format' is 'nato_phonetik'; expected one of: \
+                     nato_phonetic, hex, raw, nato"
+                        .to_string()
+                ),
+                (
+                    "with".to_string(),
+                    "Step 'missing': action 'check_value' requires 'with.expected'".to_string()
+                ),
+                (
+                    "missing_block".to_string(),
+                    "Step 'missing_block': action 'enter_value' requires 'with.message'"
+                        .to_string()
+                ),
+            ]
+        );
+    }
+
+    /// A value still carrying an expression belongs to run time: nothing at
+    /// or below it is reported. What is known now still is: a key, a count,
+    /// the presence of a field.
+    #[test]
+    fn schema_violations_at_a_deferred_value_are_left_to_run_time() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles:
+  alice: {}
+parameters:
+  algo: { type: string }
+  n: { type: integer }
+  usages: { type: string }
+sections:
+  main:
+    role: "${role.alice}"
+    steps:
+      algo:
+        action: generate_key
+        backend: soft
+        with:
+          algorithm: "${param.algo}"
+          policy: "${param.usages}"
+      count:
+        action: issue_certificate
+        backend: soft
+        with:
+          validity_days: "${param.n}"
+      exact:
+        action: enter_secret
+        with:
+          message: "PIN"
+          length: "${param.n}"
+          min_length: 4
+      typo:
+        action: generate_key
+        backend: soft
+        with:
+          algorythm: "${param.algo}"
+backends:
+  soft: { provider: software }
+"#;
+        let (_, _, diags) = analyze_str(None, yaml);
+        let schema: Vec<&str> = diags
+            .iter()
+            .map(|d| d.message.as_str())
+            .filter(|m| m.contains("'with") || m.contains("parameter") || m.contains("exact"))
+            .collect();
+        assert_eq!(
+            schema,
+            [
+                "Step 'exact': 'length' is exact, so 'min_length' and 'max_length' cannot be \
+                 given beside it",
+                "Step 'typo': action 'generate_key' has no 'algorythm' parameter. Accepted: \
+                 algorithm, policy, slot",
+            ],
+            "{diags:#?}"
+        );
+    }
+
     #[test]
     fn missing_action_diagnostic_spans_step_id_with_full_length() {
         // The "step is missing required field 'action'" diagnostic must point at

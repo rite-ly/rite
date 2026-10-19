@@ -2,6 +2,7 @@
 
 use crate::diagnostic::ReferenceContext;
 use rite_model::expression::{ExprError, RefType};
+use rite_model::validate::{Anchor, Pointer};
 use rite_model::{
     ActId, ActionType, ArtifactId, MaterialId, OutputId, ParamId, ParameterType, RoleId, SectionId,
     StepId,
@@ -242,6 +243,26 @@ pub enum ResolveError {
         field: &'static str,
         /// The `reads:` input it needs.
         requires: &'static str,
+    },
+
+    /// Step `with:` block fails its action's schema.
+    ///
+    /// The schema says which keys an action takes and requires and what each
+    /// value may be, the same in every build. A value still carrying an
+    /// expression is checked when the step runs instead.
+    #[error("Step '{step}': {message}")]
+    SchemaViolation {
+        /// The step ID.
+        step: StepId,
+        /// Where in the `with:` block; the root is the block itself.
+        field: Pointer,
+        /// Whether the diagnostic points at the key or the value there.
+        anchor: Anchor,
+        /// The JSON Schema keyword that failed, a stable code for machine
+        /// output.
+        keyword: String,
+        /// What is wrong, phrased for the ceremony author.
+        message: String,
     },
 
     /// Step `with:` block holds a value the action cannot accept.

@@ -10,6 +10,10 @@ use std::fmt;
 
 use serde_json::Value;
 
+mod message;
+
+pub use message::{Anchor, ParamsCheck, params_check};
+
 /// A compiled schema.
 pub struct Validator {
     engine: jsonschema::Validator,
@@ -150,6 +154,27 @@ pub enum Matched {
 }
 
 impl Keyword {
+    /// The JSON Schema name of the keyword, a stable code for machine
+    /// output.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Keyword::Type { .. } => "type",
+            Keyword::Enum { .. } => "enum",
+            Keyword::Const { .. } => "const",
+            Keyword::Pattern { .. } => "pattern",
+            Keyword::Minimum { .. } => "minimum",
+            Keyword::Maximum { .. } => "maximum",
+            Keyword::MinItems { .. } => "minItems",
+            Keyword::Required { .. } => "required",
+            Keyword::AdditionalProperties { .. } => "additionalProperties",
+            Keyword::OneOf { .. } => "oneOf",
+            Keyword::Not => "not",
+            Keyword::False => "false",
+            Keyword::Unsupported { keyword } => keyword,
+        }
+    }
+
     fn from_engine(kind: &jsonschema::error::ValidationErrorKind) -> Self {
         use jsonschema::error::{TypeKind, ValidationErrorKind as Kind};
         match kind {

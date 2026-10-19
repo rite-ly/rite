@@ -35,6 +35,8 @@ pub mod safe_path;
 mod schema;
 pub mod transcript;
 mod types;
+#[cfg(feature = "validate")]
+pub mod validate;
 
 pub use rite_sdk::BackendConfig;
 

@@ -20,6 +20,33 @@ At boot, live-boot overlays the ceremony layer on the base system, so the same b
 serves every ceremony. The outputs partition is FAT32, which Linux, macOS and Windows read
 and write without extra drivers.
 
+## Released tooling and base ISOs
+
+Each release publishes the Docker tooling image as `ghcr.io/rite-ly/rite-img:<version>`,
+and a base ISO per architecture, `rite-<version>-amd64.iso` and `rite-<version>-arm64.iso`,
+with the release files. The release workflow builds each ISO with that release's
+`rite-img` image and Linux `rite` binary. To use them, skip to
+[Add a ceremony](#add-a-ceremony), with `ghcr.io/rite-ly/rite-img:<version>` in place of
+`rite-img` and the downloaded ISO as `--iso`.
+
+Check the downloads against the release before using them:
+
+```
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify rite-<version>-amd64.iso --repo rite-ly/rite
+gh attestation verify oci://ghcr.io/rite-ly/rite-img:<version> --repo rite-ly/rite
+```
+
+The attestations tie each file and the image to the release workflow run and its commit.
+An ISO cannot be rebuilt to the same bytes, because live-build downloads the current
+Debian packages, so the published hash is the one to cite for a base ISO. The Debian
+packages it holds, with their versions, are listed in `rite-<version>-<arch>.packages`
+next to it, and in the ISO at `/live/filesystem.packages`.
+
+The `rite` in a base ISO is the Linux release binary, which has no PIV or YubiKey
+backend, and the live system has no `pcscd`. A ceremony that uses a hardware token does
+not run from these ISOs.
+
 ## Build the Docker tooling image
 
 Two kinds of image appear on this page: the Docker image that holds the build tools, and
@@ -125,6 +152,9 @@ tag:
 ```
 docker image inspect --format '{{.Id}}' rite-img
 ```
+
+A released image is pinned by its digest instead, which `docker pull` prints:
+`ghcr.io/rite-ly/rite-img@sha256:<digest>`.
 
 `build-img` prints its SHA-256 hashes on stdout, one per line, and its progress on stderr,
 so `> hashes.txt` keeps only the hashes:
@@ -311,3 +341,5 @@ booted.
 | `img/config/mount-outputs` | Mounts `RITE-OUT` at `/rite/outputs` |
 | `img/config/bootloaders/grub.cfg` | Boot menu |
 | `img/config/bashrc`, `img/config/foot.ini`, `img/config/logind.conf` | Shell, terminal and login settings |
+| `.github/workflows/img.yml` | Builds an image for each architecture, and checks that `build-img` is reproducible, on pull requests that change `img/` |
+| `.github/workflows/release.yml` | Publishes `rite-img` and the base ISOs with each release |

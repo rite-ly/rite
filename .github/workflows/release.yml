@@ -156,13 +156,19 @@ jobs:
           path: target/aarch64-unknown-linux-musl/release/rite-ls
           if-no-files-found: error
 
-  # Glibc runtime image, built one arch per runner so each compiles natively:
+  # The Docker images, built one arch per runner so each compiles natively:
   # amd64 on ubuntu-latest, arm64 on ubuntu-24.04-arm (no QEMU). Each build is
   # pushed to ghcr.io by digest only; the merge job below assembles the tagged
-  # multi-arch manifest list. The glibc build dynamically links libpcsclite and
-  # system OpenSSL, so the image carries the piv/yubikey backends.
+  # multi-arch manifest list.
+  #
+  # - rite: the glibc runtime image. The glibc build dynamically links
+  #   libpcsclite and system OpenSSL, so the image carries the piv/yubikey
+  #   backends.
+  # - rite-img: the tools that build ceremony images (img/,
+  #   docs/development/img.md). The base ISOs below are built with these
+  #   exact images.
   build-image:
-    name: Build image (${{ matrix.arch }})
+    name: Build image ${{ matrix.image }} (${{ matrix.arch }})
     needs: [validate]
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -171,6 +177,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        image: [rite, rite-img]
+        arch: [amd64, arm64]
         include:
           - arch: amd64
             platform: linux/amd64
@@ -178,6 +186,23 @@ jobs:
           - arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
+          - image: rite
+            context: .
+            target: release
+            build-args: |
+              CARGO_BUILD_ARGS=--features piv,yubikey
+              RITE_BUILD_COMMIT=${{ needs.validate.outputs.commit_sha }}
+              RITE_BUILD_COMMIT_DATE=${{ needs.validate.outputs.commit_date }}
+            description: DSL and runtime for cryptographic key ceremonies
+            digests: image-digest
+            cache: release-image
+          - image: rite-img
+            context: img
+            target: ''
+            build-args: ''
+            description: Builds bootable Rite ceremony images
+            digests: img-tooling-digest
+            cache: release-img-tooling
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -197,10 +222,10 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/rite-ly/rite
+          images: ghcr.io/rite-ly/${{ matrix.image }}
           labels: |
-            org.opencontainers.image.title=rite
-            org.opencontainers.image.description=DSL and runtime for cryptographic key ceremonies
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.description=${{ matrix.description }}
             org.opencontainers.image.source=https://github.com/rite-ly/rite
             org.opencontainers.image.url=https://ritely.io
             org.opencontainers.image.documentation=https://ritely.io/docs
@@ -211,22 +236,19 @@ jobs:
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: .
-          target: release
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
-          build-args: |
-            CARGO_BUILD_ARGS=--features piv,yubikey
-            RITE_BUILD_COMMIT=${{ needs.validate.outputs.commit_sha }}
-            RITE_BUILD_COMMIT_DATE=${{ needs.validate.outputs.commit_date }}
+          build-args: ${{ matrix.build-args }}
           # Provenance is attested via Sigstore (actions/attest, in the merge
           # job); disable BuildKit's in-registry provenance so the index carries
           # a single signed attestation.
           provenance: false
-          outputs: type=image,name=ghcr.io/rite-ly/rite,push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=release-image-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=release-image-${{ matrix.arch }}
+          outputs: type=image,name=ghcr.io/rite-ly/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.cache }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache }}-${{ matrix.arch }}
 
       # Export the per-arch digest as a filename-only marker; the merge job
       # collects both and feeds them to `imagetools create`.
@@ -239,19 +261,93 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: image-digest-${{ matrix.arch }}
+          name: ${{ matrix.digests }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           # Kept until the merge job is approved, which can be days after the
           # build.
           retention-days: 7
 
+  # The base ISO for each architecture, from the release's musl binary, built
+  # on a native runner by the rite-img image pushed above. Live-build downloads
+  # the current Debian packages, so a rebuild gives a different ISO; the
+  # published hash is the one to cite.
+  build-iso:
+    name: Build base ISO (${{ matrix.arch }})
+    needs: [validate, build-linux-musl, build-image]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      ISO: rite-${{ needs.validate.outputs.version }}-${{ matrix.arch }}.iso
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Download the rite binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rite-linux-${{ matrix.arch }}
+          path: work
+
+      - name: Download the rite-img digest
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: img-tooling-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build the ISO
+        working-directory: work
+        run: |
+          digest=$(basename "${{ runner.temp }}"/digests/*)
+          docker run --rm --privileged -v "$PWD:/work" \
+            "ghcr.io/rite-ly/rite-img@sha256:${digest}" build-iso \
+            --binary rite --output "$ISO"
+
+      # The Debian packages and versions in the live system, as dpkg-query
+      # lists them. The ISO holds the same list; a copy next to it answers
+      # which versions a release shipped without opening the ISO.
+      - name: Extract the package list
+        working-directory: work
+        run: |
+          digest=$(basename "${{ runner.temp }}"/digests/*)
+          docker run --rm -v "$PWD:/work" --entrypoint xorriso \
+            "ghcr.io/rite-ly/rite-img@sha256:${digest}" \
+            -osirrox on -indev "$ISO" \
+            -extract /live/filesystem.packages "${ISO%.iso}.packages"
+
+      - name: Upload the ISO
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iso-${{ matrix.arch }}
+          path: |
+            work/${{ env.ISO }}
+            work/rite-${{ needs.validate.outputs.version }}-${{ matrix.arch }}.packages
+          if-no-files-found: error
+          # An ISO is already compressed.
+          compression-level: 0
+          # Kept for a re-run of the release job, as the digests are.
+          retention-days: 7
+
   # Assemble the per-arch digests into the tagged multi-arch manifest list and
-  # attest the resulting index. Until this job runs, the images are on ghcr.io
-  # by digest only, with no tag; the `docker` environment holds the approval,
-  # after the draft release exists.
+  # attest the resulting index, once per image. Until this job runs, the images
+  # are on ghcr.io by digest only, with no tag; the `docker` environment holds
+  # the approval, after the draft release exists.
   merge-image:
-    name: Merge and push image manifest
+    name: Merge and push image manifest (${{ matrix.image }})
     needs: [build-image, release]
     runs-on: ubuntu-latest
     environment: docker
@@ -260,12 +356,22 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: rite
+            digests: image-digest-*
+            description: DSL and runtime for cryptographic key ceremonies
+          - image: rite-img
+            digests: img-tooling-digest-*
+            description: Builds bootable Rite ceremony images
     steps:
       - name: Download digests
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: ${{ runner.temp }}/digests
-          pattern: image-digest-*
+          pattern: ${{ matrix.digests }}
           merge-multiple: true
 
       - name: Set up Docker Buildx
@@ -287,14 +393,14 @@ jobs:
         env:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: index
         with:
-          images: ghcr.io/rite-ly/rite
+          images: ghcr.io/rite-ly/${{ matrix.image }}
           flavor: latest=auto
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
           labels: |
-            org.opencontainers.image.title=rite
-            org.opencontainers.image.description=DSL and runtime for cryptographic key ceremonies
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.description=${{ matrix.description }}
             org.opencontainers.image.source=https://github.com/rite-ly/rite
             org.opencontainers.image.url=https://ritely.io
             org.opencontainers.image.documentation=https://ritely.io/docs
@@ -314,7 +420,7 @@ jobs:
           while IFS= read -r ann; do args+=(--annotation "$ann"); done \
             < <(jq -r '.annotations[]' <<<"$METADATA")
           for digest in *; do
-            args+=("ghcr.io/rite-ly/rite@sha256:${digest}")
+            args+=("ghcr.io/rite-ly/${{ matrix.image }}@sha256:${digest}")
           done
           docker buildx imagetools create "${args[@]}"
 
@@ -323,7 +429,7 @@ jobs:
         id: image
         run: |
           digest=$(docker buildx imagetools inspect \
-            "ghcr.io/rite-ly/rite:${{ steps.meta.outputs.version }}" \
+            "ghcr.io/rite-ly/${{ matrix.image }}:${{ steps.meta.outputs.version }}" \
             --format '{{json .Manifest}}' | jq -r '.digest')
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
@@ -333,7 +439,7 @@ jobs:
       - name: Attest image provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-name: ghcr.io/rite-ly/rite
+          subject-name: ghcr.io/rite-ly/${{ matrix.image }}
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
           # A storage record lists the image in the organization's artifact
@@ -343,7 +449,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [validate, build-native, build-linux-musl, build-image]
+    needs: [validate, build-native, build-linux-musl, build-image, build-iso]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -385,10 +491,19 @@ jobs:
           rm -rf "$tmp"
           cp "$ARTS/rite-ls-windows-amd64/rite-ls.exe" "$RELEASE_DIR/rite-ls-${VERSION}-windows-amd64.exe"
 
-          sha256sum "$RELEASE_DIR"/* > "$RELEASE_DIR/SHA256SUMS"
+          # Base ISOs, the input of build-img (docs/development/img.md), and
+          # the package list of each
+          for arch in amd64 arm64; do
+            cp "$ARTS/iso-${arch}/rite-${VERSION}-${arch}.iso" "$RELEASE_DIR/"
+            cp "$ARTS/iso-${arch}/rite-${VERSION}-${arch}.packages" "$RELEASE_DIR/"
+          done
+
+          # Bare file names, so sha256sum --check works in the directory the
+          # files are downloaded to.
+          (cd "$RELEASE_DIR" && sha256sum -- * > SHA256SUMS)
 
       # Provenance over the exact files shipped on the release: the rite tarballs/zip,
-      # the flat rite-ls binaries, and SHA256SUMS. Attesting the packaged files (not the
+      # the flat rite-ls binaries, the base ISOs and their package lists, and SHA256SUMS. Attesting the packaged files (not the
       # raw build outputs) means each subject digest matches what a user downloads, so
       # `gh attestation verify <file> --repo rite-ly/rite` succeeds on the artefact itself.
       - name: Attest release artifacts

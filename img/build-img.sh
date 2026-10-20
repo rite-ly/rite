@@ -76,6 +76,8 @@ done
 for mat in "${MATERIALS[@]}"; do
     [[ -f "$mat" ]] || die "material file not found: $mat"
 done
+[[ ! -d "$OUTPUT_FILE" ]] || die "--output is a directory: $OUTPUT_FILE"
+[[ -d "$(dirname "$OUTPUT_FILE")" ]] || die "directory not found: $(dirname "$OUTPUT_FILE")"
 
 # A definition names its files by paths relative to its own directory
 # (path: "test_keys/escrow_public.pem"). Every input keeps its path relative to
@@ -128,7 +130,9 @@ for rel in "${CEREMONY_PATHS[@]}" "${MATERIAL_PATHS[@]}"; do
     install -m 0644 "$BASE/$rel" "$LAYER/rite/inputs/$rel"
 done
 printf '/rite/inputs/%s\n' "${CEREMONY_PATHS[@]}" > "$LAYER/rite/ceremonies"
-chmod 0644 "$LAYER/rite/ceremonies"
+# install -d sets the mode of the last directory only; the parents it creates,
+# and the mktemp directory itself, take other modes.
+chmod -R u=rwX,go=rX "$LAYER"
 
 CEREMONY_SQUASHFS="$TEMP_DIR/ceremony.squashfs"
 quietly mksquashfs "$LAYER" "$CEREMONY_SQUASHFS" \
@@ -157,8 +161,9 @@ quietly mkfs.fat --invariant -F 32 -n "RITE-OUT" "$OUTPUTS_IMG"
 # -append_partition adds partitions after the ISO data in an MBR partition
 # table: 2 is the EFI system partition, 3 the outputs partition (type 0x0c,
 # FAT32 LBA). SOURCE_DATE_EPOCH fixes the ISO's own timestamps, and the added
-# files get a fixed mtime because xorriso records it.
+# files get a fixed mode and mtime because xorriso records them.
 note "Writing the image."
+chmod 0644 "$CEREMONY_SQUASHFS" "$FILESYSTEM_MODULE"
 touch -d @0 "$CEREMONY_SQUASHFS" "$FILESYSTEM_MODULE"
 IMG_TMP="$TEMP_DIR/output.img"
 SOURCE_DATE_EPOCH=0 quietly xorriso -indev "$ISO_FILE" \

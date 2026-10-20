@@ -1,0 +1,37 @@
+#!/bin/bash
+# /usr/lib/rite/mount-outputs
+# Mounts the RITE-OUT partition of the stick the ceremony was loaded from at
+# /rite/outputs, for the rite user. Runs as root before each session start.
+#
+# The partition is looked up on the disk that holds the live medium, not by
+# label across all disks: with a second ceremony stick plugged in, a label
+# lookup could find that stick, and the outputs would land apart from the
+# ceremony that produced them.
+#
+# A base ISO boot has no RITE-OUT partition, which is not an error. A failed
+# mount is: its message goes to /run/rite/outputs-error, which rite-session
+# shows the operator.
+#
+# flush writes data to the stick promptly, so outputs survive a power cut more
+# often. The partition holds data only, so nothing on it may execute.
+
+OUTPUTS=/rite/outputs
+ERROR_FILE=/run/rite/outputs-error
+
+mountpoint -q "$OUTPUTS" && exit 0
+mkdir -p /run/rite
+rm -f "$ERROR_FILE"
+
+medium=$(findmnt -no SOURCE /run/live/medium) || exit 0
+parent=$(lsblk -no PKNAME "$medium")
+disk=${parent:+/dev/$parent}
+disk=${disk:-$medium}
+device=$(lsblk -nrpo NAME,LABEL "$disk" | awk '$2 == "RITE-OUT" { print $1; exit }')
+[[ -n "$device" ]] || exit 0
+
+if ! error=$(mount -t vfat \
+    -o "rw,flush,nosuid,nodev,noexec,uid=$(id -u rite),gid=$(id -g rite),umask=022" \
+    "$device" "$OUTPUTS" 2>&1); then
+    echo "$device: $error" > "$ERROR_FILE"
+fi
+exit 0

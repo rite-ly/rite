@@ -1,0 +1,7 @@
+#!/bin/bash
+# img/auto/build
+# Live-build build script with logging
+
+set -eo pipefail
+
+lb build noauto 2>&1 | tee build.log

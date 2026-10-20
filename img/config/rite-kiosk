@@ -1,0 +1,17 @@
+#!/bin/bash
+# /usr/lib/rite/rite-kiosk
+# Starts rite-session inside cage + foot, or on the text console when the boot
+# entry asks for it (rite.console) or cage fails to start. rite-session always
+# exits 0, Ctrl-C included, and cage and foot pass on its status, so any other
+# status means cage or foot failed. cage's own output goes to the journal.
+
+if ! grep -qwF 'rite.console' /proc/cmdline; then
+    systemd-cat -t cage cage -- foot /usr/lib/rite/rite-session
+    status=$?
+    if [[ $status -eq 0 ]]; then
+        exit 0
+    fi
+    export RITE_SESSION_NOTICE="The graphical session failed (exit status $status). This session runs on the text console."
+fi
+
+exec /usr/lib/rite/rite-session

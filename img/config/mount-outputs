@@ -13,7 +13,9 @@
 # shows the operator.
 #
 # flush writes data to the stick promptly, so outputs survive a power cut more
-# often. The partition holds data only, so nothing on it may execute.
+# often. The partition holds data only, so nothing on it may execute. FAT has
+# no permissions of its own: umask=077 gives every file the 0600 that rite asks
+# for its private artifacts.
 
 OUTPUTS=/rite/outputs
 ERROR_FILE=/run/rite/outputs-error
@@ -30,7 +32,7 @@ device=$(lsblk -nrpo NAME,LABEL "$disk" | awk '$2 == "RITE-OUT" { print $1; exit
 [[ -n "$device" ]] || exit 0
 
 if ! error=$(mount -t vfat \
-    -o "rw,flush,nosuid,nodev,noexec,uid=$(id -u rite),gid=$(id -g rite),umask=022" \
+    -o "rw,flush,nosuid,nodev,noexec,uid=$(id -u rite),gid=$(id -g rite),umask=077" \
     "$device" "$OUTPUTS" 2>&1); then
     echo "$device: $error" > "$ERROR_FILE"
 fi

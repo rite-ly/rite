@@ -68,7 +68,7 @@ echo ""
 case ${#CEREMONIES[@]} in
     0) ;;
     1)
-        echo "Command:   rite run ${CEREMONIES[0]}"
+        printf 'Command:   rite run %q\n' "${CEREMONIES[0]}"
         echo "           (in the shell, add flags such as --dry-run or --role as needed)"
         echo ""
         if [[ "$OUTPUTS_MOUNTED" == true ]]; then

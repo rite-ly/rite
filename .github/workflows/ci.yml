@@ -190,6 +190,7 @@ jobs:
 
       - name: Build the base ISO
         run: |
+          mkdir -p out
           docker run --rm --privileged -v "$PWD:/work" rite-img build-iso \
             --binary dist/glibc-${{ matrix.arch }}/rite --output out/rite.iso
 

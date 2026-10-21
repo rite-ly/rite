@@ -25,7 +25,8 @@ and write without extra drivers.
 Each release publishes the Docker tooling image as `ghcr.io/rite-ly/rite-img:<version>`,
 and a base ISO per architecture, `rite-<version>-amd64.iso` and `rite-<version>-arm64.iso`,
 with the release files. The release workflow builds each ISO with that release's
-`rite-img` image and Linux `rite` binary. To use them, skip to
+`rite-img` image and the `rite` binary from its `rite` Docker image, which has the PIV
+and YubiKey backends. To use them, skip to
 [Add a ceremony](#add-a-ceremony), with `ghcr.io/rite-ly/rite-img:<version>` in place of
 `rite-img` and the downloaded ISO as `--iso`.
 
@@ -42,10 +43,6 @@ An ISO cannot be rebuilt to the same bytes, because live-build downloads the cur
 Debian packages, so the published hash is the one to cite for a base ISO. The Debian
 packages it holds, with their versions, are listed in `rite-<version>-<arch>.packages`
 next to it, and in the ISO at `/live/filesystem.packages`.
-
-The `rite` in a base ISO is the Linux release binary, which has no PIV or YubiKey
-backend, and the live system has no `pcscd`. A ceremony that uses a hardware token does
-not run from these ISOs.
 
 ## Build the Docker tooling image
 
@@ -70,12 +67,22 @@ mkdir -p out
 
 ## Build the base ISO
 
-`build-iso` takes a Linux `rite` binary, from a `rite-<version>-linux-<arch>.tar.gz`
-release archive or a musl build. The architecture comes from the binary.
+`build-iso` takes a Linux `rite` binary. The architecture comes from the binary. The
+released ISOs carry the binary of the `rite` Docker image: it is built on Debian trixie,
+as the live system is, and has the PIV and YubiKey backends. It links the system OpenSSL,
+so the ISO's OpenSSL is the version Debian serves when the ISO is built. A Bake target
+builds the binary on its own, here for arm64, into `dist/glibc-arm64/`:
+
+```
+docker buildx bake binary-glibc-arm64
+```
+
+The static binary from a `rite-<version>-linux-<arch>.tar.gz` release archive also works,
+for ceremonies that use no hardware token.
 
 ```
 docker run --rm --privileged -v "$PWD:/work" rite-img build-iso \
-    --binary rite \
+    --binary dist/glibc-arm64/rite \
     --output out/rite-arm64.iso
 ```
 
@@ -84,12 +91,14 @@ the network and the host.
 
 The ISO is built for the binary's architecture, and the Docker image must run that
 architecture too. To build an amd64 ISO on an arm64 host, build the Docker image for amd64
-and run it under emulation, which is slower:
+and run it under emulation, which is slower. The amd64 binary compiles under emulation
+too, which takes far longer than the native build:
 
 ```
+docker buildx bake binary-glibc-amd64
 docker build --platform linux/amd64 -t rite-img:amd64 img/
 docker run --rm --privileged --platform linux/amd64 -v "$PWD:/work" rite-img:amd64 build-iso \
-    --binary rite-amd64 \
+    --binary dist/glibc-amd64/rite \
     --output out/rite-amd64.iso
 ```
 
@@ -341,5 +350,6 @@ booted.
 | `img/config/mount-outputs` | Mounts `RITE-OUT` at `/rite/outputs` |
 | `img/config/bootloaders/grub.cfg` | Boot menu |
 | `img/config/bashrc`, `img/config/foot.ini`, `img/config/logind.conf` | Shell, terminal and login settings |
-| `.github/workflows/img.yml` | Builds an image for each architecture, and checks that `build-img` is reproducible, on pull requests that change `img/` |
+| `img/config/rite.rules` | polkit rule: the `rite` user may use smart cards and nothing else; power off and reboot go through sudo |
+| `.github/workflows/ci.yml` | The `Image` jobs build an image for each architecture, and check that `build-img` is reproducible, on every pull request to main and push to main |
 | `.github/workflows/release.yml` | Publishes `rite-img` and the base ISOs with each release |

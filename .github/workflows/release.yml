@@ -246,9 +246,22 @@ jobs:
           # job); disable BuildKit's in-registry provenance so the index carries
           # a single signed attestation.
           provenance: false
-          outputs: type=image,name=ghcr.io/rite-ly/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          # The rite image's file system is also written to rite-rootfs, so the
+          # base ISOs below take the binary of this exact build.
+          outputs: |
+            type=image,name=ghcr.io/rite-ly/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+            ${{ matrix.image == 'rite' && 'type=local,dest=rite-rootfs' || '' }}
           cache-from: type=gha,scope=${{ matrix.cache }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.cache }}-${{ matrix.arch }}
+
+      - name: Upload the glibc binary
+        if: matrix.image == 'rite'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rite-glibc-${{ matrix.arch }}
+          path: rite-rootfs/usr/local/bin/rite
+          if-no-files-found: error
+          retention-days: 7
 
       # Export the per-arch digest as a filename-only marker; the merge job
       # collects both and feeds them to `imagetools create`.
@@ -268,13 +281,15 @@ jobs:
           # build.
           retention-days: 7
 
-  # The base ISO for each architecture, from the release's musl binary, built
-  # on a native runner by the rite-img image pushed above. Live-build downloads
+  # The base ISO for each architecture, built on a native runner by the
+  # rite-img image pushed above. Its rite is the glibc binary of the rite image
+  # of the same run: built on Debian trixie, as the live system is, with the
+  # piv/yubikey backends the musl binary lacks. Live-build downloads
   # the current Debian packages, so a rebuild gives a different ISO; the
   # published hash is the one to cite.
   build-iso:
     name: Build base ISO (${{ matrix.arch }})
-    needs: [validate, build-linux-musl, build-image]
+    needs: [validate, build-image]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -290,17 +305,17 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     steps:
-      - name: Download the rite binary
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: rite-linux-${{ matrix.arch }}
-          path: work
-
       - name: Download the rite-img digest
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: img-tooling-digest-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests
+
+      - name: Download the glibc binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rite-glibc-${{ matrix.arch }}
+          path: work
 
       - name: Log in to ghcr.io
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

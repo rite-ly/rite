@@ -113,3 +113,13 @@ todo = "deny"
 unimplemented = "deny"
 wildcard_imports = "deny"
 self_named_module_files = "deny"
+
+# The binaries are built with whole-program optimization: `rite-ls` shrinks by
+# about a third, and both IDE extensions commit four of them per release. Symbol
+# names stay in, so a panic's backtrace still names its functions. Cargo reads
+# a profile from the workspace root only and leaves it out of a published crate:
+# `cargo install` and a crate that depends on these build with their own.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"

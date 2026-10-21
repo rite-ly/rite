@@ -12,7 +12,7 @@ use rite_model::expression::RefType;
 use rite_model::expression::{
     ExprError, ExprValue, Expression, Reference, parse_expr_value, parse_expression_detailed,
 };
-use rite_model::validate::{Anchor, Pointer};
+use rite_model::validate::{Anchor, Pointer, Values};
 use rite_model::{
     Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind,
     MaterialSource, Metadata, NamedInput, Output, OutputId, ParamId, Parameter, PostCeremonyDuty,
@@ -643,7 +643,7 @@ impl ResolveContext {
                 continue;
             }
             accepted = false;
-            let message = check.message(action, raw, &violation);
+            let message = check.message(action, raw, &violation, Values::Shown);
             // Two keywords can say the same thing about one entry.
             if !reported.insert(message.clone()) {
                 continue;
@@ -2300,7 +2300,7 @@ sections:
         let [message] = messages.as_slice() else {
             panic!("expected one schema violation, got {:?}", result.errors);
         };
-        assert!(message.contains("expected one of: RSA-2048"), "{message}");
+        assert!(message.contains("must be one of: RSA-2048"), "{message}");
         assert!(
             message.contains("'with.algorithm'"),
             "the message names the field it is about: {message}"

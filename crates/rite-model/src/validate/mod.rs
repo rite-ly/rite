@@ -12,7 +12,7 @@ use serde_json::Value;
 
 mod message;
 
-pub use message::{Anchor, ParamsCheck, params_check};
+pub use message::{Anchor, ParamsCheck, Values, params_check};
 
 /// A compiled schema.
 pub struct Validator {

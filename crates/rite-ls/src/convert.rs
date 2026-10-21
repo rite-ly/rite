@@ -117,7 +117,7 @@ sections:
         let published: Vec<_> = diags.iter().map(to_lsp_diagnostic).collect();
         let found = published
             .iter()
-            .find(|d| d.message.contains("'with.algorithm' is 'RSA-9999'"))
+            .find(|d| d.message.contains("'with.algorithm' must be one of"))
             .expect("the editor is told about the bad algorithm");
 
         assert_eq!(found.severity, Some(DiagnosticSeverity::ERROR));

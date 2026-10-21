@@ -621,7 +621,12 @@ fn type_json_scalars(ceremony: &mut Ceremony, node: &Node) {
                 continue;
             };
             if let Some(with) = fields.get_node("with") {
-                step.with = Some(typed_json(with));
+                // `with:` with nothing after it, or `with: ~`, is YAML's null:
+                // a step that gives no parameters, as one without the key.
+                let null = with
+                    .as_scalar()
+                    .is_some_and(|s| s.may_coerce() && matches!(s.as_str(), "" | "~" | "null"));
+                step.with = (!null).then(|| typed_json(with));
             }
             if let Some(reads) = fields.get_node("reads") {
                 step.reads = Some(typed_json(reads));
@@ -1258,6 +1263,65 @@ sections:
                 .with
                 .is_some()
         );
+    }
+
+    /// An empty `with:` is YAML's null, a step with no parameters; a quoted
+    /// empty string is not null, and is left for the schema to refuse.
+    #[test]
+    fn an_empty_with_is_no_block() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles: {}
+sections:
+  s:
+    steps:
+      empty:
+        action: confirm
+        with:
+      tilde:
+        action: confirm
+        with: ~
+      quoted:
+        action: confirm
+        with: ""
+"#;
+        let (ceremony, _, _) = lower_ceremony(None, yaml);
+        let ceremony = ceremony.expect("should parse");
+        let steps = &ceremony.sections.get("s").unwrap().steps;
+        assert_eq!(steps.get("empty").unwrap().with, None);
+        assert_eq!(steps.get("tilde").unwrap().with, None);
+        assert_eq!(
+            steps.get("quoted").unwrap().with,
+            Some(serde_json::json!(""))
+        );
+    }
+
+    /// The same rule in the typed fields of the DSL: a quoted `"true"` is a
+    /// string, so a field that takes a boolean refuses it.
+    #[test]
+    fn a_quoted_value_in_a_typed_field_is_refused() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles: {}
+sections:
+  s:
+    steps:
+      step:
+        action: confirm
+        silent: "true"
+"#;
+        let (ceremony, _, diags) = lower_ceremony(None, yaml);
+        assert!(ceremony.is_none());
+        assert!(
+            diags.iter().any(|d| d.severity == Severity::Error),
+            "{diags:?}"
+        );
+
+        let plain = yaml.replace("silent: \"true\"", "silent: true");
+        let (ceremony, _, _) = lower_ceremony(None, &plain);
+        assert!(ceremony.is_some());
     }
 
     /// A quoted scalar is a string, whatever it looks like; a plain one takes

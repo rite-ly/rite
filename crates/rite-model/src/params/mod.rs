@@ -439,6 +439,12 @@ mod schema_tests {
             let Value::Object(object) = value else {
                 return;
             };
+            // The message lookup starts where a keyword is written, which for
+            // a referenced type is its definition, so a message beside a
+            // `$ref` would never be read.
+            if object.contains_key("$ref") && object.contains_key("x-message") {
+                found.push(format!("{path}: x-message beside $ref"));
+            }
             for (key, child) in object {
                 if !KEYWORDS.contains(&key.as_str()) {
                     found.push(format!("{path}/{key}"));

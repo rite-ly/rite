@@ -128,6 +128,27 @@ fn resolve_with_material_paths(
     result
 }
 
+/// Add the errors found while reading the file to a resolution.
+///
+/// A file can deserialize and still be refused while it is read, a number the
+/// transcript cannot record among them. `rite check` reports those; this
+/// makes `rite run` refuse the same file rather than start it.
+fn with_structural_errors<T>(
+    mut result: ResolveResult<T>,
+    diags: Vec<Diagnostic>,
+) -> ResolveResult<T> {
+    let errors: Vec<ResolveError> = diags
+        .into_iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(lower::diagnostic_to_resolve_error)
+        .collect();
+    if !errors.is_empty() {
+        result.value = None;
+        result.errors.splice(0..0, errors);
+    }
+    result
+}
+
 /// Extract the first error diagnostic as a `ResolveError`, or return a generic parse failure.
 fn first_resolve_error(diags: Vec<Diagnostic>) -> ResolveError {
     diags
@@ -155,7 +176,7 @@ pub fn resolve(
         return ResolveResult::err(first_resolve_error(diags));
     };
 
-    resolve::resolve_ceremony(ceremony, inputs)
+    with_structural_errors(resolve::resolve_ceremony(ceremony, inputs), diags)
 }
 
 /// Parse and resolve a ceremony from a file path.
@@ -182,7 +203,10 @@ pub fn resolve_files(
         return ResolveResult::err(first_resolve_error(diags));
     };
 
-    resolve_with_material_paths(ceremony, ceremony_path, inputs)
+    with_structural_errors(
+        resolve_with_material_paths(ceremony, ceremony_path, inputs),
+        diags,
+    )
 }
 
 /// Parse and validate ceremony YAML from an in-memory string.
@@ -593,8 +617,8 @@ sections:
                 ),
                 (
                     "nato_phonetik".to_string(),
-                    "Step 'bad_item': 'with.format' is 'nato_phonetik'; expected one of: \
-                     nato_phonetic, hex, raw, nato"
+                    "Step 'bad_item': 'with.format' must be one of: nato_phonetic, hex, raw, \
+                     nato, found 'nato_phonetik'"
                         .to_string()
                 ),
                 (
@@ -668,6 +692,37 @@ backends:
                  algorithm, policy, slot",
             ],
             "{diags:#?}"
+        );
+    }
+
+    /// A file `rite check` refuses while reading it is refused by `resolve`
+    /// too, so `rite run` never starts it.
+    #[test]
+    fn resolve_refuses_what_reading_the_file_refuses() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles:
+  alice: {}
+sections:
+  main:
+    role: "${role.alice}"
+    steps:
+      read:
+        action: oral_readback
+        with:
+          value: "ABCD"
+          characters: 2.0
+"#;
+        let result = resolve(yaml, None);
+        assert!(result.value.is_none());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.to_string().contains("2.0 is not an integer")),
+            "{:?}",
+            result.errors
         );
     }
 

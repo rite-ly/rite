@@ -1,8 +1,10 @@
 //! The schema of each action's `with:` block, compiled once, and what a
 //! violation of it says to the ceremony author.
 //!
-//! One renderer, worded per keyword. Where a generic sentence would lose
-//! meaning, the schema carries an `x-message` and that is the message: the
+//! One renderer, worded per keyword. A violation about a value reads as the
+//! rule, then the value found: `'with.shares' must be at most 100, found
+//! 101`. Where a generic rule would lose meaning, the schema carries an
+//! `x-message` and that is the rule: the
 //! one on the schema object that owns the failing keyword, or on an object
 //! reaching it through `allOf`, `oneOf`, `if`/`then` or `not` only, never
 //! through `properties` or `items`, so a message never captures errors about
@@ -63,6 +65,16 @@ pub enum Anchor {
     Value,
 }
 
+/// Whether a message may quote the value it is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Values {
+    /// Quote it: the value is as the definition writes it.
+    Shown,
+    /// Leave it out: the value was evaluated, and an expression may have
+    /// copied a secret into it.
+    Withheld,
+}
+
 impl Violation {
     /// What a diagnostic about this violation underlines: the offending key
     /// for an unexpected one, the key of the object missing a field for a
@@ -105,27 +117,34 @@ impl ParamsCheck {
     }
 
     /// The violation in words, for the author of the step holding `with`.
+    ///
+    /// A violation about a value reads as the rule, then the value found when
+    /// `values` allows it. Keys are always named: they are the definition's,
+    /// never a secret.
     #[must_use]
-    pub fn message(&self, action: ActionType, with: &Value, violation: &Violation) -> String {
+    pub fn message(
+        &self,
+        action: ActionType,
+        with: &Value,
+        violation: &Violation,
+        values: Values,
+    ) -> String {
         let at = &violation.instance_path;
         let field = field_name(at);
-        let value = at.lookup(with);
         match &violation.keyword {
             Keyword::AdditionalProperties { unexpected } => {
                 let accepted = self.accepted(&violation.schema_path);
                 let keys = unexpected.join("', '");
-                if at.segments().is_empty() {
-                    if accepted.is_empty() {
-                        format!("action '{action}' takes no 'with:' parameters, found '{keys}'")
-                    } else {
-                        format!(
-                            "action '{action}' has no '{keys}' parameter. Accepted: {}",
-                            accepted.join(", ")
-                        )
-                    }
-                } else {
+                if !at.segments().is_empty() {
                     format!(
                         "'{field}' has no '{keys}' field. Accepted: {}",
+                        accepted.join(", ")
+                    )
+                } else if accepted.is_empty() {
+                    format!("action '{action}' takes no 'with:' parameters, found '{keys}'")
+                } else {
+                    format!(
+                        "action '{action}' has no '{keys}' parameter. Accepted: {}",
                         accepted.join(", ")
                     )
                 }
@@ -138,21 +157,63 @@ impl ParamsCheck {
                 }
             }
             keyword => {
-                // A `oneOf` of constants is an enumeration whose values each
-                // carry a description, and reads as one.
-                let keyword = &self
-                    .constants(&violation.schema_path)
-                    .filter(|_| matches!(keyword, Keyword::OneOf { .. }))
-                    .map_or_else(|| keyword.clone(), |options| Keyword::Enum { options });
-                let sentence = x_message(&self.schema, &violation.schema_path)
-                    .map_or_else(|| sentence(keyword, &field, value), str::to_string);
-                match value {
-                    Some(value) if is_scalar(value) && !mentions_value(keyword) => {
-                        format!("{sentence}, found {}", shown(value))
+                let rule = x_message(&self.schema, &violation.schema_path).map_or_else(
+                    || self.rule(keyword, &violation.schema_path, &field),
+                    str::to_string,
+                );
+                match (values, at.lookup(with)) {
+                    (Values::Shown, Some(value)) if is_scalar(value) => {
+                        format!("{rule}, found {}", shown(value))
                     }
-                    _ => sentence,
+                    _ => rule,
                 }
             }
+        }
+    }
+
+    /// What a keyword about a value asks of `field`, in words.
+    fn rule(&self, keyword: &Keyword, keyword_at: &Pointer, field: &str) -> String {
+        let options = match keyword {
+            Keyword::Enum { options } => Some(options.clone()),
+            // A `oneOf` of constants is an enumeration whose values each
+            // carry a description, and reads as one.
+            Keyword::OneOf { .. } => self.constants(keyword_at),
+            _ => None,
+        };
+        if let Some(options) = options {
+            return match options.as_slice() {
+                [only] => format!("'{field}' must be {}", shown(only)),
+                _ => format!(
+                    "'{field}' must be one of: {}",
+                    options.iter().map(plain).collect::<Vec<_>>().join(", ")
+                ),
+            };
+        }
+        match keyword {
+            Keyword::Type { expected } => {
+                let types: Vec<&str> = expected.iter().map(|t| type_name(t)).collect();
+                format!("'{field}' must be {}", types.join(" or "))
+            }
+            Keyword::Const { expected } => format!("'{field}' must be {}", shown(expected)),
+            Keyword::Pattern { pattern } => format!("'{field}' must match {pattern}"),
+            Keyword::Minimum { limit } => format!("'{field}' must be at least {limit}"),
+            Keyword::Maximum { limit } => format!("'{field}' must be at most {limit}"),
+            Keyword::MinItems { limit } => format!("'{field}' needs at least {limit} entries"),
+            Keyword::OneOf {
+                matched: Matched::None,
+            } => format!("'{field}' takes none of the forms it can have"),
+            Keyword::OneOf {
+                matched: Matched::Several,
+            } => format!("'{field}' takes more than one of the forms it can have"),
+            Keyword::Not | Keyword::False => format!("'{field}' is not accepted here"),
+            Keyword::Unsupported { keyword } => format!(
+                "'{field}' fails the schema keyword '{keyword}', which this version does not check"
+            ),
+            // Worded by `message`, which names the keys involved; and an
+            // enumeration is worded above.
+            Keyword::Enum { .. }
+            | Keyword::Required { .. }
+            | Keyword::AdditionalProperties { .. } => format!("'{field}' is not accepted"),
         }
     }
 
@@ -176,53 +237,6 @@ impl ParamsCheck {
             .and_then(Value::as_object)
             .map(|properties| properties.keys().cloned().collect())
             .unwrap_or_default()
-    }
-}
-
-/// The generic sentence for a keyword, before any `found`.
-fn sentence(keyword: &Keyword, field: &str, value: Option<&Value>) -> String {
-    let value = value.map_or_else(|| "absent".to_string(), shown);
-    match keyword {
-        Keyword::Type { expected } => {
-            let types: Vec<&str> = expected.iter().map(|t| type_name(t)).collect();
-            format!("'{field}' must be {}", types.join(" or "))
-        }
-        Keyword::Enum { options } => match options.as_slice() {
-            [only] => format!("'{field}' must be {}", shown(only)),
-            _ => format!(
-                "'{field}' is {value}; expected one of: {}",
-                options.iter().map(plain).collect::<Vec<_>>().join(", ")
-            ),
-        },
-        Keyword::Const { expected } => format!("'{field}' must be {}", shown(expected)),
-        Keyword::Pattern { pattern } => format!("'{field}' must match {pattern}"),
-        Keyword::Minimum { limit } => format!("'{field}' is {value}; the least is {limit}"),
-        Keyword::Maximum { limit } => format!("'{field}' is {value}; the most is {limit}"),
-        Keyword::MinItems { limit } => format!("'{field}' needs at least {limit} entries"),
-        Keyword::OneOf {
-            matched: Matched::None,
-        } => format!("'{field}' takes none of the forms it can have"),
-        Keyword::OneOf {
-            matched: Matched::Several,
-        } => format!("'{field}' takes more than one of the forms it can have"),
-        Keyword::Not | Keyword::False => format!("'{field}' is not accepted here"),
-        Keyword::Unsupported { keyword } => format!(
-            "'{field}' fails the schema keyword '{keyword}', which this version does not check"
-        ),
-        Keyword::Required { property } => format!("'{field}' requires '{property}'"),
-        Keyword::AdditionalProperties { unexpected } => {
-            format!("'{field}' has no '{}' field", unexpected.join("', '"))
-        }
-    }
-}
-
-/// Whether the generic sentence already shows the value, so `found` would
-/// repeat it.
-fn mentions_value(keyword: &Keyword) -> bool {
-    match keyword {
-        Keyword::Enum { options } => options.len() > 1,
-        Keyword::Minimum { .. } | Keyword::Maximum { .. } => true,
-        _ => false,
     }
 }
 
@@ -314,7 +328,7 @@ mod tests {
         check
             .validate(with)
             .iter()
-            .map(|violation| check.message(action, with, violation))
+            .map(|violation| check.message(action, with, violation, Values::Shown))
             .collect()
     }
 
@@ -330,9 +344,9 @@ mod tests {
     fn each_keyword_has_its_sentence() {
         assert_eq!(
             sole(ActionType::GenerateKey, &json!({"algorithm": "RSA-9999"})),
-            "'with.algorithm' is 'RSA-9999'; expected one of: RSA-2048, RSA-4096, ECDSA-P256, \
-             ECDSA-P384, Ed25519, ML-DSA-44, ML-DSA-65, ML-DSA-87, ML-KEM-512, ML-KEM-768, \
-             ML-KEM-1024, AES-128, AES-256"
+            "'with.algorithm' must be one of: RSA-2048, RSA-4096, ECDSA-P256, ECDSA-P384, \
+             Ed25519, ML-DSA-44, ML-DSA-65, ML-DSA-87, ML-KEM-512, ML-KEM-768, ML-KEM-1024, \
+             AES-128, AES-256, found 'RSA-9999'"
         );
         assert_eq!(
             sole(ActionType::EncryptData, &json!({"scheme": "AES-256-KW"})),
@@ -350,7 +364,7 @@ mod tests {
                 ActionType::SplitSecret,
                 &json!({"threshold": 2, "shares": 101})
             ),
-            "'with.shares' is 101; the most is 100"
+            "'with.shares' must be at most 100, found 101"
         );
         assert_eq!(
             sole(ActionType::CheckValue, &json!({"actual": "x"})),
@@ -369,8 +383,8 @@ mod tests {
                 ActionType::GenerateKey,
                 &json!({"policy": {"usages": ["sign", "fly"]}})
             ),
-            "'with.policy.usages[1]' is 'fly'; expected one of: sign, verify, encrypt, decrypt, \
-             wrap, unwrap, derive"
+            "'with.policy.usages[1]' must be one of: sign, verify, encrypt, decrypt, wrap, \
+             unwrap, derive, found 'fly'"
         );
         assert!(
             sole(
@@ -445,22 +459,22 @@ mod tests {
             (
                 ActionType::SignData,
                 json!({"algorithm": "RSA-PSS-SHA1"}),
-                "expected one of",
+                "must be one of",
             ),
             (
                 ActionType::IssueCertificate,
                 json!({"profile": "wildcard"}),
-                "expected one of",
+                "must be one of",
             ),
             (
                 ActionType::UnwrapKey,
                 json!({"algorithm": "AES-192"}),
-                "expected one of",
+                "must be one of",
             ),
             (
                 ActionType::WrapKey,
                 json!({"scheme": "CMS-RSA-CBC"}),
-                "expected one of",
+                "must be one of",
             ),
             (
                 ActionType::EncryptData,
@@ -499,12 +513,12 @@ mod tests {
             (
                 ActionType::Reveal,
                 json!({"message": "m", "format": "words"}),
-                "expected one of",
+                "must be one of",
             ),
             (
                 ActionType::Reveal,
                 json!({"message": "m", "length": 0}),
-                "the least is 1",
+                "at least 1",
             ),
             (
                 ActionType::Reveal,
@@ -519,7 +533,7 @@ mod tests {
             (
                 ActionType::SplitSecret,
                 json!({"threshold": 1, "shares": 3}),
-                "the least is 2",
+                "at least 2",
             ),
             (
                 ActionType::SplitSecret,
@@ -559,12 +573,12 @@ mod tests {
             (
                 ActionType::OralReadback,
                 json!({"format": "nato_phonetik"}),
-                "expected one of",
+                "must be one of",
             ),
             (
                 ActionType::PivSign,
                 json!({"algorithm": "Ed25519"}),
-                "expected one of",
+                "must be one of",
             ),
             (
                 ActionType::PivReadCertificate,
@@ -574,7 +588,7 @@ mod tests {
             (
                 ActionType::IssueCertificate,
                 json!({"path_len": 300}),
-                "the most is 255",
+                "at most 255",
             ),
             (
                 ActionType::GenerateKey,
@@ -652,6 +666,44 @@ mod tests {
                 Vec::<String>::new(),
                 "{action} {with}"
             );
+        }
+    }
+
+    /// An `x-message` says the rule; the value found follows it as it
+    /// follows a generic one.
+    #[test]
+    fn an_x_message_is_followed_by_the_value_found() {
+        assert_eq!(
+            sole(
+                ActionType::Reveal,
+                &json!({"message": "m", "format": "bip39", "length": 32})
+            ),
+            "'length' counts words for 'bip39', and a phrase has 12, 15, 18, 21 or 24 words, \
+             found 32"
+        );
+    }
+
+    /// An evaluated value may hold a secret an expression copied in, so a
+    /// message about it names the field and the rule only.
+    #[test]
+    fn a_withheld_value_is_never_quoted() {
+        let check = params_check(ActionType::UnwrapKey).unwrap();
+        for with in [
+            json!({"expect_key": "c2VjcmV0LWtleS1tYXRlcmlhbA=="}),
+            json!({"algorithm": "c2VjcmV0LWtleS1tYXRlcmlhbA=="}),
+            json!({"label": 1_234_567}),
+        ] {
+            let found = check.validate(&with);
+            assert!(!found.is_empty(), "{with}");
+            for violation in &found {
+                let message =
+                    check.message(ActionType::UnwrapKey, &with, violation, Values::Withheld);
+                assert!(
+                    !message.contains("c2Vj") && !message.contains("1234567"),
+                    "{message}"
+                );
+                assert!(!message.contains("found"), "{message}");
+            }
         }
     }
 

@@ -57,6 +57,7 @@ use crate::state::{ExecutionState, HandlerContext, StepResult};
 use crate::step_info::StepInfo;
 use crate::system_info::StartupSnapshot;
 use crate::transcript_sink::{TranscriptFingerprint, TranscriptSink};
+use rite_model::validate::Values;
 use rite_model::{ErrorClass, ErrorRecord, Prompt, RetryPolicy, StepFact, StepOutcome};
 
 /// Gather the machine entropy `m` that seeds the ceremony entropy source.
@@ -809,28 +810,23 @@ impl RunBackends<'_> {
     }
 }
 
-/// Run one step, retrying transient failures under operator control.
-///
-/// Each attempt re-acquires the backend handle (it is moved into the handler)
-/// and snapshots the side-effect count beforehand: a transient error is
-/// retriable only if the attempt performed no work on the world yet (the
-/// conservative re-executability gate). Interaction records such as an
-/// answered prompt do not close the gate: a retried attempt simply prompts
-/// again. A retriable error within the step's [`RetryPolicy`] prompts the
-/// operator; any other failure terminates the run.
 /// Check the evaluated `with:` block against the action's schema.
 ///
 /// The resolver checked what was literal; an expression's value is known
-/// only now. It is refused in the same words a literal one would be, before
+/// only now. It is refused under the rule a literal one would break, before
 /// the handler or a backend sees it, so a handler can rely on its params
 /// having the shape the schema describes. Every value is known here, so
 /// nothing is deferred.
+///
+/// The value is evaluated, and may be a secret an expression copied in, so
+/// the message names the field and the rule and never the value: it reaches
+/// the transcript and the screen.
 fn check_params(action: ActionType, params: &serde_json::Value) -> Result<(), ActionError> {
     let check = rite_model::validate::params_check(action)
         .map_err(|error| ActionError::Failed(error.to_string()))?;
     let mut messages: Vec<String> = Vec::new();
     for violation in check.validate(params) {
-        let message = check.message(action, params, &violation);
+        let message = check.message(action, params, &violation, Values::Withheld);
         if !messages.contains(&message) {
             messages.push(message);
         }
@@ -842,6 +838,15 @@ fn check_params(action: ActionType, params: &serde_json::Value) -> Result<(), Ac
     }
 }
 
+/// Run one step, retrying transient failures under operator control.
+///
+/// Each attempt re-acquires the backend handle (it is moved into the handler)
+/// and snapshots the side-effect count beforehand: a transient error is
+/// retriable only if the attempt performed no work on the world yet (the
+/// conservative re-executability gate). Interaction records such as an
+/// answered prompt do not close the gate: a retried attempt simply prompts
+/// again. A retriable error within the step's [`RetryPolicy`] prompts the
+/// operator; any other failure terminates the run.
 fn execute_step_with_retry(
     handler: &dyn Action,
     step: &Step,
@@ -851,6 +856,18 @@ fn execute_step_with_retry(
     reporter: &mut Reporter<'_>,
     backends: &mut RunBackends<'_>,
 ) -> Result<StepResult, ExecutionError> {
+    // The params are the same on every attempt, so they are checked once, and
+    // a refusal is the first attempt's failure, never retried.
+    if let Err(action_err) = check_params(step.action, params) {
+        let exec_err = action_error_to_execution(action_err, &step.id);
+        reporter.fact(StepFact::StepAttemptFailed {
+            step: step.id.clone(),
+            attempt: 1,
+            error: exec_err.to_error_record(),
+        })?;
+        return Err(exec_err);
+    }
+
     let mut attempt: u32 = 1;
     loop {
         let side_effects_before = reporter.side_effects_emitted();
@@ -858,13 +875,12 @@ fn execute_step_with_retry(
         // Backend acquisition is part of the attempt: a failed lazy
         // initialization (device unplugged, daemon down) carries the same
         // retriability semantics as a backend error inside the handler.
-        let attempt_result =
-            check_params(step.action, params).and_then(|()| match &step_info.backend {
-                Some(name) => backends.acquire(name, reporter).and_then(|backend| {
-                    handler.execute(step_info, ctx, params, reporter, Some(backend))
-                }),
-                None => handler.execute(step_info, ctx, params, reporter, None),
-            });
+        let attempt_result = match &step_info.backend {
+            Some(name) => backends.acquire(name, reporter).and_then(|backend| {
+                handler.execute(step_info, ctx, params, reporter, Some(backend))
+            }),
+            None => handler.execute(step_info, ctx, params, reporter, None),
+        };
 
         let action_err = match attempt_result {
             Ok(result) => return Ok(result),
@@ -1840,9 +1856,10 @@ sections:
                 _ => None,
             })
             .expect("the attempt is recorded");
+        // The value is evaluated, and could be a secret, so it is not shown.
         assert_eq!(
             error,
-            "Step 'work' failed: 'with.statement' must be a string, found 3"
+            "Step 'work' failed: 'with.statement' must be a string"
         );
         assert!(
             !facts

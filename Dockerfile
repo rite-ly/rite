@@ -93,6 +93,11 @@ RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-image-${TA
     cargo build --locked --release -p rite $CARGO_BUILD_ARGS && \
     install -D -m 0755 target/release/rite /out/rite
 
+# The glibc binary on its own, for the base ISOs (img/), whose live system is
+# Debian trixie with the libraries it links.
+FROM scratch AS binary-glibc
+COPY --from=builder-image /out/rite /rite
+
 FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS runtime-base
 
 # libssl3 and libpcsclite1 are the shared libraries the glibc image binary links

@@ -7,7 +7,7 @@
 #
 # Example:
 #   docker run --rm --privileged -v "$PWD:/work" rite-img build-iso \
-#       --binary rite-linux-amd64 \
+#       --binary dist/glibc-amd64/rite \
 #       --output rite.iso
 set -euo pipefail
 
@@ -55,7 +55,7 @@ done
 FILE_OUTPUT=$(file "$BINARY")
 case "$FILE_OUTPUT" in
     *"Mach-O"*)
-        die "$BINARY is a macOS binary; pass the Linux rite binary from a rite-<version>-linux-<arch> release archive"
+        die "$BINARY is a macOS binary; pass a Linux rite binary, such as the one docker buildx bake binary-glibc-<arch> builds"
         ;;
 esac
 
@@ -106,6 +106,7 @@ install -D -m 0755 /img/config/mount-outputs        "$CHROOT/usr/lib/rite/mount-
 install -D -m 0644 /img/config/rite-session.service "$CHROOT/etc/systemd/system/rite-session.service"
 install -D -m 0644 /img/config/rite-session.pam     "$CHROOT/etc/pam.d/rite-session"
 install -D -m 0644 /img/config/logind.conf          "$CHROOT/etc/systemd/logind.conf.d/rite.conf"
+install -D -m 0644 /img/config/rite.rules           "$CHROOT/etc/polkit-1/rules.d/10-rite.rules"
 install -D -m 0644 /img/config/foot.ini             "$CHROOT/etc/xdg/foot/foot.ini"
 install -D -m 0644 /img/config/bashrc               "$CHROOT/etc/skel/.bashrc"
 

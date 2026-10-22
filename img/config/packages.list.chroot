@@ -38,3 +38,18 @@ cage
 foot
 foot-terminfo
 fonts-dejavu-core
+
+# Libraries the rite binary links: system OpenSSL and the PC/SC client. The
+# binary is the one from the rite Docker image, built on Debian trixie. Their
+# versions are those Debian serves when the ISO is built, which the release
+# records in the ISO's .packages file.
+libssl3t64
+libpcsclite1
+
+# Smart cards (PIV, YubiKey): pcscd talks to the reader through the CCID
+# driver, and asks polkit whether a client may use it; Debian's policy allows
+# the user of an active local session, which the rite session is. The rule in
+# rite.rules refuses that user every other polkit action.
+pcscd
+libccid
+polkitd

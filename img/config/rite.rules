@@ -1,0 +1,17 @@
+// /etc/polkit-1/rules.d/10-rite.rules
+// The rite user may use smart cards, which Debian's policy allows an active
+// local session. Every other action, such as suspending with key material in
+// memory, is refused without a prompt. Power off and reboot go through the
+// sudoers rule of setup-hook.sh, as root.
+polkit.addRule(function(action, subject) {
+    if (subject.user !== "rite") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    switch (action.id) {
+    case "org.debian.pcsc-lite.access_pcsc":
+    case "org.debian.pcsc-lite.access_card":
+        return polkit.Result.NOT_HANDLED;
+    default:
+        return polkit.Result.NO;
+    }
+});

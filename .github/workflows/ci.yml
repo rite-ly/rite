@@ -34,6 +34,8 @@ jobs:
         run: cargo clippy -p rite-stdlib --features piv,yubikey --all-targets -- -D warnings
       - name: Clippy (pkcs11)
         run: cargo clippy -p rite-pkcs11 --all-targets -- -D warnings
+      - name: Shellcheck (image tooling)
+        run: shellcheck img/*.sh img/lib/*.sh img/auto/* img/config/rite-session img/config/rite-kiosk img/config/mount-outputs img/config/setup-hook.sh
 
   test:
     name: Test
@@ -144,3 +146,71 @@ jobs:
           for f in dist/amd64/rite dist/amd64/rite-ls dist/arm64/rite dist/arm64/rite-ls; do
             file "$f" | tee /dev/stderr | grep -qE 'static(ally|-pie) linked'
           done
+
+  # Runs the commands of docs/development/img.md for both architectures, so a
+  # broken ceremony image shows before a release tag. The release jobs that
+  # publish rite-img and the base ISOs (release.yml) run only on a tag. The
+  # caches are written on main and only read by pull requests.
+  image:
+    name: Image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # The kind of binary the release puts in the ISO, built natively. The
+      # live system must provide the libraries it links, which a static binary
+      # would not check.
+      - name: Build the glibc rite binary
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
+        with:
+          files: ./docker-bake.hcl
+          targets: binary-glibc-${{ matrix.arch }}
+          set: |
+            *.cache-from=type=gha,scope=ci-glibc-${{ matrix.arch }}
+            ${{ github.event_name == 'push' && format('*.cache-to=type=gha,mode=max,scope=ci-glibc-{0}', matrix.arch) || '' }}
+
+      - name: Build the rite-img image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: img
+          tags: rite-img
+          load: true
+          cache-from: type=gha,scope=ci-img-tooling-${{ matrix.arch }}
+          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope=ci-img-tooling-{0}', matrix.arch) || '' }}
+
+      - name: Build the base ISO
+        run: |
+          mkdir -p out
+          docker run --rm --privileged -v "$PWD:/work" rite-img build-iso \
+            --binary dist/glibc-${{ matrix.arch }}/rite --output out/rite.iso
+
+      - name: Add a ceremony
+        run: |
+          docker run --rm -v "$PWD:/work" rite-img build-img \
+            --iso out/rite.iso \
+            --ceremony examples/showcase/demo.rite.yaml \
+            --output out/demo.img
+
+      # docs/development/img.md says build-img is reproducible.
+      - name: Check that build-img is reproducible
+        run: |
+          docker run --rm -v "$PWD:/work" rite-img build-img \
+            --iso out/rite.iso \
+            --ceremony examples/showcase/demo.rite.yaml \
+            --output out/demo-again.img
+          cmp out/demo.img out/demo-again.img
+
+      - name: Read back the outputs partition
+        run: |
+          docker run --rm -v "$PWD:/work" rite-img extract \
+            --image out/demo.img --output out/outputs

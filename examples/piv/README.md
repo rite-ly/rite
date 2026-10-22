@@ -4,8 +4,9 @@ Examples using a PIV smart card, such as a YubiKey. The private key stays on
 the device.
 
 These ceremonies need a `rite` binary built with the `piv` and `yubikey`
-features. The macOS and Windows release binaries (including `brew install rite`)
-and the Docker image (`ghcr.io/rite-ly/rite`) include them. Static musl Linux binaries do not; build from source on Linux:
+features. The macOS and Windows release binaries (including `brew install rite`),
+the Docker image (`ghcr.io/rite-ly/rite`) and the base ISOs for ceremony images
+(`docs/development/img.md`) include them. Static musl Linux binaries do not; build from source on Linux:
 
 ```sh
 cargo build -p rite --features piv,yubikey

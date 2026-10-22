@@ -20,6 +20,7 @@ serve different needs:
 |--------------------------------------------|--------------------|--------------------|-----------------------------------------------|
 | Release tarballs (`rite-*-linux-*.tar.gz`) | musl, fully static | vendored           | no (`piv`/`yubikey` cannot static-link PC/SC) |
 | Docker image (`ghcr.io/rite-ly/rite`)      | glibc              | system (`libssl3`) | yes (`piv`, `yubikey`)                        |
+| Base ISOs (`rite-*-<arch>.iso`)            | glibc, the image's | system (`libssl3`) | yes (`piv`, `yubikey`)                        |
 
 The tarballs stay static for portability across distros (Alpine, older glibc,
 Remote SSH targets). The image runs on a known Debian base, so it links
@@ -46,15 +47,18 @@ Run a single target:
 docker buildx bake binaries-amd64    # x86_64 musl binaries → dist/amd64/
 docker buildx bake binaries-arm64    # aarch64 musl binaries → dist/arm64/
 docker buildx bake image             # multi-arch runtime image (cache only locally)
+docker buildx bake binary-glibc-arm64  # the image's aarch64 binary → dist/glibc-arm64/
 ```
 
 ## Build targets
 
-| Bake target      | Dockerfile stage | Output                                                                                                               |
-|------------------|------------------|----------------------------------------------------------------------------------------------------------------------|
-| `binaries-amd64` | `binaries-amd64` | `dist/amd64/{rite, rite-ls}` (musl static)                                                                           |
-| `binaries-arm64` | `binaries-arm64` | `dist/arm64/{rite, rite-ls}` (musl static)                                                                           |
-| `image`          | `release`        | multi-arch runtime image (`linux/amd64,linux/arm64`), glibc + hardware backends, with SBOM + provenance attestations |
+| Bake target          | Dockerfile stage | Output                                                                                                               |
+|----------------------|------------------|----------------------------------------------------------------------------------------------------------------------|
+| `binaries-amd64`     | `binaries-amd64` | `dist/amd64/{rite, rite-ls}` (musl static)                                                                           |
+| `binaries-arm64`     | `binaries-arm64` | `dist/arm64/{rite, rite-ls}` (musl static)                                                                           |
+| `image`              | `release`        | multi-arch runtime image (`linux/amd64,linux/arm64`), glibc + hardware backends, with SBOM + provenance attestations |
+| `binary-glibc-amd64` | `binary-glibc`   | `dist/glibc-amd64/rite`, the image's binary, for the base ISOs                                                       |
+| `binary-glibc-arm64` | `binary-glibc`   | `dist/glibc-arm64/rite`, the image's binary, for the base ISOs                                                       |
 
 ## Build stages and toolchains
 
@@ -67,7 +71,7 @@ only triggers the stages it needs:
   `CARGO_BUILD_TARGET` pre-set, so a single amd64 host cross-compiles both
   arches with no QEMU for the Rust step. Output is fully static (vendored
   OpenSSL, no libc runtime dependency).
-- **glibc chain** (`builder-image`) feeds the `image` target. It sets no
+- **glibc chain** (`builder-image`) feeds the `image` and `binary-glibc-*` targets. It sets no
   `--platform`, so buildx compiles it once per target platform: amd64 natively,
   arm64 emulated via QEMU. It dynamically links system OpenSSL and `libpcsclite`, which is what
   lets the image carry the `piv`/`yubikey` backends. The emulated arm64 compile

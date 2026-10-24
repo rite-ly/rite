@@ -130,6 +130,8 @@ is the reference.
 - The ceremony session on tty1 and a second terminal on tty2 (see
   [Run the ceremony](#run-the-ceremony)), as the `rite` user.
 - PC/SC (`pcscd`) and the CCID driver, for PIV and YubiKey.
+- CPU microcode updates for AMD and Intel processors (amd64), which the kernel applies
+  at boot.
 - Network: DHCP on every wired link. The image has no wireless support, so the only
   network it can use is a cable the participants can see.
 - A toolbox, which neither `rite` nor the session needs, for the operator's convenience in

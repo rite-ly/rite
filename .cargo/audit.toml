@@ -29,4 +29,29 @@ ignore = [
     #     `RsaPrivateKey`, `decrypt`, and `sign`);
     #   - a fixed release of `rsa` ships (drop this entry and upgrade).
     "RUSTSEC-2023-0071",
+
+    # RUSTSEC-2026-0387: timing variability in `crypto-bigint` operations
+    # intended to be constant-time. Fixed in 0.7.6; the affected 0.5 line has
+    # no fix.
+    #
+    # Why it does not apply here: `crypto-bigint` 0.5 is not a dependency of
+    # this workspace. It arrives only through `yubikey` 0.8, via
+    # `elliptic-curve` 0.13 and `p256`/`p384`, and so only in builds with the
+    # `piv` or `yubikey` feature enabled. The default build and the static
+    # musl release artifacts do not contain it.
+    #
+    # Where it does appear, no secret reaches it: `yubikey` uses the curve
+    # crates only to decode the EC public key a card reports
+    # (`yubikey::piv`) and to verify ECDSA signatures over certificates
+    # (`yubikey::certificate`). Both operate on public values. EC private-key
+    # operations happen on the card.
+    #
+    # Revisit if any of the following becomes true:
+    #   - `p256`, `p384` or `elliptic-curve` becomes a direct dependency of a
+    #     crate in this workspace;
+    #   - `yubikey` gains a software EC private-key code path (grep the
+    #     dependency for `SigningKey`, `SecretKey`, and `diffie_hellman`);
+    #   - a stable `yubikey` release moves to `crypto-bigint` >= 0.7.6 (drop
+    #     this entry and upgrade).
+    "RUSTSEC-2026-0387",
 ]

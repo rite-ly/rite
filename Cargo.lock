@@ -2119,7 +2119,7 @@ dependencies = [
 
 [[package]]
 name = "rite"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "assert_cmd",
  "base16ct 1.0.0",
@@ -2146,7 +2146,7 @@ dependencies = [
 
 [[package]]
 name = "rite-ls"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "dashmap",
  "rite-model",
@@ -2157,7 +2157,7 @@ dependencies = [
 
 [[package]]
 name = "rite-model"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base16ct 1.0.0",
  "base64ct",
@@ -2174,7 +2174,7 @@ dependencies = [
 
 [[package]]
 name = "rite-openssl"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base16ct 1.0.0",
  "openssl",
@@ -2186,7 +2186,7 @@ dependencies = [
 
 [[package]]
 name = "rite-piv"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "der 0.7.10",
  "rite-sdk",
@@ -2197,7 +2197,7 @@ dependencies = [
 
 [[package]]
 name = "rite-pkcs11"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "cryptoki",
  "rite-sdk",
@@ -2205,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "rite-render"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base64ct",
  "chrono",
@@ -2219,7 +2219,7 @@ dependencies = [
 
 [[package]]
 name = "rite-resolver"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "indexmap",
  "marked-yaml",
@@ -2232,7 +2232,7 @@ dependencies = [
 
 [[package]]
 name = "rite-runtime"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base16ct 1.0.0",
  "base32ct",
@@ -2255,7 +2255,7 @@ dependencies = [
 
 [[package]]
 name = "rite-sdk"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base64ct",
  "bitflags",
@@ -2268,7 +2268,7 @@ dependencies = [
 
 [[package]]
 name = "rite-stdlib"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base16ct 1.0.0",
  "chrono",
@@ -2293,7 +2293,7 @@ dependencies = [
 
 [[package]]
 name = "rite-tui"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -2307,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "rite-yubikey"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "rite-piv",
  "rite-sdk",

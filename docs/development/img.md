@@ -132,8 +132,8 @@ is the reference.
 - PC/SC (`pcscd`) and the CCID driver, for PIV and YubiKey.
 - CPU microcode updates for AMD and Intel processors (amd64), which the kernel applies
   at boot.
-- Network: DHCP on every wired link. The image has no wireless support, so the only
-  network it can use is a cable the participants can see.
+- Network: DHCP on every wired link. No Wi-Fi, Bluetooth, NFC or cellular modem driver
+  loads, so the only network it can use is a cable the participants can see.
 - A toolbox, which neither `rite` nor the session needs, for the operator's convenience in
   the second terminal: `openssl`, `jq`, `xxd`, `file`, `nano`, `ip`, `qrencode`,
   `zbarimg`, `gpg`, `ykman`, `pkcs11-tool`, `pcsc_scan`, `python3` and `man`. They are
@@ -316,8 +316,8 @@ The `rite` user has no root access and the image has no `sudo`. polkit lets it p
 machine off and reboot it (`poweroff`, `reboot`, `shutdown`), use smart cards and switch
 terminals, and refuses everything else. No terminal offers a login.
 
-The image gets a network address by DHCP on any wired link, and has no wireless
-support. A ceremony that needs an air gap establishes it physically, by leaving out the
+The image gets a network address by DHCP on any wired link, and loads no radio
+driver. A ceremony that needs an air gap establishes it physically, by leaving out the
 cable, and records it as a witnessed confirmation step, such as `verify_air_gap` in
 `examples/showcase/demo.rite.yaml`.
 

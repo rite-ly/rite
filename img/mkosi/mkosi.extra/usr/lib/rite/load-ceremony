@@ -1,0 +1,60 @@
+#!/bin/bash
+# /usr/lib/rite/load-ceremony
+# Copies the ceremony layer, the rite-ceremony partition build-img adds, from
+# the boot disk into memory, once, records its SHA-256 in
+# /run/rite/ceremony.sha256, checks it holds data only, and puts it in
+# /run/extensions, where systemd-sysext merges it into /usr. Everything later
+# reads that copy, so the bytes the ceremony uses are the bytes hashed. A layer
+# that fails the check is not merged, and /run/rite/ceremony-error says why for
+# the start screen.
+#
+# A base image has no ceremony layer, which is not an error.
+set -euo pipefail
+
+# Prints the first path of the layer outside the files build-img writes, under
+# /usr/share/rite and /usr/lib/extension-release.d: a system extension can
+# replace any file of /usr and /opt, programs root runs included. The file
+# system is the first partition (ceremony.repart.d/10-root.conf), mounted at its
+# offset in the file: partition devices of a loop device would race with udev
+# probing them.
+first_path_outside() {
+    local start layer outside status=0
+    start=$(partx --noheadings --raw --output START --nr 1 "$1") || return 1
+    layer=$(mktemp -d) || return 1
+    if mount -t erofs -o "ro,nosuid,nodev,noexec,offset=$((start * 512))" "$1" "$layer"; then
+        outside=$(cd "$layer" && find . -mindepth 1 \
+            ! -path ./usr ! -path ./usr/share ! -path ./usr/lib \
+            ! -path ./usr/share/rite ! -path './usr/share/rite/*' \
+            ! -path ./usr/lib/extension-release.d ! -path './usr/lib/extension-release.d/*' \
+            -print -quit) || status=1
+        umount "$layer" || status=1
+    else
+        status=1
+    fi
+    rmdir "$layer"
+    [[ $status -eq 0 ]] && echo "${outside#.}"
+}
+
+if ! device=$(/usr/lib/rite/boot-partition rite-ceremony); then
+    echo "No ceremony layer on the boot disk."
+    exit 0
+fi
+
+mkdir -p /run/extensions /run/rite
+cat "$device" > /run/rite/ceremony.raw
+chmod 0444 /run/rite/ceremony.raw
+sha256sum /run/rite/ceremony.raw | cut -d' ' -f1 > /run/rite/ceremony.sha256
+
+if ! outside=$(first_path_outside /run/rite/ceremony.raw); then
+    error="the ceremony layer could not be read"
+elif [[ -n "$outside" ]]; then
+    error="the ceremony layer has files outside /usr/share/rite, such as $outside"
+else
+    mv /run/rite/ceremony.raw /run/extensions/ceremony.raw
+    echo "Ceremony layer loaded from $device: sha256 $(cat /run/rite/ceremony.sha256)"
+    exit 0
+fi
+rm -f /run/rite/ceremony.raw
+echo "$error" > /run/rite/ceremony-error
+echo "Ceremony layer not merged: $error" >&2
+exit 1

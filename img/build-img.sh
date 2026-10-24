@@ -1,17 +1,17 @@
 #!/bin/bash
 # img/build-img.sh
-# Layer one or more ceremonies onto a base ISO and emit a flashable .img.
+# Add one or more ceremonies to a base image and emit a flashable .img.
 # Runs inside the rite-img container.
 #
 # Needs no privileges: nothing is mounted or attached to a loop device. The
-# output is reproducible: the same base ISO, ceremonies and materials give the
-# same image, byte for byte.
+# output is reproducible: the same base image, ceremonies and materials give
+# the same image, byte for byte.
 #
 # Prints the image's hashes on stdout, one per line; progress goes to stderr.
 #
 # Example:
 #   docker run --rm -v "$PWD:/work" rite-img build-img \
-#       --iso rite.iso \
+#       --base rite-base.img \
 #       --ceremony sub_ca.rite.yaml \
 #       --material transport_public.pem \
 #       --output sub_ca.img
@@ -28,13 +28,13 @@ usage() {
 Usage: build-img [OPTIONS]
 
 Required:
-  --iso FILE          Base ISO (from build-iso).
+  --base FILE         Base image (from build-base), as .img or .img.xz.
   --ceremony FILE     Ceremony YAML file (repeatable).
   --output FILE       Output image file (.img).
 
 Optional:
   --material FILE     File a ceremony reads (repeatable).
-  --verbose           Show the output of xorriso.
+  --verbose           Show the output of systemd-repart and sfdisk.
   -h, --help          Show this help.
 
 Inputs keep their paths relative to the common ancestor directory of the
@@ -49,14 +49,14 @@ Prints one line per hash on stdout:
 EOF
 }
 
-ISO_FILE=""
+BASE_IMAGE=""
 OUTPUT_FILE=""
 CEREMONIES=()
 MATERIALS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --iso)      need_value "$@"; ISO_FILE="$2";      shift 2 ;;
+        --base)     need_value "$@"; BASE_IMAGE="$2";    shift 2 ;;
         --ceremony) need_value "$@"; CEREMONIES+=("$2"); shift 2 ;;
         --material) need_value "$@"; MATERIALS+=("$2");  shift 2 ;;
         --output)   need_value "$@"; OUTPUT_FILE="$2";   shift 2 ;;
@@ -66,10 +66,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n "$ISO_FILE" ]]          || usage_error "--iso is required"
+[[ -n "$BASE_IMAGE" ]]        || usage_error "--base is required"
 [[ ${#CEREMONIES[@]} -gt 0 ]] || usage_error "--ceremony is required"
 [[ -n "$OUTPUT_FILE" ]]       || usage_error "--output is required"
-[[ -f "$ISO_FILE" ]]          || die "ISO file not found: $ISO_FILE"
+[[ -f "$BASE_IMAGE" ]]        || die "base image not found: $BASE_IMAGE"
 for ceremony in "${CEREMONIES[@]}"; do
     [[ -f "$ceremony" ]] || die "ceremony file not found: $ceremony"
 done
@@ -81,15 +81,15 @@ done
 
 # A definition names its files by paths relative to its own directory
 # (path: "test_keys/escrow_public.pem"). Every input keeps its path relative to
-# BASE, the common ancestor directory of the ceremony files, so those relative
-# paths still resolve in /rite/inputs. With one ceremony, BASE is its directory.
-# realpath -s keeps symlinks as they are: a symlinked input sits at the path the
-# definition uses, not at its target's.
-BASE=$(dirname "$(realpath -s "${CEREMONIES[0]}")")
+# INPUT_ROOT, the common ancestor directory of the ceremony files, so those
+# relative paths still resolve in /rite/inputs. With one ceremony, INPUT_ROOT is
+# its directory. realpath -s keeps symlinks as they are: a symlinked input sits
+# at the path the definition uses, not at its target's.
+INPUT_ROOT=$(dirname "$(realpath -s "${CEREMONIES[0]}")")
 for ceremony in "${CEREMONIES[@]}"; do
     dir=$(dirname "$(realpath -s "$ceremony")")
-    until [[ "$dir/" == "${BASE%/}/"* ]]; do
-        BASE=$(dirname "$BASE")
+    until [[ "$dir/" == "${INPUT_ROOT%/}/"* ]]; do
+        INPUT_ROOT=$(dirname "$INPUT_ROOT")
     done
 done
 
@@ -98,8 +98,8 @@ MATERIAL_PATHS=()
 declare -A SEEN=()
 add_input() {
     local file=$1 rel
-    rel=$(realpath -s --relative-to="$BASE" "$file")
-    [[ "$rel" != ../* ]] || die "$file is outside the ceremonies' directory ($BASE)"
+    rel=$(realpath -s --relative-to="$INPUT_ROOT" "$file")
+    [[ "$rel" != ../* ]] || die "$file is outside the ceremonies' directory ($INPUT_ROOT)"
     [[ -z "${SEEN[$rel]:-}" ]] || die "input $rel is given twice"
     SEEN[$rel]=1
     INPUT_PATH=$rel
@@ -118,83 +118,117 @@ done
 TEMP_DIR=$(mktemp -d -p "$(dirname "$OUTPUT_FILE")" .build-img.XXXXXX)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
-# Ceremony layer. The inputs go in /rite/inputs, and /rite/ceremonies lists
-# the ceremony files in the order given, for the session's start screen.
-# Modes, owner, timestamps and xattrs are fixed, so the layer depends only on
-# the file contents and names, and the session user can read every file.
+IMG_TMP="$TEMP_DIR/output.img"
+case "$BASE_IMAGE" in
+    *.xz) note "Decompressing the base image."
+          xz -dc "$BASE_IMAGE" > "$IMG_TMP" || die "cannot decompress $BASE_IMAGE" ;;
+    *)    cp "$BASE_IMAGE" "$IMG_TMP" ;;
+esac
+
+# The base's root partition type names its architecture, which the layer's
+# partition type must match for systemd-sysext to use it.
+PART_TYPES=$(partx -g -o TYPE "$IMG_TMP" 2>/dev/null || true)
+case "$PART_TYPES" in
+    *b921b045-1df0-41c3-af44-4c6f280d3fae*) ARCH=arm64 ;;
+    *4f68bce3-e8cd-4db1-96e7-fbcaf984b709*) ARCH=x86-64 ;;
+    *) die "$BASE_IMAGE is not a base image from build-base (no arm64 or x86-64 root partition)" ;;
+esac
+if partx -g -o NAME "$IMG_TMP" | grep -qxF -e rite-ceremony -e RITE-OUT; then
+    die "$BASE_IMAGE already holds a ceremony; pass the base image from build-base"
+fi
+
+# Ceremony layer: a system extension image, which systemd-sysext merges into
+# /usr at boot. The inputs go in /usr/share/rite/inputs, and
+# /usr/share/rite/ceremonies lists the ceremony files in the order given, for
+# the session's start screen; the base links /rite/inputs and /rite/ceremonies
+# there. extension-release names the extension "ceremony" and accepts any
+# host, since the layer holds data only. Modes, owner and timestamps are fixed,
+# so the layer depends only on the file contents and names, and the session
+# user can read every file.
 note "Building the ceremony layer."
-LAYER="$TEMP_DIR/layer"
-install -d -m 0755 "$LAYER/rite" "$LAYER/rite/inputs"
+TREE="$TEMP_DIR/tree"
+SHARE="$TREE/usr/share/rite"
+install -d -m 0755 "$SHARE/inputs" "$TREE/usr/lib/extension-release.d"
 for rel in "${CEREMONY_PATHS[@]}" "${MATERIAL_PATHS[@]}"; do
-    install -d -m 0755 "$LAYER/rite/inputs/$(dirname "$rel")"
-    install -m 0644 "$BASE/$rel" "$LAYER/rite/inputs/$rel"
+    install -d -m 0755 "$SHARE/inputs/$(dirname "$rel")"
+    install -m 0644 "$INPUT_ROOT/$rel" "$SHARE/inputs/$rel"
 done
-printf '/rite/inputs/%s\n' "${CEREMONY_PATHS[@]}" > "$LAYER/rite/ceremonies"
+printf '/rite/inputs/%s\n' "${CEREMONY_PATHS[@]}" > "$SHARE/ceremonies"
+echo "ID=_any" > "$TREE/usr/lib/extension-release.d/extension-release.ceremony"
 # install -d sets the mode of the last directory only; the parents it creates,
 # and the mktemp directory itself, take other modes.
-chmod -R u=rwX,go=rX "$LAYER"
+chmod -R u=rwX,go=rX "$TREE"
+find "$TREE" -exec touch -h -d @0 {} +
 
-CEREMONY_SQUASHFS="$TEMP_DIR/ceremony.squashfs"
-quietly mksquashfs "$LAYER" "$CEREMONY_SQUASHFS" \
-    -comp xz -all-root -no-xattrs -mkfs-time 0 -all-time 0 -no-progress
+# EROFS with dm-verity hashes, in a GPT image of its own. The seed fixes the
+# partition UUIDs and the verity salt.
+LAYER="$TEMP_DIR/layer.raw"
+SOURCE_DATE_EPOCH=0 quietly systemd-repart \
+    --empty=create --size=auto --offline=yes \
+    --architecture="$ARCH" \
+    --seed=7d1c3d0e-2b8f-4a55-9c1e-0f4a6b2d8e31 \
+    --definitions=/img/ceremony.repart.d \
+    --copy-source="$TREE" \
+    "$LAYER"
+LAYER_SHA=$(sha256sum "$LAYER" | cut -d' ' -f1)
 
-# live-boot stacks the images listed here, bottom first. Entries are bare file
-# names; live-boot prepends the live medium's /live/ directory.
-FILESYSTEM_MODULE="$TEMP_DIR/filesystem.module"
-printf '%s\n' filesystem.squashfs ceremony.squashfs > "$FILESYSTEM_MODULE"
+# A UUID derived from the layer, so the same inputs give the same image and two
+# ceremonies give different ones.
+uuid_of() {
+    sha256sum <<<"$1" | sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12}).*/\1-\2-\3-\4-\5/'
+}
 
-# EFI system partition. The ISO boots through its El Torito EFI image, which
-# firmware finds on optical media and on some USB disks. A copy of that image as
-# an MBR partition of type 0xef is what other firmware looks for on a USB disk.
-quietly xorriso -osirrox on -indev "$ISO_FILE" -extract /boot/grub/efi.img "$TEMP_DIR/efi.img"
+# The partitions. The image grows by the layer and the outputs partition, the
+# backup GPT moves to the new end, and both partitions are added after the
+# base's, whose contents stay byte for byte as built. The layer partition holds
+# a Linux file system type, so nothing mounts it on its own; the outputs
+# partition is a Microsoft basic data partition, which Linux, macOS and Windows
+# mount. The disk GUID changes too: it is the same in every image of a base, and
+# Windows rewrites a disk GUID that clashes with another disk's, which would
+# change the system hash below.
+note "Writing the image."
+LAYER_MB=$(( ($(stat -c %s "$LAYER") + 1048575) / 1048576 ))
+truncate -s "+$((LAYER_MB + OUTPUTS_PARTITION_SIZE_MB + 1))M" "$IMG_TMP"
+quietly sfdisk --relocate gpt-bak-std "$IMG_TMP"
+quietly sfdisk --disk-id "$IMG_TMP" "$(uuid_of "disk:$LAYER_SHA")"
+printf 'size=%sMiB, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=%s, name="rite-ceremony"\n' \
+    "$LAYER_MB" "$(uuid_of "ceremony:$LAYER_SHA")" \
+    | quietly sfdisk --append "$IMG_TMP"
+printf 'size=%sMiB, type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7, uuid=%s, name="RITE-OUT"\n' \
+    "$OUTPUTS_PARTITION_SIZE_MB" "$(uuid_of "outputs:$LAYER_SHA")" \
+    | quietly sfdisk --append "$IMG_TMP"
+
+# Start and length, in 512-byte sectors, of the partition with the given name.
+partition() {
+    partx -g -o START,SECTORS,NAME "$IMG_TMP" | awk -v name="$1" '$3 == name { print $1, $2 }'
+}
+read -r LAYER_START LAYER_SECTORS < <(partition rite-ceremony)
+read -r OUTPUTS_START OUTPUTS_SECTORS < <(partition RITE-OUT)
+
+# The layer is padded to its partition, because the system loads and hashes
+# the whole partition at boot; the layer hash below is the one it records.
+truncate -s $((LAYER_SECTORS * 512)) "$LAYER"
+dd if="$LAYER" of="$IMG_TMP" bs=512 seek="$LAYER_START" conv=notrunc status=none
 
 # Outputs partition: FAT32 reads and writes on Linux, macOS and Windows without
 # drivers, so the outputs are visible when the stick is plugged into any machine.
 # --invariant fixes the volume ID and timestamps mkfs.fat would otherwise take
 # from the random generator and the clock.
 OUTPUTS_IMG="$TEMP_DIR/outputs.img"
-truncate -s "${OUTPUTS_PARTITION_SIZE_MB}M" "$OUTPUTS_IMG"
-quietly mkfs.fat --invariant -F 32 -n "RITE-OUT" "$OUTPUTS_IMG"
-
-# Repack the ISO. Order follows https://wiki.debian.org/RepackBootableISO:
-# -map adds the files, -boot_image any replay keeps the boot records, and
-# -append_partition adds partitions after the ISO data in an MBR partition
-# table: 2 is the EFI system partition, 3 the outputs partition (type 0x0c,
-# FAT32 LBA). SOURCE_DATE_EPOCH fixes the ISO's own timestamps, and the added
-# files get a fixed mode and mtime because xorriso records them.
-note "Writing the image."
-chmod 0644 "$CEREMONY_SQUASHFS" "$FILESYSTEM_MODULE"
-touch -d @0 "$CEREMONY_SQUASHFS" "$FILESYSTEM_MODULE"
-IMG_TMP="$TEMP_DIR/output.img"
-SOURCE_DATE_EPOCH=0 quietly xorriso -indev "$ISO_FILE" \
-    -outdev "$IMG_TMP" \
-    -map "$CEREMONY_SQUASHFS" /live/ceremony.squashfs \
-    -map "$FILESYSTEM_MODULE" /live/filesystem.module \
-    -boot_image any replay \
-    -append_partition 2 0xef "$TEMP_DIR/efi.img" \
-    -append_partition 3 0x0c "$OUTPUTS_IMG" \
-    -end
-
-# Disk signature. xorriso leaves the MBR's 32-bit disk signature at zero, and
-# Windows may write one of its own into a disk that has none, which would change
-# the system hash below. The first bytes of the layer hash keep the image
-# reproducible and differ between ceremonies.
-SIG=$(sha256sum "$CEREMONY_SQUASHFS" | cut -c1-8)
-printf '%b' "\\x${SIG:0:2}\\x${SIG:2:2}\\x${SIG:4:2}\\x${SIG:6:2}" \
-    | dd of="$IMG_TMP" bs=1 seek=440 conv=notrunc status=none
+quietly mkfs.fat --invariant -F 32 -n RITE-OUT -C "$OUTPUTS_IMG" $((OUTPUTS_SECTORS / 2))
+dd if="$OUTPUTS_IMG" of="$IMG_TMP" bs=512 seek="$OUTPUTS_START" conv=notrunc status=none
 
 # Everything before the outputs partition, the part of a written stick that a
 # ceremony leaves unchanged. Plugging the stick into a machine may write to the
 # outputs partition (macOS adds .fseventsd), so participants compare this part.
-SYSTEM_SECTORS=$(partx -g -o START -n 3 "$IMG_TMP" | tr -d ' ')
-SYSTEM_BYTES=$((SYSTEM_SECTORS * 512))
+SYSTEM_BYTES=$((OUTPUTS_START * 512))
 SYSTEM_HASH=$(head -c "$SYSTEM_BYTES" "$IMG_TMP" | sha256sum | cut -d' ' -f1)
 
 mv "$IMG_TMP" "$OUTPUT_FILE"
 
 echo "image     sha256:$(sha256sum "$OUTPUT_FILE" | cut -d' ' -f1)  $OUTPUT_FILE"
 echo "system    sha256:$SYSTEM_HASH  $SYSTEM_BYTES"
-echo "layer     sha256:$(sha256sum "$CEREMONY_SQUASHFS" | cut -d' ' -f1)"
+echo "layer     sha256:$(sha256sum "$LAYER" | cut -d' ' -f1)"
 for rel in "${CEREMONY_PATHS[@]}"; do
-    echo "ceremony  sha256:$(sha256sum "$BASE/$rel" | cut -d' ' -f1)  /rite/inputs/$rel"
+    echo "ceremony  sha256:$(sha256sum "$INPUT_ROOT/$rel" | cut -d' ' -f1)  /rite/inputs/$rel"
 done

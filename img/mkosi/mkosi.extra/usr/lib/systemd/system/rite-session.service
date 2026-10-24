@@ -12,7 +12,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 ExecStartPre=+/usr/lib/rite/mount-outputs
-ExecStart=/usr/lib/rite/rite-kiosk
+ExecStart=/usr/lib/rite/rite-kiosk /usr/lib/rite/rite-session
 Restart=always
 RestartSec=1
 User=rite

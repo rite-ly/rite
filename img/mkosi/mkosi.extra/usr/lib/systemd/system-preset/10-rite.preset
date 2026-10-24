@@ -1,0 +1,6 @@
+# Units of the ceremony image. mkosi applies the presets at the end of the
+# build (systemctl preset-all); Debian's default enables every other unit,
+# systemd-networkd and systemd-resolved among them.
+enable rite-session.service
+enable rite-shell.service
+enable rite-ceremony-load.service

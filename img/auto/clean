@@ -1,7 +1,0 @@
-#!/bin/bash
-# img/auto/clean
-# Live-build clean script
-
-set -e
-
-lb clean noauto "${@}"

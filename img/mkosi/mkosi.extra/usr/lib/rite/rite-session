@@ -35,8 +35,13 @@ fi
 # The SHA-256 shown is the digest the transcript records for the definition.
 case ${#CEREMONIES[@]} in
     0)
-        echo "No ceremony on this medium. It was booted from a base ISO, or the"
-        echo "image was not built with build-img."
+        if [[ -s /run/rite/ceremony-error ]]; then
+            echo "WARNING: the ceremony layer on this medium was not loaded:"
+            echo "  $(cat /run/rite/ceremony-error)"
+        else
+            echo "No ceremony on this medium. It was booted from a base image, or the"
+            echo "image was not built with build-img."
+        fi
         ;;
     1)
         echo "Ceremony:  ${CEREMONIES[0]}"
@@ -63,6 +68,8 @@ elif [[ -s /run/rite/outputs-error ]]; then
 else
     echo "WARNING: no RITE-OUT partition. Outputs in $OUTPUTS are lost at power off."
 fi
+echo ""
+echo "Terminals: Ctrl+Alt+F2 opens a second terminal, Ctrl+Alt+F1 returns here."
 echo ""
 
 case ${#CEREMONIES[@]} in

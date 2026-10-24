@@ -2,49 +2,65 @@
 # Single image that builds Rite ceremony images.
 #
 # Subcommands (dispatched by entrypoint.sh):
-#   build-iso   Assemble a base Debian Live ISO with the rite binary.
-#               Needs --privileged (live-build mounts inside its chroot).
-#   build-img   Layer a ceremony onto a base ISO and emit a flashable .img.
+#   build-base  Build the base image: Debian, the rite binary and the ceremony
+#               session. Needs --privileged (mkosi mounts inside its build
+#               tree).
+#   build-img   Add a ceremony to a base image and emit a flashable .img.
 #   extract     Copy ceremony outputs out of a .img.
 #
-# The three share one image because they need the same tooling (live-build,
-# squashfs-tools, xorriso, dosfstools, mtools).
+# The three share one image because they need the same tooling (systemd-repart,
+# dosfstools, mtools).
 
 FROM debian:trixie-20261005@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
 
-ARG TARGETARCH
-
-RUN apt-get update && apt-get install -y \
-    live-build \
-    debootstrap \
-    file \
-    squashfs-tools \
-    xorriso \
-    mtools \
+# The tools mkosi drives, from Debian. build-img and extract use systemd-repart,
+# fdisk, dosfstools and mtools on their own.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    ca-certificates \
+    python3 \
+    python3-pefile \
+    apt \
+    dpkg \
+    debian-archive-keyring \
+    systemd-repart \
+    systemd-ukify \
+    systemd-boot \
+    systemd-boot-efi \
+    udev \
+    cryptsetup-bin \
+    erofs-utils \
     dosfstools \
+    mtools \
     fdisk \
     util-linux \
+    file \
+    kmod \
+    cpio \
     zstd \
-    && if [ "$TARGETARCH" = "arm64" ]; then \
-         apt-get install -y grub-efi-arm64-bin; \
-       else \
-         apt-get install -y grub-efi-amd64-bin; \
-       fi \
+    xz-utils \
+    bubblewrap \
+    uidmap \
     && rm -rf /var/lib/apt/lists/*
 
-# live-build's working directory, where build-iso writes its configuration and
-# the build tree.
-RUN mkdir /iso-build
+# mkosi 27.1, pinned by commit. It is pure Python and runs from the checkout;
+# Debian trixie packages an older version.
+ARG MKOSI_COMMIT=ecf7f5702bb2052b7a69cab3fe7d37bc3b9ad77b
+RUN git init -q /opt/mkosi \
+    && git -C /opt/mkosi fetch -q --depth 1 https://github.com/systemd/mkosi.git "$MKOSI_COMMIT" \
+    && git -C /opt/mkosi checkout -q FETCH_HEAD \
+    && rm -rf /opt/mkosi/.git \
+    && ln -s /opt/mkosi/bin/mkosi /usr/local/bin/mkosi
 
 # The commands run from /work, where the examples mount the current directory,
 # so relative paths given to them, and printed back, are the same inside the
 # container and on the host.
 WORKDIR /work
 
-COPY lib/    /img/lib/
-COPY auto/   /img/auto/
-COPY config/ /img/config/
-COPY entrypoint.sh build-iso.sh build-img.sh extract-outputs.sh /img/
-RUN chmod +x /img/*.sh /img/auto/*
+COPY lib/              /img/lib/
+COPY mkosi/            /img/mkosi/
+COPY ceremony.repart.d/ /img/ceremony.repart.d/
+COPY entrypoint.sh build-base.sh build-img.sh extract-outputs.sh /img/
+RUN chmod +x /img/*.sh
 
 ENTRYPOINT ["/img/entrypoint.sh"]

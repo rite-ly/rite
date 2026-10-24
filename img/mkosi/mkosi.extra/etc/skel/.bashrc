@@ -7,5 +7,3 @@
 . /usr/share/bash-completion/bash_completion
 
 PS1='rite:\w\$ '
-alias poweroff='sudo systemctl poweroff'
-alias reboot='sudo systemctl reboot'

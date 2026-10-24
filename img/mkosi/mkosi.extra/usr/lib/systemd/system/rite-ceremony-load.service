@@ -1,0 +1,14 @@
+# Runs load-ceremony before systemd-sysext merges the system extensions.
+[Unit]
+Description=Load the ceremony layer into memory
+DefaultDependencies=no
+After=systemd-udev-trigger.service
+Before=systemd-sysext.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/rite/load-ceremony
+
+[Install]
+WantedBy=systemd-sysext.service

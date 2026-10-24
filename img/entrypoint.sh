@@ -8,8 +8,8 @@ usage() {
 Usage: docker run [--privileged] rite-img <command> [options]
 
 Commands:
-  build-iso     Build a base Rite ceremony ISO (needs --privileged).
-  build-img     Layer ceremonies onto an ISO, produce a flashable .img.
+  build-base    Build a base Rite ceremony image (needs --privileged).
+  build-img     Add ceremonies to a base image, produce a flashable .img.
   extract       Copy ceremony outputs out of a .img.
 
 Run any command with --help for its own options.
@@ -25,9 +25,9 @@ cmd="$1"
 shift
 
 case "$cmd" in
-    build-iso) exec /img/build-iso.sh "$@" ;;
-    build-img) exec /img/build-img.sh "$@" ;;
-    extract)   exec /img/extract-outputs.sh "$@" ;;
+    build-base) exec /img/build-base.sh "$@" ;;
+    build-img)  exec /img/build-img.sh "$@" ;;
+    extract)    exec /img/extract-outputs.sh "$@" ;;
     -h|--help|help) usage ;;
     *)
         echo "rite-img: unknown command: $cmd" >&2

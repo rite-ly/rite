@@ -35,7 +35,7 @@ jobs:
       - name: Clippy (pkcs11)
         run: cargo clippy -p rite-pkcs11 --all-targets -- -D warnings
       - name: Shellcheck (image tooling)
-        run: shellcheck img/*.sh img/lib/*.sh img/auto/* img/config/rite-session img/config/rite-kiosk img/config/mount-outputs img/config/setup-hook.sh
+        run: shellcheck img/*.sh img/lib/*.sh img/mkosi/mkosi.postinst.chroot img/mkosi/mkosi.finalize img/mkosi/mkosi.extra/usr/lib/rite/*
 
   test:
     name: Test
@@ -149,7 +149,7 @@ jobs:
 
   # Runs the commands of docs/development/img.md for both architectures, so a
   # broken ceremony image shows before a release tag. The release jobs that
-  # publish rite-img and the base ISOs (release.yml) run only on a tag. The
+  # publish rite-img and the base images (release.yml) run only on a tag. The
   # caches are written on main and only read by pull requests.
   image:
     name: Image (${{ matrix.arch }})
@@ -167,7 +167,7 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # The kind of binary the release puts in the ISO, built natively. The
+      # The kind of binary the release puts in the base image, built natively. The
       # live system must provide the libraries it links, which a static binary
       # would not check.
       - name: Build the glibc rite binary
@@ -188,16 +188,16 @@ jobs:
           cache-from: type=gha,scope=ci-img-tooling-${{ matrix.arch }}
           cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope=ci-img-tooling-{0}', matrix.arch) || '' }}
 
-      - name: Build the base ISO
+      - name: Build the base image
         run: |
           mkdir -p out
-          docker run --rm --privileged -v "$PWD:/work" rite-img build-iso \
-            --binary dist/glibc-${{ matrix.arch }}/rite --output out/rite.iso
+          docker run --rm --privileged -v "$PWD:/work" rite-img build-base \
+            --binary dist/glibc-${{ matrix.arch }}/rite --output out/base.img
 
       - name: Add a ceremony
         run: |
           docker run --rm -v "$PWD:/work" rite-img build-img \
-            --iso out/rite.iso \
+            --base out/base.img \
             --ceremony examples/showcase/demo.rite.yaml \
             --output out/demo.img
 
@@ -205,7 +205,7 @@ jobs:
       - name: Check that build-img is reproducible
         run: |
           docker run --rm -v "$PWD:/work" rite-img build-img \
-            --iso out/rite.iso \
+            --base out/base.img \
             --ceremony examples/showcase/demo.rite.yaml \
             --output out/demo-again.img
           cmp out/demo.img out/demo-again.img

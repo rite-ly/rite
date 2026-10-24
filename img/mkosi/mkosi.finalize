@@ -1,0 +1,10 @@
+#!/bin/sh
+# img/mkosi/mkosi.finalize
+# Runs on the image tree at the end of build-base, before mkosi adds the UKI
+# and makes the partitions.
+set -eu
+
+# systemd-boot titles the boot entries from PRETTY_NAME: "Rite Ceremony", and
+# "Rite Ceremony (safe mode)" for the second profile of the UKI. The other
+# fields still name Debian.
+sed -i 's/^PRETTY_NAME=.*/PRETTY_NAME="Rite Ceremony"/' "$BUILDROOT/usr/lib/os-release"

@@ -49,13 +49,10 @@ done
 [[ -n "$OUTPUT_DIR" ]] || usage_error "--output is required"
 [[ -f "$IMAGE" ]]      || die "image file not found: $IMAGE"
 
-# build-img appends the outputs partition as partition 3.
-START=$(partx -g -o START -n 3 "$IMAGE" 2>/dev/null | tr -d ' ' || true)
-[[ -n "$START" ]] || die "$IMAGE has no partition 3; was it built with build-img?"
+# build-img names the outputs partition RITE-OUT in the partition table.
+START=$(partx -g -o START,NAME "$IMAGE" 2>/dev/null | awk '$2 == "RITE-OUT" { print $1; exit }' || true)
+[[ -n "$START" ]] || die "$IMAGE has no RITE-OUT partition; was it built with build-img?"
 OFFSET=$((START * 512))
-
-LABEL=$(blkid -p -O "$OFFSET" -s LABEL -o value "$IMAGE" 2>/dev/null || true)
-[[ "$LABEL" == "RITE-OUT" ]] || die "partition 3 of $IMAGE is not labelled RITE-OUT (found '$LABEL')"
 
 # The output directory must be new or empty, so the outputs of two images never
 # mix and nothing already there is overwritten.

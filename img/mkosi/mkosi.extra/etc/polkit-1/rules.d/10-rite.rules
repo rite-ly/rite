@@ -1,0 +1,30 @@
+// /etc/polkit-1/rules.d/10-rite.rules
+// The rite user may use smart cards, switch terminals, power the machine off
+// and reboot it. Every other action, such as suspending with key material in
+// memory, is refused without a prompt. The rite user has no other privilege.
+//
+// Debian's policy allows smart cards to the active session only. The rite user
+// has two sessions, the ceremony on tty1 and the shell on tty2, and a ceremony
+// keeps using its card while the operator is on the other terminal, so both are
+// allowed. Switching terminals (cage, through logind) keeps Debian's policy,
+// which allows the active session. poweroff, reboot and shutdown ask logind,
+// which asks for the multiple-sessions action when another session is open, as
+// the second terminal is.
+polkit.addRule(function(action, subject) {
+    if (subject.user !== "rite") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    switch (action.id) {
+    case "org.debian.pcsc-lite.access_pcsc":
+    case "org.debian.pcsc-lite.access_card":
+    case "org.freedesktop.login1.power-off":
+    case "org.freedesktop.login1.power-off-multiple-sessions":
+    case "org.freedesktop.login1.reboot":
+    case "org.freedesktop.login1.reboot-multiple-sessions":
+        return polkit.Result.YES;
+    case "org.freedesktop.login1.chvt":
+        return polkit.Result.NOT_HANDLED;
+    default:
+        return polkit.Result.NO;
+    }
+});

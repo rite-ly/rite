@@ -1,0 +1,9 @@
+# /etc/systemd/network/80-rite-dhcp.network
+# Every wired link gets an address by DHCP, as on a desktop system. A ceremony
+# that needs an air gap establishes it physically, by leaving the cable out,
+# and records it as a witnessed step.
+[Match]
+Type=ether
+
+[Network]
+DHCP=yes

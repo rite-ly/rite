@@ -1,0 +1,20 @@
+#!/bin/bash
+# /usr/lib/rite/rite-shell
+# The second terminal, on tty2: a shell next to the ceremony session on tty1,
+# starting in the outputs directory as the session's shell does. Leaving the
+# shell ends it, and rite-shell.service starts it again.
+#
+# Ctrl-C ends whatever runs in the foreground, not this script: rite-kiosk takes
+# any non-zero status from it for a display failure.
+trap ':' INT
+
+cd /rite/outputs || cd ~ || exit 0
+clear
+if [[ -n "${RITE_SESSION_NOTICE:-}" ]]; then
+    echo "$RITE_SESSION_NOTICE"
+    echo ""
+fi
+echo "Second terminal. Ctrl+Alt+F1 returns to the ceremony session."
+echo ""
+bash
+exit 0

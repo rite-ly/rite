@@ -1,0 +1,28 @@
+#!/bin/bash
+# /usr/lib/rite/boot-partition NAME
+# Prints the device of the partition named NAME in the partition table of the
+# disk the system booted from, such as /dev/sda5. Exits 1 when there is none,
+# or when the root is not a dm-verity device.
+#
+# The boot disk is the disk of the partition under the verified root. The
+# ceremony layer and RITE-OUT are looked up there, not by name across all
+# disks: with a second ceremony stick plugged in, a name lookup could find that
+# stick's partitions instead. veritysetup names the root's data partition, and
+# its parent (PKNAME) is the boot disk.
+#
+# The names are read from the partition table with blkid -p, not from udev,
+# which may not have processed the disk yet early in the boot.
+
+name=$1
+
+data=$(veritysetup status root 2>/dev/null | awk '$1 == "data" && $2 == "device:" { print $3 }')
+[[ -n "$data" ]] || exit 1
+disk=/dev/$(lsblk -ndo PKNAME "$data")
+
+for part in $(lsblk -nrpo NAME,TYPE "$disk" | awk '$2 == "part" { print $1 }'); do
+    if [[ "$(blkid -p -s PART_ENTRY_NAME -o value "$part" 2>/dev/null)" == "$name" ]]; then
+        echo "$part"
+        exit 0
+    fi
+done
+exit 1

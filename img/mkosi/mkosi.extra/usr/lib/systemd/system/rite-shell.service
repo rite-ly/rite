@@ -1,0 +1,31 @@
+# The second terminal on tty2, run as the rite user: a shell in cage + foot, or
+# on the text console, as the session on tty1 is. It starts after the session,
+# whose start mounts the outputs partition. It restarts when the operator
+# leaves its shell, with no start limit.
+[Unit]
+Description=Rite second terminal
+After=rite-session.service systemd-user-sessions.service dbus.socket systemd-logind.service
+Wants=dbus.socket systemd-logind.service
+ConditionPathExists=/dev/tty2
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/rite/rite-kiosk /usr/lib/rite/rite-shell
+Restart=always
+RestartSec=1
+User=rite
+WorkingDirectory=~
+PAMName=rite-session
+TTYPath=/dev/tty2
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=tty
+StandardError=tty
+UtmpIdentifier=tty2
+UtmpMode=user
+
+[Install]
+WantedBy=multi-user.target

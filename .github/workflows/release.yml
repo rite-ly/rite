@@ -165,7 +165,7 @@ jobs:
   #   libpcsclite and system OpenSSL, so the image carries the piv/yubikey
   #   backends.
   # - rite-img: the tools that build ceremony images (img/,
-  #   docs/development/img.md). The base ISOs below are built with these
+  #   docs/development/img.md). The base images below are built with these
   #   exact images.
   build-image:
     name: Build image ${{ matrix.image }} (${{ matrix.arch }})
@@ -247,7 +247,7 @@ jobs:
           # a single signed attestation.
           provenance: false
           # The rite image's file system is also written to rite-rootfs, so the
-          # base ISOs below take the binary of this exact build.
+          # base images below take the binary of this exact build.
           outputs: |
             type=image,name=ghcr.io/rite-ly/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
             ${{ matrix.image == 'rite' && 'type=local,dest=rite-rootfs' || '' }}
@@ -281,21 +281,21 @@ jobs:
           # build.
           retention-days: 7
 
-  # The base ISO for each architecture, built on a native runner by the
+  # The base image for each architecture, built on a native runner by the
   # rite-img image pushed above. Its rite is the glibc binary of the rite image
-  # of the same run: built on Debian trixie, as the live system is, with the
-  # piv/yubikey backends the musl binary lacks. Live-build downloads
-  # the current Debian packages, so a rebuild gives a different ISO; the
-  # published hash is the one to cite.
-  build-iso:
-    name: Build base ISO (${{ matrix.arch }})
+  # of the same run: built on Debian trixie, as the base system is, with the
+  # piv/yubikey backends the musl binary lacks. The Debian packages come from
+  # the snapshot.debian.org date in img/mkosi/mkosi.conf. The release ships it
+  # compressed with xz, and the packages it holds as a JSON manifest.
+  build-base:
+    name: Build base image (${{ matrix.arch }})
     needs: [validate, build-image]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: read
     env:
-      ISO: rite-${{ needs.validate.outputs.version }}-${{ matrix.arch }}.iso
+      BASE: rite-base-${{ needs.validate.outputs.version }}-${{ matrix.arch }}
     strategy:
       fail-fast: false
       matrix:
@@ -324,35 +324,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build the ISO
+      - name: Build the base image
         working-directory: work
         run: |
           digest=$(basename "${{ runner.temp }}"/digests/*)
           docker run --rm --privileged -v "$PWD:/work" \
-            "ghcr.io/rite-ly/rite-img@sha256:${digest}" build-iso \
-            --binary rite --output "$ISO"
+            "ghcr.io/rite-ly/rite-img@sha256:${digest}" build-base \
+            --binary rite --output "$BASE.img" --manifest "$BASE.manifest.json"
+          xz -T0 "$BASE.img"
 
-      # The Debian packages and versions in the live system, as dpkg-query
-      # lists them. The ISO holds the same list; a copy next to it answers
-      # which versions a release shipped without opening the ISO.
-      - name: Extract the package list
-        working-directory: work
-        run: |
-          digest=$(basename "${{ runner.temp }}"/digests/*)
-          docker run --rm -v "$PWD:/work" --entrypoint xorriso \
-            "ghcr.io/rite-ly/rite-img@sha256:${digest}" \
-            -osirrox on -indev "$ISO" \
-            -extract /live/filesystem.packages "${ISO%.iso}.packages"
-
-      - name: Upload the ISO
+      - name: Upload the base image
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: iso-${{ matrix.arch }}
+          name: base-${{ matrix.arch }}
           path: |
-            work/${{ env.ISO }}
-            work/rite-${{ needs.validate.outputs.version }}-${{ matrix.arch }}.packages
+            work/${{ env.BASE }}.img.xz
+            work/${{ env.BASE }}.manifest.json
           if-no-files-found: error
-          # An ISO is already compressed.
+          # The image is already compressed.
           compression-level: 0
           # Kept for a re-run of the release job, as the digests are.
           retention-days: 7
@@ -464,7 +453,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [validate, build-native, build-linux-musl, build-image, build-iso]
+    needs: [validate, build-native, build-linux-musl, build-image, build-base]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -506,11 +495,11 @@ jobs:
           rm -rf "$tmp"
           cp "$ARTS/rite-ls-windows-amd64/rite-ls.exe" "$RELEASE_DIR/rite-ls-${VERSION}-windows-amd64.exe"
 
-          # Base ISOs, the input of build-img (docs/development/img.md), and
-          # the package list of each
+          # Base images, the input of build-img (docs/development/img.md), and
+          # the package manifest of each
           for arch in amd64 arm64; do
-            cp "$ARTS/iso-${arch}/rite-${VERSION}-${arch}.iso" "$RELEASE_DIR/"
-            cp "$ARTS/iso-${arch}/rite-${VERSION}-${arch}.packages" "$RELEASE_DIR/"
+            cp "$ARTS/base-${arch}/rite-base-${VERSION}-${arch}.img.xz" "$RELEASE_DIR/"
+            cp "$ARTS/base-${arch}/rite-base-${VERSION}-${arch}.manifest.json" "$RELEASE_DIR/"
           done
 
           # Bare file names, so sha256sum --check works in the directory the
@@ -518,8 +507,9 @@ jobs:
           (cd "$RELEASE_DIR" && sha256sum -- * > SHA256SUMS)
 
       # Provenance over the exact files shipped on the release: the rite tarballs/zip,
-      # the flat rite-ls binaries, the base ISOs and their package lists, and SHA256SUMS. Attesting the packaged files (not the
-      # raw build outputs) means each subject digest matches what a user downloads, so
+      # the flat rite-ls binaries, the base images and their package manifests, and
+      # SHA256SUMS. Attesting the packaged files (not the raw build outputs) means each
+      # subject digest matches what a user downloads, so
       # `gh attestation verify <file> --repo rite-ly/rite` succeeds on the artefact itself.
       - name: Attest release artifacts
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2

@@ -331,7 +331,10 @@ jobs:
           docker run --rm --privileged -v "$PWD:/work" \
             "ghcr.io/rite-ly/rite-img@sha256:${digest}" build-base \
             --binary rite --output "$BASE.img" --manifest "$BASE.manifest.json"
-          xz -T0 "$BASE.img"
+          # The container writes the image as root; compressing to stdout
+          # leaves the runner user owning the .xz, where xz in place would try
+          # to copy root's group onto it and fail.
+          xz -T0 -c "$BASE.img" > "$BASE.img.xz"
 
       - name: Upload the base image
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

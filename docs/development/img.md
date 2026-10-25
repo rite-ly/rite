@@ -1,11 +1,14 @@
-# Ceremony image
+# Rite Live
 
-`img/` builds a bootable USB image for running a Rite ceremony. The image holds a Debian
-system with the `rite` binary, the ceremony and its input materials, and a separate
-partition for the outputs of each run.
+Rite Live runs a Rite ceremony from a USB drive, on a read-only system that runs only
+Rite. `img/` builds it in two parts: the Live system, a Debian system with the `rite`
+binary, published with each release, and the ceremony layer, which holds the ceremony
+definitions and their input materials. `build-img` puts both in one image, with a
+partition for the outputs of each run. Written to a USB drive, the image becomes the
+ceremony medium.
 
-The operator boots the machine from the stick, runs the ceremony, and reads the outputs
-back on another machine.
+The operator boots the machine from the ceremony medium, runs the ceremony, and reads the
+outputs back on another machine.
 
 ## Layout of an image
 
@@ -13,45 +16,47 @@ An image is a GPT disk with five partitions:
 
 | Partition | Content | Built by |
 |---|---|---|
-| EFI system partition | systemd-boot and the unified kernel image (UKI): the kernel, its initrd and its command line in one file | `build-base`, once per `rite` release and architecture |
-| Root | Debian trixie, `rite` and the ceremony session, as a read-only EROFS file system | `build-base` |
-| Root verity | The dm-verity hashes of the root partition | `build-base` |
-| `rite-ceremony` | The ceremony layer: the ceremony YAML files and their materials, as a system extension image | `build-img`, once per ceremony |
+| EFI system partition | systemd-boot and the unified kernel image (UKI): the kernel, its initrd and its command line in one file | `build-system`, once per `rite` release and architecture |
+| Root | Debian trixie, `rite` and the ceremony session, as a read-only EROFS file system | `build-system` |
+| Root verity | The dm-verity hashes of the root partition | `build-system` |
+| `rite-ceremony` | The ceremony layer: the ceremony definitions and their materials, as a system extension image | `build-img`, once per ceremony |
 | `RITE-OUT` | Empty FAT32 partition, mounted at `/rite/outputs` | `build-img` |
 
-The first three partitions are the base image. Its root hash, which covers every block
+The first three partitions are the Live system. Its root hash, which covers every block
 of the root partition, is on the UKI's command line, and the kernel checks each block it
 reads against it: a modified block stops the machine. The system writes to memory, never
-to the stick, except for the outputs partition.
+to the medium, except for the outputs partition.
 
 At boot, the system copies the ceremony layer into memory once, records its SHA-256 in
 `/run/rite/ceremony.sha256`, and merges the copy into `/usr` (systemd-sysext); the
 ceremony files appear in `/rite/inputs`. A layer with files outside `/usr/share/rite`,
 which could replace programs of the system, is not merged, and the start screen says so.
-The same base image serves every ceremony. The outputs partition is FAT32, which Linux,
+The same Live system serves every ceremony. The outputs partition is FAT32, which Linux,
 macOS and Windows read and write without extra drivers.
 
-## Released tooling and base images
+## Released tooling and Live systems
 
 Each release publishes the Docker tooling image as `ghcr.io/rite-ly/rite-img:<version>`,
-and a base image per architecture, `rite-base-<version>-amd64.img.xz` and
-`rite-base-<version>-arm64.img.xz`, with the release files. The release workflow builds
-each base image with that release's `rite-img` image and the `rite` binary from its
+and a Live system per architecture, `rite-live-<version>-amd64.img.xz` and
+`rite-live-<version>-arm64.img.xz`, with the release files. The release workflow builds
+each Live system with that release's `rite-img` image and the `rite` binary from its
 `rite` Docker image, which has the PIV and YubiKey backends. To use them, skip to
 [Add a ceremony](#add-a-ceremony), with `ghcr.io/rite-ly/rite-img:<version>` in place of
-`rite-img` and the downloaded file as `--base`; `build-img` reads it compressed.
+`rite-img` and the downloaded file as `--system`; `build-img` reads it compressed.
+Releases up to 0.7.2 name the file `rite-base-<version>-<arch>.img.xz`, and their
+`rite-img` takes `--base` and `--ceremony` in place of `--system` and `--definition`.
 
 Check the downloads against the release before using them:
 
 ```
 sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify rite-base-<version>-amd64.img.xz --repo rite-ly/rite
+gh attestation verify rite-live-<version>-amd64.img.xz --repo rite-ly/rite
 gh attestation verify oci://ghcr.io/rite-ly/rite-img:<version> --repo rite-ly/rite
 ```
 
 The attestations tie each file and the image to the release workflow run and its commit.
-The Debian packages a base image holds, with their versions, are listed in
-`rite-base-<version>-<arch>.manifest.json` next to it.
+The Debian packages a Live system holds, with their versions, are listed in
+`rite-live-<version>-<arch>.manifest.json` next to it.
 
 ## Build the Docker tooling image
 
@@ -62,8 +67,9 @@ the bootable `.img` those tools produce. Build the Docker image from the repo ro
 docker build -t rite-img img/
 ```
 
-Run `build-base` with `--privileged`, because mkosi, which builds the base image, mounts
-file systems inside its build tree. `build-img` and `extract` run without privileges.
+Run `build-system` with `--privileged`, because mkosi, which builds the Live system,
+mounts file systems inside its build tree. `build-img` and `extract` run without
+privileges.
 
 The examples mount the current directory at `/work`, the commands' working directory, and
 run from the repo root. Relative paths then mean the same inside the container and on the
@@ -74,13 +80,13 @@ be under the mounted directory. The examples write into `out/`, which git ignore
 mkdir -p out
 ```
 
-## Build the base image
+## Build the Live system
 
-`build-base` takes a Linux `rite` binary. The architecture comes from the binary. The
-released images carry the binary of the `rite` Docker image: it is built on Debian trixie,
-as the base system is, and has the PIV and YubiKey backends. It links the system OpenSSL,
-so the image's OpenSSL is the version of the Debian packages the image installs. A Bake
-target builds the binary on its own, here for arm64, into `dist/glibc-arm64/`:
+`build-system` takes a Linux `rite` binary. The architecture comes from the binary. The
+released Live systems carry the binary of the `rite` Docker image: it is built on Debian
+trixie, as the Live system is, and has the PIV and YubiKey backends. It links the system
+OpenSSL, so its OpenSSL is the version of the Debian packages the Live system installs.
+A Bake target builds the binary on its own, here for arm64, into `dist/glibc-arm64/`:
 
 ```
 docker buildx bake binary-glibc-arm64
@@ -90,42 +96,42 @@ The static binary from a `rite-<version>-linux-<arch>.tar.gz` release archive al
 for ceremonies that use no hardware token.
 
 ```
-docker run --rm --privileged -v "$PWD:/work" rite-img build-base \
+docker run --rm --privileged -v "$PWD:/work" rite-img build-system \
     --binary dist/glibc-arm64/rite \
-    --output out/rite-base-arm64.img
+    --output out/rite-live-arm64.img
 ```
 
 A build downloads the Debian packages from snapshot.debian.org, and takes a few minutes.
 `--manifest FILE` also writes the list of packages and their versions.
 
-An amd64 image builds the same way on an arm64 host, with the amd64 binary: Docker
+An amd64 Live system builds the same way on an arm64 host, with the amd64 binary: Docker
 Desktop runs the image's amd64 programs under emulation, which makes the build slower.
 The amd64 binary compiles under emulation too, which takes far longer than the native
 build:
 
 ```
 docker buildx bake binary-glibc-amd64
-docker run --rm --privileged -v "$PWD:/work" rite-img build-base \
+docker run --rm --privileged -v "$PWD:/work" rite-img build-system \
     --binary dist/glibc-amd64/rite \
-    --output out/rite-base-amd64.img
+    --output out/rite-live-amd64.img
 ```
 
-`build-base` prints two lines:
+`build-system` prints two lines:
 
 ```
-base  sha256:7d27da65…  out/rite-base-arm64.img
-root  744904d5…
+image  sha256:7d27da65…  out/rite-live-arm64.img
+root   744904d5…
 ```
 
-`base` is the SHA-256 of the image file. `root` is its root hash, which the image puts on
-the kernel command line (`roothash=` in `/proc/cmdline` on the running system).
+`image` is the SHA-256 of the file. `root` is the root hash, which the build puts on the
+kernel command line (`roothash=` in `/proc/cmdline` on the running system).
 
 The Debian packages are those snapshot.debian.org served at the date in
 `img/mkosi/mkosi.conf`; moving that date is how package updates come in. Two builds of the
-base image install the same packages but differ in timestamps, so the released base image
-is the reference.
+Live system install the same packages but differ in timestamps, so the released Live
+system is the reference.
 
-### What the base image contains
+### What the Live system contains
 
 - The ceremony session on tty1 and a second terminal on tty2 (see
   [Run the ceremony](#run-the-ceremony)), as the `rite` user.
@@ -137,56 +143,57 @@ is the reference.
 - A toolbox, which neither `rite` nor the session needs, for the operator's convenience in
   the second terminal: `openssl`, `jq`, `xxd`, `file`, `nano`, `ip`, `qrencode`,
   `zbarimg`, `gpg`, `ykman`, `pkcs11-tool`, `pcsc_scan`, `python3` and `man`. They are
-  part of the base, so its root hash covers them.
+  part of the Live system, so its root hash covers them.
 
 ## Add a ceremony
 
 ```
 docker run --rm -v "$PWD:/work" rite-img build-img \
-    --base out/rite-base-arm64.img \
-    --ceremony examples/showcase/demo.rite.yaml \
+    --system out/rite-live-arm64.img \
+    --definition examples/showcase/demo.rite.yaml \
     --output out/demo.img
 ```
 
 `--material FILE` adds a file the ceremony reads, and can be repeated. A definition names
-its files by paths relative to its own directory, so a material must be in the ceremony's
-directory or below it, and keeps that relative path on the stick:
+its files by paths relative to its own directory, so a material must be in the definition's
+directory or below it, and keeps that relative path on the medium:
 
 ```
 docker run --rm -v "$PWD:/work" rite-img build-img \
-    --base out/rite-base-arm64.img \
-    --ceremony examples/showcase/import_key.rite.yaml \
+    --system out/rite-live-arm64.img \
+    --definition examples/showcase/import_key.rite.yaml \
     --material examples/showcase/test_keys/transport_kek_component.bin \
     --material examples/showcase/test_keys/escrow_private.pem \
     --output out/import_key.img
 ```
 
-### Several ceremonies on one stick
+### Several ceremonies on one medium
 
-`--ceremony` can be repeated to put several ceremonies on one stick. Each input keeps its
-path relative to the common ancestor directory of all the ceremony files, which keeps every
-ceremony's relative file references valid. For example, with
+`--definition` can be repeated to put several ceremonies on one medium. Each input keeps
+its path relative to the common ancestor directory of all the definitions, which keeps
+every definition's relative file references valid. For example, with
 `examples/showcase/demo.rite.yaml` and `examples/pki/root_ca_software.rite.yaml`, the common
-ancestor is `examples/`, and the stick holds `/rite/inputs/showcase/demo.rite.yaml` and
+ancestor is `examples/`, and the medium holds `/rite/inputs/showcase/demo.rite.yaml` and
 `/rite/inputs/pki/root_ca_software.rite.yaml`.
 
-A stick with every example, for demonstrations (Bash, from the repo root):
+A medium with every example, for demonstrations (Bash, from the repo root):
 
 ```
 args=()
-for f in examples/showcase/*.rite.yaml examples/pki/*.rite.yaml; do args+=(--ceremony "$f"); done
+for f in examples/showcase/*.rite.yaml examples/pki/*.rite.yaml; do args+=(--definition "$f"); done
 for f in examples/showcase/test_*/* examples/pki/test_*/*; do args+=(--material "$f"); done
 docker run --rm -v "$PWD:/work" rite-img build-img \
-    --base out/rite-base-arm64.img "${args[@]}" --output out/examples.img
+    --system out/rite-live-arm64.img "${args[@]}" --output out/examples.img
 ```
 
-For a real ceremony, use one ceremony per stick. Each stick's outputs partition then holds
-a single ceremony's evidence, and the operator has no choice of ceremony to get wrong.
+For a real ceremony, use one ceremony per medium. Each medium's outputs partition then
+holds a single ceremony's evidence, and the operator has no choice of ceremony to get
+wrong.
 
 ### Hashes
 
-`build-img` is reproducible: with the same `rite-img` Docker image, the same base image,
-ceremonies and materials give the same `.img`, byte for byte. Every file, file system and
+`build-img` is reproducible: with the same `rite-img` Docker image, the same Live system,
+definitions and materials give the same `.img`, byte for byte. Every file, file system and
 partition table `build-img` generates has fixed modes, owners, identifiers and timestamps,
 so only the contents and paths of the inputs affect it.
 
@@ -206,36 +213,36 @@ A released image is pinned by its digest instead, which `docker pull` prints:
 so `> hashes.txt` keeps only the hashes:
 
 ```
-image     sha256:f581111c…  out/demo.img
-system    sha256:d193b10b…  977272832
-layer     sha256:6f90fd17…
-ceremony  sha256:c61593fd…  /rite/inputs/demo.rite.yaml
+image       sha256:f581111c…  out/demo.img
+medium      sha256:d193b10b…  977272832
+layer       sha256:6f90fd17…
+definition  sha256:c61593fd…  /rite/inputs/demo.rite.yaml
 ```
 
 | Line | What the hash covers |
 |---|---|
 | `image` | The complete `.img` file, for checking a download or a copy. |
-| `system` | The first `N` bytes of the image, with `N` the last field of the line: everything before the outputs partition, that is the partition table, the base image and the ceremony layer. Participants use it to check the written stick. |
+| `medium` | The first `N` bytes of the image, with `N` the last field of the line: everything before the outputs partition, that is the partition table, the Live system and the ceremony layer. Participants use it to check the ceremony medium they wrote. |
 | `layer` | The ceremony layer partition. The running system records the same value in `/run/rite/ceremony.sha256`. |
-| `ceremony` | Each ceremony YAML file, as raw bytes, with its path on the stick. The transcript records the same value as the definition's `template` digest in `ceremony_started`. |
+| `definition` | Each ceremony definition, as raw bytes, with its path on the medium. The transcript records the same value as the definition's `template` digest in `ceremony_started`. |
 
-`build-base` prints the lines shown above, and `extract` the path of each run directory it
-copies. Errors go to stderr; a usage error exits with status 2 and any other failure with
-status 1. With `--verbose`, `build-base` and `build-img` show the output of the tools they
-run.
+`build-system` prints the lines shown above, and `extract` the path of each run directory
+it copies. Errors go to stderr; a usage error exits with status 2 and any other failure
+with status 1. With `--verbose`, `build-system` and `build-img` show the output of the
+tools they run.
 
-## Write it to a USB stick
+## Write it to a USB drive
 
 Writing the image erases the target device. Check the device name carefully, and use the
 whole USB disk, not a partition on it.
 
-On Linux, with `/dev/sdX` the stick (`lsblk` lists the disks):
+On Linux, with `/dev/sdX` the USB drive (`lsblk` lists the disks):
 
 ```
 sudo dd if=out/demo.img of=/dev/sdX bs=4M conv=fsync status=progress
 ```
 
-On macOS, with `/dev/diskN` the stick (`diskutil list` lists the disks), then eject it
+On macOS, with `/dev/diskN` the USB drive (`diskutil list` lists the disks), then eject it
 before unplugging:
 
 ```
@@ -244,31 +251,31 @@ sudo dd if=out/demo.img of=/dev/rdiskN bs=4m
 diskutil eject /dev/diskN
 ```
 
-Each participant can check the stick against the published `system` hash. Replace `N`
-with the length in bytes from the end of the `system` line:
+Each participant can check the ceremony medium against the published `medium` hash.
+Replace `N` with the length in bytes from the end of the `medium` line:
 
 ```
 sudo head -c N /dev/sdX | sha256sum               # Linux
 sudo head -c N /dev/rdiskN | shasum -a 256        # macOS
 ```
 
-The stick starts with the same bytes as the image, so the same `N` applies to both. The
-check excludes the outputs partition: plugging the stick into a machine can write to that
+The medium starts with the same bytes as the image, so the same `N` applies to both. The
+check excludes the outputs partition: plugging the medium into a machine can write to that
 partition (macOS adds its own files when it mounts it), and the ceremony writes to it, so
 the check gives the same result before and after the ceremony.
 
 ## Run the ceremony
 
-The machine must boot the stick in UEFI mode, with Secure Boot off, and with no other Rite
-stick plugged in: the system looks for the ceremony layer and the outputs partition on
-the disk its root comes from, and two sticks made from the same base image have the same
-root. The start screen's SHA-256 shows which ceremony was loaded. The stick stays plugged
-in until power off: the system reads its files from the stick as they are used.
+The machine must boot the medium in UEFI mode, with Secure Boot off, and with no other
+ceremony medium plugged in: the system looks for the ceremony layer and the outputs
+partition on the disk its root comes from, and two media made from the same Live system
+have the same root. The start screen's SHA-256 shows which ceremony was loaded. The medium
+stays plugged in until power off: the system reads its files from it as they are used.
 
 The UKI is not signed, so firmware with Secure Boot on refuses it. The integrity of the
-image rests on the `system` hash the participants check before boot, and on dm-verity,
+medium rests on the `medium` hash the participants check before boot, and on dm-verity,
 which checks every block of the root as it is read. Machines whose firmware cannot turn
-Secure Boot off cannot run the image.
+Secure Boot off cannot run Rite Live.
 
 The boot menu has three entries:
 
@@ -281,10 +288,10 @@ The boot menu has three entries:
 
 The boot menu cannot edit the entries: their kernel command line, root hash included, is
 part of the UKI. With Secure Boot off, a UEFI shell can still start the UKI with another
-command line (see [What the image proves](#what-the-image-proves)).
+command line (see [What Rite Live proves](#what-rite-live-proves)).
 
 The session starts on its own as the `rite` user. Its start screen shows the `rite`
-version, the ceremony file with its SHA-256, where the outputs go, and the `rite run`
+version, the ceremony definition with its SHA-256, where the outputs go, and the `rite run`
 command for the ceremony. Pressing Enter starts `rite run` with that ceremony, and
 `rite run` asks for any parameter the ceremony leaves open. For other flags, such as
 `--dry-run` or `--role`, the operator types the word `shell` at the prompt and runs the
@@ -294,13 +301,13 @@ When the outputs partition is missing or does not mount, the start screen says s
 offers no Enter shortcut: the ceremony's outputs would be lost at power off, so running it
 anyway takes typing the command in the shell.
 
-On a stick with several ceremonies, the start screen lists each ceremony with its SHA-256
+On a medium with several ceremonies, the start screen lists each ceremony with its SHA-256
 and opens the shell. The operator chooses the ceremony and runs it with `rite run`, so the
-SHA-256 shown is the one to compare with the published ceremony hash.
+SHA-256 shown is the one to compare with the published `definition` hash.
 
 The shell has tab completion for `rite` and starts in `/rite/outputs`. `rite run` writes
 to the current directory unless given `--output`, so a run started from the shell also
-writes to the stick. `poweroff` shuts the machine down; leaving the shell returns to the
+writes to the medium. `poweroff` shuts the machine down; leaving the shell returns to the
 start screen. If the graphical session fails to start, the session continues on the text
 console.
 
@@ -312,11 +319,11 @@ In the graphical session, dragging with the mouse selects text, and a middle cli
 Ctrl+Shift+V pastes it; Ctrl+Shift+C copies a selection to the clipboard. The text console
 has no mouse support.
 
-The `rite` user has no root access and the image has no `sudo`. polkit lets it power the
+The `rite` user has no root access and the system has no `sudo`. polkit lets it power the
 machine off and reboot it (`poweroff`, `reboot`, `shutdown`), use smart cards and switch
 terminals, and refuses everything else. No terminal offers a login.
 
-The image gets a network address by DHCP on any wired link, and loads no radio
+The system gets a network address by DHCP on any wired link, and loads no radio
 driver. A ceremony that needs an air gap establishes it physically, by leaving out the
 cable, and records it as a witnessed confirmation step, such as `verify_air_gap` in
 `examples/showcase/demo.rite.yaml`.
@@ -332,23 +339,23 @@ The keyboard layout is US.
   which may lack certificates the installed system needs. Windows with BitLocker asks for
   its recovery key when it boots with a different Secure Boot setting, so set it back
   before starting Windows again.
-- **Boot menu entries.** The firmware's boot menu may list the stick several times. The
+- **Boot menu entries.** The firmware's boot menu may list the medium several times. The
   entry that starts with "UEFI:" and names partition 1, the EFI system partition, boots
-  the image. Entries without "UEFI:" are legacy BIOS boot, which the stick does not have.
+  the image. Entries without "UEFI:" are legacy BIOS boot, which the medium does not have.
 - **Firmware messages.** Lines such as `[Firmware Bug]` from AMD-Vi or `tpm_crb … probe
   failed` at the start of the boot report faulty firmware tables. The system continues
   without the affected feature.
 - **TPM.** The system neither uses nor waits for the TPM, and leaves it as it found it: the
   systemd services that store a key or a policy in the TPM are masked.
-- **Graphics.** The image has the firmware that AMD, NVIDIA and Intel graphics drivers load.
-  AMD memory encryption stays off, because the NVIDIA driver leaves the display black with
-  it. On a machine where the main entry still shows nothing, safe mode keeps the display
-  the firmware set up.
+- **Graphics.** The system has the firmware that AMD, NVIDIA and Intel graphics drivers
+  load. AMD memory encryption stays off, because the NVIDIA driver leaves the display black
+  with it. On a machine where the main entry still shows nothing, safe mode keeps the
+  display the firmware set up.
 
 ## Read the outputs
 
 On another machine, mount the `RITE-OUT` partition; most desktop systems mount it when the
-stick is plugged in. It holds one directory per run. Copy the directory for the run to
+medium is plugged in. It holds one directory per run. Copy the directory for the run to
 check, then pass the path of the copy to `rite verify`:
 
 ```
@@ -388,43 +395,43 @@ start each test with a new one. `-nic none` gives the VM no network interface. A
 image boots the same way under `qemu-system-x86_64 -machine q35`, with OVMF
 (`edk2-x86_64-code.fd`) as the UEFI firmware.
 
-## What the image proves
+## What Rite Live proves
 
 The checks on this page establish different things:
 
-- **Image integrity.** The `system` hash lets each participant check that the measured part
-  of the written stick matches the published digest. This authenticates the image only if
-  the digest comes through a channel the participants trust independently of the image. A
-  digest obtained from the same source as the image does not authenticate it.
+- **Medium integrity.** The `medium` hash lets each participant check that the measured
+  part of the written medium matches the published digest. This authenticates the medium
+  only if the digest comes through a channel the participants trust independently of the
+  image. A digest obtained from the same source as the image does not authenticate it.
 - **Integrity while running.** The kernel checks every block of the root it reads against
-  the root hash on the UKI's command line, and stops the machine on a mismatch. A stick
+  the root hash on the UKI's command line, and stops the machine on a mismatch. A medium
   modified after the participants checked it, in the root partition, is caught when the
   modified block is read. The ceremony layer is read once into memory, and its hash is
   recorded at that moment.
-- **Reproducibility.** Rebuilding the image from the released base image and the same
-  ceremony files and materials, with the same `rite-img` Docker image, gives a check that
-  does not rely on whoever built the stick.
+- **Reproducibility.** Rebuilding the image from the released Live system and the same
+  definitions and materials, with the same `rite-img` Docker image, gives a check that
+  does not rely on whoever built the medium.
 - **Ceremony identity.** The transcript's `template` digest identifies the ceremony
   definition the run used, and `rite verify` checks the transcript and its artifacts.
 
-The image does not establish what actually ran. Nothing in the transcript records which
-base system booted, and no TPM is used. With Secure Boot off, someone who can write to the
-stick between the check and the boot can replace the UKI, root hash included. Anyone at
-the keyboard during boot can open a UEFI shell, from the firmware or from another stick,
-and start the UKI with their own command line, which gives a root shell without changing a
-byte of the stick. The mitigation is physical supervision: participants keep the stick
-and the machine under observation from the check to power off, so they can see any
-interaction with the boot process. Observation does not prove what booted.
+Rite Live does not establish what actually ran. Nothing in the transcript records which
+Live system booted, and no TPM is used. With Secure Boot off, someone who can write to the
+medium between the check and the boot can replace the UKI, root hash included. Anyone at
+the keyboard during boot can open a UEFI shell, from the firmware or from another USB
+drive, and start the UKI with their own command line, which gives a root shell without
+changing a byte of the medium. The mitigation is physical supervision: participants keep
+the medium and the machine under observation from the check to power off, so they can see
+any interaction with the boot process. Observation does not prove what booted.
 
 ## Files
 
 | File | Role |
 |---|---|
 | `img/Dockerfile`, `img/entrypoint.sh` | Docker tooling image, with mkosi pinned by commit, and its subcommand dispatch |
-| `img/build-base.sh` | Base image build with mkosi |
-| `img/mkosi/mkosi.conf`, `img/mkosi/mkosi.conf.d/` | Base image: distribution and snapshot date, packages, kernel command line |
+| `img/build-system.sh` | Live system build with mkosi |
+| `img/mkosi/mkosi.conf`, `img/mkosi/mkosi.conf.d/` | Live system: distribution and snapshot date, packages, kernel command line |
 | `img/mkosi/mkosi.uki-profiles/safe.conf` | The safe mode boot entry |
-| `img/mkosi/mkosi.repart/` | Partitions of the base image: EFI system partition, root, root verity |
+| `img/mkosi/mkosi.repart/` | Partitions of the Live system: EFI system partition, root, root verity |
 | `img/mkosi/mkosi.postinst.chroot`, `img/mkosi/mkosi.finalize` | Build-time setup inside the image: the `rite` user, completion, masked units; the boot menu title |
 | `img/mkosi/mkosi.extra/` | Files copied into the image, at their paths in it |
 | `.../efi/loader/loader.conf` | Boot menu: timeout, no editing |
@@ -439,5 +446,5 @@ interaction with the boot process. Observation does not prove what booted.
 | `.../etc/polkit-1/rules.d/10-rite.rules` | polkit rule: the `rite` user may use smart cards, switch terminals, power off and reboot, nothing else |
 | `img/build-img.sh`, `img/ceremony.repart.d/` | Ceremony layer and outputs partition |
 | `img/extract-outputs.sh` | Outputs from an image file |
-| `.github/workflows/ci.yml` | The `Image` jobs build a base image and an image for each architecture, and check that `build-img` is reproducible, on every pull request to main and push to main |
-| `.github/workflows/release.yml` | Publishes `rite-img` and the base images with each release |
+| `.github/workflows/ci.yml` | The `Image` jobs build a Live system and an image for each architecture, and check that `build-img` is reproducible, on every pull request to main and push to main |
+| `.github/workflows/release.yml` | Publishes `rite-img` and the Live systems with each release |

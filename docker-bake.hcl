@@ -4,7 +4,7 @@
 #   binaries-amd64 / binaries-arm64  — extract per-arch musl-static binaries to dist/<arch>/
 #   image                            — multi-arch runtime image (linux/amd64,linux/arm64)
 #   binary-glibc-amd64 / -arm64      — the image's glibc rite alone, to dist/glibc-<arch>/,
-#                                      for the base ISOs (docs/development/img.md)
+#                                      for the Live system (docs/development/img.md)
 #
 # Groups:
 #   default   — both binaries + image (local multi-arch build)
@@ -20,7 +20,7 @@
 #   docker buildx bake binaries         # both binaries, no image
 #   docker buildx bake binaries-amd64   # one target
 #   docker buildx bake image            # multi-arch image only
-#   docker buildx bake binary-glibc-arm64  # glibc rite for an arm64 ISO
+#   docker buildx bake binary-glibc-arm64  # glibc rite for an arm64 Live system
 #
 # CI injects cache scopes (and, for local pushes, tags) via `--set`.
 

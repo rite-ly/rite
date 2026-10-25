@@ -1,12 +1,14 @@
 #!/bin/bash
 # img/extract-outputs.sh
-# Copy the ceremony outputs out of the RITE-OUT partition of a ceremony image.
-# Runs inside the rite-img container and needs no privileges: mtools reads the
-# FAT32 partition from the image file at its offset, without mounting it.
+# Copy the ceremony outputs out of the RITE-OUT partition of an image from
+# build-img. Runs inside the rite-img container and needs no privileges: mtools
+# reads the FAT32 partition from the image file at its offset, without mounting
+# it.
 #
 # Prints the path of each copied run directory on stdout.
 #
-# For a USB stick, mount the RITE-OUT partition and copy the outputs from it.
+# For a written medium, mount the RITE-OUT partition and copy the outputs from
+# it.
 #
 # Example:
 #   docker run --rm -v "$PWD:/work" rite-img extract \
@@ -23,7 +25,7 @@ usage() {
 Usage: extract [OPTIONS]
 
 Required:
-  --image FILE        Ceremony image (.img) produced by build-img.
+  --image FILE        Image (.img) produced by build-img.
   --output DIR        Directory to copy the outputs into (created if missing).
 
 Optional:

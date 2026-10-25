@@ -1,6 +1,6 @@
 #!/bin/bash
 # img/mkosi/mkosi.postinst.chroot
-# Runs inside the image during build-base, after the packages, the files of
+# Runs inside the image during build-system, after the packages, the files of
 # mkosi.extra and the rite binary are installed.
 set -euo pipefail
 
@@ -33,7 +33,7 @@ systemctl mask systemd-firstboot.service
 
 # systemd would mount the EFI system partition read-write on first access to
 # /boot or /efi. The system needs nothing there after boot, and a mount can
-# change the partition's bytes, which the system hash of build-img covers.
+# change the partition's bytes, which the medium hash of build-img covers.
 systemctl mask boot.automount efi.automount
 
 # systemd-pcrlock writes a policy into the TPM; see systemd.tpm2_wait=0 in

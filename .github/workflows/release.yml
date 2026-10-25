@@ -164,8 +164,8 @@ jobs:
   # - rite: the glibc runtime image. The glibc build dynamically links
   #   libpcsclite and system OpenSSL, so the image carries the piv/yubikey
   #   backends.
-  # - rite-img: the tools that build ceremony images (img/,
-  #   docs/development/img.md). The base images below are built with these
+  # - rite-img: the tools that build Rite Live (img/,
+  #   docs/development/img.md). The Live systems below are built with these
   #   exact images.
   build-image:
     name: Build image ${{ matrix.image }} (${{ matrix.arch }})
@@ -200,7 +200,7 @@ jobs:
             context: img
             target: ''
             build-args: ''
-            description: Builds bootable Rite ceremony images
+            description: Builds Rite Live, a bootable read-only system that runs Rite ceremonies
             digests: img-tooling-digest
             cache: release-img-tooling
     steps:
@@ -247,7 +247,7 @@ jobs:
           # a single signed attestation.
           provenance: false
           # The rite image's file system is also written to rite-rootfs, so the
-          # base images below take the binary of this exact build.
+          # Live systems below take the binary of this exact build.
           outputs: |
             type=image,name=ghcr.io/rite-ly/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
             ${{ matrix.image == 'rite' && 'type=local,dest=rite-rootfs' || '' }}
@@ -281,21 +281,21 @@ jobs:
           # build.
           retention-days: 7
 
-  # The base image for each architecture, built on a native runner by the
+  # The Live system for each architecture, built on a native runner by the
   # rite-img image pushed above. Its rite is the glibc binary of the rite image
-  # of the same run: built on Debian trixie, as the base system is, with the
+  # of the same run: built on Debian trixie, as the Live system is, with the
   # piv/yubikey backends the musl binary lacks. The Debian packages come from
   # the snapshot.debian.org date in img/mkosi/mkosi.conf. The release ships it
   # compressed with xz, and the packages it holds as a JSON manifest.
-  build-base:
-    name: Build base image (${{ matrix.arch }})
+  build-system:
+    name: Build Live system (${{ matrix.arch }})
     needs: [validate, build-image]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: read
     env:
-      BASE: rite-base-${{ needs.validate.outputs.version }}-${{ matrix.arch }}
+      LIVE: rite-live-${{ needs.validate.outputs.version }}-${{ matrix.arch }}
     strategy:
       fail-fast: false
       matrix:
@@ -324,25 +324,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build the base image
+      - name: Build the Live system
         working-directory: work
         run: |
           digest=$(basename "${{ runner.temp }}"/digests/*)
           docker run --rm --privileged -v "$PWD:/work" \
-            "ghcr.io/rite-ly/rite-img@sha256:${digest}" build-base \
-            --binary rite --output "$BASE.img" --manifest "$BASE.manifest.json"
+            "ghcr.io/rite-ly/rite-img@sha256:${digest}" build-system \
+            --binary rite --output "$LIVE.img" --manifest "$LIVE.manifest.json"
           # The container writes the image as root; compressing to stdout
           # leaves the runner user owning the .xz, where xz in place would try
           # to copy root's group onto it and fail.
-          xz -T0 -c "$BASE.img" > "$BASE.img.xz"
+          xz -T0 -c "$LIVE.img" > "$LIVE.img.xz"
 
-      - name: Upload the base image
+      - name: Upload the Live system
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: base-${{ matrix.arch }}
+          name: live-${{ matrix.arch }}
           path: |
-            work/${{ env.BASE }}.img.xz
-            work/${{ env.BASE }}.manifest.json
+            work/${{ env.LIVE }}.img.xz
+            work/${{ env.LIVE }}.manifest.json
           if-no-files-found: error
           # The image is already compressed.
           compression-level: 0
@@ -372,7 +372,7 @@ jobs:
             description: DSL and runtime for cryptographic key ceremonies
           - image: rite-img
             digests: img-tooling-digest-*
-            description: Builds bootable Rite ceremony images
+            description: Builds Rite Live, a bootable read-only system that runs Rite ceremonies
     steps:
       - name: Download digests
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -456,7 +456,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [validate, build-native, build-linux-musl, build-image, build-base]
+    needs: [validate, build-native, build-linux-musl, build-image, build-system]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -498,11 +498,11 @@ jobs:
           rm -rf "$tmp"
           cp "$ARTS/rite-ls-windows-amd64/rite-ls.exe" "$RELEASE_DIR/rite-ls-${VERSION}-windows-amd64.exe"
 
-          # Base images, the input of build-img (docs/development/img.md), and
+          # Live systems, the input of build-img (docs/development/img.md), and
           # the package manifest of each
           for arch in amd64 arm64; do
-            cp "$ARTS/base-${arch}/rite-base-${VERSION}-${arch}.img.xz" "$RELEASE_DIR/"
-            cp "$ARTS/base-${arch}/rite-base-${VERSION}-${arch}.manifest.json" "$RELEASE_DIR/"
+            cp "$ARTS/live-${arch}/rite-live-${VERSION}-${arch}.img.xz" "$RELEASE_DIR/"
+            cp "$ARTS/live-${arch}/rite-live-${VERSION}-${arch}.manifest.json" "$RELEASE_DIR/"
           done
 
           # Bare file names, so sha256sum --check works in the directory the
@@ -510,7 +510,7 @@ jobs:
           (cd "$RELEASE_DIR" && sha256sum -- * > SHA256SUMS)
 
       # Provenance over the exact files shipped on the release: the rite tarballs/zip,
-      # the flat rite-ls binaries, the base images and their package manifests, and
+      # the flat rite-ls binaries, the Live systems and their package manifests, and
       # SHA256SUMS. Attesting the packaged files (not the raw build outputs) means each
       # subject digest matches what a user downloads, so
       # `gh attestation verify <file> --repo rite-ly/rite` succeeds on the artefact itself.

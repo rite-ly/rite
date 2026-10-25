@@ -8,7 +8,7 @@
 #
 # Everything runs from the outputs directory: rite run writes to the current
 # directory by default, so a command typed without --output still writes to the
-# stick.
+# medium.
 
 # Ctrl-C ends whatever runs in the foreground, not this script: rite-kiosk takes
 # any non-zero status from it for a display failure. A trap, unlike ignoring the
@@ -39,8 +39,8 @@ case ${#CEREMONIES[@]} in
             echo "WARNING: the ceremony layer on this medium was not loaded:"
             echo "  $(cat /run/rite/ceremony-error)"
         else
-            echo "No ceremony on this medium. It was booted from a base image, or the"
-            echo "image was not built with build-img."
+            echo "No ceremony on this medium. It was booted from the Live system alone,"
+            echo "or the image was not built with build-img."
         fi
         ;;
     1)

@@ -1,13 +1,13 @@
 #!/bin/bash
 # /usr/lib/rite/mount-outputs
-# Mounts the RITE-OUT partition of the stick the system booted from at
+# Mounts the RITE-OUT partition of the medium the system booted from at
 # /rite/outputs, for the rite user. Runs as root before each session start.
 #
-# A base image has no RITE-OUT partition, which is not an error. A failed mount
-# is: its message goes to /run/rite/outputs-error, which rite-session shows the
-# operator.
+# The Live system alone has no RITE-OUT partition, which is not an error. A
+# failed mount is: its message goes to /run/rite/outputs-error, which
+# rite-session shows the operator.
 #
-# flush writes data to the stick promptly, so outputs survive a power cut more
+# flush writes data to the medium promptly, so outputs survive a power cut more
 # often. The partition holds data only, so nothing on it may execute. FAT has
 # no permissions of its own: umask=077 gives every file the 0600 that rite asks
 # for its private artifacts.

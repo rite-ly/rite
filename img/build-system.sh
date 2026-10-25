@@ -1,6 +1,6 @@
 #!/bin/bash
-# img/build-base.sh
-# Build the base image: a bootable GPT disk image with Debian, the rite binary
+# img/build-system.sh
+# Build the Live system: a bootable GPT disk image with Debian, the rite binary
 # and the ceremony session, from the mkosi configuration in /img/mkosi.
 # Runs inside the rite-img container.
 #
@@ -8,34 +8,34 @@
 # stderr.
 #
 # Example:
-#   docker run --rm --privileged -v "$PWD:/work" rite-img build-base \
+#   docker run --rm --privileged -v "$PWD:/work" rite-img build-system \
 #       --binary dist/glibc-amd64/rite \
-#       --output rite-base.img
+#       --output rite-live.img
 set -euo pipefail
 
-PROG=build-base
+PROG=build-system
 source /img/lib/utils.sh
 
 usage() {
     cat <<EOF
-Usage: build-base [OPTIONS]
+Usage: build-system [OPTIONS]
 
 Required:
   --binary FILE      Pre-built rite binary (Linux ELF, amd64 or arm64). The
-                     image is built for the binary's architecture; another
+                     system is built for the binary's architecture; another
                      architecture than the container's builds under
                      emulation, as Docker Desktop provides.
-  --output FILE      Output base image (.img).
+  --output FILE      Output Live system (.img).
 
 Optional:
-  --manifest FILE    Also write the image's Debian packages and their versions,
-                     as JSON.
+  --manifest FILE    Also write the system's Debian packages and their
+                     versions, as JSON.
   --verbose          Show the output of mkosi.
   -h, --help         Show this help.
 
 Prints on stdout:
-  base  sha256:<hash>  <path>
-  root  <root hash>
+  image  sha256:<hash>  <path>
+  root   <root hash>
 EOF
 }
 
@@ -74,7 +74,7 @@ esac
 # Work next to the output, so the final mv is a rename on the same filesystem
 # and a failed run leaves any previous output untouched. mkosi resolves
 # relative paths against its configuration directory, so this one is absolute.
-TEMP_DIR=$(mktemp -d -p "$(realpath "$(dirname "$OUTPUT")")" .build-base.XXXXXX)
+TEMP_DIR=$(mktemp -d -p "$(realpath "$(dirname "$OUTPUT")")" .build-system.XXXXXX)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
 # A copy of the configuration with the binary in its mkosi.extra tree, which
@@ -83,20 +83,20 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 cp -a /img/mkosi "$TEMP_DIR/mkosi"
 install -D -m 0755 "$BINARY" "$TEMP_DIR/mkosi/mkosi.extra/usr/bin/rite"
 
-note "Building the $ARCH base image with mkosi; this downloads the Debian packages and takes a few minutes."
+note "Building the $ARCH Live system with mkosi; this downloads the Debian packages and takes a few minutes."
 quietly mkosi \
     --directory "$TEMP_DIR/mkosi" \
     --architecture "$MKOSI_ARCH" \
     --output-directory "$TEMP_DIR/out" \
-    --output base \
+    --output system \
     build
 
-[[ -f "$TEMP_DIR/out/base.raw" ]] || die "mkosi finished without producing an image"
-ROOT_HASH=$(cat "$TEMP_DIR/out/base.roothash")
+[[ -f "$TEMP_DIR/out/system.raw" ]] || die "mkosi finished without producing an image"
+ROOT_HASH=$(cat "$TEMP_DIR/out/system.roothash")
 if [[ -n "$MANIFEST" ]]; then
-    mv "$TEMP_DIR/out/base.manifest" "$MANIFEST"
+    mv "$TEMP_DIR/out/system.manifest" "$MANIFEST"
 fi
-mv "$TEMP_DIR/out/base.raw" "$OUTPUT"
+mv "$TEMP_DIR/out/system.raw" "$OUTPUT"
 
-echo "base  sha256:$(sha256sum "$OUTPUT" | cut -d' ' -f1)  $OUTPUT"
-echo "root  $ROOT_HASH"
+echo "image  sha256:$(sha256sum "$OUTPUT" | cut -d' ' -f1)  $OUTPUT"
+echo "root   $ROOT_HASH"

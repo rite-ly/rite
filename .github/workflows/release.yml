@@ -14,7 +14,7 @@ env:
 jobs:
   validate:
     name: Validate version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.check.outputs.version }}
       commit_sha: ${{ steps.commit.outputs.sha }}
@@ -53,10 +53,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          - os: macos-26
             rust_target: aarch64-apple-darwin
             rite_target: darwin-arm64
-          - os: windows-latest
+          - os: windows-2025
             rust_target: x86_64-pc-windows-msvc
             rite_target: windows-amd64
 
@@ -99,7 +99,7 @@ jobs:
   build-linux-musl:
     name: Build Linux musl binaries
     needs: [validate]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -157,7 +157,7 @@ jobs:
           if-no-files-found: error
 
   # The Docker images, built one arch per runner so each compiles natively:
-  # amd64 on ubuntu-latest, arm64 on ubuntu-24.04-arm (no QEMU). Each build is
+  # amd64 on ubuntu-24.04, arm64 on ubuntu-24.04-arm (no QEMU). Each build is
   # pushed to ghcr.io by digest only; the merge job below assembles the tagged
   # multi-arch manifest list.
   #
@@ -182,7 +182,7 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
@@ -301,7 +301,7 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: arm64
             runner: ubuntu-24.04-arm
     steps:
@@ -356,7 +356,7 @@ jobs:
   merge-image:
     name: Merge and push image manifest (${{ matrix.image }})
     needs: [build-image, release]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: docker
     permissions:
       contents: read
@@ -457,7 +457,7 @@ jobs:
   release:
     name: Create Release
     needs: [validate, build-native, build-linux-musl, build-image, build-base]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       id-token: write
@@ -536,7 +536,7 @@ jobs:
   publish-crates:
     name: Publish crates
     needs: [release]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: crates.io
     permissions:
       contents: read

@@ -36,7 +36,7 @@ pub use key_material::{CertificateDer, PublicKeyDer};
 pub use backend::{
     AttestationBackend, Backend, BackendError, CertStoreBackend, KeyStoreBackend,
     KeyTransportBackend, PivBackend, Pkcs11AdminBackend, Pkcs11Backend, RandomBackend,
-    Retriability, SignBackend, TpmBackend, VerifyBackend, YubikeyBackend,
+    Retriability, SignBackend, TpmBackend, VerifyBackend, YubikeyBackend, lock_device,
 };
 
 pub use types::{

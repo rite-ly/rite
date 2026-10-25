@@ -14,7 +14,7 @@ use rite_sdk::{
     Backend, BackendError, KeyId, KeySecurityAttributes, KeyUsages, Pkcs11Backend, Pkcs11Mechanism,
     Pkcs11TokenFlags, Pkcs11TokenInfo, backend_capabilities,
 };
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 /// Where to find the token, and which one to use.
 #[derive(Debug, Clone)]
@@ -86,10 +86,9 @@ impl Pkcs11TokenBackend {
         })
     }
 
-    /// The session, recovered even if a previous holder panicked. A poisoned
-    /// mutex says a thread died, not that the token is unusable.
-    fn session(&self) -> MutexGuard<'_, Session> {
-        self.session.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Lock the session; see [`rite_sdk::lock_device`].
+    fn session(&self) -> Result<MutexGuard<'_, Session>, BackendError> {
+        rite_sdk::lock_device(&self.session)
     }
 
     /// Find a key object by its `CKA_LABEL`.
@@ -112,7 +111,7 @@ impl Pkcs11TokenBackend {
             }
         });
         let found = self
-            .session()
+            .session()?
             .find_objects(&template)
             .map_err(|e| BackendError::HardwareFailure(format!("find objects: {e}")))?;
         found
@@ -179,7 +178,7 @@ impl Pkcs11Backend for Pkcs11TokenBackend {
             AttributeType::Derive,
         ];
         let attributes = self
-            .session()
+            .session()?
             .get_attributes(handle, &wanted)
             .map_err(|e| BackendError::HardwareFailure(format!("read attributes: {e}")))?;
 
@@ -245,13 +244,13 @@ impl Pkcs11Backend for Pkcs11TokenBackend {
     fn login(&mut self, pin: &[u8]) -> Result<(), BackendError> {
         let pin = std::str::from_utf8(pin)
             .map_err(|_| BackendError::InvalidData("PIN is not valid UTF-8".to_string()))?;
-        self.session()
+        self.session()?
             .login(UserType::User, Some(&AuthPin::from(pin.to_string())))
             .map_err(|e| BackendError::HardwareFailure(format!("login: {e}")))
     }
 
     fn logout(&mut self) -> Result<(), BackendError> {
-        self.session()
+        self.session()?
             .logout()
             .map_err(|e| BackendError::HardwareFailure(format!("logout: {e}")))
     }

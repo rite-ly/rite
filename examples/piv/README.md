@@ -5,7 +5,7 @@ the device.
 
 These ceremonies need a `rite` binary built with the `piv` and `yubikey`
 features. The macOS and Windows release binaries (including `brew install rite`),
-the Docker image (`ghcr.io/rite-ly/rite`) and the base ISOs for ceremony images
+the Docker image (`ghcr.io/rite-ly/rite`) and the Rite Live system
 (`docs/development/img.md`) include them. Static musl Linux binaries do not; build from source on Linux:
 
 ```sh

@@ -93,8 +93,8 @@ RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-image-${TA
     cargo build --locked --release -p rite $CARGO_BUILD_ARGS && \
     install -D -m 0755 target/release/rite /out/rite
 
-# The glibc binary on its own, for the base images (img/), whose system is
-# Debian trixie with the libraries it links.
+# The glibc binary on its own, for the Live systems (img/), which are Debian
+# trixie with the libraries it links.
 FROM scratch AS binary-glibc
 COPY --from=builder-image /out/rite /rite
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 # img/mkosi/mkosi.finalize
-# Runs on the image tree at the end of build-base, before mkosi adds the UKI
+# Runs on the image tree at the end of build-system, before mkosi adds the UKI
 # and makes the partitions.
 set -eu
 

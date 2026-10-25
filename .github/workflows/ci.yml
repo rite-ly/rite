@@ -148,8 +148,8 @@ jobs:
           done
 
   # Runs the commands of docs/development/img.md for both architectures, so a
-  # broken ceremony image shows before a release tag. The release jobs that
-  # publish rite-img and the base images (release.yml) run only on a tag. The
+  # broken Rite Live build shows before a release tag. The release jobs that
+  # publish rite-img and the Live systems (release.yml) run only on a tag. The
   # caches are written on main and only read by pull requests.
   image:
     name: Image (${{ matrix.arch }})
@@ -167,8 +167,8 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # The kind of binary the release puts in the base image, built natively. The
-      # live system must provide the libraries it links, which a static binary
+      # The kind of binary the release puts in the Live system, built natively.
+      # The system must provide the libraries it links, which a static binary
       # would not check.
       - name: Build the glibc rite binary
         uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
@@ -188,25 +188,25 @@ jobs:
           cache-from: type=gha,scope=ci-img-tooling-${{ matrix.arch }}
           cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope=ci-img-tooling-{0}', matrix.arch) || '' }}
 
-      - name: Build the base image
+      - name: Build the Live system
         run: |
           mkdir -p out
-          docker run --rm --privileged -v "$PWD:/work" rite-img build-base \
-            --binary dist/glibc-${{ matrix.arch }}/rite --output out/base.img
+          docker run --rm --privileged -v "$PWD:/work" rite-img build-system \
+            --binary dist/glibc-${{ matrix.arch }}/rite --output out/live.img
 
       - name: Add a ceremony
         run: |
           docker run --rm -v "$PWD:/work" rite-img build-img \
-            --base out/base.img \
-            --ceremony examples/showcase/demo.rite.yaml \
+            --system out/live.img \
+            --definition examples/showcase/demo.rite.yaml \
             --output out/demo.img
 
       # docs/development/img.md says build-img is reproducible.
       - name: Check that build-img is reproducible
         run: |
           docker run --rm -v "$PWD:/work" rite-img build-img \
-            --base out/base.img \
-            --ceremony examples/showcase/demo.rite.yaml \
+            --system out/live.img \
+            --definition examples/showcase/demo.rite.yaml \
             --output out/demo-again.img
           cmp out/demo.img out/demo-again.img
 

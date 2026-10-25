@@ -20,7 +20,7 @@ serve different needs:
 |--------------------------------------------|--------------------|--------------------|-----------------------------------------------|
 | Release tarballs (`rite-*-linux-*.tar.gz`) | musl, fully static | vendored           | no (`piv`/`yubikey` cannot static-link PC/SC) |
 | Docker image (`ghcr.io/rite-ly/rite`)      | glibc              | system (`libssl3`) | yes (`piv`, `yubikey`)                        |
-| Base ISOs (`rite-*-<arch>.iso`)            | glibc, the image's | system (`libssl3`) | yes (`piv`, `yubikey`)                        |
+| Rite Live (`rite-live-*-<arch>.img.xz`)    | glibc, the image's | system (`libssl3`) | yes (`piv`, `yubikey`)                        |
 
 The tarballs stay static for portability across distros (Alpine, older glibc,
 Remote SSH targets). The image runs on a known Debian base, so it links
@@ -57,8 +57,8 @@ docker buildx bake binary-glibc-arm64  # the image's aarch64 binary → dist/gli
 | `binaries-amd64`     | `binaries-amd64` | `dist/amd64/{rite, rite-ls}` (musl static)                                                                           |
 | `binaries-arm64`     | `binaries-arm64` | `dist/arm64/{rite, rite-ls}` (musl static)                                                                           |
 | `image`              | `release`        | multi-arch runtime image (`linux/amd64,linux/arm64`), glibc + hardware backends, with SBOM + provenance attestations |
-| `binary-glibc-amd64` | `binary-glibc`   | `dist/glibc-amd64/rite`, the image's binary, for the base ISOs                                                       |
-| `binary-glibc-arm64` | `binary-glibc`   | `dist/glibc-arm64/rite`, the image's binary, for the base ISOs                                                       |
+| `binary-glibc-amd64` | `binary-glibc`   | `dist/glibc-amd64/rite`, the image's binary, for the Live system                                                     |
+| `binary-glibc-arm64` | `binary-glibc`   | `dist/glibc-arm64/rite`, the image's binary, for the Live system                                                     |
 
 ## Build stages and toolchains
 

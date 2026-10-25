@@ -1,12 +1,12 @@
 # img/Dockerfile
-# Single image that builds Rite ceremony images.
+# Single image with the tools that build Rite Live.
 #
 # Subcommands (dispatched by entrypoint.sh):
-#   build-base  Build the base image: Debian, the rite binary and the ceremony
-#               session. Needs --privileged (mkosi mounts inside its build
-#               tree).
-#   build-img   Add a ceremony to a base image and emit a flashable .img.
-#   extract     Copy ceremony outputs out of a .img.
+#   build-system  Build the Live system: Debian, the rite binary and the
+#                 ceremony session. Needs --privileged (mkosi mounts inside its
+#                 build tree).
+#   build-img     Add a ceremony to a Live system and emit a flashable .img.
+#   extract       Copy ceremony outputs out of a .img.
 #
 # The three share one image because they need the same tooling (systemd-repart,
 # dosfstools, mtools).
@@ -60,7 +60,7 @@ WORKDIR /work
 COPY lib/              /img/lib/
 COPY mkosi/            /img/mkosi/
 COPY ceremony.repart.d/ /img/ceremony.repart.d/
-COPY entrypoint.sh build-base.sh build-img.sh extract-outputs.sh /img/
+COPY entrypoint.sh build-system.sh build-img.sh extract-outputs.sh /img/
 RUN chmod +x /img/*.sh
 
 ENTRYPOINT ["/img/entrypoint.sh"]

@@ -133,6 +133,14 @@ docker run --rm -it --init \
   ghcr.io/rite-ly/rite check ceremony.rite.yaml
 ```
 
+Run a ceremony from a USB drive with Rite Live, a read-only system that runs only Rite on the ceremony machine: add the ceremony definition to the Live system from the [release files](https://github.com/rite-ly/rite/releases/latest), write the image to a USB drive, and boot the machine from it ([Rite Live](docs/development/img.md)):
+
+```sh
+docker run --rm -v "$PWD:/work" ghcr.io/rite-ly/rite-img:<version> build-img \
+  --system rite-live-<version>-amd64.img.xz \
+  --definition ceremony.rite.yaml --output ceremony.img
+```
+
 Install from crates.io:
 
 ```sh
@@ -188,7 +196,13 @@ Both bundle the `rite-ls` language server. For other LSP-aware editors, run `rit
   - [ ] Code actions for common diagnostics
 - [x] **Isolation and deployment**
   - [x] Docker image for containerised execution
-  - [ ] Bootable USB image for air-gapped ceremonies
+  - [x] Rite Live: run a ceremony from a USB drive, on a read-only system that runs only Rite ([Rite Live](docs/development/img.md))
+    - [x] A Live system with each release, with build attestations; `rite-img` adds the ceremony as its own layer, reproducibly
+    - [x] Participants check the written drive against a published hash, and dm-verity checks every block the system reads
+    - [x] YubiKey PIV, and a toolbox in a second terminal (`openssl`, `ykman`, `pkcs11-tool`, `qrencode`, ...)
+    - [x] Outputs on a partition that Linux, macOS and Windows read
+    - [ ] Live system identity and network state recorded in the transcript
+    - [ ] Secure Boot signing
 
 ## Design
 

@@ -7,7 +7,8 @@ CLI behavior conventions are documented in `docs/development/cli-conventions.md`
 Runtime and frontend architecture is documented in `docs/development/runtime-and-frontend.md`,
 crate layout in `docs/development/crate-layout.md`, the crypto stack in
 `docs/development/cryptographic-dependencies.md`, the testing strategy in
-`docs/development/testing.md`, and the bootable ceremony image in `docs/development/img.md`.
+`docs/development/testing.md`, and Rite Live, the bootable ceremony system, in
+`docs/development/img.md`.
 
 ## AI-assisted contributions
 

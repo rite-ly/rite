@@ -8,7 +8,7 @@
 # that fails the check is not merged, and /run/rite/ceremony-error says why for
 # the start screen.
 #
-# A base image has no ceremony layer, which is not an error.
+# The Live system alone has no ceremony layer, which is not an error.
 set -euo pipefail
 
 # Prints the first path of the layer outside the files build-img writes, under

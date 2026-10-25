@@ -48,6 +48,10 @@ pub fn run(cmd_tx: &Sender<UiCommand>, event_rx: Receiver<ExecEvent>) -> io::Res
     let _guard = RawTerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
+    // The first draw writes only the cells that differ from a blank screen.
+    // A terminal without an alternate screen, such as the Linux console,
+    // keeps what was on it before, so the screen is cleared first.
+    terminal.clear()?;
 
     let (msg_tx, msg_rx) = unbounded::<Msg>();
     spawn_input_thread(msg_tx.clone());

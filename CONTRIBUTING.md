@@ -65,6 +65,15 @@ cargo test --workspace
 cargo test -p rite-stdlib -p rite --features piv,yubikey
 ```
 
+**Dependencies**, when a change touches a `Cargo.toml` or `Cargo.lock`
+(`cargo install cargo-deny --locked`):
+```sh
+cargo deny check
+```
+
+It checks advisories, licences and sources against `deny.toml`. A new dependency's licence must
+be on its `allow` list.
+
 **All at once**, the same commands as the CI lint and test jobs:
 ```sh
 cargo fmt --all -- --check \

@@ -1,10 +1,20 @@
-# cargo-audit configuration.
+# cargo-deny configuration: advisories, licences, banned crates and sources.
 #
-# Run via `cargo audit` (and in CI). Advisories listed under `ignore` are
-# suppressed with a documented rationale below; each entry must state why it
-# does not apply here and the condition under which it must be revisited.
+# Run with `cargo deny check`; CI runs it on dependency changes and weekly.
+
+[graph]
+# The hardware backends are behind features, and their dependencies are the
+# ones the advisory entries below are about.
+all-features = true
 
 [advisories]
+# Unmaintained and unsound crates fail the check as well as vulnerable ones,
+# anywhere in the graph. So does a yanked version in `Cargo.lock`.
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+# Each entry states why the advisory does not apply here and the condition
+# under which it must be revisited.
 ignore = [
     # RUSTSEC-2023-0071 — "Marvin Attack": potential key recovery through
     # timing sidechannels in the `rsa` crate. No fixed version is available
@@ -28,7 +38,7 @@ ignore = [
     #   - `yubikey` gains an RSA private-key code path (grep the dependency for
     #     `RsaPrivateKey`, `decrypt`, and `sign`);
     #   - a fixed release of `rsa` ships (drop this entry and upgrade).
-    "RUSTSEC-2023-0071",
+    { id = "RUSTSEC-2023-0071", reason = "rsa only rebuilds public keys inside yubikey" },
 
     # RUSTSEC-2026-0387: timing variability in `crypto-bigint` operations
     # intended to be constant-time. Fixed in 0.7.6; the affected 0.5 line has
@@ -53,5 +63,47 @@ ignore = [
     #     dependency for `SigningKey`, `SecretKey`, and `diffie_hellman`);
     #   - a stable `yubikey` release moves to `crypto-bigint` >= 0.7.6 (drop
     #     this entry and upgrade).
-    "RUSTSEC-2026-0387",
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 only sees public values inside yubikey" },
 ]
+
+[licenses]
+# Permissive licences only, so every dependency can be combined with both the
+# GPL-3.0-only crates and the `Apache-2.0 OR MIT` ones (`rite-sdk`,
+# `rite-model`, `rite-resolver`). A dependency under any other licence needs
+# an entry here, reviewed against both.
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Zlib",
+]
+# The workspace's own GPL crates, by name, so the licence does not become
+# acceptable for a dependency.
+exceptions = [
+    { allow = ["GPL-3.0-only"], crate = "rite" },
+    { allow = ["GPL-3.0-only"], crate = "rite-ls" },
+    { allow = ["GPL-3.0-only"], crate = "rite-openssl" },
+    { allow = ["GPL-3.0-only"], crate = "rite-piv" },
+    { allow = ["GPL-3.0-only"], crate = "rite-pkcs11" },
+    { allow = ["GPL-3.0-only"], crate = "rite-render" },
+    { allow = ["GPL-3.0-only"], crate = "rite-runtime" },
+    { allow = ["GPL-3.0-only"], crate = "rite-stdlib" },
+    { allow = ["GPL-3.0-only"], crate = "rite-tui" },
+    { allow = ["GPL-3.0-only"], crate = "rite-yubikey" },
+]
+
+[bans]
+wildcards = "deny"
+# Duplicates warn rather than fail: `yubikey` 0.8 pulls in the previous
+# RustCrypto generation (`der`, `digest`, `sha2`, `x509-cert` and others)
+# next to the one `rite-sdk` uses.
+multiple-versions = "warn"
+
+[sources]
+# Dependencies come from crates.io only.
+unknown-registry = "deny"
+unknown-git = "deny"

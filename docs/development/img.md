@@ -58,6 +58,15 @@ The attestations tie each file and the image to the release workflow run and its
 The Debian packages a Live system holds, with their versions, are listed in
 `rite-live-<version>-<arch>.manifest.json` next to it.
 
+Its root hash is in `rite-live-<version>-<arch>.roothash`, which `SHA256SUMS` and the
+attestations also cover. The Live system is not reproducible, so this file is the reference
+for its root hash. On a machine booted from the medium, the second terminal shows the root
+hash the system runs with:
+
+```
+grep -o 'roothash=[0-9a-f]*' /proc/cmdline
+```
+
 ## Build the Docker tooling image
 
 Two kinds of image appear on this page: the Docker image that holds the build tools, and
@@ -125,6 +134,7 @@ root   744904d5…
 
 `image` is the SHA-256 of the file. `root` is the root hash, which the build puts on the
 kernel command line (`roothash=` in `/proc/cmdline` on the running system).
+`--roothash FILE` also writes it to a file, as the release does.
 
 The Debian packages are those snapshot.debian.org served at the date in
 `img/mkosi/mkosi.conf`; moving that date is how package updates come in. Two builds of the

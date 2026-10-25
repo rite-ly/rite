@@ -114,12 +114,14 @@ unimplemented = "deny"
 wildcard_imports = "deny"
 self_named_module_files = "deny"
 
-# The binaries are built with whole-program optimization: `rite-ls` shrinks by
-# about a third, and both IDE extensions commit four of them per release. Symbol
-# names stay in, so a panic's backtrace still names its functions. Cargo reads
-# a profile from the workspace root only and leaves it out of a published crate:
-# `cargo install` and a crate that depends on these build with their own.
+# Fat LTO cuts `rite-ls` by about a third, which matters because the IDE
+# extensions commit its binaries. Symbols stay in for readable backtraces. This
+# profile applies to workspace builds only, not to `cargo install` or dependents.
+#
+# Overflow checks stay on as a backstop for arithmetic not written with
+# `checked_*` or `wrapping_*`; they add about 1% to the binary size.
 [profile.release]
 lto = "fat"
 codegen-units = 1
 strip = "debuginfo"
+overflow-checks = true

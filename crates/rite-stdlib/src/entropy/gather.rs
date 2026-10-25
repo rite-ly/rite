@@ -29,9 +29,6 @@ impl Action for GatherEntropyAction {
     }
 
     fn apply_defaults(&self, params: &mut serde_json::Value, _step: &StepInfo) {
-        if !params.is_object() {
-            *params = serde_json::json!({});
-        }
         if let Some(obj) = params.as_object_mut() {
             obj.entry("instruction".to_string())
                 .or_insert_with(|| serde_json::json!(DEFAULT_INSTRUCTION));

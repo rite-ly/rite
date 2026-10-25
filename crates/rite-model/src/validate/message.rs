@@ -10,7 +10,7 @@
 //! through `properties` or `items`, so a message never captures errors about
 //! another field.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use serde_json::Value;
@@ -31,7 +31,7 @@ pub struct ParamsCheck {
 ///
 /// Returns why the generated schema did not compile, which is a mistake in
 /// the generator; a test compiles every action's schema.
-pub fn params_check(action: ActionType) -> Result<&'static ParamsCheck, &'static SchemaError> {
+pub fn params_check(action: ActionType) -> Result<&'static ParamsCheck, SchemaError> {
     static CHECKS: OnceLock<HashMap<ActionType, Result<ParamsCheck, SchemaError>>> =
         OnceLock::new();
     let checks = CHECKS.get_or_init(|| {
@@ -47,17 +47,15 @@ pub fn params_check(action: ActionType) -> Result<&'static ParamsCheck, &'static
     });
     match checks.get(&action) {
         Some(Ok(check)) => Ok(check),
-        Some(Err(error)) => Err(error),
+        Some(Err(error)) => Err(error.clone()),
         // Every action is in `ALL`, which a test holds to the enum.
-        None => {
-            static MISSING: OnceLock<SchemaError> = OnceLock::new();
-            Err(MISSING.get_or_init(|| SchemaError(format!("no schema for '{action}'"))))
-        }
+        None => Err(SchemaError(format!("no schema for '{action}'"))),
     }
 }
 
 /// Where a diagnostic about a violation points: at a key, or at a value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Anchor {
     /// The key of the entry at the pointer.
     Key,
@@ -67,6 +65,7 @@ pub enum Anchor {
 
 /// Whether a message may quote the value it is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Values {
     /// Quote it: the value is as the definition writes it.
     Shown,
@@ -87,7 +86,17 @@ impl Violation {
                 _ => (self.instance_path.clone(), Anchor::Value),
             },
             Keyword::Required { .. } => (self.instance_path.clone(), Anchor::Key),
-            _ => (self.instance_path.clone(), Anchor::Value),
+            Keyword::Type { .. }
+            | Keyword::Enum { .. }
+            | Keyword::Const { .. }
+            | Keyword::Pattern { .. }
+            | Keyword::Minimum { .. }
+            | Keyword::Maximum { .. }
+            | Keyword::MinItems { .. }
+            | Keyword::OneOf { .. }
+            | Keyword::Not
+            | Keyword::False
+            | Keyword::Unsupported { .. } => (self.instance_path.clone(), Anchor::Value),
         }
     }
 }
@@ -95,23 +104,38 @@ impl Violation {
 impl ParamsCheck {
     /// Every way `with` fails the action's schema. An object with several
     /// unexpected keys gives one violation per key, so each can point at its
-    /// own key.
+    /// own key. A value of the wrong type gives that violation alone: the
+    /// rules about its value, such as the names a string may take, do not
+    /// apply to it.
     #[must_use]
     pub fn validate(&self, with: &Value) -> Vec<Violation> {
-        self.validator
-            .validate(with)
+        let violations = self.validator.validate(with);
+        let mistyped: HashSet<Pointer> = violations
+            .iter()
+            .filter(|violation| matches!(violation.keyword, Keyword::Type { .. }))
+            .map(|violation| violation.instance_path.clone())
+            .collect();
+        violations
             .into_iter()
-            .flat_map(|violation| match &violation.keyword {
-                Keyword::AdditionalProperties { unexpected } if unexpected.len() > 1 => unexpected
-                    .iter()
-                    .map(|key| Violation {
-                        keyword: Keyword::AdditionalProperties {
-                            unexpected: vec![key.clone()],
-                        },
-                        ..violation.clone()
-                    })
-                    .collect(),
-                _ => vec![violation],
+            .filter(|violation| {
+                matches!(violation.keyword, Keyword::Type { .. })
+                    || !mistyped.contains(&violation.instance_path)
+            })
+            .flat_map(|violation| {
+                if let Keyword::AdditionalProperties { unexpected } = &violation.keyword
+                    && unexpected.len() > 1
+                {
+                    return unexpected
+                        .iter()
+                        .map(|key| Violation {
+                            keyword: Keyword::AdditionalProperties {
+                                unexpected: vec![key.clone()],
+                            },
+                            ..violation.clone()
+                        })
+                        .collect();
+                }
+                vec![violation]
             })
             .collect()
     }
@@ -156,17 +180,28 @@ impl ParamsCheck {
                     format!("'{field}' requires '{property}'")
                 }
             }
-            keyword => {
+            // A value of the wrong type has not reached the rule an
+            // `x-message` explains, so it reads the same everywhere.
+            keyword @ Keyword::Type { .. } => found(
+                self.rule(keyword, &violation.schema_path, &field),
+                values,
+                at.lookup(with),
+            ),
+            keyword @ (Keyword::Enum { .. }
+            | Keyword::Const { .. }
+            | Keyword::Pattern { .. }
+            | Keyword::Minimum { .. }
+            | Keyword::Maximum { .. }
+            | Keyword::MinItems { .. }
+            | Keyword::OneOf { .. }
+            | Keyword::Not
+            | Keyword::False
+            | Keyword::Unsupported { .. }) => {
                 let rule = x_message(&self.schema, &violation.schema_path).map_or_else(
                     || self.rule(keyword, &violation.schema_path, &field),
                     str::to_string,
                 );
-                match (values, at.lookup(with)) {
-                    (Values::Shown, Some(value)) if is_scalar(value) => {
-                        format!("{rule}, found {}", shown(value))
-                    }
-                    _ => rule,
-                }
+                found(rule, values, at.lookup(with))
             }
         }
     }
@@ -178,7 +213,17 @@ impl ParamsCheck {
             // A `oneOf` of constants is an enumeration whose values each
             // carry a description, and reads as one.
             Keyword::OneOf { .. } => self.constants(keyword_at),
-            _ => None,
+            Keyword::Type { .. }
+            | Keyword::Const { .. }
+            | Keyword::Pattern { .. }
+            | Keyword::Minimum { .. }
+            | Keyword::Maximum { .. }
+            | Keyword::MinItems { .. }
+            | Keyword::Required { .. }
+            | Keyword::AdditionalProperties { .. }
+            | Keyword::Not
+            | Keyword::False
+            | Keyword::Unsupported { .. } => None,
         };
         if let Some(options) = options {
             return match options.as_slice() {
@@ -265,6 +310,16 @@ fn x_message<'a>(schema: &'a Value, keyword: &Pointer) -> Option<&'a str> {
             }
             _ => return None,
         };
+    }
+}
+
+/// `rule`, followed by the scalar `value` it is about when `values` allows.
+fn found(rule: String, values: Values, value: Option<&Value>) -> String {
+    match (values, value) {
+        (Values::Shown, Some(value)) if is_scalar(value) => {
+            format!("{rule}, found {}", shown(value))
+        }
+        (Values::Shown | Values::Withheld, _) => rule,
     }
 }
 
@@ -680,6 +735,29 @@ mod tests {
             ),
             "'length' counts words for 'bip39', and a phrase has 12, 15, 18, 21 or 24 words, \
              found 32"
+        );
+    }
+
+    /// A value of the wrong type is told so, in the same words everywhere,
+    /// and once: the `x-message` and the names that a string may take are
+    /// about values of the right type.
+    #[test]
+    fn a_wrong_type_is_one_message_in_plain_words() {
+        // Unquoted, so YAML reads it as a number.
+        assert_eq!(
+            sole(ActionType::PivReadCertificate, &json!({"slot": 82})),
+            "'with.slot' must be a string, found 82"
+        );
+        assert_eq!(
+            sole(
+                ActionType::EnterShare,
+                &json!({"message": "m", "length": "35"})
+            ),
+            "'with.length' must be an integer, found '35'"
+        );
+        assert_eq!(
+            sole(ActionType::EncryptData, &json!({"scheme": 5})),
+            "'with.scheme' must be a string, found 5"
         );
     }
 

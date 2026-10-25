@@ -146,6 +146,7 @@ pub enum Keyword {
 /// How many of a `oneOf`'s alternatives a value matched, when it was not
 /// exactly one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Matched {
     /// None of them.
     None,

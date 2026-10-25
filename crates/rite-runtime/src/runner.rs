@@ -189,7 +189,8 @@ pub trait Action: Send + Sync {
     /// The action this handler implements, as the DSL names it.
     fn action_type(&self) -> ActionType;
 
-    /// Apply per-step parameter defaults before validation.
+    /// Fill in per-step parameter defaults. The executor calls this on a
+    /// block the action's schema accepted, so `params` is an object.
     fn apply_defaults(&self, _params: &mut serde_json::Value, _step: &StepInfo) {}
 
     /// Report values in a step's `with:` block that *this build* cannot carry
@@ -658,15 +659,14 @@ impl Executor {
 
             let ctx = state.handler_context();
             let step_info = step_info_from(step);
-            let mut params = expressions::evaluate_expr_value(&step.with, &ctx)?;
-            handler.apply_defaults(&mut params, &step_info);
+            let params = expressions::evaluate_expr_value(&step.with, &ctx)?;
 
             let result = execute_step_with_retry(
                 handler.as_ref(),
                 step,
                 &step_info,
                 &ctx,
-                &params,
+                params,
                 reporter,
                 &mut backends,
             )?;
@@ -816,7 +816,9 @@ impl RunBackends<'_> {
 /// only now. It is refused under the rule a literal one would break, before
 /// the handler or a backend sees it, so a handler can rely on its params
 /// having the shape the schema describes. Every value is known here, so
-/// nothing is deferred.
+/// nothing is deferred. One difference with serde remains: JSON Schema counts
+/// `2.0` as an integer. No expression yields a float, since no parameter
+/// type is one, and a literal float is refused when the file is read.
 ///
 /// The value is evaluated, and may be a secret an expression copied in, so
 /// the message names the field and the rule and never the value: it reaches
@@ -852,13 +854,19 @@ fn execute_step_with_retry(
     step: &Step,
     step_info: &StepInfo,
     ctx: &HandlerContext,
-    params: &serde_json::Value,
+    mut params: serde_json::Value,
     reporter: &mut Reporter<'_>,
     backends: &mut RunBackends<'_>,
 ) -> Result<StepResult, ExecutionError> {
+    // A step with no `with:` has no parameters, as the resolver reads it.
+    if params.is_null() {
+        params = serde_json::Value::Object(serde_json::Map::new());
+    }
     // The params are the same on every attempt, so they are checked once, and
-    // a refusal is the first attempt's failure, never retried.
-    if let Err(action_err) = check_params(step.action, params) {
+    // a refusal is the first attempt's failure, never retried. The check sees
+    // the block as the definition wrote it, as the resolver does; the
+    // handler's defaults are filled in after.
+    if let Err(action_err) = check_params(step.action, &params) {
         let exec_err = action_error_to_execution(action_err, &step.id);
         reporter.fact(StepFact::StepAttemptFailed {
             step: step.id.clone(),
@@ -867,6 +875,8 @@ fn execute_step_with_retry(
         })?;
         return Err(exec_err);
     }
+    handler.apply_defaults(&mut params, step_info);
+    let params = &params;
 
     let mut attempt: u32 = 1;
     loop {
@@ -1866,6 +1876,92 @@ sections:
                 .iter()
                 .any(|f| matches!(f, StepFact::StepCompleted { .. }))
         );
+    }
+
+    /// An `attest` whose defaults turn any block into a valid one.
+    struct Defaulting;
+
+    impl Action for Defaulting {
+        fn action_type(&self) -> ActionType {
+            ActionType::Attest
+        }
+
+        fn apply_defaults(&self, params: &mut serde_json::Value, _step: &StepInfo) {
+            *params = serde_json::json!({ "statement": "the default" });
+        }
+
+        fn execute(
+            &self,
+            _step: &StepInfo,
+            _ctx: &HandlerContext,
+            _params: &serde_json::Value,
+            _reporter: &mut Reporter<'_>,
+            _backend: Option<&mut dyn Backend>,
+        ) -> Result<StepResult, ActionError> {
+            Ok(StepResult::completed("done".to_string()))
+        }
+    }
+
+    /// The schema sees the block the definition wrote, not the one the
+    /// handler's defaults make of it: a whole block an expression turned
+    /// into a string is refused, as a literal string is at `rite check`.
+    #[test]
+    fn the_schema_checks_the_block_before_the_defaults() {
+        let yaml = r#"
+version: "0.3"
+name: "Evaluated"
+roles:
+  participant:
+    person: "Alice"
+parameters:
+  s: { type: string, default: "a statement" }
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      work:
+        action: attest
+        silent: true
+        with: "${param.s}"
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("a whole block expression is deferred at resolution");
+        let (result, facts, _) = drive(ceremony, Arc::new(Defaulting), true);
+
+        assert!(result.is_err());
+        let error = facts
+            .iter()
+            .find_map(|f| match f {
+                StepFact::StepAttemptFailed { error, .. } => Some(error.message.clone()),
+                _ => None,
+            })
+            .expect("the attempt is recorded");
+        assert_eq!(error, "Step 'work' failed: 'with' must be a map");
+    }
+
+    /// A step without `with:` has no parameters, and the defaults fill them.
+    #[test]
+    fn a_step_without_with_runs_with_its_defaults() {
+        let yaml = r#"
+version: "0.3"
+name: "Defaults"
+roles:
+  participant:
+    person: "Alice"
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      work:
+        action: attest
+        silent: true
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("resolve");
+        let (result, _, _) = drive(ceremony, Arc::new(Defaulting), true);
+        assert_eq!(result.expect("run ok").steps_completed, 1);
     }
 
     #[test]

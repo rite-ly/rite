@@ -26,7 +26,12 @@ mod tests {
             .flat_map(|byte| [format!("{byte:02x}"), format!("{byte:02X}")])
             .collect();
         names.extend(names.clone().into_iter().map(|name| format!("piv:{name}")));
-        names.extend(["", "9", "9aa", "piv:", "x9a"].map(String::from));
+        names.extend(
+            [
+                "", "9", "9aa", "piv:", "x9a", "082", "+82", "piv:095", " 82",
+            ]
+            .map(String::from),
+        );
         for name in names {
             assert_eq!(
                 pattern.is_match(&name),

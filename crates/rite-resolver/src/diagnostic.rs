@@ -299,7 +299,7 @@ impl SpanMap {
         if let Some(found) = fields.get(field) {
             let span = match anchor {
                 Anchor::Key => found.key.or(found.value),
-                Anchor::Value => found.value.or(found.key),
+                Anchor::Value | _ => found.value.or(found.key),
             };
             if span.is_some() {
                 return span;

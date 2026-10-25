@@ -35,6 +35,7 @@ pub use piv::{
     AttestSlotParams, PIV_SIGN_ALGORITHMS, PIV_SLOT, PivReadCertificateParams, PivSignParams,
 };
 pub use pki::{GenerateCsrParams, IssueCertificateParams};
+pub(crate) use schema::names;
 pub use schema::{KEYWORDS, generator, with_schema};
 pub use sharing::{EnterShareParams, RevealParams, SplitSecretParams};
 pub use verification::{

@@ -3,6 +3,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::types::Vocabulary;
+
 /// Params for `clock_check` action.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -25,11 +27,10 @@ pub struct ConfirmParams {
 
 /// Display format for the `oral_readback` action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(into = "String", try_from = "String")]
 pub enum ReadbackFormat {
-    /// NATO phonetic alphabet (default).
+    /// NATO phonetic alphabet (default). Also written `nato`.
     #[default]
-    #[serde(alias = "nato")]
     NatoPhonetic,
     /// Hex pairs, grouped by 4 bytes.
     Hex,
@@ -56,19 +57,41 @@ impl ReadbackFormat {
     }
 }
 
-/// The names serde accepts, the `nato` alias among them.
+impl Vocabulary for ReadbackFormat {
+    const VALUES: &'static [Self] = Self::ALL;
+    const ALIASES: &'static [(&'static str, Self)] = &[("nato", ReadbackFormat::NatoPhonetic)];
+
+    fn name(self) -> &'static str {
+        self.label()
+    }
+}
+
+impl From<ReadbackFormat> for String {
+    fn from(format: ReadbackFormat) -> Self {
+        format.label().to_string()
+    }
+}
+
+impl TryFrom<String> for ReadbackFormat {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Self::from_name(&s).ok_or_else(|| {
+            format!(
+                "unknown readback format '{s}': expected {}",
+                crate::types::either(Self::ALL.iter().map(|format| format.label()))
+            )
+        })
+    }
+}
+
 impl JsonSchema for ReadbackFormat {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "ReadbackFormat".into()
     }
 
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        super::schema::names(
-            ReadbackFormat::ALL
-                .iter()
-                .map(|format| format.label())
-                .chain(["nato"]),
-        )
+        Self::names_schema()
     }
 }
 

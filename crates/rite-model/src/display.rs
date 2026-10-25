@@ -17,6 +17,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+use crate::types::Vocabulary;
 use crate::{bip39, paper32};
 
 /// An encoding a value is shown in.
@@ -346,15 +347,19 @@ impl fmt::Display for UnknownRevealFormat {
 
 impl std::error::Error for UnknownRevealFormat {}
 
+impl Vocabulary for RevealFormat {
+    const VALUES: &'static [Self] = Self::ALL;
+
+    fn name(self) -> &'static str {
+        self.as_str()
+    }
+}
+
 impl FromStr for RevealFormat {
     type Err = UnknownRevealFormat;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|format| format.as_str() == s)
-            .ok_or_else(|| UnknownRevealFormat(s.to_string()))
+        Self::from_name(s).ok_or_else(|| UnknownRevealFormat(s.to_string()))
     }
 }
 

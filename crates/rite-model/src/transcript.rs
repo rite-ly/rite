@@ -475,20 +475,24 @@ impl std::fmt::Display for Format {
     }
 }
 
+impl crate::types::Vocabulary for Format {
+    const VALUES: &'static [Self] = Self::ALL;
+
+    fn name(self) -> &'static str {
+        self.as_str()
+    }
+}
+
 impl std::str::FromStr for Format {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|format| format.as_str() == s)
-            .ok_or_else(|| {
-                format!(
-                    "unknown format '{s}': expected {}",
-                    crate::types::either(Format::ALL.iter().map(|format| format.as_str()))
-                )
-            })
+        <Self as crate::types::Vocabulary>::from_name(s).ok_or_else(|| {
+            format!(
+                "unknown format '{s}': expected {}",
+                crate::types::either(Format::ALL.iter().map(|format| format.as_str()))
+            )
+        })
     }
 }
 

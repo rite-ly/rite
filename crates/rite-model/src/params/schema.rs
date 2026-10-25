@@ -154,7 +154,7 @@ fn enter_value(generator: &mut SchemaGenerator) -> Schema {
 }
 
 /// A JSON Schema `enum` of names, for a vocabulary narrowed by an action.
-pub(super) fn names<'a>(names: impl Iterator<Item = &'a str>) -> Schema {
+pub(crate) fn names<'a>(names: impl Iterator<Item = &'a str>) -> Schema {
     let names: Vec<&str> = names.collect();
     json_schema!({ "type": "string", "enum": names })
 }

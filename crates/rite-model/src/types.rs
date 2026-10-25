@@ -266,13 +266,13 @@ pub enum BackendUsage {
 /// parameter, not part of a profile's identity, so this enum carries no
 /// run-specific values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(into = "String", try_from = "String")]
 #[non_exhaustive]
 pub enum CertProfile {
     /// Self-signed CA at the top of a chain.
     RootCa,
-    /// CA below another, constrained by `path_len`.
-    #[serde(alias = "intermediate_ca")]
+    /// CA below another, constrained by `path_len`. Also written
+    /// `intermediate_ca`.
     SubCa,
     /// TLS server certificate.
     TlsServer,
@@ -292,11 +292,6 @@ impl CertProfile {
         CertProfile::EndEntity,
     ];
 
-    /// `intermediate_ca` is `sub_ca` under the name the PKI world more often
-    /// uses for it.
-    const ALIASES: &'static [(&'static str, CertProfile)] =
-        &[("intermediate_ca", CertProfile::SubCa)];
-
     /// The name a ceremony writes.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -315,17 +310,36 @@ impl fmt::Display for CertProfile {
     }
 }
 
+impl Vocabulary for CertProfile {
+    const VALUES: &'static [Self] = Self::ALL;
+    /// `intermediate_ca` is `sub_ca` under the name the PKI world more often
+    /// uses for it.
+    const ALIASES: &'static [(&'static str, Self)] = &[("intermediate_ca", CertProfile::SubCa)];
+
+    fn name(self) -> &'static str {
+        self.as_str()
+    }
+}
+
 impl std::str::FromStr for CertProfile {
     type Err = UnknownCertProfile;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .iter()
-            .map(|&profile| (profile.as_str(), profile))
-            .chain(Self::ALIASES.iter().copied())
-            .find(|(name, _)| *name == s)
-            .map(|(_, profile)| profile)
-            .ok_or(UnknownCertProfile)
+        Self::from_name(s).ok_or(UnknownCertProfile)
+    }
+}
+
+impl From<CertProfile> for String {
+    fn from(profile: CertProfile) -> Self {
+        profile.as_str().to_string()
+    }
+}
+
+impl TryFrom<String> for CertProfile {
+    type Error = UnknownCertProfile;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -335,12 +349,7 @@ impl schemars::JsonSchema for CertProfile {
     }
 
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        let names: Vec<&str> = Self::ALL
-            .iter()
-            .map(|profile| profile.as_str())
-            .chain(Self::ALIASES.iter().map(|(alias, _)| *alias))
-            .collect();
-        schemars::json_schema!({ "type": "string", "enum": names })
+        Self::names_schema()
     }
 }
 
@@ -352,6 +361,40 @@ impl fmt::Display for UnknownCertProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let names: Vec<&str> = CertProfile::ALL.iter().map(|p| p.as_str()).collect();
         write!(f, "supported profiles: {}", names.join(", "))
+    }
+}
+
+/// A DSL enum a ceremony writes as one of a fixed set of names.
+///
+/// Parsing and the schema both read the names from here, so an alias is
+/// written once and the schema accepts exactly what parsing does.
+pub(crate) trait Vocabulary: Copy + 'static {
+    /// Every value, in declaration order.
+    const VALUES: &'static [Self];
+    /// Other names a ceremony may write, and the value each stands for.
+    const ALIASES: &'static [(&'static str, Self)] = &[];
+
+    /// The name a ceremony writes and a transcript records.
+    fn name(self) -> &'static str;
+
+    /// The value `name` stands for, under its own name or an alias.
+    fn from_name(name: &str) -> Option<Self> {
+        Self::VALUES
+            .iter()
+            .map(|&value| (value.name(), value))
+            .chain(Self::ALIASES.iter().copied())
+            .find(|(candidate, _)| *candidate == name)
+            .map(|(_, value)| value)
+    }
+
+    /// A string schema that accepts every name and alias.
+    fn names_schema() -> schemars::Schema {
+        crate::params::names(
+            Self::VALUES
+                .iter()
+                .map(|value| value.name())
+                .chain(Self::ALIASES.iter().map(|(alias, _)| *alias)),
+        )
     }
 }
 
@@ -439,15 +482,19 @@ impl From<SharingScheme> for String {
     }
 }
 
+impl Vocabulary for SharingScheme {
+    const VALUES: &'static [Self] = Self::ALL;
+
+    fn name(self) -> &'static str {
+        self.as_str()
+    }
+}
+
 impl std::str::FromStr for SharingScheme {
     type Err = UnknownSharingScheme;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|scheme| scheme.as_str() == s)
-            .ok_or(UnknownSharingScheme)
+        Self::from_name(s).ok_or(UnknownSharingScheme)
     }
 }
 
@@ -457,8 +504,7 @@ impl schemars::JsonSchema for SharingScheme {
     }
 
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        let names: Vec<&str> = Self::ALL.iter().map(|scheme| scheme.as_str()).collect();
-        schemars::json_schema!({ "type": "string", "enum": names })
+        Self::names_schema()
     }
 }
 
@@ -1232,17 +1278,45 @@ mod tests {
         check(Format::ALL);
     }
 
-    /// serde accepts the alias, so the schema does too.
+    /// serde, `FromStr` and the schema accept the same names, aliases
+    /// included, for every vocabulary whose schema is its names.
     #[test]
-    fn a_cert_profile_alias_is_in_the_schema_and_parses() {
-        let schema = schemars::schema_for!(CertProfile);
-        let names = schema.get("enum").and_then(|e| e.as_array()).unwrap();
-        assert!(names.iter().any(|name| name == "intermediate_ca"));
-        assert_eq!(
-            serde_json::from_value::<CertProfile>(serde_json::json!("intermediate_ca")).unwrap(),
-            CertProfile::SubCa
-        );
+    fn a_vocabulary_schema_accepts_what_serde_reads() {
+        use crate::params::ReadbackFormat;
+
+        fn check<T>()
+        where
+            T: Vocabulary + std::fmt::Debug + PartialEq + schemars::JsonSchema,
+            T: serde::de::DeserializeOwned,
+        {
+            let schema = schemars::schema_for!(T);
+            let listed: Vec<&str> = schema
+                .get("enum")
+                .and_then(|names| names.as_array())
+                .unwrap()
+                .iter()
+                .filter_map(|name| name.as_str())
+                .collect();
+            let named = T::VALUES.iter().map(|&value| (value.name(), value));
+            let mut expected = Vec::new();
+            for (name, value) in named.chain(T::ALIASES.iter().copied()) {
+                assert_eq!(
+                    serde_json::from_value::<T>(serde_json::json!(name)).unwrap(),
+                    value
+                );
+                expected.push(name);
+            }
+            assert_eq!(listed, expected);
+        }
+
+        check::<CertProfile>();
+        check::<SharingScheme>();
+        check::<ReadbackFormat>();
         assert_eq!("intermediate_ca".parse(), Ok(CertProfile::SubCa));
+        assert_eq!(
+            serde_json::from_value::<ReadbackFormat>(serde_json::json!("nato")).unwrap(),
+            ReadbackFormat::NatoPhonetic
+        );
     }
 
     /// `ActionType::ALL` is written by hand, so it can fall behind the enum.

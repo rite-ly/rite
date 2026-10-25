@@ -192,7 +192,10 @@ jobs:
         run: |
           mkdir -p out
           docker run --rm --privileged -v "$PWD:/work" rite-img build-system \
-            --binary dist/glibc-${{ matrix.arch }}/rite --output out/live.img
+            --binary dist/glibc-${{ matrix.arch }}/rite \
+            --output out/live.img \
+            --roothash out/live.roothash
+          grep -qxE '[0-9a-f]{64}' out/live.roothash
 
       - name: Add a ceremony
         run: |
@@ -213,4 +216,5 @@ jobs:
       - name: Read back the outputs partition
         run: |
           docker run --rm -v "$PWD:/work" rite-img extract \
-            --image out/demo.img --output out/outputs
+            --image out/demo.img \
+            --output out/outputs

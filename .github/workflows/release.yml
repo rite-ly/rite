@@ -286,7 +286,9 @@ jobs:
   # of the same run: built on Debian trixie, as the Live system is, with the
   # piv/yubikey backends the musl binary lacks. The Debian packages come from
   # the snapshot.debian.org date in img/mkosi/mkosi.conf. The release ships it
-  # compressed with xz, and the packages it holds as a JSON manifest.
+  # compressed with xz, the packages it holds as a JSON manifest, and its root
+  # hash: the system is not reproducible, so the root hash a booted machine
+  # shows can only be checked against this file.
   build-system:
     name: Build Live system (${{ matrix.arch }})
     needs: [validate, build-image]
@@ -330,7 +332,10 @@ jobs:
           digest=$(basename "${{ runner.temp }}"/digests/*)
           docker run --rm --privileged -v "$PWD:/work" \
             "ghcr.io/rite-ly/rite-img@sha256:${digest}" build-system \
-            --binary rite --output "$LIVE.img" --manifest "$LIVE.manifest.json"
+            --binary rite \
+            --output "$LIVE.img" \
+            --manifest "$LIVE.manifest.json" \
+            --roothash "$LIVE.roothash"
           # The container writes the image as root; compressing to stdout
           # leaves the runner user owning the .xz, where xz in place would try
           # to copy root's group onto it and fail.
@@ -343,6 +348,7 @@ jobs:
           path: |
             work/${{ env.LIVE }}.img.xz
             work/${{ env.LIVE }}.manifest.json
+            work/${{ env.LIVE }}.roothash
           if-no-files-found: error
           # The image is already compressed.
           compression-level: 0
@@ -498,11 +504,12 @@ jobs:
           rm -rf "$tmp"
           cp "$ARTS/rite-ls-windows-amd64/rite-ls.exe" "$RELEASE_DIR/rite-ls-${VERSION}-windows-amd64.exe"
 
-          # Live systems, the input of build-img (docs/development/img.md), and
-          # the package manifest of each
+          # Live systems, the input of build-img (docs/development/img.md), with
+          # the package manifest and the root hash of each
           for arch in amd64 arm64; do
             cp "$ARTS/live-${arch}/rite-live-${VERSION}-${arch}.img.xz" "$RELEASE_DIR/"
             cp "$ARTS/live-${arch}/rite-live-${VERSION}-${arch}.manifest.json" "$RELEASE_DIR/"
+            cp "$ARTS/live-${arch}/rite-live-${VERSION}-${arch}.roothash" "$RELEASE_DIR/"
           done
 
           # Bare file names, so sha256sum --check works in the directory the
@@ -510,8 +517,8 @@ jobs:
           (cd "$RELEASE_DIR" && sha256sum -- * > SHA256SUMS)
 
       # Provenance over the exact files shipped on the release: the rite tarballs/zip,
-      # the flat rite-ls binaries, the Live systems and their package manifests, and
-      # SHA256SUMS. Attesting the packaged files (not the raw build outputs) means each
+      # the flat rite-ls binaries, the Live systems with their package manifests and
+      # root hashes, and SHA256SUMS. Attesting the packaged files (not the raw build outputs) means each
       # subject digest matches what a user downloads, so
       # `gh attestation verify <file> --repo rite-ly/rite` succeeds on the artefact itself.
       - name: Attest release artifacts

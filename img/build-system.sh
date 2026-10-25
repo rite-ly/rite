@@ -30,6 +30,7 @@ Required:
 Optional:
   --manifest FILE    Also write the system's Debian packages and their
                      versions, as JSON.
+  --roothash FILE    Also write the system's root hash, the line root prints.
   --verbose          Show the output of mkosi.
   -h, --help         Show this help.
 
@@ -42,12 +43,14 @@ EOF
 BINARY=""
 OUTPUT=""
 MANIFEST=""
+ROOT_HASH_FILE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --binary)   need_value "$@"; BINARY="$2"; shift 2 ;;
         --output)   need_value "$@"; OUTPUT="$2"; shift 2 ;;
         --manifest) need_value "$@"; MANIFEST="$2"; shift 2 ;;
+        --roothash) need_value "$@"; ROOT_HASH_FILE="$2"; shift 2 ;;
         --verbose)  VERBOSE=true; shift ;;
         -h|--help)  usage; exit 0 ;;
         *)          usage_error "unknown option: $1" ;;
@@ -58,7 +61,7 @@ done
 [[ -n "$OUTPUT" ]] || usage_error "--output is required"
 [[ -f "$BINARY" ]] || die "binary not found: $BINARY"
 # Checked now rather than after a build of several minutes.
-for out in "$OUTPUT" ${MANIFEST:+"$MANIFEST"}; do
+for out in "$OUTPUT" ${MANIFEST:+"$MANIFEST"} ${ROOT_HASH_FILE:+"$ROOT_HASH_FILE"}; do
     [[ ! -d "$out" ]] || die "output is a directory: $out"
     [[ -d "$(dirname "$out")" ]] || die "directory not found: $(dirname "$out")"
 done
@@ -95,6 +98,9 @@ quietly mkosi \
 ROOT_HASH=$(cat "$TEMP_DIR/out/system.roothash")
 if [[ -n "$MANIFEST" ]]; then
     mv "$TEMP_DIR/out/system.manifest" "$MANIFEST"
+fi
+if [[ -n "$ROOT_HASH_FILE" ]]; then
+    echo "$ROOT_HASH" > "$ROOT_HASH_FILE"
 fi
 mv "$TEMP_DIR/out/system.raw" "$OUTPUT"
 

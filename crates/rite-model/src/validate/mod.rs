@@ -382,17 +382,17 @@ mod tests {
             matches!(found.as_slice(), [(path, Keyword::Pattern { .. })] if path == "/expect_recipient")
         );
 
+        // The cap over every scheme and the default scheme's limit are both
+        // 100, and the engine reports each rule.
         let found = keywords(
             ActionType::SplitSecret,
             &json!({"threshold": 2, "shares": 101}),
         );
-        assert_eq!(
-            found,
-            [(
-                "/shares".to_string(),
-                Keyword::Maximum { limit: json!(100) }
-            )]
+        let maximum = (
+            "/shares".to_string(),
+            Keyword::Maximum { limit: json!(100) },
         );
+        assert_eq!(found, [maximum.clone(), maximum]);
 
         let found = keywords(
             ActionType::EnterSecret,

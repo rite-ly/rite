@@ -623,10 +623,8 @@ fn type_json_scalars(ceremony: &mut Ceremony, node: &Node) {
             if let Some(with) = fields.get_node("with") {
                 // `with:` with nothing after it, or `with: ~`, is YAML's null:
                 // a step that gives no parameters, as one without the key.
-                let null = with
-                    .as_scalar()
-                    .is_some_and(|s| s.may_coerce() && matches!(s.as_str(), "" | "~" | "null"));
-                step.with = (!null).then(|| typed_json(with));
+                let typed = typed_json(with);
+                step.with = (!typed.is_null()).then_some(typed);
             }
             if let Some(reads) = fields.get_node("reads") {
                 step.reads = Some(typed_json(reads));
@@ -653,10 +651,13 @@ fn type_json_scalars(ceremony: &mut Ceremony, node: &Node) {
 fn typed_json(node: &Node) -> serde_json::Value {
     if let Some(scalar) = node.as_scalar() {
         let text = scalar.as_str();
-        let typed = if scalar.may_coerce() {
-            coerce_scalar(text)
-        } else {
+        let typed = if !scalar.may_coerce() {
             None
+        } else if text.is_empty() {
+            // A key with nothing after it.
+            Some(serde_json::Value::Null)
+        } else {
+            coerce_scalar(text)
         };
         typed.unwrap_or_else(|| serde_json::Value::String(text.to_string()))
     } else if let Some(map) = node.as_mapping() {
@@ -716,7 +717,7 @@ fn number_diagnostics(
 /// Try to coerce a YAML scalar string to its typed JSON equivalent.
 /// Follows YAML 1.2 core schema rules.
 fn coerce_scalar(s: &str) -> Option<serde_json::Value> {
-    if s == "null" || s == "~" {
+    if matches!(s, "null" | "Null" | "NULL" | "~") {
         return Some(serde_json::Value::Null);
     }
     if matches!(s, "true" | "True" | "TRUE") {

@@ -695,6 +695,85 @@ backends:
         );
     }
 
+    /// Each mistake in a `with:` block is reported once, and none hides
+    /// another: a rule over several values is checked beside the schema, a
+    /// count is capped whatever the scheme, every spelling of YAML's null
+    /// means null, and an expression that fails to parse is not also a value
+    /// of the wrong type.
+    #[test]
+    fn each_with_mistake_is_reported_once_and_none_hides_another() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles:
+  alice: {}
+parameters:
+  s: { type: string }
+sections:
+  main:
+    role: "${role.alice}"
+    steps:
+      both:
+        action: enter_secret
+        with:
+          message: "PIN"
+          mesage: "typo"
+          min_length: 8
+          max_length: 6
+      capped:
+        action: split_secret
+        reads: { secret: "${param.s}" }
+        with:
+          scheme: "${param.s}"
+          threshold: 2
+          shares: 150
+      empty:
+        action: enter_value
+        with:
+          message:
+      no_block:
+        action: confirm
+        with: Null
+      unclosed:
+        action: issue_certificate
+        with:
+          validity_days: "${param.s"
+"#;
+        let (_, _, diags) = analyze_str(None, yaml);
+        let messages: Vec<&str> = diags
+            .iter()
+            .map(|d| d.message.as_str())
+            .filter(|m| m.starts_with("Step '"))
+            .collect();
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| !m.starts_with("Step 'unclosed'") && !m.starts_with("Step 'capped'"))
+                .copied()
+                .collect::<Vec<_>>(),
+            [
+                "Step 'both': action 'enter_secret' has no 'mesage' parameter. Accepted: \
+                 format, length, max_length, message, min_length",
+                "Step 'both': action 'enter_secret': 'min_length' is above 'max_length', so \
+                 no value fits",
+                "Step 'empty': 'with.message' must be a string, found null",
+            ],
+            "{diags:#?}"
+        );
+        assert!(
+            messages.contains(&"Step 'capped': 'with.shares' must be at most 100, found 150"),
+            "{diags:#?}"
+        );
+        let unclosed: Vec<&&str> = messages
+            .iter()
+            .filter(|m| m.starts_with("Step 'unclosed'"))
+            .collect();
+        assert!(
+            unclosed.iter().all(|m| !m.contains("must be an integer")),
+            "{unclosed:#?}"
+        );
+    }
+
     /// A file `rite check` refuses while reading it is refused by `resolve`
     /// too, so `rite run` never starts it.
     #[test]

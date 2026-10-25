@@ -637,12 +637,10 @@ impl ResolveContext {
             }
         };
         let mut reported = HashSet::new();
-        let mut accepted = true;
         for violation in check.validate(raw) {
             if is_deferred(with, &violation.instance_path) {
                 continue;
             }
-            accepted = false;
             let message = check.message(action, raw, &violation, Values::Shown);
             // Two keywords can say the same thing about one entry.
             if !reported.insert(message.clone()) {
@@ -657,9 +655,7 @@ impl ResolveContext {
                 message,
             });
         }
-        if accepted {
-            self.validate_step_cross_field(id, action, with);
-        }
+        self.validate_step_cross_field(id, action, with, &mut reported);
     }
 
     fn validate_step_with_fields(&mut self, id: &StepId, step: &schema::StepBody) {
@@ -684,17 +680,22 @@ impl ResolveContext {
     ///
     /// Values still carrying an expression have nothing to check yet, so the
     /// literal projection is what gets inspected and an absent field is never
-    /// reported.
+    /// reported. A rule the schema also says, already in `reported`, is
+    /// reported once.
     fn validate_step_cross_field(
         &mut self,
         id: &StepId,
         action: ActionType,
         with: &rite_model::expression::ExprValue,
+        reported: &mut HashSet<String>,
     ) {
         let Some(literal) = rite_model::expression::literal_expr_value(with) else {
             return;
         };
         for error in rite_model::params::cross_field(action, &literal) {
+            if !reported.insert(error.message.clone()) {
+                continue;
+            }
             self.add_error(ResolveError::InvalidWithValue {
                 step: id.clone(),
                 action,
@@ -1387,7 +1388,13 @@ fn is_deferred(with: &rite_model::expression::ExprValue, at: &Pointer) -> bool {
             ExprValue::Literal(_) => return false,
         };
     }
-    matches!(node, ExprValue::Expr(_) | ExprValue::Interpolated(_))
+    match node {
+        ExprValue::Expr(_) | ExprValue::Interpolated(_) => true,
+        // A string holding `${` is an expression that failed to parse, which
+        // has its own error; the DSL has no other way to write `${`.
+        ExprValue::Literal(rite_model::expression::Literal::String(text)) => text.contains("${"),
+        ExprValue::Literal(_) | ExprValue::Object(_) | ExprValue::Array(_) => false,
+    }
 }
 
 #[cfg(test)]

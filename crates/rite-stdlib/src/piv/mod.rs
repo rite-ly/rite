@@ -18,10 +18,12 @@ pub use attest::YubikeyAttestSlotAction;
 #[cfg(test)]
 mod tests {
     /// The schema checks a slot with a pattern, since the model cannot link
-    /// `rite-piv`; the two must accept the same names.
+    /// `rite-piv`; the two must accept the same names. The check is the one
+    /// `rite check` runs, with the engine that enforces the pattern.
     #[test]
     fn the_slot_pattern_accepts_what_the_slot_parser_reads() {
-        let pattern = rite_model::compile_pattern(rite_model::params::PIV_SLOT).unwrap();
+        let check =
+            rite_model::validate::params_check(rite_model::ActionType::PivReadCertificate).unwrap();
         let mut names: Vec<String> = (0u8..=255)
             .flat_map(|byte| [format!("{byte:02x}"), format!("{byte:02X}")])
             .collect();
@@ -34,7 +36,9 @@ mod tests {
         );
         for name in names {
             assert_eq!(
-                pattern.is_match(&name),
+                check
+                    .validate(&serde_json::json!({ "slot": name }))
+                    .is_empty(),
                 rite_piv::ops::slot_from_hint(&name).is_ok(),
                 "{name}"
             );

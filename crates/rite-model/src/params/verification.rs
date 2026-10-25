@@ -28,6 +28,7 @@ pub struct ConfirmParams {
 /// Display format for the `oral_readback` action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
+#[non_exhaustive]
 pub enum ReadbackFormat {
     /// NATO phonetic alphabet (default). Also written `nato`.
     #[default]
@@ -38,37 +39,15 @@ pub enum ReadbackFormat {
     Raw,
 }
 
-impl ReadbackFormat {
-    /// Every format, in declaration order.
-    pub const ALL: &'static [ReadbackFormat] = &[
-        ReadbackFormat::NatoPhonetic,
-        ReadbackFormat::Hex,
-        ReadbackFormat::Raw,
-    ];
-
-    /// Short label suitable for transcript display.
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            ReadbackFormat::NatoPhonetic => "nato_phonetic",
-            ReadbackFormat::Hex => "hex",
-            ReadbackFormat::Raw => "raw",
-        }
-    }
-}
-
-impl Vocabulary for ReadbackFormat {
-    const VALUES: &'static [Self] = Self::ALL;
-    const ALIASES: &'static [(&'static str, Self)] = &[("nato", ReadbackFormat::NatoPhonetic)];
-
-    fn name(self) -> &'static str {
-        self.label()
-    }
-}
+crate::types::vocabulary!(ReadbackFormat {
+    NatoPhonetic => "nato_phonetic" | "nato",
+    Hex => "hex",
+    Raw => "raw",
+});
 
 impl From<ReadbackFormat> for String {
     fn from(format: ReadbackFormat) -> Self {
-        format.label().to_string()
+        format.as_str().to_string()
     }
 }
 
@@ -79,7 +58,7 @@ impl TryFrom<String> for ReadbackFormat {
         Self::from_name(&s).ok_or_else(|| {
             format!(
                 "unknown readback format '{s}': expected {}",
-                crate::types::either(Self::ALL.iter().map(|format| format.label()))
+                crate::types::either(Self::ALL.iter().map(|format| format.as_str()))
             )
         })
     }

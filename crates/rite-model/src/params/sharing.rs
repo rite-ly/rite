@@ -80,21 +80,23 @@ pub struct EnterShareParams {
     pub length: Option<u64>,
 }
 
-/// A share is bytes, so it is never written in words.
+/// A share is bytes, so it is never written in words. Naming a words format
+/// is told why; any other name gets the list.
 fn share_formats(_: &mut SchemaGenerator) -> Schema {
-    let formats: Vec<&str> = RevealFormat::ALL
+    let (words, bytes): (Vec<RevealFormat>, Vec<RevealFormat>) = RevealFormat::ALL
         .iter()
-        .filter(|format| !format.is_words())
-        .map(|format| format.as_str())
-        .collect();
-    let mut schema = names(formats.iter().copied());
+        .partition(|format| format.is_words());
+    let mut schema = names(bytes.iter().map(|format| format.as_str()));
+    let words: Vec<&str> = words.iter().map(|format| format.as_str()).collect();
     schema.insert(
-        "x-message".to_string(),
-        format!(
-            "a share is written in {}; words are for the secret the shares combine into",
-            crate::types::either(formats.into_iter())
-        )
-        .into(),
+        "allOf".to_string(),
+        json!([{
+            "not": { "enum": words },
+            "x-message": format!(
+                "a share is written in {}; words are for the secret the shares combine into",
+                crate::types::either(bytes.iter().map(|format| format.as_str()))
+            ),
+        }]),
     );
     schema
 }
@@ -102,15 +104,16 @@ fn share_formats(_: &mut SchemaGenerator) -> Schema {
 /// A share is its secret plus a header, so it is longer than the header.
 fn longer_than_a_header(schema: &mut Schema) {
     let header = SharingScheme::RiteSssV1.header_len();
-    let length = property(schema, "length");
-    length.insert("minimum".to_string(), header.saturating_add(1).into());
-    length.insert(
-        "x-message".to_string(),
-        format!(
-            "'length' is a share's secret plus {header} header bytes, so it is longer than \
-             {header}"
-        )
-        .into(),
+    // The message is the minimum's alone, beside the bounds the type sets.
+    property(schema, "length").insert(
+        "allOf".to_string(),
+        json!([{
+            "minimum": header.saturating_add(1),
+            "x-message": format!(
+                "'length' is a share's secret plus {header} header bytes, so it is longer \
+                 than {header}"
+            ),
+        }]),
     );
 }
 
@@ -141,8 +144,24 @@ pub struct SplitSecretParams {
 const DEFAULT_SHARING_SCHEME: SharingScheme = SharingScheme::RiteSssV1;
 
 /// Each scheme's limit on the counts, for a step naming it; the default
-/// scheme's for a step naming none.
+/// scheme's for a step naming none. Above the largest limit, no scheme takes
+/// the counts, which holds while `scheme` is an expression `rite check`
+/// cannot read.
 fn share_limits(schema: &mut Schema) {
+    let largest = SharingScheme::ALL
+        .iter()
+        .map(|scheme| scheme.max_shares())
+        .max()
+        .unwrap_or(u8::MAX);
+    add_rule(
+        schema,
+        json!({
+            "properties": {
+                "threshold": { "maximum": largest },
+                "shares": { "maximum": largest },
+            }
+        }),
+    );
     for &scheme in SharingScheme::ALL {
         let max = scheme.max_shares();
         let names_it = if scheme == DEFAULT_SHARING_SCHEME {

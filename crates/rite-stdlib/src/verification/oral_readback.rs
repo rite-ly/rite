@@ -112,6 +112,12 @@ impl Action for OralReadbackAction {
             ReadbackFormat::NatoPhonetic => to_nato_phonetic(&display_value),
             ReadbackFormat::Hex => to_hex_format(&display_value),
             ReadbackFormat::Raw => display_value.clone(),
+            other => {
+                return Err(ActionError::Failed(format!(
+                    "this build cannot read a value back as '{}'",
+                    other.as_str()
+                )));
+            }
         };
 
         if let Some(message) = &typed.message {
@@ -120,7 +126,7 @@ impl Action for OralReadbackAction {
 
         reporter.log(Icon::Info, "READER: Please read aloud the following value:")?;
         reporter.log(Icon::Info, format!("    Raw value: {display_value}"))?;
-        reporter.log(Icon::Info, format!("    {}: {formatted}", format.label()))?;
+        reporter.log(Icon::Info, format!("    {}: {formatted}", format.as_str()))?;
 
         reporter.log(
             Icon::Info,

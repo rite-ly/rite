@@ -48,23 +48,13 @@ pub enum RevealFormat {
     Bip39,
 }
 
+crate::types::vocabulary!(RevealFormat {
+    Paper32 => "paper32",
+    Hex => "hex",
+    Bip39 => "bip39",
+});
+
 impl RevealFormat {
-    /// Every format, in declaration order.
-    pub const ALL: &'static [RevealFormat] = &[
-        RevealFormat::Paper32,
-        RevealFormat::Hex,
-        RevealFormat::Bip39,
-    ];
-
-    /// The name a ceremony writes.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RevealFormat::Paper32 => "paper32",
-            RevealFormat::Hex => "hex",
-            RevealFormat::Bip39 => "bip39",
-        }
-    }
-
     /// Whether the value is words, one per row, rather than characters.
     pub fn is_words(self) -> bool {
         match self {
@@ -346,14 +336,6 @@ impl fmt::Display for UnknownRevealFormat {
 }
 
 impl std::error::Error for UnknownRevealFormat {}
-
-impl Vocabulary for RevealFormat {
-    const VALUES: &'static [Self] = Self::ALL;
-
-    fn name(self) -> &'static str {
-        self.as_str()
-    }
-}
 
 impl FromStr for RevealFormat {
     type Err = UnknownRevealFormat;

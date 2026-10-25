@@ -323,32 +323,17 @@ pub enum Format {
     Bip39,
 }
 
+crate::types::vocabulary!(Format {
+    Text => "text",
+    Digits => "digits",
+    Alphanumeric => "alphanumeric",
+    Hex => "hex",
+    Base64 => "base64",
+    Paper32 => "paper32",
+    Bip39 => "bip39",
+});
+
 impl Format {
-    /// Every format, in declaration order.
-    pub const ALL: &'static [Format] = &[
-        Format::Text,
-        Format::Digits,
-        Format::Alphanumeric,
-        Format::Hex,
-        Format::Base64,
-        Format::Paper32,
-        Format::Bip39,
-    ];
-
-    /// The name a ceremony writes.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Format::Text => "text",
-            Format::Digits => "digits",
-            Format::Alphanumeric => "alphanumeric",
-            Format::Hex => "hex",
-            Format::Base64 => "base64",
-            Format::Paper32 => "paper32",
-            Format::Bip39 => "bip39",
-        }
-    }
-
     /// Whether the value stands for bytes, which is what the step then keeps.
     #[must_use]
     pub fn is_encoding(self) -> bool {
@@ -472,14 +457,6 @@ pub const PLACEHOLDER_LIMIT: usize = 64 * 1024;
 impl std::fmt::Display for Format {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
-    }
-}
-
-impl crate::types::Vocabulary for Format {
-    const VALUES: &'static [Self] = Self::ALL;
-
-    fn name(self) -> &'static str {
-        self.as_str()
     }
 }
 

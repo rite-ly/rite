@@ -282,42 +282,17 @@ pub enum CertProfile {
     EndEntity,
 }
 
-impl CertProfile {
-    /// Every profile, in declaration order.
-    pub const ALL: &'static [CertProfile] = &[
-        CertProfile::RootCa,
-        CertProfile::SubCa,
-        CertProfile::TlsServer,
-        CertProfile::CodeSigning,
-        CertProfile::EndEntity,
-    ];
-
-    /// The name a ceremony writes.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            CertProfile::RootCa => "root_ca",
-            CertProfile::SubCa => "sub_ca",
-            CertProfile::TlsServer => "tls_server",
-            CertProfile::CodeSigning => "code_signing",
-            CertProfile::EndEntity => "end_entity",
-        }
-    }
-}
+crate::types::vocabulary!(CertProfile {
+    RootCa => "root_ca",
+    SubCa => "sub_ca" | "intermediate_ca",
+    TlsServer => "tls_server",
+    CodeSigning => "code_signing",
+    EndEntity => "end_entity",
+});
 
 impl fmt::Display for CertProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
-    }
-}
-
-impl Vocabulary for CertProfile {
-    const VALUES: &'static [Self] = Self::ALL;
-    /// `intermediate_ca` is `sub_ca` under the name the PKI world more often
-    /// uses for it.
-    const ALIASES: &'static [(&'static str, Self)] = &[("intermediate_ca", CertProfile::SubCa)];
-
-    fn name(self) -> &'static str {
-        self.as_str()
     }
 }
 
@@ -398,6 +373,40 @@ pub(crate) trait Vocabulary: Copy + 'static {
     }
 }
 
+/// Give a DSL enum its names from one list: `ALL`, `as_str`, and its
+/// [`Vocabulary`] impl, aliases written `Variant => "name" | "alias"`.
+///
+/// `as_str` matches every variant, so a variant left out of the list fails
+/// to compile, and `ALL` is complete because it is built from the same list.
+macro_rules! vocabulary {
+    ($ty:ident { $($variant:ident => $name:literal $(| $alias:literal)*,)+ }) => {
+        impl $ty {
+            /// Every value, in declaration order.
+            pub const ALL: &'static [$ty] = &[$($ty::$variant),+];
+
+            /// The name a ceremony writes and a transcript records.
+            #[must_use]
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $($ty::$variant => $name,)+
+                }
+            }
+        }
+
+        impl $crate::types::Vocabulary for $ty {
+            const VALUES: &'static [Self] = Self::ALL;
+            const ALIASES: &'static [(&'static str, Self)] =
+                &[$($(($alias, $ty::$variant),)*)+];
+
+            fn name(self) -> &'static str {
+                self.as_str()
+            }
+        }
+    };
+}
+
+pub(crate) use vocabulary;
+
 /// Names as a person reads a list of alternatives: `a, b or c`.
 pub(crate) fn either<'a>(names: impl Iterator<Item = &'a str>) -> String {
     let names: Vec<&str> = names.collect();
@@ -424,17 +433,11 @@ pub enum SharingScheme {
     RiteSssV1,
 }
 
+crate::types::vocabulary!(SharingScheme {
+    RiteSssV1 => "rite-sss/v1",
+});
+
 impl SharingScheme {
-    /// Every scheme, in declaration order.
-    pub const ALL: &'static [SharingScheme] = &[SharingScheme::RiteSssV1];
-
-    /// The name a ceremony writes and the transcript records.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SharingScheme::RiteSssV1 => "rite-sss/v1",
-        }
-    }
-
     /// The most shares a split under this scheme may make.
     ///
     /// A policy limit rather than what the arithmetic allows: a share index
@@ -479,14 +482,6 @@ impl fmt::Display for SharingScheme {
 impl From<SharingScheme> for String {
     fn from(scheme: SharingScheme) -> Self {
         scheme.as_str().to_string()
-    }
-}
-
-impl Vocabulary for SharingScheme {
-    const VALUES: &'static [Self] = Self::ALL;
-
-    fn name(self) -> &'static str {
-        self.as_str()
     }
 }
 
@@ -1219,10 +1214,9 @@ mod tests {
         }
     }
 
-    /// Each vocabulary's `ALL` is written by hand. The matches fail to compile
-    /// when a variant is added, which puts the error next to the list; the
-    /// assertions then check that each name parses back and is the name serde
-    /// writes, since `as_str` and the serde derive are separate spellings.
+    /// `vocabulary!` builds each `ALL` and `as_str` from one list, so neither
+    /// can miss a variant. Each name parses back, and is the name serde
+    /// writes, which for a derived serde is a second spelling.
     #[test]
     fn every_vocabulary_lists_every_value_under_its_serde_name() {
         use crate::{Format, RevealFormat};
@@ -1242,36 +1236,6 @@ mod tests {
             }
         }
 
-        for profile in CertProfile::ALL {
-            match profile {
-                CertProfile::RootCa
-                | CertProfile::SubCa
-                | CertProfile::TlsServer
-                | CertProfile::CodeSigning
-                | CertProfile::EndEntity => {}
-            }
-        }
-        for scheme in SharingScheme::ALL {
-            match scheme {
-                SharingScheme::RiteSssV1 => {}
-            }
-        }
-        for format in RevealFormat::ALL {
-            match format {
-                RevealFormat::Paper32 | RevealFormat::Hex | RevealFormat::Bip39 => {}
-            }
-        }
-        for format in Format::ALL {
-            match format {
-                Format::Text
-                | Format::Digits
-                | Format::Alphanumeric
-                | Format::Hex
-                | Format::Base64
-                | Format::Paper32
-                | Format::Bip39 => {}
-            }
-        }
         check(CertProfile::ALL);
         check(SharingScheme::ALL);
         check(RevealFormat::ALL);

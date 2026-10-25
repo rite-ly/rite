@@ -62,10 +62,14 @@ pub struct ParamError {
 /// value compared with another, and a pattern that must compile in the
 /// dialect the runtime uses.
 ///
-/// `with` is the literal part of a block that passed its schema, as
+/// At `rite check`, `with` is the literal part of a block, as
 /// [`literal_expr_value`](crate::expression::literal_expr_value) projects it:
 /// a field whose value is an expression is absent, and a rule is checked over
-/// what is known.
+/// what is known. When the step runs, it is the evaluated block. A field
+/// that is absent or of the wrong type is skipped, since the schema reports
+/// it. The messages quote no value, since an evaluated one may be a secret
+/// an expression copied in, except a pattern that does not compile, which
+/// the step's prompt would record anyway.
 #[must_use]
 pub fn cross_field(action: ActionType, with: &serde_json::Value) -> Vec<ParamError> {
     match action {
@@ -105,10 +109,9 @@ fn share_counts(with: &serde_json::Value) -> Vec<ParamError> {
     let count = |field| with.get(field).and_then(serde_json::Value::as_u64);
     match (count("threshold"), count("shares")) {
         (Some(threshold), Some(shares)) if shares < threshold => vec![ParamError {
-            message: format!(
-                "'shares' is {shares} and 'threshold' is {threshold}; fewer shares than the \
-                 threshold could never reconstruct the secret"
-            ),
+            message: "'shares' is below 'threshold', and fewer shares than the threshold \
+                      could never reconstruct the secret"
+                .to_string(),
         }],
         _ => Vec::new(),
     }
@@ -125,7 +128,7 @@ fn entry_shape(with: &serde_json::Value) -> Vec<ParamError> {
     let shape = EntryShape {
         format: with
             .get("format")
-            .and_then(|format| FormatSpec::from_json(format).ok()),
+            .and_then(|format| serde_json::from_value(format.clone()).ok()),
         length: length("length"),
         min_length: length("min_length"),
         max_length: length("max_length"),
@@ -152,34 +155,6 @@ pub enum FormatSpec {
         /// A regular expression the whole value must match.
         pattern: String,
     },
-}
-
-impl FormatSpec {
-    /// Read the field, with a message that says what the two forms are.
-    ///
-    /// # Errors
-    ///
-    /// Returns why the value is neither a format name nor a pattern.
-    pub fn from_json(value: &serde_json::Value) -> Result<Self, String> {
-        if let Some(name) = value.as_str() {
-            return name.parse().map(FormatSpec::Named);
-        }
-        match value.get("pattern").and_then(|p| p.as_str()) {
-            Some(pattern) if value.as_object().is_some_and(|m| m.len() == 1) => {
-                Ok(FormatSpec::Pattern {
-                    pattern: pattern.to_string(),
-                })
-            }
-            _ => Err(format!(
-                "'format' must name a format ({}) or be {{ pattern: \"...\" }}, found {value}",
-                Format::ALL
-                    .iter()
-                    .map(|format| format.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-        }
-    }
 }
 
 /// A format name, or an object holding only a pattern.
@@ -276,9 +251,7 @@ impl EntryShape {
         if let (Some(min), Some(max)) = (min_length, max_length)
             && min > max
         {
-            return Err(format!(
-                "'min_length' is {min} and 'max_length' is {max}, so no value fits"
-            ));
+            return Err("'min_length' is above 'max_length', so no value fits".to_string());
         }
         // Bounds that hold no phrase length describe no phrase.
         if format == Some(Format::Bip39)

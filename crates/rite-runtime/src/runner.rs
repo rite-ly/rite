@@ -810,7 +810,8 @@ impl RunBackends<'_> {
     }
 }
 
-/// Check the evaluated `with:` block against the action's schema.
+/// Check the evaluated `with:` block against the action's schema, and the
+/// rules over several values that a schema cannot say.
 ///
 /// The resolver checked what was literal; an expression's value is known
 /// only now. It is refused under the rule a literal one would break, before
@@ -827,8 +828,16 @@ fn check_params(action: ActionType, params: &serde_json::Value) -> Result<(), Ac
     let check = rite_model::validate::params_check(action)
         .map_err(|error| ActionError::Failed(error.to_string()))?;
     let mut messages: Vec<String> = Vec::new();
-    for violation in check.validate(params) {
-        let message = check.message(action, params, &violation, Values::Withheld);
+    let found = check
+        .validate(params)
+        .into_iter()
+        .map(|violation| check.message(action, params, &violation, Values::Withheld))
+        .chain(
+            rite_model::params::cross_field(action, params)
+                .into_iter()
+                .map(|error| error.message),
+        );
+    for message in found {
         if !messages.contains(&message) {
             messages.push(message);
         }
@@ -1938,6 +1947,70 @@ sections:
             })
             .expect("the attempt is recorded");
         assert_eq!(error, "Step 'work' failed: 'with' must be a map");
+    }
+
+    /// A handler for `action` that completes, for runs that must stop before it.
+    struct Completes(ActionType);
+
+    impl Action for Completes {
+        fn action_type(&self) -> ActionType {
+            self.0
+        }
+
+        fn execute(
+            &self,
+            _step: &StepInfo,
+            _ctx: &HandlerContext,
+            _params: &serde_json::Value,
+            _reporter: &mut Reporter<'_>,
+            _backend: Option<&mut dyn Backend>,
+        ) -> Result<StepResult, ActionError> {
+            Ok(StepResult::completed("done".to_string()))
+        }
+    }
+
+    /// A rule over several values is checked when the step runs too, once an
+    /// expression gave the value `rite check` could not know.
+    #[test]
+    fn a_rule_over_several_values_is_checked_when_the_step_runs() {
+        let yaml = r#"
+version: "0.3"
+name: "Evaluated"
+roles:
+  participant:
+    person: "Alice"
+parameters:
+  n: { type: integer, default: 8 }
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      work:
+        action: enter_secret
+        silent: true
+        with:
+          message: "PIN"
+          min_length: "${param.n}"
+          max_length: 6
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("the minimum is deferred at resolution");
+        let (result, facts, _) =
+            drive(ceremony, Arc::new(Completes(ActionType::EnterSecret)), true);
+
+        assert!(result.is_err());
+        let error = facts
+            .iter()
+            .find_map(|f| match f {
+                StepFact::StepAttemptFailed { error, .. } => Some(error.message.clone()),
+                _ => None,
+            })
+            .expect("the attempt is recorded");
+        assert_eq!(
+            error,
+            "Step 'work' failed: 'min_length' is above 'max_length', so no value fits"
+        );
     }
 
     /// A step without `with:` has no parameters, and the defaults fill them.

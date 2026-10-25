@@ -102,25 +102,93 @@ impl Violation {
 }
 
 impl ParamsCheck {
-    /// Every way `with` fails the action's schema. An object with several
-    /// unexpected keys gives one violation per key, so each can point at its
-    /// own key. A value of the wrong type gives that violation alone: the
-    /// rules about its value, such as the names a string may take, do not
-    /// apply to it.
+    /// Every way `with` fails the action's schema, one violation per thing
+    /// to fix.
+    ///
+    /// An object with several unexpected keys gives one violation per key, so
+    /// each can point at its own key. A value of the wrong type gives that
+    /// violation alone: the rules about its value do not apply to it.
+    /// Otherwise, of the rules one value breaks, those with an `x-message`
+    /// say more than the generic ones and are the ones kept, and of two
+    /// bounds on the same side only the tighter is.
     #[must_use]
     pub fn validate(&self, with: &Value) -> Vec<Violation> {
         let violations = self.validator.validate(with);
-        let mistyped: HashSet<Pointer> = violations
-            .iter()
-            .filter(|violation| matches!(violation.keyword, Keyword::Type { .. }))
-            .map(|violation| violation.instance_path.clone())
-            .collect();
+        let mut mistyped: HashSet<Pointer> = HashSet::new();
+        let mut explained: HashSet<Pointer> = HashSet::new();
+        let mut lowest_maximum: HashMap<Pointer, f64> = HashMap::new();
+        let mut highest_minimum: HashMap<Pointer, f64> = HashMap::new();
+        for violation in &violations {
+            let at = violation.instance_path.clone();
+            match &violation.keyword {
+                Keyword::Type { .. } => {
+                    mistyped.insert(at);
+                }
+                Keyword::Maximum { limit } => {
+                    let limit = limit.as_f64().unwrap_or(f64::INFINITY);
+                    let lowest = lowest_maximum.entry(at.clone()).or_insert(limit);
+                    *lowest = lowest.min(limit);
+                }
+                Keyword::Minimum { limit } => {
+                    let limit = limit.as_f64().unwrap_or(f64::NEG_INFINITY);
+                    let highest = highest_minimum.entry(at.clone()).or_insert(limit);
+                    *highest = highest.max(limit);
+                }
+                Keyword::Enum { .. }
+                | Keyword::Const { .. }
+                | Keyword::Pattern { .. }
+                | Keyword::MinItems { .. }
+                | Keyword::Required { .. }
+                | Keyword::AdditionalProperties { .. }
+                | Keyword::OneOf { .. }
+                | Keyword::Not
+                | Keyword::False
+                | Keyword::Unsupported { .. } => {}
+            }
+            if self.explains(violation) {
+                explained.insert(violation.instance_path.clone());
+            }
+        }
+        // Two rules can set the same bound; it is reported once.
+        let mut bounded: HashSet<(Pointer, bool)> = HashSet::new();
+        let kept = |violation: &Violation| {
+            let at = &violation.instance_path;
+            let tightest = |limits: &HashMap<Pointer, f64>, limit: &Value| {
+                limits.get(at).copied() == limit.as_f64()
+            };
+            // A type error, and each key, is reported on its own.
+            if is_about_type_or_key(&violation.keyword) {
+                return true;
+            }
+            if mistyped.contains(at) {
+                return false;
+            }
+            if explained.contains(at) {
+                return self.explains(violation);
+            }
+            match &violation.keyword {
+                Keyword::Maximum { limit } => {
+                    tightest(&lowest_maximum, limit) && bounded.insert((at.clone(), true))
+                }
+                Keyword::Minimum { limit } => {
+                    tightest(&highest_minimum, limit) && bounded.insert((at.clone(), false))
+                }
+                Keyword::Type { .. }
+                | Keyword::Required { .. }
+                | Keyword::AdditionalProperties { .. }
+                | Keyword::Enum { .. }
+                | Keyword::Const { .. }
+                | Keyword::Pattern { .. }
+                | Keyword::MinItems { .. }
+                | Keyword::OneOf { .. }
+                | Keyword::Not
+                | Keyword::False
+                | Keyword::Unsupported { .. } => true,
+            }
+        };
         violations
             .into_iter()
-            .filter(|violation| {
-                matches!(violation.keyword, Keyword::Type { .. })
-                    || !mistyped.contains(&violation.instance_path)
-            })
+            .filter(kept)
             .flat_map(|violation| {
                 if let Keyword::AdditionalProperties { unexpected } = &violation.keyword
                     && unexpected.len() > 1
@@ -138,6 +206,13 @@ impl ParamsCheck {
                 vec![violation]
             })
             .collect()
+    }
+
+    /// Whether the schema words this violation with an `x-message`. A type
+    /// error or a key never is: see [`message`](Self::message).
+    fn explains(&self, violation: &Violation) -> bool {
+        !is_about_type_or_key(&violation.keyword)
+            && x_message(&self.schema, &violation.schema_path).is_some()
     }
 
     /// The violation in words, for the author of the step holding `with`.
@@ -282,6 +357,26 @@ impl ParamsCheck {
             .and_then(Value::as_object)
             .map(|properties| properties.keys().cloned().collect())
             .unwrap_or_default()
+    }
+}
+
+/// Whether `keyword` is about the value's type or about a key, which the
+/// messages word themselves, rather than about the value.
+fn is_about_type_or_key(keyword: &Keyword) -> bool {
+    match keyword {
+        Keyword::Type { .. } | Keyword::Required { .. } | Keyword::AdditionalProperties { .. } => {
+            true
+        }
+        Keyword::Enum { .. }
+        | Keyword::Const { .. }
+        | Keyword::Pattern { .. }
+        | Keyword::Minimum { .. }
+        | Keyword::Maximum { .. }
+        | Keyword::MinItems { .. }
+        | Keyword::OneOf { .. }
+        | Keyword::Not
+        | Keyword::False
+        | Keyword::Unsupported { .. } => false,
     }
 }
 
@@ -758,6 +853,61 @@ mod tests {
         assert_eq!(
             sole(ActionType::EncryptData, &json!({"scheme": 5})),
             "'with.scheme' must be a string, found 5"
+        );
+    }
+
+    /// A value breaking several rules gets the one that says most: an
+    /// `x-message` over a generic rule, the tighter of two bounds. And an
+    /// `x-message` speaks only for the rule it explains.
+    #[test]
+    fn one_value_gets_the_message_that_says_most() {
+        // The u8 bound is 255; the scheme's limit is tighter.
+        assert_eq!(
+            sole(
+                ActionType::SplitSecret,
+                &json!({"threshold": 2, "shares": 300})
+            ),
+            "'with.shares' must be at most 100, found 300"
+        );
+        // Below the type's bound and outside the phrase lengths.
+        assert_eq!(
+            sole(
+                ActionType::Reveal,
+                &json!({"message": "m", "format": "bip39", "length": 0})
+            ),
+            "'length' counts words for 'bip39', and a phrase has 12, 15, 18, 21 or 24 words, \
+             found 0"
+        );
+        // A share is never words; a typo is just not a format.
+        assert_eq!(
+            sole(
+                ActionType::EnterShare,
+                &json!({"message": "m", "format": "bip39"})
+            ),
+            "a share is written in paper32 or hex; words are for the secret the shares \
+             combine into, found 'bip39'"
+        );
+        assert_eq!(
+            sole(
+                ActionType::EnterShare,
+                &json!({"message": "m", "format": "hexx"})
+            ),
+            "'with.format' must be one of: paper32, hex, found 'hexx'"
+        );
+        // The header message is the minimum's, not the type's bound.
+        assert_eq!(
+            sole(
+                ActionType::EnterShare,
+                &json!({"message": "m", "length": 2})
+            ),
+            "'length' is a share's secret plus 3 header bytes, so it is longer than 3, found 2"
+        );
+        assert!(
+            sole(
+                ActionType::EnterShare,
+                &json!({"message": "m", "length": 9_007_199_254_740_992_u64})
+            )
+            .starts_with("'with.length' must be at most ")
         );
     }
 

@@ -34,8 +34,8 @@ family, for three reasons:
   signature family brings its own maturity, release cadence, and advisories.
 - **Advisory applicability stays tractable.** Whether an advisory affects Rite
   depends on which paths use the crate, and that assessment has to be redone
-  whenever the set changes. `.cargo/audit.toml` holds the one entry currently
-  carried, with its rationale.
+  whenever the set changes. The `ignore` list in `deny.toml` holds the entries
+  currently carried, with their rationale.
 
 OpenSSL rather than some other single implementation: ceremonies largely run on
 hardware (PIV cards, HSMs), so signing in a real ceremony happens outside any

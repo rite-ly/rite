@@ -24,6 +24,7 @@
 //! - Mock: All traits (for testing)
 
 use std::collections::BTreeMap;
+use std::sync::{Mutex, MutexGuard};
 
 use zeroize::Zeroizing;
 
@@ -663,6 +664,11 @@ pub enum BackendError {
     #[error("Hardware failure: {0}")]
     HardwareFailure(String),
 
+    /// An earlier operation on the device was interrupted, so its state
+    /// (verified PIN, authenticated management key, open command) is unknown.
+    #[error("Device state unknown: {0}")]
+    DeviceStateUnknown(String),
+
     /// Invalid key format or data.
     #[error("Invalid key format: {0}")]
     InvalidKeyFormat(String),
@@ -709,11 +715,12 @@ impl BackendError {
             | BackendError::Configuration(_) => Retriability::Transient,
 
             // Fatal: re-execution is meaningless or unsafe. A terminal device
-            // state (PIN budget exhausted, capacity full), a definition that
-            // asks for something the backend cannot do, or malformed/unknown
-            // input that retrying cannot resolve.
+            // state (PIN budget exhausted, capacity full, state unknown), a
+            // definition that asks for something the backend cannot do, or
+            // malformed/unknown input that retrying cannot resolve.
             BackendError::PinBlocked
             | BackendError::CapacityExceeded
+            | BackendError::DeviceStateUnknown(_)
             | BackendError::OperationNotPermitted(_)
             | BackendError::AttributeReadOnly(_)
             | BackendError::UnsupportedAlgorithm(_)
@@ -724,6 +731,26 @@ impl BackendError {
             | BackendError::Other(_) => Retriability::Fatal,
         }
     }
+}
+
+/// Lock the handle of a device that is not `Sync`.
+///
+/// `Backend` is `Send + Sync`, and a hardware handle (a PC/SC card, a PKCS#11
+/// session) is not, so a hardware backend keeps it behind a `Mutex`. The lock
+/// is poisoned when an operation panics while holding it, which leaves the
+/// device in an unknown state; the backend then refuses further use rather
+/// than carry that state into the next step.
+///
+/// # Errors
+///
+/// Returns [`BackendError::DeviceStateUnknown`] if the lock is poisoned.
+pub fn lock_device<T>(device: &Mutex<T>) -> Result<MutexGuard<'_, T>, BackendError> {
+    device.lock().map_err(|_| {
+        BackendError::DeviceStateUnknown(
+            "an earlier operation was interrupted; the run cannot continue on this device"
+                .to_string(),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -765,6 +792,7 @@ mod tests {
         let fatal = [
             BackendError::PinBlocked,
             BackendError::CapacityExceeded,
+            BackendError::DeviceStateUnknown("interrupted".into()),
             BackendError::OperationNotPermitted("usage".into()),
             BackendError::AttributeReadOnly("attr".into()),
             BackendError::UnsupportedAlgorithm("rsa1".into()),
@@ -788,5 +816,31 @@ mod tests {
         // The hardware budget: a wrong PIN can be retried; an exhausted one cannot.
         assert!(BackendError::PinFailed(1).retriability().is_retriable());
         assert!(!BackendError::PinBlocked.retriability().is_retriable());
+    }
+
+    #[test]
+    fn a_poisoned_device_lock_is_a_fatal_error() {
+        let device = Mutex::new(0u8);
+        let poisoned = std::thread::scope(|s| {
+            s.spawn(|| {
+                let _guard = device.lock().unwrap();
+                panic!("operation interrupted while holding the device");
+            })
+            .join()
+        });
+        assert!(poisoned.is_err(), "the holder must have panicked");
+
+        let err = lock_device(&device).unwrap_err();
+        assert!(
+            matches!(err, BackendError::DeviceStateUnknown(_)),
+            "a poisoned lock must not hand out the device: {err:?}"
+        );
+        assert_eq!(err.retriability(), Retriability::Fatal);
+    }
+
+    #[test]
+    fn an_unpoisoned_device_lock_hands_out_the_device() {
+        let device = Mutex::new(7u8);
+        assert_eq!(*lock_device(&device).unwrap(), 7);
     }
 }

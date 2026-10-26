@@ -3,7 +3,7 @@
 //! Wraps a `yubikey::YubiKey` connection (via a `Mutex` for interior
 //! mutability) to provide standard PIV operations per NIST SP 800-73-5.
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 use rite_sdk::{
     Backend, BackendConfig, BackendError, CertRef, CertStoreBackend, KeyId, KeyMetadata, KeySpec,
@@ -18,10 +18,13 @@ use crate::ops;
 /// Wraps a `yubikey::YubiKey` connection to provide standard PIV operations
 /// per NIST SP 800-73-5. The inner `YubiKey` is held in a `Mutex` because
 /// PC/SC transactions require exclusive device access even for read-only
-/// commands, yet several backend trait methods take `&self`.
+/// commands, yet several backend trait methods take `&self`. The device's
+/// identity is read once at connection, so reporting it never takes the lock.
 pub struct PivCardBackend {
     name: String,
     yubikey: Mutex<yubikey::YubiKey>,
+    info: PivDeviceInfo,
+    fingerprint: String,
 }
 
 impl PivCardBackend {
@@ -47,20 +50,19 @@ impl PivCardBackend {
         } else {
             yubikey::YubiKey::open().map_err(ops::map_error)?
         };
+        let info = ops::device_info(&yk);
+        let fingerprint = format!("piv-serial={}+firmware={}", yk.serial(), yk.version());
         Ok(Self {
             name,
             yubikey: Mutex::new(yk),
+            info,
+            fingerprint,
         })
     }
 
-    /// Lock the device, recovering the guard if a previous holder panicked.
-    ///
-    /// PC/SC access is serialized through this mutex; a poisoned lock means a
-    /// prior operation panicked mid-transaction. We recover the guard rather
-    /// than propagate the poison so a single failed step does not permanently
-    /// wedge the backend for the rest of the ceremony.
-    fn device(&self) -> MutexGuard<'_, yubikey::YubiKey> {
-        self.yubikey.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Lock the device; see [`rite_sdk::lock_device`].
+    fn device(&self) -> Result<MutexGuard<'_, yubikey::YubiKey>, BackendError> {
+        rite_sdk::lock_device(&self.yubikey)
     }
 }
 
@@ -74,8 +76,7 @@ impl Backend for PivCardBackend {
     }
 
     fn fingerprint(&self) -> String {
-        let yk = self.device();
-        format!("piv-serial={}+firmware={}", yk.serial(), yk.version())
+        self.fingerprint.clone()
     }
 
     rite_sdk::backend_capabilities!(
@@ -88,7 +89,7 @@ impl Backend for PivCardBackend {
 
 impl KeyStoreBackend for PivCardBackend {
     fn generate_key(&mut self, spec: KeySpec) -> Result<KeyMetadata, BackendError> {
-        let mut yk = self.device();
+        let mut yk = self.device()?;
         ops::generate_key(
             &mut yk,
             spec.algorithm,
@@ -109,12 +110,12 @@ impl KeyStoreBackend for PivCardBackend {
     }
 
     fn export_public_key(&self, key_id: &KeyId) -> Result<PublicKeyDer, BackendError> {
-        let mut yk = self.device();
+        let mut yk = self.device()?;
         ops::export_public_key(&mut yk, key_id)
     }
 
     fn list_keys(&self) -> Result<Vec<KeyMetadata>, BackendError> {
-        let mut yk = self.device();
+        let mut yk = self.device()?;
         ops::list_keys(&mut yk)
     }
 
@@ -132,7 +133,7 @@ impl SignBackend for PivCardBackend {
         message: &[u8],
         algorithm: SignAlgorithm,
     ) -> Result<Vec<u8>, BackendError> {
-        let mut yk = self.device();
+        let mut yk = self.device()?;
         ops::sign(&mut yk, key_id, message, algorithm)
     }
 }
@@ -141,7 +142,7 @@ impl CertStoreBackend for PivCardBackend {
     fn store_cert(&mut self, cert_ref: &CertRef, cert_der: &[u8]) -> Result<(), BackendError> {
         match cert_ref {
             CertRef::PivSlot(slot) => {
-                let mut yk = self.device();
+                let mut yk = self.device()?;
                 ops::write_certificate(&mut yk, *slot, cert_der)
             }
             // `CertRef` is #[non_exhaustive]; PIV addresses certificates by slot only.
@@ -154,7 +155,7 @@ impl CertStoreBackend for PivCardBackend {
     fn read_cert(&self, cert_ref: &CertRef) -> Result<Vec<u8>, BackendError> {
         match cert_ref {
             CertRef::PivSlot(slot) => {
-                let mut yk = self.device();
+                let mut yk = self.device()?;
                 ops::read_certificate(&mut yk, *slot)
             }
             // `CertRef` is #[non_exhaustive]; PIV addresses certificates by slot only.
@@ -173,12 +174,12 @@ impl CertStoreBackend for PivCardBackend {
 
 impl PivBackend for PivCardBackend {
     fn list_slots(&self) -> Result<Vec<PivSlotInfo>, BackendError> {
-        let mut yk = self.device();
+        let mut yk = self.device()?;
         ops::list_slots(&mut yk)
     }
 
     fn verify_pin(&mut self, pin: &[u8]) -> Result<(), BackendError> {
-        let mut yk = self.device();
+        let mut yk = self.device()?;
         yk.verify_pin(pin).map_err(ops::map_error)
     }
 
@@ -189,7 +190,7 @@ impl PivBackend for PivCardBackend {
     }
 
     fn pin_retries(&mut self) -> Result<u32, BackendError> {
-        let mut yk = self.device();
+        let mut yk = self.device()?;
         ops::pin_retries(&mut yk)
     }
 
@@ -200,7 +201,6 @@ impl PivBackend for PivCardBackend {
     }
 
     fn device_info(&self) -> Result<PivDeviceInfo, BackendError> {
-        let yk = self.device();
-        Ok(ops::device_info(&yk))
+        Ok(self.info.clone())
     }
 }

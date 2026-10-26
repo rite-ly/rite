@@ -820,9 +820,7 @@ impl RunBackends<'_> {
 /// only now. It is refused under the rule a literal one would break, before
 /// the handler or a backend sees it, so a handler can rely on its params
 /// having the shape the schema describes. Every value is known here, so
-/// nothing is deferred. One difference with serde remains: JSON Schema counts
-/// `2.0` as an integer. No expression yields a float, since no parameter
-/// type is one, and a literal float is refused when the file is read.
+/// nothing is deferred.
 ///
 /// The value is evaluated, and may be a secret an expression copied in, so
 /// the message names the field and the rule and never the value: it reaches

@@ -95,8 +95,7 @@ impl Violation {
             | Keyword::MinItems { .. }
             | Keyword::OneOf { .. }
             | Keyword::Not
-            | Keyword::False
-            | Keyword::Unsupported { .. } => (self.instance_path.clone(), Anchor::Value),
+            | Keyword::False => (self.instance_path.clone(), Anchor::Value),
         }
     }
 }
@@ -142,8 +141,7 @@ impl ParamsCheck {
                 | Keyword::AdditionalProperties { .. }
                 | Keyword::OneOf { .. }
                 | Keyword::Not
-                | Keyword::False
-                | Keyword::Unsupported { .. } => {}
+                | Keyword::False => {}
             }
             if self.explains(violation) {
                 explained.insert(violation.instance_path.clone());
@@ -182,8 +180,7 @@ impl ParamsCheck {
                 | Keyword::MinItems { .. }
                 | Keyword::OneOf { .. }
                 | Keyword::Not
-                | Keyword::False
-                | Keyword::Unsupported { .. } => true,
+                | Keyword::False => true,
             }
         };
         violations
@@ -270,8 +267,7 @@ impl ParamsCheck {
             | Keyword::MinItems { .. }
             | Keyword::OneOf { .. }
             | Keyword::Not
-            | Keyword::False
-            | Keyword::Unsupported { .. }) => {
+            | Keyword::False) => {
                 let rule = x_message(&self.schema, &violation.schema_path).map_or_else(
                     || self.rule(keyword, &violation.schema_path, &field),
                     str::to_string,
@@ -297,8 +293,7 @@ impl ParamsCheck {
             | Keyword::Required { .. }
             | Keyword::AdditionalProperties { .. }
             | Keyword::Not
-            | Keyword::False
-            | Keyword::Unsupported { .. } => None,
+            | Keyword::False => None,
         };
         if let Some(options) = options {
             return match options.as_slice() {
@@ -326,9 +321,6 @@ impl ParamsCheck {
                 matched: Matched::Several,
             } => format!("'{field}' takes more than one of the forms it can have"),
             Keyword::Not | Keyword::False => format!("'{field}' is not accepted here"),
-            Keyword::Unsupported { keyword } => format!(
-                "'{field}' fails the schema keyword '{keyword}', which this version does not check"
-            ),
             // Worded by `message`, which names the keys involved; and an
             // enumeration is worded above.
             Keyword::Enum { .. }
@@ -375,8 +367,7 @@ fn is_about_type_or_key(keyword: &Keyword) -> bool {
         | Keyword::MinItems { .. }
         | Keyword::OneOf { .. }
         | Keyword::Not
-        | Keyword::False
-        | Keyword::Unsupported { .. } => false,
+        | Keyword::False => false,
     }
 }
 

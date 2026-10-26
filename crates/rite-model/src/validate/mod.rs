@@ -1,22 +1,23 @@
 //! Check a JSON value against a generated schema.
 //!
-//! The engine is behind this module: nothing outside it sees the validator
-//! library's types, only [`Violation`]s, so the engine can change without
-//! touching what reads them. Generated schemas keep to
-//! [`params::KEYWORDS`](crate::params::KEYWORDS), and [`Keyword`] has a
-//! variant for each keyword in that set that can reject a value.
+//! The engine is behind this module: nothing outside it sees how a schema is
+//! held, only [`Violation`]s. Generated schemas keep to
+//! [`params::KEYWORDS`](crate::params::KEYWORDS), the engine checks those
+//! keywords alone, and [`Keyword`] has a variant for each that can reject a
+//! value.
 
 use std::fmt;
 
 use serde_json::Value;
 
+mod engine;
 mod message;
 
 pub use message::{Anchor, ParamsCheck, Values, params_check};
 
 /// A compiled schema.
 pub struct Validator {
-    engine: jsonschema::Validator,
+    engine: engine::Engine,
 }
 
 /// A schema the engine could not compile, which is a mistake in the
@@ -33,31 +34,22 @@ impl fmt::Display for SchemaError {
 impl std::error::Error for SchemaError {}
 
 impl Validator {
-    /// Compile a draft 2020-12 schema.
+    /// Compile a draft 2020-12 schema that keeps to
+    /// [`params::KEYWORDS`](crate::params::KEYWORDS).
     ///
     /// # Errors
     ///
-    /// Returns why the schema is not one.
+    /// Returns where the schema is not one, or uses a keyword outside that
+    /// set.
     pub fn new(schema: &Value) -> Result<Self, SchemaError> {
-        jsonschema::draft202012::options()
-            .should_validate_formats(false)
-            .build(schema)
-            .map(|engine| Validator { engine })
-            .map_err(|e| SchemaError(e.to_string()))
+        engine::Engine::new(schema).map(|engine| Validator { engine })
     }
 
     /// Every way `instance` fails the schema, in the order the engine finds
     /// them. Empty when it passes.
     #[must_use]
     pub fn validate(&self, instance: &Value) -> Vec<Violation> {
-        self.engine
-            .iter_errors(instance)
-            .map(|error| Violation {
-                instance_path: Pointer::parse(error.instance_path().as_str()),
-                schema_path: Pointer::parse(error.schema_path().as_str()),
-                keyword: Keyword::from_engine(error.kind()),
-            })
-            .collect()
+        self.engine.validate(instance)
     }
 }
 
@@ -134,13 +126,6 @@ pub enum Keyword {
     Not,
     /// A `false` schema: no value is accepted here.
     False,
-    /// A keyword outside [`params::KEYWORDS`](crate::params::KEYWORDS).
-    /// Generated schemas never use one, which a test holds them to, so this
-    /// is a mistake in the generator rather than in a ceremony.
-    Unsupported {
-        /// The keyword's name.
-        keyword: String,
-    },
 }
 
 /// How many of a `oneOf`'s alternatives a value matched, when it was not
@@ -172,54 +157,6 @@ impl Keyword {
             Keyword::OneOf { .. } => "oneOf",
             Keyword::Not => "not",
             Keyword::False => "false",
-            Keyword::Unsupported { keyword } => keyword,
-        }
-    }
-
-    fn from_engine(kind: &jsonschema::error::ValidationErrorKind) -> Self {
-        use jsonschema::error::{TypeKind, ValidationErrorKind as Kind};
-        match kind {
-            Kind::Type { kind } => Keyword::Type {
-                expected: match kind {
-                    TypeKind::Single(single) => vec![single.to_string()],
-                    TypeKind::Multiple(set) => set.into_iter().map(|t| t.to_string()).collect(),
-                },
-            },
-            Kind::Enum { options } => Keyword::Enum {
-                options: options.as_array().cloned().unwrap_or_default(),
-            },
-            Kind::Constant { expected_value } => Keyword::Const {
-                expected: expected_value.clone(),
-            },
-            Kind::Pattern { pattern } => Keyword::Pattern {
-                pattern: pattern.clone(),
-            },
-            Kind::Minimum { limit } => Keyword::Minimum {
-                limit: limit.clone(),
-            },
-            Kind::Maximum { limit } => Keyword::Maximum {
-                limit: limit.clone(),
-            },
-            Kind::MinItems { limit } => Keyword::MinItems { limit: *limit },
-            Kind::Required { property } => Keyword::Required {
-                property: property
-                    .as_str()
-                    .map_or_else(|| property.to_string(), str::to_string),
-            },
-            Kind::AdditionalProperties { unexpected } => Keyword::AdditionalProperties {
-                unexpected: unexpected.clone(),
-            },
-            Kind::OneOfNotValid { .. } => Keyword::OneOf {
-                matched: Matched::None,
-            },
-            Kind::OneOfMultipleValid { .. } => Keyword::OneOf {
-                matched: Matched::Several,
-            },
-            Kind::Not { .. } => Keyword::Not,
-            Kind::FalseSchema => Keyword::False,
-            other => Keyword::Unsupported {
-                keyword: other.keyword().to_string(),
-            },
         }
     }
 }

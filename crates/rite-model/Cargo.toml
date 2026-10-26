@@ -24,17 +24,10 @@ sha2 = { workspace = true }
 # The DSL vocabulary types describe themselves as JSON Schema, for the schema
 # of a step's `with:` block.
 schemars = { workspace = true }
-jsonschema = { workspace = true, optional = true }
-
-[features]
-# `rite_model::validate`, which checks a value against a generated schema.
-# Off by default, so a crate that only reads transcripts does not link the
-# validator.
-validate = ["dep:jsonschema"]
 
 [dev-dependencies]
 # The published JSON Schemas are checked against the generated ones by this
-# crate's tests.
+# crate's tests, and `validate`'s engine against a complete validator.
 jsonschema = { workspace = true }
 
 [lints]

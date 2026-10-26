@@ -614,8 +614,9 @@ impl ResolveContext {
     /// runs. A misspelled key whose value is an expression is still reported,
     /// since the key is known now.
     ///
-    /// The rules over several values that a schema cannot say run only on a
-    /// block the schema accepts, so they can rely on its shape.
+    /// The rules over several values that a schema cannot say run on every
+    /// block, whatever the schema found, and read only the values whose
+    /// shape they need.
     fn validate_step_with(
         &mut self,
         id: &StepId,

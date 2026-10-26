@@ -227,6 +227,9 @@ impl Transform for Strict {
                 Some("uint16") => (0, i64::from(u16::MAX)),
                 Some("uint32") => (0, i64::from(u32::MAX)),
                 Some("uint" | "uint64") => (0, MAX_SAFE_INTEGER),
+                Some("int8") => (i64::from(i8::MIN), i64::from(i8::MAX)),
+                Some("int16") => (i64::from(i16::MIN), i64::from(i16::MAX)),
+                Some("int32") => (i64::from(i32::MIN), i64::from(i32::MAX)),
                 _ => (-MAX_SAFE_INTEGER, MAX_SAFE_INTEGER),
             };
             let minimum = schema
@@ -241,5 +244,45 @@ impl Transform for Strict {
             schema.insert("maximum".to_string(), maximum.into());
         }
         transform_subschemas(self, schema);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use schemars::JsonSchema;
+    use serde_json::json;
+
+    /// An integer field's schema is bounded by its Rust type, signed or not,
+    /// and a bound the field sets itself is kept when it is tighter.
+    #[test]
+    fn an_integer_is_bounded_by_its_rust_type() {
+        #[derive(JsonSchema)]
+        #[allow(dead_code)]
+        struct Integers {
+            small: i8,
+            medium: i16,
+            large: i32,
+            count: u8,
+            #[schemars(range(min = 1))]
+            shares: u8,
+        }
+        let schema = generator().root_schema_for::<Integers>();
+        let value = schema.as_value();
+        let bounds = |name: &str| {
+            let at = |keyword: &str| {
+                value
+                    .pointer(&format!("/properties/{name}/{keyword}"))
+                    .cloned()
+            };
+            (at("minimum"), at("maximum"))
+        };
+        let expect = |low: i64, high: i64| (Some(json!(low)), Some(json!(high)));
+        assert_eq!(bounds("small"), expect(-128, 127));
+        assert_eq!(bounds("medium"), expect(-32768, 32767));
+        assert_eq!(bounds("large"), expect(i32::MIN.into(), i32::MAX.into()));
+        assert_eq!(bounds("count"), expect(0, 255));
+        assert_eq!(bounds("shares"), expect(1, 255));
+        assert!(value.pointer("/properties/small/format").is_none());
     }
 }

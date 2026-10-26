@@ -734,6 +734,9 @@ sections:
       no_block:
         action: confirm
         with: Null
+      no_reads:
+        action: confirm
+        reads: ~
       unclosed:
         action: issue_certificate
         with:

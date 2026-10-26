@@ -638,6 +638,20 @@ impl Executor {
                 role: step.role.clone().unwrap_or_else(|| RoleId::new("")),
             })?;
 
+            // Look up handler
+            let handler = self
+                .registry
+                .get(&step.action)
+                .ok_or(ExecutionError::UnknownAction(step.action))?
+                .clone();
+
+            // The params depend only on what earlier steps produced, so a
+            // block that cannot run is refused before the operator is asked
+            // to start the step.
+            let ctx = state.handler_context();
+            let step_info = step_info_from(step);
+            let params = step_params(handler.as_ref(), step, &step_info, &ctx, reporter)?;
+
             // Pacing: gate the step body on operator acknowledgement. The
             // prompt fires with the step header already visible, so the
             // operator confirms "ready for step X" rather than "what just
@@ -650,23 +664,12 @@ impl Executor {
                 })?;
             }
 
-            // Look up handler
-            let handler = self
-                .registry
-                .get(&step.action)
-                .ok_or(ExecutionError::UnknownAction(step.action))?
-                .clone();
-
-            let ctx = state.handler_context();
-            let step_info = step_info_from(step);
-            let params = expressions::evaluate_expr_value(&step.with, &ctx)?;
-
             let result = execute_step_with_retry(
                 handler.as_ref(),
                 step,
                 &step_info,
                 &ctx,
-                params,
+                &params,
                 reporter,
                 &mut backends,
             )?;
@@ -824,9 +827,8 @@ impl RunBackends<'_> {
 /// The value is evaluated, and may be a secret an expression copied in, so
 /// the message names the field and the rule and never the value: it reaches
 /// the transcript and the screen.
-fn check_params(action: ActionType, params: &serde_json::Value) -> Result<(), ActionError> {
-    let check = rite_model::validate::params_check(action)
-        .map_err(|error| ActionError::Failed(error.to_string()))?;
+fn check_params(action: ActionType, params: &serde_json::Value) -> Result<(), String> {
+    let check = rite_model::validate::params_check(action).map_err(|error| error.to_string())?;
     let mut messages: Vec<String> = Vec::new();
     let found = check
         .validate(params)
@@ -845,8 +847,40 @@ fn check_params(action: ActionType, params: &serde_json::Value) -> Result<(), Ac
     if messages.is_empty() {
         Ok(())
     } else {
-        Err(ActionError::Failed(messages.join("; ")))
+        Err(messages.join("; "))
     }
+}
+
+/// The step's params: its `with:` block evaluated, checked, and with the
+/// handler's defaults filled in.
+///
+/// A refusal is recorded as the step's first attempt failing, and never
+/// retried, since the params are the same on every attempt. The check sees
+/// the block as the definition wrote it, as the resolver does; the defaults
+/// are filled in after.
+fn step_params(
+    handler: &dyn Action,
+    step: &Step,
+    step_info: &StepInfo,
+    ctx: &HandlerContext,
+    reporter: &mut Reporter<'_>,
+) -> Result<serde_json::Value, ExecutionError> {
+    let mut params = expressions::evaluate_expr_value(&step.with, ctx)?;
+    // A step with no `with:` has no parameters, as the resolver reads it.
+    if params.is_null() {
+        params = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let Err(reason) = check_params(step.action, &params) {
+        let exec_err = ExecutionError::InvalidParams(format!("step '{}': {reason}", step.id));
+        reporter.fact(StepFact::StepAttemptFailed {
+            step: step.id.clone(),
+            attempt: 1,
+            error: exec_err.to_error_record(),
+        })?;
+        return Err(exec_err);
+    }
+    handler.apply_defaults(&mut params, step_info);
+    Ok(params)
 }
 
 /// Run one step, retrying transient failures under operator control.
@@ -863,30 +897,10 @@ fn execute_step_with_retry(
     step: &Step,
     step_info: &StepInfo,
     ctx: &HandlerContext,
-    mut params: serde_json::Value,
+    params: &serde_json::Value,
     reporter: &mut Reporter<'_>,
     backends: &mut RunBackends<'_>,
 ) -> Result<StepResult, ExecutionError> {
-    // A step with no `with:` has no parameters, as the resolver reads it.
-    if params.is_null() {
-        params = serde_json::Value::Object(serde_json::Map::new());
-    }
-    // The params are the same on every attempt, so they are checked once, and
-    // a refusal is the first attempt's failure, never retried. The check sees
-    // the block as the definition wrote it, as the resolver does; the
-    // handler's defaults are filled in after.
-    if let Err(action_err) = check_params(step.action, &params) {
-        let exec_err = action_error_to_execution(action_err, &step.id);
-        reporter.fact(StepFact::StepAttemptFailed {
-            step: step.id.clone(),
-            attempt: 1,
-            error: exec_err.to_error_record(),
-        })?;
-        return Err(exec_err);
-    }
-    handler.apply_defaults(&mut params, step_info);
-    let params = &params;
-
     let mut attempt: u32 = 1;
     loop {
         let side_effects_before = reporter.side_effects_emitted();
@@ -1772,6 +1786,26 @@ sections:
         Vec<StepFact>,
         usize,
     ) {
+        let (result, facts, confirms, _) =
+            drive_run(ceremony, action, confirm_answer, backend_registry, true);
+        (result, facts, confirms)
+    }
+
+    /// Like [`drive_with_backends`], choosing whether the run is a dry run,
+    /// which skips the pacing prompts. Each pacing prompt is acknowledged,
+    /// and counted in the last value returned.
+    fn drive_run(
+        ceremony: Ceremony,
+        action: Arc<dyn Action>,
+        confirm_answer: bool,
+        backend_registry: BackendRegistry,
+        dry_run: bool,
+    ) -> (
+        Result<ExecutionSummary, ExecutionError>,
+        Vec<StepFact>,
+        usize,
+        usize,
+    ) {
         let mut registry = ActionRegistry::new();
         registry.register(action);
 
@@ -1784,13 +1818,14 @@ sections:
             registry,
             backend_registry,
             dry_run_output_config(),
-            true, // dry_run: skips pacing/start prompts, leaving only the retry Confirm
+            dry_run,
             StartupSnapshot::placeholder(),
         );
         let join = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
 
         let mut facts = Vec::new();
         let mut confirms = 0usize;
+        let mut continues = 0usize;
         while let Ok(ev) = event_rx.recv() {
             match ev {
                 ExecEvent::Fact { fact, .. } => facts.push(fact),
@@ -1819,11 +1854,24 @@ sections:
                         })
                         .expect("send secret");
                 }
+                ExecEvent::AwaitPrompt {
+                    prompt_id,
+                    prompt: Prompt::Continue { .. },
+                    ..
+                } => {
+                    continues = continues.saturating_add(1);
+                    cmd_tx
+                        .send(UiCommand::PromptResponse {
+                            prompt_id,
+                            response: Response::Acknowledge,
+                        })
+                        .expect("send acknowledge");
+                }
                 _ => {}
             }
         }
         let result = join.join().expect("executor join");
-        (result, facts, confirms)
+        (result, facts, confirms, continues)
     }
 
     fn attempt_numbers(facts: &[StepFact]) -> Vec<u32> {
@@ -1871,15 +1919,18 @@ sections:
         let error = facts
             .iter()
             .find_map(|f| match f {
-                StepFact::StepAttemptFailed { error, .. } => Some(error.message.clone()),
+                StepFact::StepAttemptFailed { error, .. } => Some(error.clone()),
                 _ => None,
             })
             .expect("the attempt is recorded");
         // The value is evaluated, and could be a secret, so it is not shown.
         assert_eq!(
-            error,
-            "Step 'work' failed: 'with.statement' must be a string"
+            error.message,
+            "Invalid params: step 'work': 'with.statement' must be a string"
         );
+        // The definition is at fault, not the operator.
+        assert_eq!(error.class, ErrorClass::Integrity);
+        assert_eq!(error.kind, "invalid_params");
         assert!(
             !facts
                 .iter()
@@ -1946,7 +1997,7 @@ sections:
                 _ => None,
             })
             .expect("the attempt is recorded");
-        assert_eq!(error, "Step 'work' failed: 'with' must be a map");
+        assert_eq!(error, "Invalid params: step 'work': 'with' must be a map");
     }
 
     /// A handler for `action` that completes, for runs that must stop before it.
@@ -2009,8 +2060,50 @@ sections:
             .expect("the attempt is recorded");
         assert_eq!(
             error,
-            "Step 'work' failed: 'min_length' is above 'max_length', so no value fits"
+            "Invalid params: step 'work': 'min_length' is above 'max_length', so no value fits"
         );
+    }
+
+    /// A step whose params are refused fails before the operator is asked
+    /// to start it, since starting it could not change them.
+    #[test]
+    fn a_refused_step_is_not_offered_to_the_operator() {
+        let yaml = r#"
+version: "0.3"
+name: "Evaluated"
+roles:
+  participant:
+    person: "Alice"
+parameters:
+  n: { type: integer, default: 3 }
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      work:
+        action: attest
+        with:
+          statement: "${param.n}"
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("an expression is deferred at resolution");
+        let (result, facts, _, continues) = drive_run(
+            ceremony,
+            Arc::new(Completes(ActionType::Attest)),
+            true,
+            BackendRegistry::new(),
+            false,
+        );
+
+        assert!(matches!(result, Err(ExecutionError::InvalidParams(_))));
+        assert!(
+            facts
+                .iter()
+                .any(|f| matches!(f, StepFact::StepAttemptFailed { .. }))
+        );
+        // Only the prompt that starts the ceremony.
+        assert_eq!(continues, 1);
     }
 
     /// A step without `with:` has no parameters, and the defaults fill them.

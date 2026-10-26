@@ -620,14 +620,16 @@ fn type_json_scalars(ceremony: &mut Ceremony, node: &Node) {
             ) else {
                 continue;
             };
+            // `with:` or `reads:` with nothing after it, or `~`, is YAML's
+            // null: a step that gives no parameters, or reads nothing, as one
+            // without the key.
             if let Some(with) = fields.get_node("with") {
-                // `with:` with nothing after it, or `with: ~`, is YAML's null:
-                // a step that gives no parameters, as one without the key.
                 let typed = typed_json(with);
                 step.with = (!typed.is_null()).then_some(typed);
             }
             if let Some(reads) = fields.get_node("reads") {
-                step.reads = Some(typed_json(reads));
+                let typed = typed_json(reads);
+                step.reads = (!typed.is_null()).then_some(typed);
             }
         }
     }

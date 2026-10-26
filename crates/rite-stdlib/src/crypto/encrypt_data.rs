@@ -9,7 +9,7 @@ use rite_sdk::{Backend, DataKey, EncryptedData, KeyAlgorithm, KeyCheckValue, Wra
 use serde_json::json;
 
 use crate::crypto::content;
-use crate::params::EncryptDataParams;
+use rite_model::params::EncryptDataParams;
 
 /// Encrypt bytes into a container only the named key opens.
 ///

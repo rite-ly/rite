@@ -17,7 +17,7 @@ use rite_runtime::{
 use rite_sdk::Backend;
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 
-use crate::params::EntryParams;
+use rite_model::params::EntryParams;
 
 /// Take a value a person types, as a text artifact and a transcript fact.
 pub struct EnterValueAction;

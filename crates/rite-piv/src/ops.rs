@@ -67,7 +67,12 @@ pub fn slot_from_hint(hint: &str) -> Result<PivSlot, BackendError> {
         other => {
             // Retired key-management slots are addressed by their NIST key
             // reference (0x82..=0x95). Rite stores them as a 0-based index.
+            // Two hex digits, as the reference is written: `from_str_radix`
+            // alone also reads `082` and `+82`.
             let unknown = || BackendError::Configuration(format!("Unknown PIV slot: {hint}"));
+            if other.len() != 2 || !other.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(unknown());
+            }
             let key_ref = u8::from_str_radix(other, 16).map_err(|_| unknown())?;
             if (convert::RETIRED_KEY_REF_MIN..=convert::RETIRED_KEY_REF_MAX).contains(&key_ref) {
                 Ok(PivSlot::Retired(

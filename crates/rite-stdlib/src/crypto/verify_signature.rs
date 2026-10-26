@@ -9,7 +9,7 @@ use rite_sdk::Backend;
 use serde_json::json;
 
 use super::sign_data::resolve_sign_algorithm;
-use crate::params::VerifySignatureParams;
+use rite_model::params::VerifySignatureParams;
 
 /// Verify a signature over data, given the signer's public key.
 ///
@@ -61,7 +61,7 @@ impl Action for VerifySignatureAction {
             ))
         })?;
 
-        let algorithm = resolve_sign_algorithm(typed.algorithm.as_deref(), key_algorithm)?;
+        let algorithm = resolve_sign_algorithm(typed.algorithm, key_algorithm)?;
 
         let data_id = data_ref.artifact_id();
         let data =

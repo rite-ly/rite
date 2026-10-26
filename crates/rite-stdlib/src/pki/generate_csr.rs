@@ -27,7 +27,7 @@ use x509_cert::{
     spki::SubjectPublicKeyInfoOwned,
 };
 
-use crate::params::GenerateCsrParams;
+use rite_model::params::GenerateCsrParams;
 
 use super::oids::sig_profile_for_algorithm;
 

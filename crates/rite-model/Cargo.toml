@@ -12,7 +12,7 @@ categories = ["security"]
 publish = true
 
 [dependencies]
-rite-sdk = { workspace = true }
+rite-sdk = { workspace = true, features = ["schemars"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 indexmap = { workspace = true }
@@ -21,10 +21,20 @@ base16ct = { workspace = true }
 base64ct = { workspace = true }
 zeroize = { workspace = true }
 sha2 = { workspace = true }
+# The DSL vocabulary types describe themselves as JSON Schema, for the schema
+# of a step's `with:` block.
+schemars = { workspace = true }
+jsonschema = { workspace = true, optional = true }
+
+[features]
+# `rite_model::validate`, which checks a value against a generated schema.
+# Off by default, so a crate that only reads transcripts does not link the
+# validator.
+validate = ["dep:jsonschema"]
 
 [dev-dependencies]
-# The published JSON Schemas are generated, and checked, by this crate's tests.
-schemars = { workspace = true }
+# The published JSON Schemas are checked against the generated ones by this
+# crate's tests.
 jsonschema = { workspace = true }
 
 [lints]

@@ -6,7 +6,7 @@ use rite_runtime::{
 };
 use rite_sdk::Backend;
 
-use crate::params::AttestParams;
+use rite_model::params::AttestParams;
 
 const DEFAULT_STATEMENT: &str = "I attest to the accuracy of the above";
 
@@ -21,9 +21,6 @@ impl Action for AttestAction {
     }
 
     fn apply_defaults(&self, params: &mut serde_json::Value, _step: &StepInfo) {
-        if !params.is_object() {
-            *params = serde_json::json!({});
-        }
         if let Some(obj) = params.as_object_mut() {
             obj.entry("statement".to_string())
                 .or_insert_with(|| serde_json::json!(DEFAULT_STATEMENT));

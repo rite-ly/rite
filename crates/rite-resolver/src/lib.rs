@@ -128,6 +128,27 @@ fn resolve_with_material_paths(
     result
 }
 
+/// Add the errors found while reading the file to a resolution.
+///
+/// A file can deserialize and still be refused while it is read, a number the
+/// transcript cannot record among them. `rite check` reports those; this
+/// makes `rite run` refuse the same file rather than start it.
+fn with_structural_errors<T>(
+    mut result: ResolveResult<T>,
+    diags: Vec<Diagnostic>,
+) -> ResolveResult<T> {
+    let errors: Vec<ResolveError> = diags
+        .into_iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(lower::diagnostic_to_resolve_error)
+        .collect();
+    if !errors.is_empty() {
+        result.value = None;
+        result.errors.splice(0..0, errors);
+    }
+    result
+}
+
 /// Extract the first error diagnostic as a `ResolveError`, or return a generic parse failure.
 fn first_resolve_error(diags: Vec<Diagnostic>) -> ResolveError {
     diags
@@ -155,7 +176,7 @@ pub fn resolve(
         return ResolveResult::err(first_resolve_error(diags));
     };
 
-    resolve::resolve_ceremony(ceremony, inputs)
+    with_structural_errors(resolve::resolve_ceremony(ceremony, inputs), diags)
 }
 
 /// Parse and resolve a ceremony from a file path.
@@ -182,7 +203,10 @@ pub fn resolve_files(
         return ResolveResult::err(first_resolve_error(diags));
     };
 
-    resolve_with_material_paths(ceremony, ceremony_path, inputs)
+    with_structural_errors(
+        resolve_with_material_paths(ceremony, ceremony_path, inputs),
+        diags,
+    )
 }
 
 /// Parse and validate ceremony YAML from an in-memory string.
@@ -531,6 +555,256 @@ sections:
             span_text(yaml, span),
             "${role.ghost}",
             "diagnostic should underline the full expression including the ${{...}} delimiters"
+        );
+    }
+
+    /// Each schema violation points at the entry it is about: the value that
+    /// is wrong, the key that is unknown, or the `with:` key of a block
+    /// missing a field.
+    #[test]
+    fn schema_diagnostics_point_at_the_field() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles:
+  alice: {}
+sections:
+  main:
+    role: "${role.alice}"
+    steps:
+      bad_value:
+        action: issue_certificate
+        with:
+          validity_days: ten
+      bad_key:
+        action: confirm
+        with:
+          message: "Ready"
+          statment: "typo"
+      bad_item:
+        action: oral_readback
+        with:
+          format: nato_phonetik
+      missing:
+        action: check_value
+        with:
+          actual: "a"
+      missing_block:
+        action: enter_value
+"#;
+        let (_, _, diags) = analyze_str(None, yaml);
+        let found: Vec<(String, String)> = diags
+            .iter()
+            .filter(|d| d.message.contains("'with") || d.message.contains("parameter"))
+            .map(|d| {
+                let span = d.span.expect("a schema diagnostic has a span");
+                (span_text(yaml, span).to_string(), d.message.clone())
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (
+                    "ten".to_string(),
+                    "Step 'bad_value': 'with.validity_days' must be an integer, found 'ten'"
+                        .to_string()
+                ),
+                (
+                    "statment".to_string(),
+                    "Step 'bad_key': action 'confirm' has no 'statment' parameter. Accepted: \
+                     message"
+                        .to_string()
+                ),
+                (
+                    "nato_phonetik".to_string(),
+                    "Step 'bad_item': 'with.format' must be one of: nato_phonetic, hex, raw, \
+                     nato, found 'nato_phonetik'"
+                        .to_string()
+                ),
+                (
+                    "with".to_string(),
+                    "Step 'missing': action 'check_value' requires 'with.expected'".to_string()
+                ),
+                (
+                    "missing_block".to_string(),
+                    "Step 'missing_block': action 'enter_value' requires 'with.message'"
+                        .to_string()
+                ),
+            ]
+        );
+    }
+
+    /// A value still carrying an expression belongs to run time: nothing at
+    /// or below it is reported. What is known now still is: a key, a count,
+    /// the presence of a field.
+    #[test]
+    fn schema_violations_at_a_deferred_value_are_left_to_run_time() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles:
+  alice: {}
+parameters:
+  algo: { type: string }
+  n: { type: integer }
+  usages: { type: string }
+sections:
+  main:
+    role: "${role.alice}"
+    steps:
+      algo:
+        action: generate_key
+        backend: soft
+        with:
+          algorithm: "${param.algo}"
+          policy: "${param.usages}"
+      count:
+        action: issue_certificate
+        backend: soft
+        with:
+          validity_days: "${param.n}"
+      exact:
+        action: enter_secret
+        with:
+          message: "PIN"
+          length: "${param.n}"
+          min_length: 4
+      typo:
+        action: generate_key
+        backend: soft
+        with:
+          algorythm: "${param.algo}"
+backends:
+  soft: { provider: software }
+"#;
+        let (_, _, diags) = analyze_str(None, yaml);
+        let schema: Vec<&str> = diags
+            .iter()
+            .map(|d| d.message.as_str())
+            .filter(|m| m.contains("'with") || m.contains("parameter") || m.contains("exact"))
+            .collect();
+        assert_eq!(
+            schema,
+            [
+                "Step 'exact': 'length' is exact, so 'min_length' and 'max_length' cannot be \
+                 given beside it",
+                "Step 'typo': action 'generate_key' has no 'algorythm' parameter. Accepted: \
+                 algorithm, policy, slot",
+            ],
+            "{diags:#?}"
+        );
+    }
+
+    /// Each mistake in a `with:` block is reported once, and none hides
+    /// another: a rule over several values is checked beside the schema, a
+    /// count is capped whatever the scheme, every spelling of YAML's null
+    /// means null, and an expression that fails to parse is not also a value
+    /// of the wrong type.
+    #[test]
+    fn each_with_mistake_is_reported_once_and_none_hides_another() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles:
+  alice: {}
+parameters:
+  s: { type: string }
+sections:
+  main:
+    role: "${role.alice}"
+    steps:
+      both:
+        action: enter_secret
+        with:
+          message: "PIN"
+          mesage: "typo"
+          min_length: 8
+          max_length: 6
+      capped:
+        action: split_secret
+        reads: { secret: "${param.s}" }
+        with:
+          scheme: "${param.s}"
+          threshold: 2
+          shares: 150
+      empty:
+        action: enter_value
+        with:
+          message:
+      no_block:
+        action: confirm
+        with: Null
+      no_reads:
+        action: confirm
+        reads: ~
+      unclosed:
+        action: issue_certificate
+        with:
+          validity_days: "${param.s"
+"#;
+        let (_, _, diags) = analyze_str(None, yaml);
+        let messages: Vec<&str> = diags
+            .iter()
+            .map(|d| d.message.as_str())
+            .filter(|m| m.starts_with("Step '"))
+            .collect();
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| !m.starts_with("Step 'unclosed'") && !m.starts_with("Step 'capped'"))
+                .copied()
+                .collect::<Vec<_>>(),
+            [
+                "Step 'both': action 'enter_secret' has no 'mesage' parameter. Accepted: \
+                 format, length, max_length, message, min_length",
+                "Step 'both': action 'enter_secret': 'min_length' is above 'max_length', so \
+                 no value fits",
+                "Step 'empty': 'with.message' must be a string, found null",
+            ],
+            "{diags:#?}"
+        );
+        assert!(
+            messages.contains(&"Step 'capped': 'with.shares' must be at most 100, found 150"),
+            "{diags:#?}"
+        );
+        let unclosed: Vec<&&str> = messages
+            .iter()
+            .filter(|m| m.starts_with("Step 'unclosed'"))
+            .collect();
+        assert!(
+            unclosed.iter().all(|m| !m.contains("must be an integer")),
+            "{unclosed:#?}"
+        );
+    }
+
+    /// A file `rite check` refuses while reading it is refused by `resolve`
+    /// too, so `rite run` never starts it.
+    #[test]
+    fn resolve_refuses_what_reading_the_file_refuses() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles:
+  alice: {}
+sections:
+  main:
+    role: "${role.alice}"
+    steps:
+      read:
+        action: oral_readback
+        with:
+          value: "ABCD"
+          characters: 2.0
+"#;
+        let result = resolve(yaml, None);
+        assert!(result.value.is_none());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.to_string().contains("2.0 is not an integer")),
+            "{:?}",
+            result.errors
         );
     }
 

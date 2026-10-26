@@ -2259,6 +2259,7 @@ version = "0.7.2"
 dependencies = [
  "base64ct",
  "bitflags",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror",

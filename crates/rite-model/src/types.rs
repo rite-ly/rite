@@ -266,12 +266,13 @@ pub enum BackendUsage {
 /// parameter, not part of a profile's identity, so this enum carries no
 /// run-specific values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(into = "String", try_from = "String")]
 #[non_exhaustive]
 pub enum CertProfile {
     /// Self-signed CA at the top of a chain.
     RootCa,
-    /// CA below another, constrained by `path_len`.
+    /// CA below another, constrained by `path_len`. Also written
+    /// `intermediate_ca`.
     SubCa,
     /// TLS server certificate.
     TlsServer,
@@ -281,15 +282,17 @@ pub enum CertProfile {
     EndEntity,
 }
 
+crate::types::vocabulary!(CertProfile {
+    RootCa => "root_ca",
+    SubCa => "sub_ca" | "intermediate_ca",
+    TlsServer => "tls_server",
+    CodeSigning => "code_signing",
+    EndEntity => "end_entity",
+});
+
 impl fmt::Display for CertProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CertProfile::RootCa => write!(f, "root_ca"),
-            CertProfile::SubCa => write!(f, "sub_ca"),
-            CertProfile::TlsServer => write!(f, "tls_server"),
-            CertProfile::CodeSigning => write!(f, "code_signing"),
-            CertProfile::EndEntity => write!(f, "end_entity"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -297,16 +300,31 @@ impl std::str::FromStr for CertProfile {
     type Err = UnknownCertProfile;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "root_ca" => Ok(Self::RootCa),
-            // `intermediate_ca` is the same shape under the name the PKI
-            // world more often uses for it.
-            "sub_ca" | "intermediate_ca" => Ok(Self::SubCa),
-            "tls_server" => Ok(Self::TlsServer),
-            "code_signing" => Ok(Self::CodeSigning),
-            "end_entity" => Ok(Self::EndEntity),
-            _ => Err(UnknownCertProfile),
-        }
+        Self::from_name(s).ok_or(UnknownCertProfile)
+    }
+}
+
+impl From<CertProfile> for String {
+    fn from(profile: CertProfile) -> Self {
+        profile.as_str().to_string()
+    }
+}
+
+impl TryFrom<String> for CertProfile {
+    type Error = UnknownCertProfile;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl schemars::JsonSchema for CertProfile {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "CertProfile".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        Self::names_schema()
     }
 }
 
@@ -316,10 +334,86 @@ pub struct UnknownCertProfile;
 
 impl fmt::Display for UnknownCertProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "supported profiles: root_ca, sub_ca, tls_server, code_signing, end_entity"
+        let names: Vec<&str> = CertProfile::ALL.iter().map(|p| p.as_str()).collect();
+        write!(f, "supported profiles: {}", names.join(", "))
+    }
+}
+
+/// A DSL enum a ceremony writes as one of a fixed set of names.
+///
+/// Parsing and the schema both read the names from here, so an alias is
+/// written once and the schema accepts exactly what parsing does.
+pub(crate) trait Vocabulary: Copy + 'static {
+    /// Every value, in declaration order.
+    const VALUES: &'static [Self];
+    /// Other names a ceremony may write, and the value each stands for.
+    const ALIASES: &'static [(&'static str, Self)] = &[];
+
+    /// The name a ceremony writes and a transcript records.
+    fn name(self) -> &'static str;
+
+    /// The value `name` stands for, under its own name or an alias.
+    fn from_name(name: &str) -> Option<Self> {
+        Self::VALUES
+            .iter()
+            .map(|&value| (value.name(), value))
+            .chain(Self::ALIASES.iter().copied())
+            .find(|(candidate, _)| *candidate == name)
+            .map(|(_, value)| value)
+    }
+
+    /// A string schema that accepts every name and alias.
+    fn names_schema() -> schemars::Schema {
+        crate::params::names(
+            Self::VALUES
+                .iter()
+                .map(|value| value.name())
+                .chain(Self::ALIASES.iter().map(|(alias, _)| *alias)),
         )
+    }
+}
+
+/// Give a DSL enum its names from one list: `ALL`, `as_str`, and its
+/// [`Vocabulary`] impl, aliases written `Variant => "name" | "alias"`.
+///
+/// `as_str` matches every variant, so a variant left out of the list fails
+/// to compile, and `ALL` is complete because it is built from the same list.
+macro_rules! vocabulary {
+    ($ty:ident { $($variant:ident => $name:literal $(| $alias:literal)*,)+ }) => {
+        impl $ty {
+            /// Every value, in declaration order.
+            pub const ALL: &'static [$ty] = &[$($ty::$variant),+];
+
+            /// The name a ceremony writes and a transcript records.
+            #[must_use]
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $($ty::$variant => $name,)+
+                }
+            }
+        }
+
+        impl $crate::types::Vocabulary for $ty {
+            const VALUES: &'static [Self] = Self::ALL;
+            const ALIASES: &'static [(&'static str, Self)] =
+                &[$($(($alias, $ty::$variant),)*)+];
+
+            fn name(self) -> &'static str {
+                self.as_str()
+            }
+        }
+    };
+}
+
+pub(crate) use vocabulary;
+
+/// Names as a person reads a list of alternatives: `a, b or c`.
+pub(crate) fn either<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let names: Vec<&str> = names.collect();
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+        Some((last, _)) => (*last).to_string(),
+        None => String::new(),
     }
 }
 
@@ -339,14 +433,11 @@ pub enum SharingScheme {
     RiteSssV1,
 }
 
-impl SharingScheme {
-    /// The name a ceremony writes and the transcript records.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SharingScheme::RiteSssV1 => "rite-sss/v1",
-        }
-    }
+crate::types::vocabulary!(SharingScheme {
+    RiteSssV1 => "rite-sss/v1",
+});
 
+impl SharingScheme {
     /// The most shares a split under this scheme may make.
     ///
     /// A policy limit rather than what the arithmetic allows: a share index
@@ -398,10 +489,17 @@ impl std::str::FromStr for SharingScheme {
     type Err = UnknownSharingScheme;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "rite-sss/v1" => Ok(Self::RiteSssV1),
-            _ => Err(UnknownSharingScheme),
-        }
+        Self::from_name(s).ok_or(UnknownSharingScheme)
+    }
+}
+
+impl schemars::JsonSchema for SharingScheme {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SharingScheme".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        Self::names_schema()
     }
 }
 
@@ -419,7 +517,8 @@ pub struct UnknownSharingScheme;
 
 impl fmt::Display for UnknownSharingScheme {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "supported sharing schemes: rite-sss/v1")
+        let names: Vec<&str> = SharingScheme::ALL.iter().map(|s| s.as_str()).collect();
+        write!(f, "supported sharing schemes: {}", names.join(", "))
     }
 }
 
@@ -620,106 +719,6 @@ impl ActionType {
             | ActionType::Attest
             | ActionType::GatherEntropy
             | ActionType::TpmAttest => false,
-        }
-    }
-
-    /// Returns the `with:` field names that are required for this action.
-    ///
-    /// The resolver reports a diagnostic for each missing field.
-    ///
-    /// TODO: Replace the stringly-typed `with: serde_json::Value` in `schema::StepBody` with a
-    /// typed `WithFields` enum (one variant per action, carrying its required fields as named
-    /// struct members). Serde would then enforce required fields at parse time and this method
-    /// would no longer be needed. This is a breaking change to the schema and lowering layers.
-    pub fn required_with_fields(self) -> &'static [&'static str] {
-        match self {
-            ActionType::CheckValue => &["actual", "expected"],
-            ActionType::GenerateCsr => &["subject"],
-            // Raw material carries no description, so the ceremony declares
-            // what it is lifting rather than the step guessing.
-            ActionType::ImportKey => &["algorithm"],
-            ActionType::SplitSecret => &["threshold", "shares"],
-            // The label is what the person sees at the keyboard or on the
-            // sheet, and there is no default that names what it is.
-            ActionType::EnterValue
-            | ActionType::EnterSecret
-            | ActionType::Reveal
-            | ActionType::EnterShare => &["message"],
-
-            ActionType::ClockCheck
-            | ActionType::Confirm
-            | ActionType::OralReadback
-            | ActionType::MachineInfo
-            | ActionType::GenerateKey
-            | ActionType::WrapKey
-            | ActionType::UnwrapKey
-            | ActionType::ExportPublic
-            | ActionType::SignData
-            | ActionType::VerifySignature
-            | ActionType::Attest
-            | ActionType::GatherEntropy
-            | ActionType::TpmAttest
-            | ActionType::PivReadCertificate
-            | ActionType::PivSign
-            | ActionType::YubikeyAttestSlot
-            | ActionType::EncryptData
-            | ActionType::DecryptData
-            | ActionType::CombineShares
-            | ActionType::IssueCertificate => &[],
-        }
-    }
-
-    /// Every `with:` key this action accepts.
-    ///
-    /// Nothing else may appear under `with:`. Serde ignores a key it does not
-    /// know, so without this a misspelled field, or one that used to exist, is
-    /// dropped in silence and the ceremony quietly stops doing what its author
-    /// wrote. That is the failure this list exists to prevent, and it covers
-    /// typos and removed fields alike rather than naming them one at a time.
-    ///
-    /// Required keys are the subset in
-    /// [`required_with_fields`](Self::required_with_fields); the rest are
-    /// optional. Nested keys are not listed: only the top level of the block
-    /// is checked, because a nested shape belongs to the handler's own params
-    /// type.
-    pub fn known_with_fields(self) -> &'static [&'static str] {
-        match self {
-            ActionType::ClockCheck | ActionType::Confirm => &["message"],
-            ActionType::CheckValue => &["actual", "expected", "message", "sensitive"],
-            ActionType::OralReadback => &["value", "format", "characters", "message"],
-            ActionType::Reveal | ActionType::EnterShare => &["message", "format", "note", "length"],
-            ActionType::MachineInfo => &[
-                "include_machine_id",
-                "include_cpu",
-                "include_os",
-                "include_security_features",
-                "message",
-            ],
-            ActionType::EnterValue | ActionType::EnterSecret => {
-                &["message", "format", "length", "min_length", "max_length"]
-            }
-            ActionType::GenerateKey => &["algorithm", "policy", "slot"],
-            ActionType::WrapKey => &["scheme", "expect_recipient"],
-            ActionType::UnwrapKey | ActionType::ImportKey => {
-                &["algorithm", "expect_key", "label", "policy"]
-            }
-            ActionType::EncryptData => &["scheme"],
-            ActionType::SplitSecret => &["scheme", "threshold", "shares"],
-            ActionType::SignData | ActionType::VerifySignature => &["algorithm", "message"],
-            ActionType::Attest => &["statement"],
-            ActionType::GatherEntropy => &["instruction"],
-            ActionType::IssueCertificate => &["profile", "validity_days", "issuer_cn", "path_len"],
-            ActionType::GenerateCsr => &["subject", "san"],
-            ActionType::PivReadCertificate | ActionType::YubikeyAttestSlot => &["slot", "message"],
-            ActionType::PivSign => &["slot", "algorithm", "message"],
-            // `export_public` and `decrypt_data` take their inputs through
-            // `reads:` alone, and `tpm_attest` has no handler in any build yet,
-            // so none of the three has a `with:` shape to accept. For the last,
-            // `unsupported_actions` is what reports the step itself.
-            ActionType::ExportPublic
-            | ActionType::DecryptData
-            | ActionType::CombineShares
-            | ActionType::TpmAttest => &[],
         }
     }
 
@@ -1215,6 +1214,75 @@ mod tests {
         }
     }
 
+    /// `vocabulary!` builds each `ALL` and `as_str` from one list, so neither
+    /// can miss a variant. Each name parses back, and is the name serde
+    /// writes, which for a derived serde is a second spelling.
+    #[test]
+    fn every_vocabulary_lists_every_value_under_its_serde_name() {
+        use crate::{Format, RevealFormat};
+
+        fn check<T>(all: &[T])
+        where
+            T: Copy + PartialEq + std::fmt::Debug + std::fmt::Display + Serialize,
+            T: std::str::FromStr,
+        {
+            for &value in all {
+                let name = value.to_string();
+                assert!(
+                    matches!(name.parse::<T>(), Ok(parsed) if parsed == value),
+                    "{name}"
+                );
+                assert_eq!(serde_json::to_value(value).unwrap(), name.as_str());
+            }
+        }
+
+        check(CertProfile::ALL);
+        check(SharingScheme::ALL);
+        check(RevealFormat::ALL);
+        check(Format::ALL);
+    }
+
+    /// serde, `FromStr` and the schema accept the same names, aliases
+    /// included, for every vocabulary whose schema is its names.
+    #[test]
+    fn a_vocabulary_schema_accepts_what_serde_reads() {
+        use crate::params::ReadbackFormat;
+
+        fn check<T>()
+        where
+            T: Vocabulary + std::fmt::Debug + PartialEq + schemars::JsonSchema,
+            T: serde::de::DeserializeOwned,
+        {
+            let schema = schemars::schema_for!(T);
+            let listed: Vec<&str> = schema
+                .get("enum")
+                .and_then(|names| names.as_array())
+                .unwrap()
+                .iter()
+                .filter_map(|name| name.as_str())
+                .collect();
+            let named = T::VALUES.iter().map(|&value| (value.name(), value));
+            let mut expected = Vec::new();
+            for (name, value) in named.chain(T::ALIASES.iter().copied()) {
+                assert_eq!(
+                    serde_json::from_value::<T>(serde_json::json!(name)).unwrap(),
+                    value
+                );
+                expected.push(name);
+            }
+            assert_eq!(listed, expected);
+        }
+
+        check::<CertProfile>();
+        check::<SharingScheme>();
+        check::<ReadbackFormat>();
+        assert_eq!("intermediate_ca".parse(), Ok(CertProfile::SubCa));
+        assert_eq!(
+            serde_json::from_value::<ReadbackFormat>(serde_json::json!("nato")).unwrap(),
+            ReadbackFormat::NatoPhonetic
+        );
+    }
+
     /// `ActionType::ALL` is written by hand, so it can fall behind the enum.
     ///
     /// The match below is exhaustive, so adding a variant fails to compile
@@ -1222,22 +1290,6 @@ mod tests {
     /// list an author has to extend. The name check then catches a variant
     /// listed twice, and `rite-ls` compares its own catalogue against `ALL`,
     /// which is what catches one left out.
-    /// A required field the action does not accept would be reported as
-    /// unknown, which is the opposite of the message intended, and nothing
-    /// makes the two lists agree on their own.
-    #[test]
-    fn every_required_field_is_also_a_known_field() {
-        for action in ActionType::ALL {
-            let known = action.known_with_fields();
-            for field in action.required_with_fields() {
-                assert!(
-                    known.contains(field),
-                    "{action} requires '{field}' and does not accept it"
-                );
-            }
-        }
-    }
-
     #[test]
     fn all_lists_every_action_type() {
         for action in ActionType::ALL {

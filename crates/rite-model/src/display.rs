@@ -17,59 +17,44 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+use crate::types::Vocabulary;
 use crate::{bip39, paper32};
 
 /// An encoding a value is shown in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(
-    test,
-    schemars(description = "The encoding a value is written on paper in.")
-)]
+#[schemars(description = "The encoding a value is written on paper in.")]
 #[non_exhaustive]
 pub enum RevealFormat {
     /// Rows of 32 base-32 characters, 28 of data and 4 of parity, from an
     /// alphabet without `I`, `L`, `O` and `U`; a wrong character in a row
     /// is corrected, two unreadable ones recovered. The default. See
     /// [`paper32`].
-    #[cfg_attr(
-        test,
-        schemars(
-            description = "Rows of 32 base-32 characters, 28 of data and 4 of parity; a wrong \
+    #[schemars(
+        description = "Rows of 32 base-32 characters, 28 of data and 4 of parity; a wrong \
             character in a row is corrected."
-        )
     )]
     Paper32,
     /// Two hexadecimal digits per byte, upper case, in rows of 32.
-    #[cfg_attr(
-        test,
-        schemars(description = "Two hexadecimal digits per byte, in rows of 32.")
-    )]
+    #[schemars(description = "Two hexadecimal digits per byte, in rows of 32.")]
     Hex,
     /// Words from the BIP-39 English list, one per row, as a hardware
     /// wallet shows its recovery phrase and takes it back. For entropy of
     /// 16 to 32 bytes in steps of 4. See [`bip39`].
-    #[cfg_attr(
-        test,
-        schemars(
-            description = "Words from the BIP-39 English list, one per row, for a wallet's \
+    #[schemars(
+        description = "Words from the BIP-39 English list, one per row, for a wallet's \
             recovery phrase."
-        )
     )]
     Bip39,
 }
 
-impl RevealFormat {
-    /// The name a ceremony writes.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RevealFormat::Paper32 => "paper32",
-            RevealFormat::Hex => "hex",
-            RevealFormat::Bip39 => "bip39",
-        }
-    }
+crate::types::vocabulary!(RevealFormat {
+    Paper32 => "paper32",
+    Hex => "hex",
+    Bip39 => "bip39",
+});
 
+impl RevealFormat {
     /// Whether the value is words, one per row, rather than characters.
     pub fn is_words(self) -> bool {
         match self {
@@ -341,7 +326,12 @@ pub struct UnknownRevealFormat(pub String);
 
 impl fmt::Display for UnknownRevealFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "'{}' is not a format; use paper32, hex or bip39", self.0)
+        write!(
+            f,
+            "'{}' is not a format; use {}",
+            self.0,
+            crate::types::either(RevealFormat::ALL.iter().map(|format| format.as_str()))
+        )
     }
 }
 
@@ -351,12 +341,7 @@ impl FromStr for RevealFormat {
     type Err = UnknownRevealFormat;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "paper32" => Ok(RevealFormat::Paper32),
-            "hex" => Ok(RevealFormat::Hex),
-            "bip39" => Ok(RevealFormat::Bip39),
-            other => Err(UnknownRevealFormat(other.to_string())),
-        }
+        Self::from_name(s).ok_or_else(|| UnknownRevealFormat(s.to_string()))
     }
 }
 

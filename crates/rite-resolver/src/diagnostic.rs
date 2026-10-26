@@ -1,6 +1,7 @@
 //! Diagnostic types for ceremony validation with source location tracking.
 
 use crate::error::{ResolveError, ResolveWarning};
+use rite_model::validate::{Anchor, Pointer};
 use rite_model::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};
 use std::collections::HashMap;
 use std::fmt;
@@ -141,6 +142,15 @@ pub struct UnparsedExpression {
     pub value: String,
 }
 
+/// Where one entry of a `with:` block is written: its key and its value.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FieldSpan {
+    /// The key, or `None` for a list item, which has none.
+    pub key: Option<Span>,
+    /// The value: the scalar, or the start of a map or list.
+    pub value: Option<Span>,
+}
+
 /// Maps ceremony element IDs to their source positions for diagnostic enrichment
 /// and editor navigation.
 ///
@@ -189,6 +199,9 @@ pub struct SpanMap {
     /// rather than declared identifiers, so they aren't references and
     /// don't fit any of the maps above.
     pub enum_values: Vec<Span>,
+    /// Every entry of each step's `with:` block, by JSON pointer within the
+    /// block. The root pointer is the `with:` entry itself.
+    pub with_fields: HashMap<StepId, HashMap<Pointer, FieldSpan>>,
 }
 
 impl SpanMap {
@@ -275,6 +288,33 @@ impl SpanMap {
         self.references.iter().filter(move |e| e.target == *target)
     }
 
+    /// Where to point a diagnostic about the entry at `field` in a step's
+    /// `with:` block.
+    ///
+    /// An entry with no recorded span, such as one the block lacks, points at
+    /// the nearest enclosing entry's key, and `None` means the step has no
+    /// `with:` block at all.
+    pub fn with_field_span(&self, step: &StepId, field: &Pointer, anchor: Anchor) -> Option<Span> {
+        let fields = self.with_fields.get(step)?;
+        if let Some(found) = fields.get(field) {
+            let span = match anchor {
+                Anchor::Key => found.key.or(found.value),
+                Anchor::Value | _ => found.value.or(found.key),
+            };
+            if span.is_some() {
+                return span;
+            }
+        }
+        let mut at = field.parent();
+        while let Some(parent) = at {
+            if let Some(found) = fields.get(&parent).and_then(|f| f.key.or(f.value)) {
+                return Some(found);
+            }
+            at = parent.parent();
+        }
+        None
+    }
+
     /// Convert a `ResolveError` to a `Diagnostic`, looking up the best available span.
     pub fn to_diagnostic(&self, path: Option<&Path>, err: &ResolveError) -> Diagnostic {
         let span = self.span_for_error(err);
@@ -325,8 +365,6 @@ impl SpanMap {
             ResolveError::UnknownSection { step, .. }
             | ResolveError::UnknownArtifact { step, .. }
             | ResolveError::MissingRequiredBackend { step, .. }
-            | ResolveError::MissingWithField { step, .. }
-            | ResolveError::UnknownWithField { step, .. }
             | ResolveError::WithFieldNeedsInput { step, .. }
             | ResolveError::InvalidWithValue { step, .. }
             | ResolveError::MissingReadsInput { step, .. }
@@ -336,6 +374,14 @@ impl SpanMap {
             | ResolveError::ReadsInputShape { step, .. }
             | ResolveError::InvalidRetryAttempts { step }
             | ResolveError::ArtifactNeverProduced { step, .. } => self.steps.get(step).copied(),
+            ResolveError::SchemaViolation {
+                step,
+                field,
+                anchor,
+                ..
+            } => self
+                .with_field_span(step, field, *anchor)
+                .or_else(|| self.steps.get(step).copied()),
             ResolveError::UndeclaredBackend { step, backend } => self
                 .span_for_reference(
                     &ReferenceTarget::Backend(backend.clone()),

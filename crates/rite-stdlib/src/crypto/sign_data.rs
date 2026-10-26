@@ -8,7 +8,7 @@ use rite_runtime::{
 use rite_sdk::{Backend, KeyAlgorithm, SignAlgorithm, SignBackend};
 use serde_json::json;
 
-use crate::params::SignDataParams;
+use rite_model::params::SignDataParams;
 
 /// Sign data with a key the backend holds.
 ///
@@ -47,7 +47,7 @@ impl Action for SignDataAction {
             ))
         })?;
         let key_algorithm = key.algorithm;
-        let algorithm = resolve_sign_algorithm(typed.algorithm.as_deref(), key_algorithm)?;
+        let algorithm = resolve_sign_algorithm(typed.algorithm, key_algorithm)?;
 
         let data_id = data_ref.artifact_id();
         let data =
@@ -139,18 +139,14 @@ pub(super) fn require_sign_backend<'a>(
 /// that names an algorithm the key cannot perform is a mistake worth reporting
 /// before any signing is attempted, not a backend error mid-step.
 pub(super) fn resolve_sign_algorithm(
-    requested: Option<&str>,
+    requested: Option<SignAlgorithm>,
     key_algorithm: KeyAlgorithm,
 ) -> Result<SignAlgorithm, ActionError> {
-    let Some(requested) = requested else {
+    let Some(algorithm) = requested else {
         return key_algorithm.default_sign_algorithm().ok_or_else(|| {
             ActionError::Failed(format!("{key_algorithm} keys cannot produce signatures"))
         });
     };
-
-    let algorithm: SignAlgorithm = requested
-        .parse()
-        .map_err(|_| ActionError::Failed(format!("Unknown signature algorithm: {requested}")))?;
 
     if !algorithm.accepts_key(key_algorithm) {
         return Err(ActionError::Failed(format!(
@@ -181,22 +177,19 @@ mod tests {
     #[test]
     fn honours_an_override_the_key_supports() {
         assert_eq!(
-            resolve_sign_algorithm(Some("RSA-PSS-SHA256"), KeyAlgorithm::Rsa4096).unwrap(),
+            resolve_sign_algorithm(Some(SignAlgorithm::RsaPssSha256), KeyAlgorithm::Rsa4096)
+                .unwrap(),
             SignAlgorithm::RsaPssSha256
         );
     }
 
     #[test]
     fn rejects_an_override_the_key_cannot_perform() {
-        let err = resolve_sign_algorithm(Some("ECDSA-SHA256"), KeyAlgorithm::Rsa2048).unwrap_err();
+        let err = resolve_sign_algorithm(Some(SignAlgorithm::EcdsaSha256), KeyAlgorithm::Rsa2048)
+            .unwrap_err();
         let message = err.to_string();
         assert!(message.contains("ECDSA-SHA256"), "{message}");
         assert!(message.contains("RSA-2048"), "{message}");
-    }
-
-    #[test]
-    fn rejects_an_unknown_algorithm_name() {
-        assert!(resolve_sign_algorithm(Some("ecdsa_sha256"), KeyAlgorithm::EcdsaP256).is_err());
     }
 
     /// A symmetric key reaching a signing step is a ceremony authoring error,

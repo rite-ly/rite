@@ -18,7 +18,7 @@ use serde_json::json;
 
 use super::gf256;
 use super::wire;
-use crate::params::EnterShareParams;
+use rite_model::params::EnterShareParams;
 
 /// Ask for a share row by row, and hold it as a share a later step
 /// combines.

@@ -1,7 +1,9 @@
 //! Serde helpers for marked-yaml compatibility.
 //!
-//! marked-yaml deserializes all YAML scalars as strings, so numeric fields
-//! need custom deserializers that accept both string and integer representations.
+//! A field inside an untagged enum, such as a material's, is buffered before
+//! serde picks the variant, and marked-yaml hands a buffered scalar over as a
+//! string, quoted or not. Such a numeric field reads a number from either,
+//! so there a quoted number is accepted, unlike everywhere else.
 
 use serde::Deserialize;
 

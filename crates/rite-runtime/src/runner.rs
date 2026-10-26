@@ -57,6 +57,7 @@ use crate::state::{ExecutionState, HandlerContext, StepResult};
 use crate::step_info::StepInfo;
 use crate::system_info::StartupSnapshot;
 use crate::transcript_sink::{TranscriptFingerprint, TranscriptSink};
+use rite_model::validate::Values;
 use rite_model::{ErrorClass, ErrorRecord, Prompt, RetryPolicy, StepFact, StepOutcome};
 
 /// Gather the machine entropy `m` that seeds the ceremony entropy source.
@@ -188,18 +189,19 @@ pub trait Action: Send + Sync {
     /// The action this handler implements, as the DSL names it.
     fn action_type(&self) -> ActionType;
 
-    /// Apply per-step parameter defaults before validation.
+    /// Fill in per-step parameter defaults. The executor calls this on a
+    /// block the action's schema accepted, so `params` is an object.
     fn apply_defaults(&self, _params: &mut serde_json::Value, _step: &StepInfo) {}
 
     /// Report values in a step's `with:` block that *this build* cannot carry
     /// out, without executing the step.
     ///
     /// Only build-relative findings belong here. Whether a value is one the
-    /// action accepts at all is settled by
-    /// [`rite_model::params::check`], which the resolver runs, so that an
-    /// editor linking no backend reports it too. What is left for a handler is
-    /// the question only a linked binary can answer: whether the feature,
-    /// backend or library that would carry the value out is present.
+    /// action accepts at all is settled by the action's schema, which the
+    /// resolver checks, so that an editor linking no backend reports it too.
+    /// What is left for a handler is the question only a linked binary can
+    /// answer: whether the feature, backend or library that would carry the
+    /// value out is present.
     ///
     /// `params` holds the literal part of the block, as produced by
     /// [`literal_expr_value`](rite_model::expression::literal_expr_value): a
@@ -636,6 +638,20 @@ impl Executor {
                 role: step.role.clone().unwrap_or_else(|| RoleId::new("")),
             })?;
 
+            // Look up handler
+            let handler = self
+                .registry
+                .get(&step.action)
+                .ok_or(ExecutionError::UnknownAction(step.action))?
+                .clone();
+
+            // The params depend only on what earlier steps produced, so a
+            // block that cannot run is refused before the operator is asked
+            // to start the step.
+            let ctx = state.handler_context();
+            let step_info = step_info_from(step);
+            let params = step_params(handler.as_ref(), step, &step_info, &ctx, reporter)?;
+
             // Pacing: gate the step body on operator acknowledgement. The
             // prompt fires with the step header already visible, so the
             // operator confirms "ready for step X" rather than "what just
@@ -647,18 +663,6 @@ impl Executor {
                     hint: Some(format!("Press Enter to start step {}", step.step_label)),
                 })?;
             }
-
-            // Look up handler
-            let handler = self
-                .registry
-                .get(&step.action)
-                .ok_or(ExecutionError::UnknownAction(step.action))?
-                .clone();
-
-            let ctx = state.handler_context();
-            let step_info = step_info_from(step);
-            let mut params = expressions::evaluate_expr_value(&step.with, &ctx)?;
-            handler.apply_defaults(&mut params, &step_info);
 
             let result = execute_step_with_retry(
                 handler.as_ref(),
@@ -807,6 +811,76 @@ impl RunBackends<'_> {
         }
         Ok(backend)
     }
+}
+
+/// Check the evaluated `with:` block against the action's schema, and the
+/// rules over several values that a schema cannot say.
+///
+/// The resolver checked what was literal; an expression's value is known
+/// only now. It is refused under the rule a literal one would break, before
+/// the handler or a backend sees it, so a handler can rely on its params
+/// having the shape the schema describes. Every value is known here, so
+/// nothing is deferred. One difference with serde remains: JSON Schema counts
+/// `2.0` as an integer. No expression yields a float, since no parameter
+/// type is one, and a literal float is refused when the file is read.
+///
+/// The value is evaluated, and may be a secret an expression copied in, so
+/// the message names the field and the rule and never the value: it reaches
+/// the transcript and the screen.
+fn check_params(action: ActionType, params: &serde_json::Value) -> Result<(), String> {
+    let check = rite_model::validate::params_check(action).map_err(|error| error.to_string())?;
+    let mut messages: Vec<String> = Vec::new();
+    let found = check
+        .validate(params)
+        .into_iter()
+        .map(|violation| check.message(action, params, &violation, Values::Withheld))
+        .chain(
+            rite_model::params::cross_field(action, params)
+                .into_iter()
+                .map(|error| error.message),
+        );
+    for message in found {
+        if !messages.contains(&message) {
+            messages.push(message);
+        }
+    }
+    if messages.is_empty() {
+        Ok(())
+    } else {
+        Err(messages.join("; "))
+    }
+}
+
+/// The step's params: its `with:` block evaluated, checked, and with the
+/// handler's defaults filled in.
+///
+/// A refusal is recorded as the step's first attempt failing, and never
+/// retried, since the params are the same on every attempt. The check sees
+/// the block as the definition wrote it, as the resolver does; the defaults
+/// are filled in after.
+fn step_params(
+    handler: &dyn Action,
+    step: &Step,
+    step_info: &StepInfo,
+    ctx: &HandlerContext,
+    reporter: &mut Reporter<'_>,
+) -> Result<serde_json::Value, ExecutionError> {
+    let mut params = expressions::evaluate_expr_value(&step.with, ctx)?;
+    // A step with no `with:` has no parameters, as the resolver reads it.
+    if params.is_null() {
+        params = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let Err(reason) = check_params(step.action, &params) {
+        let exec_err = ExecutionError::InvalidParams(format!("step '{}': {reason}", step.id));
+        reporter.fact(StepFact::StepAttemptFailed {
+            step: step.id.clone(),
+            attempt: 1,
+            error: exec_err.to_error_record(),
+        })?;
+        return Err(exec_err);
+    }
+    handler.apply_defaults(&mut params, step_info);
+    Ok(params)
 }
 
 /// Run one step, retrying transient failures under operator control.
@@ -1712,6 +1786,26 @@ sections:
         Vec<StepFact>,
         usize,
     ) {
+        let (result, facts, confirms, _) =
+            drive_run(ceremony, action, confirm_answer, backend_registry, true);
+        (result, facts, confirms)
+    }
+
+    /// Like [`drive_with_backends`], choosing whether the run is a dry run,
+    /// which skips the pacing prompts. Each pacing prompt is acknowledged,
+    /// and counted in the last value returned.
+    fn drive_run(
+        ceremony: Ceremony,
+        action: Arc<dyn Action>,
+        confirm_answer: bool,
+        backend_registry: BackendRegistry,
+        dry_run: bool,
+    ) -> (
+        Result<ExecutionSummary, ExecutionError>,
+        Vec<StepFact>,
+        usize,
+        usize,
+    ) {
         let mut registry = ActionRegistry::new();
         registry.register(action);
 
@@ -1724,13 +1818,14 @@ sections:
             registry,
             backend_registry,
             dry_run_output_config(),
-            true, // dry_run: skips pacing/start prompts, leaving only the retry Confirm
+            dry_run,
             StartupSnapshot::placeholder(),
         );
         let join = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
 
         let mut facts = Vec::new();
         let mut confirms = 0usize;
+        let mut continues = 0usize;
         while let Ok(ev) = event_rx.recv() {
             match ev {
                 ExecEvent::Fact { fact, .. } => facts.push(fact),
@@ -1759,11 +1854,24 @@ sections:
                         })
                         .expect("send secret");
                 }
+                ExecEvent::AwaitPrompt {
+                    prompt_id,
+                    prompt: Prompt::Continue { .. },
+                    ..
+                } => {
+                    continues = continues.saturating_add(1);
+                    cmd_tx
+                        .send(UiCommand::PromptResponse {
+                            prompt_id,
+                            response: Response::Acknowledge,
+                        })
+                        .expect("send acknowledge");
+                }
                 _ => {}
             }
         }
         let result = join.join().expect("executor join");
-        (result, facts, confirms)
+        (result, facts, confirms, continues)
     }
 
     fn attempt_numbers(facts: &[StepFact]) -> Vec<u32> {
@@ -1774,6 +1882,252 @@ sections:
                 _ => None,
             })
             .collect()
+    }
+
+    /// A value an expression produced is checked against the schema when the
+    /// step runs, in the words a literal one gets at `rite check`, and the
+    /// handler never sees it.
+    #[test]
+    fn an_evaluated_value_the_schema_refuses_fails_the_step_before_the_handler() {
+        let yaml = r#"
+version: "0.3"
+name: "Evaluated"
+roles:
+  participant:
+    person: "Alice"
+parameters:
+  n: { type: integer, default: 3 }
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      work:
+        action: attest
+        silent: true
+        with:
+          statement: "${param.n}"
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("an expression is deferred at resolution");
+        // Would complete if it ran.
+        let action = FlakyAction::new(0, transient, BeforeFail::Nothing);
+        let (result, facts, confirms) = drive(ceremony, action, true);
+
+        assert!(result.is_err());
+        assert_eq!(confirms, 0, "a value that is wrong stays wrong on retry");
+        let error = facts
+            .iter()
+            .find_map(|f| match f {
+                StepFact::StepAttemptFailed { error, .. } => Some(error.clone()),
+                _ => None,
+            })
+            .expect("the attempt is recorded");
+        // The value is evaluated, and could be a secret, so it is not shown.
+        assert_eq!(
+            error.message,
+            "Invalid params: step 'work': 'with.statement' must be a string"
+        );
+        // The definition is at fault, not the operator.
+        assert_eq!(error.class, ErrorClass::Integrity);
+        assert_eq!(error.kind, "invalid_params");
+        assert!(
+            !facts
+                .iter()
+                .any(|f| matches!(f, StepFact::StepCompleted { .. }))
+        );
+    }
+
+    /// An `attest` whose defaults turn any block into a valid one.
+    struct Defaulting;
+
+    impl Action for Defaulting {
+        fn action_type(&self) -> ActionType {
+            ActionType::Attest
+        }
+
+        fn apply_defaults(&self, params: &mut serde_json::Value, _step: &StepInfo) {
+            *params = serde_json::json!({ "statement": "the default" });
+        }
+
+        fn execute(
+            &self,
+            _step: &StepInfo,
+            _ctx: &HandlerContext,
+            _params: &serde_json::Value,
+            _reporter: &mut Reporter<'_>,
+            _backend: Option<&mut dyn Backend>,
+        ) -> Result<StepResult, ActionError> {
+            Ok(StepResult::completed("done".to_string()))
+        }
+    }
+
+    /// The schema sees the block the definition wrote, not the one the
+    /// handler's defaults make of it: a whole block an expression turned
+    /// into a string is refused, as a literal string is at `rite check`.
+    #[test]
+    fn the_schema_checks_the_block_before_the_defaults() {
+        let yaml = r#"
+version: "0.3"
+name: "Evaluated"
+roles:
+  participant:
+    person: "Alice"
+parameters:
+  s: { type: string, default: "a statement" }
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      work:
+        action: attest
+        silent: true
+        with: "${param.s}"
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("a whole block expression is deferred at resolution");
+        let (result, facts, _) = drive(ceremony, Arc::new(Defaulting), true);
+
+        assert!(result.is_err());
+        let error = facts
+            .iter()
+            .find_map(|f| match f {
+                StepFact::StepAttemptFailed { error, .. } => Some(error.message.clone()),
+                _ => None,
+            })
+            .expect("the attempt is recorded");
+        assert_eq!(error, "Invalid params: step 'work': 'with' must be a map");
+    }
+
+    /// A handler for `action` that completes, for runs that must stop before it.
+    struct Completes(ActionType);
+
+    impl Action for Completes {
+        fn action_type(&self) -> ActionType {
+            self.0
+        }
+
+        fn execute(
+            &self,
+            _step: &StepInfo,
+            _ctx: &HandlerContext,
+            _params: &serde_json::Value,
+            _reporter: &mut Reporter<'_>,
+            _backend: Option<&mut dyn Backend>,
+        ) -> Result<StepResult, ActionError> {
+            Ok(StepResult::completed("done".to_string()))
+        }
+    }
+
+    /// A rule over several values is checked when the step runs too, once an
+    /// expression gave the value `rite check` could not know.
+    #[test]
+    fn a_rule_over_several_values_is_checked_when_the_step_runs() {
+        let yaml = r#"
+version: "0.3"
+name: "Evaluated"
+roles:
+  participant:
+    person: "Alice"
+parameters:
+  n: { type: integer, default: 8 }
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      work:
+        action: enter_secret
+        silent: true
+        with:
+          message: "PIN"
+          min_length: "${param.n}"
+          max_length: 6
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("the minimum is deferred at resolution");
+        let (result, facts, _) =
+            drive(ceremony, Arc::new(Completes(ActionType::EnterSecret)), true);
+
+        assert!(result.is_err());
+        let error = facts
+            .iter()
+            .find_map(|f| match f {
+                StepFact::StepAttemptFailed { error, .. } => Some(error.message.clone()),
+                _ => None,
+            })
+            .expect("the attempt is recorded");
+        assert_eq!(
+            error,
+            "Invalid params: step 'work': 'min_length' is above 'max_length', so no value fits"
+        );
+    }
+
+    /// A step whose params are refused fails before the operator is asked
+    /// to start it, since starting it could not change them.
+    #[test]
+    fn a_refused_step_is_not_offered_to_the_operator() {
+        let yaml = r#"
+version: "0.3"
+name: "Evaluated"
+roles:
+  participant:
+    person: "Alice"
+parameters:
+  n: { type: integer, default: 3 }
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      work:
+        action: attest
+        with:
+          statement: "${param.n}"
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("an expression is deferred at resolution");
+        let (result, facts, _, continues) = drive_run(
+            ceremony,
+            Arc::new(Completes(ActionType::Attest)),
+            true,
+            BackendRegistry::new(),
+            false,
+        );
+
+        assert!(matches!(result, Err(ExecutionError::InvalidParams(_))));
+        assert!(
+            facts
+                .iter()
+                .any(|f| matches!(f, StepFact::StepAttemptFailed { .. }))
+        );
+        // Only the prompt that starts the ceremony.
+        assert_eq!(continues, 1);
+    }
+
+    /// A step without `with:` has no parameters, and the defaults fill them.
+    #[test]
+    fn a_step_without_with_runs_with_its_defaults() {
+        let yaml = r#"
+version: "0.3"
+name: "Defaults"
+roles:
+  participant:
+    person: "Alice"
+sections:
+  main:
+    role: ${role.participant}
+    steps:
+      work:
+        action: attest
+        silent: true
+"#;
+        let ceremony = rite_resolver::resolve(yaml, None)
+            .into_result()
+            .expect("resolve");
+        let (result, _, _) = drive(ceremony, Arc::new(Defaulting), true);
+        assert_eq!(result.expect("run ok").steps_completed, 1);
     }
 
     #[test]

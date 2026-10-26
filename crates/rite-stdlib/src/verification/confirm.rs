@@ -7,7 +7,7 @@ use rite_runtime::{
 };
 use rite_sdk::Backend;
 
-use crate::params::ConfirmParams;
+use rite_model::params::ConfirmParams;
 
 /// Confirm action, pause the ceremony and require a yes/no acknowledgement.
 pub struct ConfirmAction;

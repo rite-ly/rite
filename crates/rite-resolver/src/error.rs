@@ -2,6 +2,7 @@
 
 use crate::diagnostic::ReferenceContext;
 use rite_model::expression::{ExprError, RefType};
+use rite_model::validate::{Anchor, Pointer};
 use rite_model::{
     ActId, ActionType, ArtifactId, MaterialId, OutputId, ParamId, ParameterType, RoleId, SectionId,
     StepId,
@@ -194,36 +195,6 @@ pub enum ResolveError {
         action: ActionType,
     },
 
-    /// Step `with:` block is missing a required field for its action.
-    #[error("Step '{step}': action '{action}' requires 'with.{field}'")]
-    MissingWithField {
-        /// The step ID.
-        step: StepId,
-        /// The action whose parameter is missing.
-        action: ActionType,
-        /// The missing `with:` field name.
-        field: &'static str,
-    },
-
-    /// Step `with:` block names a key the action does not have.
-    ///
-    /// Serde ignores an unknown key, so an unreported one is dropped in
-    /// silence and the step quietly does something other than what its author
-    /// wrote. A typo and a field that no longer exists fail the same way and
-    /// are reported the same way.
-    #[error(
-        "Step '{step}': action '{action}' has no '{field}' parameter. Accepted: {}",
-        .action.known_with_fields().join(", ")
-    )]
-    UnknownWithField {
-        /// The step ID.
-        step: StepId,
-        /// The action whose block holds the key.
-        action: ActionType,
-        /// The key that is not a parameter.
-        field: String,
-    },
-
     /// Step `with:` block holds a field that only means something alongside a
     /// `reads:` input the step does not name.
     ///
@@ -242,6 +213,26 @@ pub enum ResolveError {
         field: &'static str,
         /// The `reads:` input it needs.
         requires: &'static str,
+    },
+
+    /// Step `with:` block fails its action's schema.
+    ///
+    /// The schema says which keys an action takes and requires and what each
+    /// value may be, the same in every build. A value still carrying an
+    /// expression is checked when the step runs instead.
+    #[error("Step '{step}': {message}")]
+    SchemaViolation {
+        /// The step ID.
+        step: StepId,
+        /// Where in the `with:` block; the root is the block itself.
+        field: Pointer,
+        /// Whether the diagnostic points at the key or the value there.
+        anchor: Anchor,
+        /// The JSON Schema keyword that failed, a stable code for machine
+        /// output.
+        keyword: String,
+        /// What is wrong, phrased for the ceremony author.
+        message: String,
     },
 
     /// Step `with:` block holds a value the action cannot accept.

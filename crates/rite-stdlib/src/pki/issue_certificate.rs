@@ -44,7 +44,7 @@ use x509_cert::{
     time::Validity,
 };
 
-use crate::params::IssueCertificateParams;
+use rite_model::params::IssueCertificateParams;
 
 use super::oids::{
     sig_profile_for_algorithm, verifiable_algorithm_names, verifiable_sign_algorithm,
@@ -155,8 +155,8 @@ impl Action for IssueCertificateAction {
     ) -> Result<StepResult, ActionError> {
         let typed: IssueCertificateParams = parse_params(params)?;
 
-        let validity_days = typed.validity_days.unwrap_or(3650);
-        let profile = parse_profile(typed.profile.as_deref())?;
+        let validity_days = typed.validity_days;
+        let profile = typed.profile;
 
         let signing_key_ref = step.required_named_input("signing_key", "issue_certificate")?;
         let csr_ref = step.required_named_input("csr", "issue_certificate")?;
@@ -343,18 +343,6 @@ impl Action for IssueCertificateAction {
             Ok(StepResult::completed(message))
         }
     }
-}
-
-/// Read the `profile:` name, defaulting to the least privileged shape.
-///
-/// Resolution has already rejected a name outside the vocabulary, so reaching
-/// the error here means the step was built without going through it.
-fn parse_profile(profile: Option<&str>) -> Result<CertProfile, ActionError> {
-    let Some(name) = profile else {
-        return Ok(CertProfile::EndEntity);
-    };
-    name.parse()
-        .map_err(|e| ActionError::Failed(format!("Unknown certificate profile '{name}'. {e}")))
 }
 
 fn build_extensions(

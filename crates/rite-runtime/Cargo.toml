@@ -13,7 +13,7 @@ publish = true
 
 [dependencies]
 rite-sdk   = { workspace = true }
-rite-model = { workspace = true }
+rite-model = { workspace = true, features = ["validate"] }
 
 serde      = { workspace = true }
 serde_json = { workspace = true }

@@ -8,7 +8,7 @@ use rite_runtime::{
 };
 use rite_sdk::Backend;
 
-use crate::params::ClockCheckParams;
+use rite_model::params::ClockCheckParams;
 
 /// Clock check action, display the current system time (UTC + local) and
 /// require operator confirmation that it is correct.

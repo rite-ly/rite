@@ -20,7 +20,7 @@ use rite_sdk::Backend;
 use zeroize::Zeroizing;
 
 use super::gf256;
-use crate::params::RevealParams;
+use rite_model::params::RevealParams;
 
 /// Show a value in a chosen encoding, and take it off the screen once the
 /// person has written it down.

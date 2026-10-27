@@ -95,7 +95,7 @@ jobs:
   # Static, software-only Linux tarballs. The rust-musl-cross toolchain images
   # are linux/amd64 (pinned via --platform in the Dockerfile), so both the amd64
   # and arm64 musl targets cross-compile on an amd64 host with no QEMU. The
-  # hardware backends ship in the native binaries and the glibc image, not here.
+  # hardware backends ship in the native binaries and the glibc binary, not here.
   build-linux-musl:
     name: Build Linux musl binaries
     needs: [validate]
@@ -161,9 +161,9 @@ jobs:
   # pushed to ghcr.io by digest only; the merge job below assembles the tagged
   # multi-arch manifest list.
   #
-  # - rite: the glibc runtime image. The glibc build dynamically links
-  #   libpcsclite and system OpenSSL, so the image carries the piv/yubikey
-  #   backends.
+  # - rite: the glibc runtime image. The glibc binary dynamically links
+  #   libpcsclite, so the image carries the piv/yubikey backends. The same
+  #   binary goes into the Live systems and the linux-<arch>-glibc tarballs.
   # - rite-img: the tools that build Rite Live (img/,
   #   docs/development/img.md). The Live systems below are built with these
   #   exact images.
@@ -190,7 +190,6 @@ jobs:
             context: .
             target: release
             build-args: |
-              CARGO_BUILD_ARGS=--features piv,yubikey
               RITE_BUILD_COMMIT=${{ needs.validate.outputs.commit_sha }}
               RITE_BUILD_COMMIT_DATE=${{ needs.validate.outputs.commit_date }}
             description: DSL and runtime for cryptographic key ceremonies
@@ -283,12 +282,12 @@ jobs:
 
   # The Live system for each architecture, built on a native runner by the
   # rite-img image pushed above. Its rite is the glibc binary of the rite image
-  # of the same run: built on Debian trixie, as the Live system is, with the
-  # piv/yubikey backends the musl binary lacks. The Debian packages come from
-  # the snapshot.debian.org date in img/mkosi/mkosi.conf. The release ships it
-  # compressed with xz, the packages it holds as a JSON manifest, and its root
-  # hash: the system is not reproducible, so the root hash a booted machine
-  # shows can only be checked against this file.
+  # of the same run, with the piv/yubikey backends the musl binary lacks. The
+  # Debian packages come from the snapshot.debian.org date in
+  # img/mkosi/mkosi.conf. The release ships it compressed with xz, the packages
+  # it holds as a JSON manifest, and its root hash: the system is not
+  # reproducible, so the root hash a booted machine shows can only be checked
+  # against this file.
   build-system:
     name: Build Live system (${{ matrix.arch }})
     needs: [validate, build-image]
@@ -484,6 +483,15 @@ jobs:
           mkdir release/
           RELEASE_DIR="$(pwd)/release"
           ARTS="$(pwd)/artifacts"
+
+          # The glibc binary is packaged as linux-<arch>-glibc tarballs.
+          for arch in amd64 arm64; do
+            tmp=$(mktemp -d)
+            cp "$ARTS/rite-glibc-${arch}/rite" "$tmp/rite"
+            chmod +x "$tmp/rite"
+            tar -czf "$RELEASE_DIR/rite-${VERSION}-linux-${arch}-glibc.tar.gz" -C "$tmp" rite
+            rm -rf "$tmp"
+          done
 
           # Unix: rite as tarball, rite-ls as flat binary
           for target in linux-amd64 linux-arm64 darwin-arm64; do

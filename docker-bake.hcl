@@ -4,7 +4,8 @@
 #   binaries-amd64 / binaries-arm64  — extract per-arch musl-static binaries to dist/<arch>/
 #   image                            — multi-arch runtime image (linux/amd64,linux/arm64)
 #   binary-glibc-amd64 / -arm64      — the image's glibc rite alone, to dist/glibc-<arch>/,
-#                                      for the Live system (docs/development/img.md)
+#                                      for the Live system (docs/development/img.md) and
+#                                      the linux-<arch>-glibc release tarballs
 #
 # Groups:
 #   default   — both binaries + image (local multi-arch build)
@@ -86,7 +87,7 @@ target "binary-glibc-arm64" {
 target "image" {
   target    = "release"
   platforms = ["linux/amd64", "linux/arm64"]
-  # The image uses the glibc `builder-image` stage (not the musl cross stages
+  # The image uses the glibc `builder-glibc` stage (not the musl cross stages
   # the binaries targets use) so the binary can dynamically link libpcsclite and
   # carry the hardware backends. CARGO_BUILD_ARGS is overridable to drop them.
   #
@@ -96,6 +97,5 @@ target "image" {
   args = {
     RITE_BUILD_COMMIT      = RITE_BUILD_COMMIT
     RITE_BUILD_COMMIT_DATE = RITE_BUILD_COMMIT_DATE
-    CARGO_BUILD_ARGS       = "--features piv,yubikey"
   }
 }

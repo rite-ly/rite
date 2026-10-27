@@ -125,6 +125,11 @@ brew tap rite-ly/tap
 brew install rite
 ```
 
+Or download a binary from the [release files](https://github.com/rite-ly/rite/releases/latest):
+
+- `rite-<version>-linux-<arch>.tar.gz`: static musl binary, runs on any Linux distribution, with software keys only.
+- `rite-<version>-linux-<arch>-glibc.tar.gz`: glibc binary with YubiKey and PIV support. Requires glibc 2.36 or later, the PC/SC library (`libpcsclite1` on Debian and Ubuntu, `pcsc-lite-libs` on Fedora), and `pcscd` running.
+
 Run with Docker:
 
 ```sh

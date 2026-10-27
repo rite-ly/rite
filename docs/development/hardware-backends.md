@@ -32,6 +32,7 @@ The prebuilt distributions enable them where the system can link PC/SC:
 | Distribution                                    | Hardware backends             |
 |-------------------------------------------------|-------------------------------|
 | macOS / Windows release binaries (and Homebrew) | yes (system PC/SC framework)  |
+| Linux `-glibc` release tarballs (glibc 2.36+)   | yes (`libpcsclite`)           |
 | Docker image (`ghcr.io/rite-ly/rite`, glibc)    | yes (`libpcsclite`)           |
 | Rite Live (`rite-live-*-<arch>.img.xz`)         | yes (`libpcsclite`, `pcscd`)  |
 | Linux release tarballs (static musl)            | no (PC/SC cannot static-link) |

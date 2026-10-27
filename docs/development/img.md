@@ -91,10 +91,11 @@ mkdir -p out
 
 ## Build the Live system
 
-`build-system` takes a Linux `rite` binary. The architecture comes from the binary. The
-released Live systems carry the binary of the `rite` Docker image: it is built on Debian
-trixie, as the Live system is, and has the PIV and YubiKey backends. It links the system
-OpenSSL, so its OpenSSL is the version of the Debian packages the Live system installs.
+`build-system` takes a Linux `rite` binary. The architecture comes from the binary.
+Released Live systems carry the glibc binary, which is also published in the `-glibc`
+release tarballs. It has the PIV and YubiKey backends and vendors the OpenSSL version of
+the `openssl-src` crate in `Cargo.lock`. The manifest lists `libssl3t64` for the toolbox
+`openssl` command, not for `rite`.
 A Bake target builds the binary on its own, here for arm64, into `dist/glibc-arm64/`:
 
 ```

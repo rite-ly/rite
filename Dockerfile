@@ -62,22 +62,21 @@ FROM scratch AS binaries-arm64
 COPY --from=builder-arm64 /out/rite    /rite
 COPY --from=builder-arm64 /out/rite-ls /rite-ls
 
-# glibc builder for the published image. Unlike the musl cross stages above
-# (which feed the static, software-only release tarballs and pin `--platform` to
-# the toolchain arch), this stage sets no `--platform`, so buildx builds it once
-# per target arch under the `image` target: amd64 natively, arm64 emulated via
-# QEMU. It dynamically links libpcsclite and
-# system OpenSSL, so the image binary can carry the piv/yubikey smart-card
-# backends the static musl build cannot. It builds only `rite`; `rite-ls` is a
-# release-tarball artifact, not part of the image.
-FROM rust:1.99.1-slim-trixie@sha256:aab42391a986424e22d6a3ec14f37bc6dd3dacff4d457ca7cccd781e02297cc6 AS builder-image
+# This stage builds the glibc binary for the Docker image, the Live systems and
+# the linux-<arch>-glibc release tarballs. It sets no --platform, so buildx
+# builds it for each target arch, natively on matching hosts and under QEMU
+# otherwise. It links glibc and libpcsclite for the piv/yubikey smart-card
+# backends and vendors OpenSSL. Debian bookworm sets the glibc floor at 2.36.
+FROM rust:1.99.1-slim-bookworm@sha256:86234e857a413004348b471d11a4ebe1aa92d2eae2b6b143cac68fd1ac3c48be AS builder-glibc
 WORKDIR /src
+# make and perl build the vendored OpenSSL.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpcsclite-dev \
-    libssl-dev \
+    make \
+    perl \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
-# Default feature set (which includes system OpenSSL) plus the hardware backends.
+# openssl-vendored is enabled for every build; the arg selects other features.
 ARG CARGO_BUILD_ARGS="--features piv,yubikey"
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
@@ -86,28 +85,37 @@ COPY crates ./crates
 ARG TARGETARCH
 ARG RITE_BUILD_COMMIT
 ARG RITE_BUILD_COMMIT_DATE
-RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-image-${TARGETARCH} \
-    --mount=type=cache,target=/src/target,id=cargo-target-image-${TARGETARCH} \
+RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-glibc-${TARGETARCH} \
+    --mount=type=cache,target=/src/target,id=cargo-target-glibc-${TARGETARCH} \
     RITE_BUILD_COMMIT="$RITE_BUILD_COMMIT" \
     RITE_BUILD_COMMIT_DATE="$RITE_BUILD_COMMIT_DATE" \
-    cargo build --locked --release -p rite $CARGO_BUILD_ARGS && \
+    cargo build --locked --release -p rite --features openssl-vendored $CARGO_BUILD_ARGS && \
     install -D -m 0755 target/release/rite /out/rite
 
-# The glibc binary on its own, for the Live systems (img/), which are Debian
-# trixie with the libraries it links.
+# Debian bookworm is the oldest supported distribution. Loading the binary
+# resolves its required symbols (Rust links with BIND_NOW), so `rite --version`
+# fails if it needs a newer glibc or libpcsclite. Every shipped copy comes from
+# this stage.
+FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS glibc-floor
+RUN apt-get update && apt-get install -y --no-install-recommends libpcsclite1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder-glibc /out/rite /usr/local/bin/rite
+RUN rite --version
+
+# The glibc binary on its own, for the Live systems (img/) and the release
+# tarballs.
 FROM scratch AS binary-glibc
-COPY --from=builder-image /out/rite /rite
+COPY --from=glibc-floor /usr/local/bin/rite /rite
 
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS runtime-base
 
-# libssl3 and libpcsclite1 are the shared libraries the glibc image binary links
-# (system OpenSSL + PC/SC). The pcscd daemon and CCID driver are not installed:
-# they are only needed to open a real card, which the container does by mounting
-# the host's PC/SC socket. See docs/docker.md.
+# libpcsclite1 is the shared library the glibc binary links besides glibc. The
+# pcscd daemon and CCID driver are not installed: they are only needed to open a
+# real card, which the container does by mounting the host's PC/SC socket. See
+# docs/docker.md.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     jq \
-    libssl3 \
     libpcsclite1 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -123,5 +131,5 @@ ENTRYPOINT ["rite"]
 CMD ["--help"]
 
 FROM runtime-base AS release
-COPY --from=builder-image /out/rite /usr/local/bin/rite
+COPY --from=glibc-floor /usr/local/bin/rite /usr/local/bin/rite
 USER rite

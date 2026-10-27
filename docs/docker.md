@@ -11,20 +11,23 @@ docker buildx build --load -t rite .
 docker run --rm -it --init -v "$PWD:/workspace" rite check ceremony.rite.yaml
 ```
 
-## Image vs. release tarballs
+## Linux binaries and images
 
-The image and the downloadable Linux release tarballs are built differently and
-serve different needs:
+The Linux release files include a static musl binary and a glibc binary with hardware
+backends. The Docker image and Rite Live use the same glibc binary as the `-glibc`
+tarballs:
 
-| Artifact                                   | Toolchain          | OpenSSL            | Hardware backends                             |
-|--------------------------------------------|--------------------|--------------------|-----------------------------------------------|
-| Release tarballs (`rite-*-linux-*.tar.gz`) | musl, fully static | vendored           | no (`piv`/`yubikey` cannot static-link PC/SC) |
-| Docker image (`ghcr.io/rite-ly/rite`)      | glibc              | system (`libssl3`) | yes (`piv`, `yubikey`)                        |
-| Rite Live (`rite-live-*-<arch>.img.xz`)    | glibc, the image's | system (`libssl3`) | yes (`piv`, `yubikey`)                        |
+| Artifact                                              | Toolchain                                      | Hardware backends                             |
+|-------------------------------------------------------|------------------------------------------------|-----------------------------------------------|
+| Release tarballs (`rite-*-linux-<arch>.tar.gz`)       | musl, fully static                             | no (`piv`/`yubikey` cannot static-link PC/SC) |
+| Release tarballs (`rite-*-linux-<arch>-glibc.tar.gz`) | glibc 2.36 or later                            | yes (`piv`, `yubikey`)                        |
+| Docker image (`ghcr.io/rite-ly/rite`)                 | glibc, same binary as in the `-glibc` tarballs | yes (`piv`, `yubikey`)                        |
+| Rite Live (`rite-live-*-<arch>.img.xz`)               | glibc, same binary as in the `-glibc` tarballs | yes (`piv`, `yubikey`)                        |
 
-The tarballs stay static for portability across distros (Alpine, older glibc,
-Remote SSH targets). The image runs on a known Debian base, so it links
-`libpcsclite` and ships the smart-card backends.
+All binaries vendor OpenSSL. The musl binary runs on any Linux distribution and supports
+software keys only. The glibc binary requires glibc 2.36 or later (Debian 12, Ubuntu
+24.04, Fedora 37, RHEL 10), the PC/SC library (`libpcsclite1` on Debian and Ubuntu,
+`pcsc-lite-libs` on Fedora and RHEL), and `pcscd` running on the host.
 
 Driving a real card from the container additionally needs the reader passed
 through (`--device`) or the host `pcscd` socket mounted; `check`, `--dry-run`,
@@ -57,8 +60,8 @@ docker buildx bake binary-glibc-arm64  # the image's aarch64 binary → dist/gli
 | `binaries-amd64`     | `binaries-amd64` | `dist/amd64/{rite, rite-ls}` (musl static)                                                                           |
 | `binaries-arm64`     | `binaries-arm64` | `dist/arm64/{rite, rite-ls}` (musl static)                                                                           |
 | `image`              | `release`        | multi-arch runtime image (`linux/amd64,linux/arm64`), glibc + hardware backends, with SBOM + provenance attestations |
-| `binary-glibc-amd64` | `binary-glibc`   | `dist/glibc-amd64/rite`, the image's binary, for the Live system                                                     |
-| `binary-glibc-arm64` | `binary-glibc`   | `dist/glibc-arm64/rite`, the image's binary, for the Live system                                                     |
+| `binary-glibc-amd64` | `binary-glibc`   | `dist/glibc-amd64/rite`, the glibc binary, for Live systems and the `-glibc` tarballs                                |
+| `binary-glibc-arm64` | `binary-glibc`   | `dist/glibc-arm64/rite`, the glibc binary, for Live systems and the `-glibc` tarballs                                |
 
 ## Build stages and toolchains
 
@@ -71,22 +74,20 @@ only triggers the stages it needs:
   `CARGO_BUILD_TARGET` pre-set, so a single amd64 host cross-compiles both
   arches with no QEMU for the Rust step. Output is fully static (vendored
   OpenSSL, no libc runtime dependency).
-- **glibc chain** (`builder-image`) feeds the `image` and `binary-glibc-*` targets. It sets no
-  `--platform`, so buildx compiles it once per target platform: amd64 natively,
-  arm64 emulated via QEMU. It dynamically links system OpenSSL and `libpcsclite`, which is what
-  lets the image carry the `piv`/`yubikey` backends. The emulated arm64 compile
-  is the slow part of a release build.
+- **glibc chain** (`builder-glibc`) feeds the `image` and `binary-glibc-*` targets. It
+  sets no `--platform`, so buildx builds for each target platform, natively on matching
+  hosts and under QEMU otherwise. It builds on Debian bookworm, vendors OpenSSL and
+  dynamically links `libpcsclite` for the `piv`/`yubikey` backends.
 
 ## Custom Cargo features
 
 The `CARGO_BUILD_ARGS` build arg overrides the feature set per target. The
-`binaries-*` targets default to `--features openssl-vendored`; the `image`
-target defaults to `--features piv,yubikey`. To build the image without the
-hardware backends:
+`binaries-*` targets default to `--features openssl-vendored`. The glibc targets always
+enable `openssl-vendored`; the arg defaults to `--features piv,yubikey`. To build the
+image without the hardware backends:
 
 ```sh
-docker buildx bake image \
-  --set "image.args.CARGO_BUILD_ARGS=--features openssl"
+docker buildx bake image --set "image.args.CARGO_BUILD_ARGS="
 ```
 
 ## Hardened runtime flags

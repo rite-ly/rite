@@ -139,7 +139,7 @@ not only that the happy path works.
 cargo test --workspace        # everything CI runs
 cargo test -p rite-runtime    # one crate
 cargo test --doc              # doc tests only
-cargo test -- --ignored       # hardware/manual tests (need devices)
+cargo test -- --ignored --test-threads=1   # hardware/manual tests (need devices), one at a time
 cargo insta review            # accept/reject snapshot changes
 
 RITE_OSSL350=0 cargo test -p rite-openssl   # as the OpenSSL 3.0 CI runner sees it

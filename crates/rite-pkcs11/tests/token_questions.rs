@@ -44,10 +44,28 @@ fn module() -> Option<String> {
     std::env::var("SOFTHSM2_MODULE").ok()
 }
 
+/// The initialized module, finalized when the test ends, so that the next test
+/// can initialize it again: the module may stay loaded between tests.
+struct Context(Pkcs11);
+
+impl std::ops::Deref for Context {
+    type Target = Pkcs11;
+
+    fn deref(&self) -> &Pkcs11 {
+        &self.0
+    }
+}
+
+impl Drop for Context {
+    fn drop(&mut self) {
+        let _ = self.0.clone().finalize();
+    }
+}
+
 /// Load the module and find the first token present.
-fn token() -> Option<(Pkcs11, Slot)> {
+fn token() -> Option<(Context, Slot)> {
     let module = module()?;
-    let context = Pkcs11::new(module).expect("load module");
+    let context = Context(Pkcs11::new(module).expect("load module"));
     context
         .initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))
         .expect("initialize");
@@ -60,7 +78,7 @@ fn token() -> Option<(Pkcs11, Slot)> {
 }
 
 /// Open a logged-in session against that token.
-fn session() -> Option<(Pkcs11, Session)> {
+fn session() -> Option<(Context, Session)> {
     let (context, slot) = token()?;
     let session = context.open_rw_session(slot).expect("open session");
     session

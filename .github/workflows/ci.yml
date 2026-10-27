@@ -23,7 +23,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
+      # ImageOS puts the runner's OS release in the cache key. Build scripts
+      # detect system libraries such as OpenSSL, and a cache from another
+      # release carries that release's detection.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          env-vars: ImageOS
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -46,6 +51,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libssl-dev libpcsclite-dev
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          env-vars: ImageOS
       - name: Test
         run: cargo test --workspace
       # piv/yubikey are off by default; run their action and backend tests,
@@ -62,6 +69,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libssl-dev softhsm2
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          env-vars: ImageOS
       # The token questions are #[ignore]d so a normal test run skips them.
       # They answer what a real PKCS#11 token does, which is what keeps the
       # wrapping model's claims about tokens from being specification reading.
@@ -102,6 +111,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          env-vars: ImageOS
       - name: Build
         run: |
           cargo build -p rite --features openssl-vendored

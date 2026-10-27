@@ -14,7 +14,8 @@ use rite_sdk::{
     Backend, BackendError, KeyId, KeySecurityAttributes, KeyUsages, Pkcs11Backend, Pkcs11Mechanism,
     Pkcs11TokenFlags, Pkcs11TokenInfo, backend_capabilities,
 };
-use std::sync::{Mutex, MutexGuard};
+use std::collections::BTreeMap;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// Where to find the token, and which one to use.
 #[derive(Debug, Clone)]
@@ -39,10 +40,89 @@ pub struct Pkcs11Config {
 /// meets a trait built for backends that can be shared.
 pub struct Pkcs11TokenBackend {
     name: String,
-    context: Pkcs11,
     slot: Slot,
     session: Mutex<Session>,
     token: Pkcs11TokenInfo,
+    // Last: fields drop in declaration order, so the session is closed before
+    // the module can be finalized.
+    module: Module,
+}
+
+/// The modules this process has initialized, by canonical path, with the
+/// number of backends using each.
+///
+/// `C_Initialize` and `C_Finalize` act on the whole process, not on one
+/// context: a second `C_Initialize` fails until `C_Finalize`, and `C_Finalize`
+/// ends every session opened through the module. Backends on the same module
+/// therefore share one initialization, made by the first and finalized after
+/// the last. They also share its login state, which PKCS#11 keeps per
+/// application: a login through one backend logs in the others.
+///
+/// This assumes nothing else in the process initializes these modules.
+static MODULES: Mutex<BTreeMap<String, (Pkcs11, usize)>> = Mutex::new(BTreeMap::new());
+
+/// Lock [`MODULES`].
+///
+/// Nothing panics while the lock is held, so a poisoned map is still accurate.
+fn modules() -> MutexGuard<'static, BTreeMap<String, (Pkcs11, usize)>> {
+    MODULES.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// One backend's use of an initialized module.
+///
+/// cryptoki leaves `C_Finalize` to the caller. Without it the module stays
+/// initialized until it is unloaded, and a module the system keeps loaded
+/// refuses the next `C_Initialize` in the same process.
+struct Module {
+    /// The key in [`MODULES`].
+    key: String,
+    context: Pkcs11,
+}
+
+impl Module {
+    /// Load and initialize the module at `path`, or share the initialization
+    /// another backend made.
+    fn open(path: &str) -> Result<Self, BackendError> {
+        // Two spellings of one library load one module. A path the loader
+        // resolves itself, such as a bare file name, is kept as given.
+        let key = std::fs::canonicalize(path)
+            .map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned());
+        let mut modules = modules();
+        if let Some((context, users)) = modules.get_mut(&key) {
+            *users = users.saturating_add(1);
+            let context = context.clone();
+            return Ok(Self { key, context });
+        }
+        let context = Pkcs11::new(path)
+            .map_err(|e| BackendError::Configuration(format!("load {path}: {e}")))?;
+        context
+            .initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))
+            .map_err(|e| BackendError::Configuration(format!("initialize module: {e}")))?;
+        modules.insert(key.clone(), (context.clone(), 1));
+        Ok(Self { key, context })
+    }
+}
+
+impl Drop for Module {
+    fn drop(&mut self) {
+        let mut modules = modules();
+        // The checks stay quiet while the thread unwinds: a second panic
+        // there aborts the process and hides the first.
+        let unwinding = std::thread::panicking();
+        let Some((_, users)) = modules.get_mut(&self.key) else {
+            debug_assert!(unwinding, "{} is not in the module map", self.key);
+            return;
+        };
+        debug_assert!(*users > 0 || unwinding, "{} has no users to drop", self.key);
+        *users = users.saturating_sub(1);
+        if *users == 0 {
+            modules.remove(&self.key);
+            // Under the lock, so no other backend initializes the module
+            // between the last user leaving and the finalize. Nothing can
+            // act on a failure here: no backend uses the module any more.
+            let _ = self.context.clone().finalize();
+        }
+    }
 }
 
 impl std::fmt::Debug for Pkcs11TokenBackend {
@@ -65,24 +145,22 @@ impl Pkcs11TokenBackend {
     /// or the named token is not present, and [`BackendError::HardwareFailure`]
     /// if the module is there but the session cannot be opened.
     pub fn try_new(name: &str, config: &Pkcs11Config) -> Result<Self, BackendError> {
-        let context = Pkcs11::new(&config.module)
-            .map_err(|e| BackendError::Configuration(format!("load {}: {e}", config.module)))?;
-        context
-            .initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))
-            .map_err(|e| BackendError::Configuration(format!("initialize module: {e}")))?;
+        // From here an early return gives the module back.
+        let module = Module::open(&config.module)?;
 
-        let slot = find_slot(&context, config.token_label.as_deref())?;
-        let session = context
+        let slot = find_slot(&module.context, config.token_label.as_deref())?;
+        let session = module
+            .context
             .open_rw_session(slot)
             .map_err(|e| BackendError::HardwareFailure(format!("open session: {e}")))?;
-        let token = read_token_info(&context, slot)?;
+        let token = read_token_info(&module.context, slot)?;
 
         Ok(Self {
             name: name.to_string(),
-            context,
             slot,
             session: Mutex::new(session),
             token,
+            module,
         })
     }
 
@@ -232,6 +310,7 @@ impl Pkcs11Backend for Pkcs11TokenBackend {
 
     fn supported_mechanisms(&self) -> Result<Vec<Pkcs11Mechanism>, BackendError> {
         let mechanisms = self
+            .module
             .context
             .get_mechanism_list(self.slot)
             .map_err(|e| BackendError::HardwareFailure(format!("list mechanisms: {e}")))?;

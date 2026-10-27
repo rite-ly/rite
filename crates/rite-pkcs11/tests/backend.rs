@@ -53,15 +53,25 @@ fn login(backend: &mut Pkcs11TokenBackend) {
 /// Put a key on the token with attributes the backend should read back.
 ///
 /// Generated through `cryptoki` rather than through the backend, which
-/// generates nothing in this milestone.
-fn put_key(label: &str) {
+/// generates nothing in this milestone. The backend must be open: it
+/// initialized the module and finalizes it when dropped, so this context only
+/// borrows that initialization.
+fn put_key(_open: &Pkcs11TokenBackend, label: &str) {
     let module = std::env::var("SOFTHSM2_MODULE").expect("checked by the caller");
     let context = cryptoki::context::Pkcs11::new(module).expect("load module");
-    context
-        .initialize(cryptoki::context::CInitializeArgs::new(
-            cryptoki::context::CInitializeFlags::OS_LOCKING_OK,
-        ))
-        .ok();
+    let initialized = context.initialize(cryptoki::context::CInitializeArgs::new(
+        cryptoki::context::CInitializeFlags::OS_LOCKING_OK,
+    ));
+    assert!(
+        matches!(
+            initialized,
+            Err(cryptoki::error::Error::Pkcs11(
+                cryptoki::error::RvError::CryptokiAlreadyInitialized,
+                _
+            ))
+        ),
+        "the open backend initialized the module: {initialized:?}"
+    );
     let slot = *context
         .get_slots_with_token()
         .expect("list slots")
@@ -138,7 +148,7 @@ fn reads_the_attributes_a_key_was_created_with() {
         return;
     };
     login(&mut backend);
-    put_key("rite-backend-test-key");
+    put_key(&backend, "rite-backend-test-key");
 
     let attributes = backend
         .key_security_attributes(&KeyId::new("rite-backend-test-key"))
@@ -171,6 +181,27 @@ fn a_key_the_token_does_not_hold_is_reported_as_missing() {
         matches!(error, rite_sdk::BackendError::KeyNotFound(_)),
         "{error:?}"
     );
+}
+
+/// Two backends on one module share its initialization: each opens, the
+/// second keeps working after the first is dropped, and the module can be
+/// opened again after both are gone.
+#[test]
+#[ignore = "needs SOFTHSM2_MODULE"]
+fn backends_on_one_module_share_its_initialization() {
+    let Some(first) = backend() else {
+        return;
+    };
+    let second = backend().expect("checked above");
+    drop(first);
+    second
+        .supported_mechanisms()
+        .expect("the second backend outlives the first");
+    drop(second);
+    let again = backend().expect("checked above");
+    again
+        .supported_mechanisms()
+        .expect("the module opens again after both are dropped");
 }
 
 /// A module path that names nothing is reported as a configuration problem,

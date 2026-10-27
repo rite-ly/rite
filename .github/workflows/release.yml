@@ -14,7 +14,7 @@ env:
 jobs:
   validate:
     name: Validate version
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.check.outputs.version }}
       commit_sha: ${{ steps.commit.outputs.sha }}
@@ -99,7 +99,7 @@ jobs:
   build-linux-musl:
     name: Build Linux musl binaries
     needs: [validate]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -361,7 +361,7 @@ jobs:
   merge-image:
     name: Merge and push image manifest (${{ matrix.image }})
     needs: [build-image, release]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     environment: docker
     permissions:
       contents: read
@@ -462,7 +462,7 @@ jobs:
   release:
     name: Create Release
     needs: [validate, build-native, build-linux-musl, build-image, build-system]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
       id-token: write
@@ -551,7 +551,7 @@ jobs:
   publish-crates:
     name: Publish crates
     needs: [release]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     environment: crates.io
     permissions:
       contents: read

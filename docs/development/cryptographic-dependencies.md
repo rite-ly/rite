@@ -116,34 +116,40 @@ the provider because it may be a smart card.
 ## Build-time capability
 
 Algorithm availability is fixed when `rite-openssl` compiles, not when it runs.
-ML-DSA and ML-KEM both arrived in OpenSSL 3.5, and their bindings sit behind a
-`cfg` resolved from the OpenSSL headers present at build time. A binary linked
+ML-DSA needs OpenSSL 3.5 and ML-KEM needs 3.6, and their bindings sit behind
+`cfg`s resolved from the OpenSSL headers present at build time. A binary linked
 against OpenSSL 3.0 contains none of that code, so no runtime check can recover
 the capability.
 
 Two pieces make this visible:
 
-- `crates/rite-openssl/build.rs` derives the `ossl350` cfg from the version
-  `openssl-sys` publishes through its `links` metadata. (`openssl-sys` is a
-  direct dependency of `rite-openssl` for this reason alone, since `links`
-  metadata reaches only direct dependents.)
+- `crates/rite-openssl/build.rs` derives the `ossl350` and `ossl360` cfgs
+  from the version `openssl-sys` publishes through its `links` metadata.
+  (`openssl-sys` is a direct dependency of `rite-openssl` for this reason
+  alone, since `links` metadata reaches only direct dependents.)
 - `rite_openssl::build_limitation(algorithm)` names what about this build
-  prevents generating a given key, and `rite_openssl::POST_QUANTUM_AVAILABLE`
-  exposes the raw cfg behind it. Ask it wherever a useful alternative exists,
-  such as skipping a test or warning during `rite check`, rather than waiting
-  for an `UnsupportedAlgorithm` error mid-ceremony. `None` means this build does
-  not limit the algorithm, which also covers one no build can generate, so it is
-  a narrower question than whether the algorithm is supported at all. Keeping
-  the per-algorithm answer in this crate is deliberate: it is the one that
-  compiles the bindings. It carries no compiler enforcement, since
-  `KeyAlgorithm` is `#[non_exhaustive]` and defined in `rite-sdk`, so a new
-  algorithm reads as unlimited until it is listed and the backstop is the
-  refusal in `generate_key`.
+  prevents generating a given key, and `rite_openssl::ML_DSA_AVAILABLE` and
+  `rite_openssl::ML_KEM_AVAILABLE` expose the raw cfgs behind it. Ask it
+  wherever a useful alternative exists, such as skipping a test or warning
+  during `rite check`, rather than waiting for an `UnsupportedAlgorithm` error
+  mid-ceremony. `None` means this build does not limit the algorithm, which
+  also covers one no build can generate, so it is a narrower question than
+  whether the algorithm is supported at all. Keeping the per-algorithm answer
+  in this crate is deliberate: it is the one that compiles the bindings. It
+  carries no compiler enforcement, since `KeyAlgorithm` is `#[non_exhaustive]`
+  and defined in `rite-sdk`, so a new algorithm reads as unlimited until it is
+  listed and the backstop is the refusal in `generate_key`.
 
-Building with post-quantum support requires OpenSSL 3.5 or newer. Distributions still
-shipping 3.0, including Ubuntu 24.04, produce a working build with the
-post-quantum algorithms absent. `--features openssl-vendored` bundles a current
-OpenSSL and always includes them.
+Distributions still shipping 3.0, including Ubuntu 24.04, produce a working
+build with the post-quantum algorithms absent. `--features openssl-vendored`
+bundles a current OpenSSL and always includes them.
+
+OpenSSL 3.5 has ML-KEM keys, but a KEM key in Rite exists to be wrapped to, and
+CMS carries an ML-KEM recipient in a `KEMRecipientInfo` (RFC 9629), which
+OpenSSL implements from 3.6. The `ossl360` cfg implies `ossl350`. A 3.5 build
+has ML-DSA and refuses by name to generate an ML-KEM key or wrap to one. It
+still imports an ML-KEM key, verifies against it and carries it as a wrapped
+payload. Debian 13 and Ubuntu 26.04 ship 3.5.
 
 ## Checking the other build before you push
 
@@ -164,3 +170,15 @@ It overrides this crate's cfg and nothing else, so it answers whether the code
 still builds without the post-quantum paths, not whether it works against
 OpenSSL 3.0. The `Test` job answers that, and the vendored `Build (smoke)` job
 is the only place the `ossl350` tests run at all. Neither sets the variable.
+
+`RITE_OSSL360=0` does the same for the 3.6 line, compiling the 3.5 side on a
+machine with 3.6; `RITE_OSSL350=0` turns both off:
+
+```sh
+RITE_OSSL360=0 cargo clippy -p rite-openssl --features vendored --all-targets -- -D warnings
+RITE_OSSL360=0 cargo test -p rite-openssl --features vendored
+```
+
+The `Build (smoke)` job runs both. They check that the 3.5 side builds and
+refuses ML-KEM where it should, still linked against 3.6. Behaviour against a
+real 3.5 library, such as how it parses an ML-KEM key, is not checked in CI.

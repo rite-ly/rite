@@ -275,8 +275,8 @@ impl Backend for OpenSslBackend {
 
     rite_sdk::backend_capabilities!(
         /// Supports RSA-2048, RSA-4096, ECDSA-P256, ECDSA-P384, Ed25519,
-        /// AES-128, AES-256, and (with OpenSSL 3.5+) ML-DSA-44/65/87 key
-        /// generation and storage.
+        /// AES-128, AES-256, (with OpenSSL 3.5+) ML-DSA-44/65/87 and (with
+        /// OpenSSL 3.6+) ML-KEM-512/768/1024 key generation and storage.
         as_keystore_mut: KeyStoreBackend,
         /// Supports RSA-PKCS1-v1.5 (SHA-256), RSA-PSS (SHA-256), ECDSA
         /// (SHA-256/SHA-384), Ed25519, and (with OpenSSL 3.5+) ML-DSA-44/65/87
@@ -284,8 +284,8 @@ impl Backend for OpenSslBackend {
         as_sign_mut: SignBackend,
         /// Verifies signatures for every algorithm this build can sign with.
         as_verify_mut: VerifyBackend,
-        /// Wraps and unwraps under CMS-AES-256-GCM to an RSA, EC or ML-KEM
-        /// recipient, under the raw RSA mechanisms to an RSA recipient, and
+        /// Wraps and unwraps under CMS-AES-256-GCM to an RSA, EC or (with
+        /// OpenSSL 3.6+) ML-KEM recipient, under the raw RSA mechanisms to an RSA recipient, and
         /// under AES-KW or AES-KWP to a symmetric key this backend holds.
         /// Every path exports the target key to DER in process memory before
         /// encrypting it, so they suit software keys rather than keys held
@@ -357,7 +357,13 @@ fn key_algorithm_of<T: HasPublic>(pkey: &PKeyRef<T>) -> Result<KeyAlgorithm, Bac
         Id::ED25519 => Ok(KeyAlgorithm::Ed25519),
         _ => {
             #[cfg(ossl350)]
-            for (algorithm, key_type) in ML_DSA_KEY_TYPES.iter().chain(ML_KEM_KEY_TYPES.iter()) {
+            for (algorithm, key_type) in &ML_DSA_KEY_TYPES {
+                if pkey.is_a(*key_type) {
+                    return Ok(*algorithm);
+                }
+            }
+            #[cfg(ossl350)]
+            for (algorithm, key_type) in &ML_KEM_KEY_TYPES {
                 if pkey.is_a(*key_type) {
                     return Ok(*algorithm);
                 }
@@ -405,6 +411,9 @@ const ML_KEM_KEY_TYPES: [(KeyAlgorithm, openssl::pkey::KeyType); 3] = [
 /// OpenSSL CSPRNG, which is then wiped.
 #[cfg(ossl350)]
 fn generate_ml_kem(algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendError> {
+    if !crate::ML_KEM_AVAILABLE {
+        return Err(unsupported_ml_kem(algorithm));
+    }
     let key_type = ML_KEM_KEY_TYPES
         .iter()
         .find(|(candidate, _)| *candidate == algorithm)
@@ -421,9 +430,22 @@ fn generate_ml_kem(algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendErro
 
 #[cfg(not(ossl350))]
 fn generate_ml_kem(algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendError> {
-    Err(BackendError::UnsupportedAlgorithm(format!(
-        "{algorithm} needs a build linked against OpenSSL 3.5 or later"
-    )))
+    Err(unsupported_ml_kem(algorithm))
+}
+
+/// Error for generating an ML-KEM key, or wrapping to one, on a build linked
+/// against OpenSSL below 3.6.
+///
+/// A KEM key in Rite exists to be wrapped to, and CMS carries an ML-KEM
+/// recipient in a `KEMRecipientInfo` (RFC 9629), which OpenSSL implements from
+/// 3.6. OpenSSL 3.5 has the keys but not that, so a 3.5 build refuses here
+/// rather than fail inside `CMS_encrypt`. It still reads an ML-KEM key, to
+/// import it, verify against it or carry it as a wrapped payload.
+fn unsupported_ml_kem(algorithm: KeyAlgorithm) -> BackendError {
+    BackendError::UnsupportedAlgorithm(format!(
+        "{algorithm} needs a build linked against OpenSSL 3.6 or later, for \
+         KEMRecipientInfo (RFC 9629), which this build lacks"
+    ))
 }
 
 /// Generate an ML-DSA keypair.
@@ -985,6 +1007,14 @@ fn cert_for_public_key(
     // recipient fails as "operation not supported for this keytype", and an
     // X25519 one encrypts and only fails later while serialising the result.
     let algorithm = key_algorithm_of(recipient_public_key)?;
+    if !crate::ML_KEM_AVAILABLE
+        && matches!(
+            algorithm,
+            KeyAlgorithm::MlKem512 | KeyAlgorithm::MlKem768 | KeyAlgorithm::MlKem1024
+        )
+    {
+        return Err(unsupported_ml_kem(algorithm));
+    }
     if !algorithm.can_receive_wrap() {
         return Err(BackendError::UnsupportedAlgorithm(format!(
             "{algorithm} cannot receive a wrap: it signs but does not encapsulate. \
@@ -2481,8 +2511,9 @@ mod tests {
     /// without them.
     ///
     /// Building it needs `PKey::private_key_from_seed`, which the `openssl`
-    /// crate compiles only against a version carrying those providers. The cfg
-    /// is confined here so the caller reads the same either way.
+    /// crate compiles only against a version carrying those providers. ML-DSA
+    /// needs 3.5 and ML-KEM 3.6. The cfgs are confined here so the caller reads
+    /// the same either way.
     fn post_quantum_material() -> Vec<(KeyAlgorithm, Vec<u8>)> {
         #[cfg(not(ossl350))]
         {
@@ -3868,7 +3899,7 @@ mod tests {
     /// A KEM key cannot sign, so it could not be its own certificate's signer.
     /// With that requirement gone, it wraps like any other recipient.
     #[test]
-    #[cfg(ossl350)]
+    #[cfg(ossl360)]
     fn wraps_and_unwraps_under_an_ml_kem_key() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let kek = backend
@@ -3895,7 +3926,7 @@ mod tests {
     /// The record has to name the post-quantum path for what it is, and a KEM
     /// is the one encapsulation that carries its KDF in a field of its own.
     #[test]
-    #[cfg(ossl350)]
+    #[cfg(ossl360)]
     fn records_the_kem_algorithms_the_blob_carries() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let kek = backend
@@ -3957,10 +3988,57 @@ mod tests {
         }
     }
 
+    /// OpenSSL 3.5 reads ML-KEM keys but has no `KEMRecipientInfo`, so a 3.5
+    /// build refuses to generate an ML-KEM key or wrap to one, and still
+    /// imports one.
+    #[test]
+    #[cfg(all(ossl350, not(ossl360)))]
+    fn refuses_ml_kem_below_openssl_3_6() {
+        let key = PKey::private_key_from_seed(
+            None,
+            openssl::pkey::KeyType::ML_KEM_768,
+            None,
+            &[9u8; ML_KEM_SEED_LEN],
+        )
+        .unwrap();
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let target = backend
+            .generate_key(extractable(KeyAlgorithm::Rsa2048, "target"))
+            .unwrap();
+
+        backend
+            .import_key(
+                spec(KeyAlgorithm::MlKem768, "imported"),
+                &pkcs8_of(&key),
+                None,
+            )
+            .unwrap();
+
+        let errors = [
+            backend
+                .generate_key(kek(KeyAlgorithm::MlKem768, "kem-kek"))
+                .unwrap_err(),
+            backend
+                .wrap_to_public(
+                    &target.key_id,
+                    &PublicKeyDer::new(key.public_key_to_der().unwrap()).unwrap(),
+                    WrapScheme::CmsAes256Gcm,
+                )
+                .unwrap_err(),
+        ];
+        for error in errors {
+            assert!(
+                matches!(error, BackendError::UnsupportedAlgorithm(_))
+                    && error.to_string().contains("OpenSSL 3.6"),
+                "{error:?}"
+            );
+        }
+    }
+
     /// `id-alg-ml-kem-768` (NIST CSOR 2.16.840.1.101.3.4.4.2).
-    #[cfg(ossl350)]
+    #[cfg(ossl360)]
     const ML_KEM_768_OID: &str = "2.16.840.1.101.3.4.4.2";
     /// `id-alg-hkdf-with-sha256` (RFC 8619).
-    #[cfg(ossl350)]
+    #[cfg(ossl360)]
     const HKDF_SHA256_OID: &str = "1.2.840.113549.1.9.16.3.28";
 }

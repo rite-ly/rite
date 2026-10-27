@@ -24,8 +24,8 @@ datapoint for any contribution, not as a compliance step.
 
 Requires Rust 1.88+ and `libssl-dev` (OpenSSL headers).
 
-The post-quantum algorithms (ML-DSA) additionally need **OpenSSL 3.5 or
-newer**. Building against an older one succeeds, with those algorithms absent
+The post-quantum algorithms additionally need a newer OpenSSL: **3.5** for
+ML-DSA and **3.6** for ML-KEM. Building against an older one succeeds, with those algorithms absent
 from the binary and their tests and examples skipped; see
 `docs/development/cryptographic-dependencies.md`. `--features openssl-vendored`
 bundles a current OpenSSL and sidesteps the question.

@@ -3,7 +3,7 @@ name: "Post-Quantum Root CA Key Generation"
 # The reasons for ML-DSA-87 and ML-KEM-768 are in README.md.
 description: |
   Generate an offline ML-DSA-87 root CA key and wrap its backup to an ML-KEM-768
-  transport key. This example requires OpenSSL 3.5 or newer at build time.
+  transport key. This example requires OpenSSL 3.6 or newer at build time.
 
 backends:
   openssl:
@@ -53,7 +53,7 @@ acts:
 
 prerequisites:
   - "Air-gapped workstation is powered on with all network interfaces disabled"
-  - "The rite build in use links OpenSSL 3.5 or newer"
+  - "The rite build in use links OpenSSL 3.6 or newer"
 
 sections:
   environment:

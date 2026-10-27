@@ -273,10 +273,14 @@ Not every key type can receive a wrap. Ed25519 and ML-DSA sign and do not
 encapsulate, so wrapping to one is refused with a message saying so rather than
 an error from inside OpenSSL.
 
-ML-KEM needs OpenSSL 3.5 or newer. Where the ceremony generates the key,
-`rite check` warns and `rite run` refuses before the ceremony starts. Where the
-recipient arrives as a public key from outside, its algorithm is not known
-until the step runs, so an older build fails there instead.
+Generating an ML-KEM key, or wrapping to one, needs OpenSSL 3.6 or newer: CMS
+carries an ML-KEM recipient in a `KEMRecipientInfo` (RFC 9629), which OpenSSL
+3.5 does not implement. Where the
+ceremony generates the key, `rite check` warns and `rite run` refuses before the
+ceremony starts on an older build. Where the recipient arrives as a public key
+from outside, its algorithm is not known until the step runs, so an older build
+refuses it there instead. The release binaries and the container image bundle
+OpenSSL 3.6.
 
 ## Software backends export the key
 

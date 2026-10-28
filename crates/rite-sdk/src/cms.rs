@@ -12,7 +12,7 @@
 //! described by the first of them, and the others are not reported.
 
 use crate::der;
-use crate::types::{Oid, RecipientInfoKind, WrapDescription};
+use crate::types::{KeyProtection, Oid, RecipientInfoKind, WrapDescription, oid};
 
 /// `id-envelopedData` (RFC 5652 §6).
 const ENVELOPED_DATA: &str = "1.2.840.113549.1.7.3";
@@ -100,7 +100,21 @@ struct Recipient {
 
 fn read_recipient(info: &Tlv<'_>) -> Result<Recipient, CmsReadError> {
     match info.tag {
-        TAG_SEQUENCE => read_ktri(info.value),
+        TAG_SEQUENCE => {
+            let ktri = read_ktri(info.value)?;
+            let algorithm = algorithm_oid(&ktri.algorithm, "keyEncryptionAlgorithm")?;
+            // The description names the OAEP identifier and not its
+            // parameters, so OAEP over SHA-1 would describe exactly as OAEP
+            // over SHA-256 does, and a record of one would check as the other.
+            // Only the parameters this crate writes and opens are described.
+            if algorithm.as_str() == oid::RSAES_OAEP {
+                require_rsaes_oaep_sha256(&ktri.algorithm)?;
+            }
+            Ok(Recipient {
+                description: WrapDescription::new(RecipientInfoKind::Ktri, algorithm),
+                key_identifier: ktri.key_identifier.map(<[u8]>::to_vec),
+            })
+        }
         TAG_CONTEXT_1_CONSTRUCTED => read_kari(info.value),
         TAG_CONTEXT_2_CONSTRUCTED => {
             let kekri = read_kekri(info.value)?;
@@ -115,22 +129,136 @@ fn read_recipient(info: &Tlv<'_>) -> Result<Recipient, CmsReadError> {
     }
 }
 
-/// `KeyTransRecipientInfo`: version, rid, keyEncryptionAlgorithm, encryptedKey.
-fn read_ktri(body: &[u8]) -> Result<Recipient, CmsReadError> {
-    let (_version, after_version) = read_tlv(body)?;
+/// The fields of a `KeyTransRecipientInfo` (RFC 5652 §6.2.1).
+struct Ktri<'a> {
+    /// The subject key identifier, or `None` when the recipient is named by
+    /// issuer and serial, which identifies a certificate rather than a key.
+    key_identifier: Option<&'a [u8]>,
+    algorithm: Tlv<'a>,
+    encrypted_key: &'a [u8],
+}
+
+/// Walk a `KeyTransRecipientInfo`: version, rid, keyEncryptionAlgorithm,
+/// encryptedKey.
+///
+/// One walker for describing and opening, for the reason [`read_kekri`] gives.
+/// It reads the structure exactly, so a blob `rite verify` describes is one
+/// the opener would also read.
+fn read_ktri(body: &[u8]) -> Result<Ktri<'_>, CmsReadError> {
+    let (version, after_version) = read_tlv(body)?;
     let (rid, after_rid) = read_tlv(after_version)?;
-    let (algorithm, _) = read_tlv(after_rid)?;
+    let (algorithm, after_algorithm) = read_tlv(after_rid)?;
+    let (encrypted_key, after_encrypted_key) = read_tlv(after_algorithm)?;
+    if !after_encrypted_key.is_empty() {
+        return Err(err(
+            "KeyTransRecipientInfo carries bytes after encryptedKey",
+        ));
+    }
 
-    // rid is either IssuerAndSerialNumber or the implicit [0] subjectKeyIdentifier.
-    let key_identifier = (rid.tag == TAG_CONTEXT_0_PRIMITIVE).then(|| rid.value.to_vec());
+    // rid is either IssuerAndSerialNumber or the implicit [0]
+    // subjectKeyIdentifier, and RFC 5652 §6.2.1 ties the version to which:
+    // 0 for the first, 2 for the second.
+    let key_identifier = (rid.tag == TAG_CONTEXT_0_PRIMITIVE).then_some(rid.value);
+    let (form, expected) = if key_identifier.is_some() {
+        ("subject key identifier", 2)
+    } else {
+        ("issuer and serial number", 0)
+    };
+    if version.expect_tag(TAG_INTEGER, "KeyTransRecipientInfo.version")? != [expected] {
+        return Err(err(format!(
+            "a KeyTransRecipientInfo naming its key by {form} must be version {expected}"
+        )));
+    }
 
-    Ok(Recipient {
-        description: WrapDescription::new(
-            RecipientInfoKind::Ktri,
-            algorithm_oid(&algorithm, "keyEncryptionAlgorithm")?,
-        ),
+    Ok(Ktri {
         key_identifier,
+        algorithm,
+        encrypted_key: encrypted_key.expect_tag(TAG_OCTET_STRING, "encryptedKey")?,
     })
+}
+
+/// Admit exactly RSAES-OAEP with SHA-256, MGF1 over SHA-256, and the empty
+/// label, which is what [`KeyProtection::RsaOaepSha256`] is.
+///
+/// Every field of `RSAES-OAEP-params` defaults to SHA-1 (RFC 8017 A.2.1), so
+/// an absent field is a different algorithm rather than an unspecified one,
+/// and each is checked by what it says rather than by being there.
+///
+/// Every element is read exactly, with nothing after it, so two encodings that
+/// differ only in trailing bytes are not both admitted as the same algorithm.
+fn require_rsaes_oaep_sha256(algorithm: &Tlv<'_>) -> Result<(), CmsReadError> {
+    let (identifier, parameters) = exact_algorithm_parts(algorithm, "keyEncryptionAlgorithm")?;
+    match identifier.as_str() {
+        oid::RSAES_OAEP => {}
+        oid::RSA_ENCRYPTION => {
+            // A reader that answers differently to a bad padding and a good
+            // one is the oracle Bleichenbacher's attack queries, so this one
+            // does not open the padding at all.
+            return Err(err(
+                "the key transport is RSAES-PKCS1-v1_5, which this reader does not open",
+            ));
+        }
+        other => {
+            return Err(err(format!(
+                "key transport algorithm {other} is not id-RSAES-OAEP"
+            )));
+        }
+    }
+
+    let parameters =
+        parameters.ok_or_else(|| err("RSAES-OAEP without parameters is OAEP over SHA-1"))?;
+    let fields = parameters.expect_tag(TAG_SEQUENCE, "RSAES-OAEP-params")?;
+
+    let (hash, after_hash) = read_tlv(fields)
+        .ok()
+        .filter(|(field, _)| field.tag == TAG_CONTEXT_0_CONSTRUCTED)
+        .ok_or_else(|| err("RSAES-OAEP-params names no hashFunc, which means SHA-1"))?;
+    require_sha256(&sole_element(hash.value, "hashFunc")?, "hashFunc")?;
+
+    let (mask, after_mask) = read_tlv(after_hash)
+        .ok()
+        .filter(|(field, _)| field.tag == TAG_CONTEXT_1_CONSTRUCTED)
+        .ok_or_else(|| {
+            err("RSAES-OAEP-params names no maskGenFunc, which means MGF1 over SHA-1")
+        })?;
+    let (mask_function, mask_parameters) =
+        exact_algorithm_parts(&sole_element(mask.value, "maskGenFunc")?, "maskGenFunc")?;
+    if mask_function.as_str() != oid::MGF1 {
+        return Err(err(format!("maskGenFunc {mask_function} is not id-mgf1")));
+    }
+    let mask_hash =
+        mask_parameters.ok_or_else(|| err("maskGenFunc names MGF1 with no hash function"))?;
+    require_sha256(&mask_hash, "maskGenFunc")?;
+
+    if !after_mask.is_empty() {
+        // DER omits a field equal to its DEFAULT, so a pSourceFunc that is
+        // present names a label other than the empty one.
+        return Err(err(
+            "RSAES-OAEP-params carries a pSourceFunc, which names a label this reader does not use",
+        ));
+    }
+    Ok(())
+}
+
+/// Admit an `AlgorithmIdentifier` naming SHA-256.
+///
+/// RFC 4055 §2.1 has a reader accept the parameters absent or NULL, since
+/// implementations write both.
+fn require_sha256(identifier: &Tlv<'_>, field: &str) -> Result<(), CmsReadError> {
+    let (digest, parameters) = exact_algorithm_parts(identifier, field)?;
+    if digest.as_str() != oid::SHA_256 {
+        return Err(err(format!(
+            "{field} is {digest}, and this reader opens RSAES-OAEP over SHA-256"
+        )));
+    }
+    match parameters {
+        None
+        | Some(Tlv {
+            tag: TAG_NULL,
+            value: [],
+        }) => Ok(()),
+        Some(_) => Err(err(format!("{field}: SHA-256 takes no parameters"))),
+    }
 }
 
 /// The fields of a `KEKRecipientInfo` (RFC 5652 §6.2.3).
@@ -152,18 +280,49 @@ struct Kekri<'a> {
 /// algorithm, opening one needs the identifier and the encrypted key, and two
 /// functions stepping through the same structure would be two places to get
 /// the field order wrong.
+///
+/// Read exactly, as [`read_ktri`] is: version 4, which RFC 5652 §6.2.3 fixes,
+/// and nothing after `encryptedKey`.
 fn read_kekri(body: &[u8]) -> Result<Kekri<'_>, CmsReadError> {
-    let (_version, after_version) = read_tlv(body)?;
+    let (version, after_version) = read_tlv(body)?;
     let (kekid, after_kekid) = read_tlv(after_version)?;
     let (algorithm, after_algorithm) = read_tlv(after_kekid)?;
-    let (encrypted_key, _) = read_tlv(after_algorithm)?;
+    let (encrypted_key, after_encrypted_key) = read_tlv(after_algorithm)?;
+    if version.expect_tag(TAG_INTEGER, "KEKRecipientInfo.version")? != [4] {
+        return Err(err("a KEKRecipientInfo must be version 4"));
+    }
+    if !after_encrypted_key.is_empty() {
+        return Err(err("KEKRecipientInfo carries bytes after encryptedKey"));
+    }
 
-    let (key_identifier, _) = read_tlv(kekid.expect_tag(TAG_SEQUENCE, "KEKIdentifier")?)?;
+    let (key_identifier, after_identifier) =
+        read_tlv(kekid.expect_tag(TAG_SEQUENCE, "KEKIdentifier")?)?;
+    kek_identifier_options(after_identifier)?;
     Ok(Kekri {
         key_identifier: key_identifier.expect_tag(TAG_OCTET_STRING, "kekid.keyIdentifier")?,
         algorithm: algorithm_oid(&algorithm, "keyEncryptionAlgorithm")?,
         encrypted_key: encrypted_key.expect_tag(TAG_OCTET_STRING, "encryptedKey")?,
     })
+}
+
+/// What may follow `kekid.keyIdentifier`: a `date` (`GeneralizedTime`), then an
+/// `other` (`OtherKeyAttribute`, a SEQUENCE), each optional, and nothing else.
+///
+/// Both are legitimate in a container sealed elsewhere and neither changes
+/// which key opens it, so they are admitted and not read.
+fn kek_identifier_options(mut rest: &[u8]) -> Result<(), CmsReadError> {
+    for tag in [TAG_GENERALIZED_TIME, TAG_SEQUENCE] {
+        if let Some(&next) = rest.first()
+            && next == tag
+        {
+            rest = read_tlv(rest)?.1;
+        }
+    }
+    if rest.is_empty() {
+        Ok(())
+    } else {
+        Err(err("KEKIdentifier carries bytes after its optional fields"))
+    }
 }
 
 /// `KeyAgreeRecipientInfo`: version, [0] originator, [1] ukm OPTIONAL,
@@ -263,6 +422,30 @@ fn read_kemri(body: &[u8]) -> Result<Recipient, CmsReadError> {
     })
 }
 
+/// The one element `bytes` holds, refusing anything after it.
+fn sole_element<'a>(bytes: &'a [u8], field: &str) -> Result<Tlv<'a>, CmsReadError> {
+    let (element, rest) = read_tlv(bytes)?;
+    if rest.is_empty() {
+        Ok(element)
+    } else {
+        Err(err(format!("{field} carries bytes after its value")))
+    }
+}
+
+/// [`algorithm_parts`], refusing anything after the parameters.
+fn exact_algorithm_parts<'a>(
+    algorithm: &Tlv<'a>,
+    field: &str,
+) -> Result<(Oid, Option<Tlv<'a>>), CmsReadError> {
+    let body = algorithm.expect_tag(TAG_SEQUENCE, field)?;
+    let (oid, rest) = read_tlv(body)?;
+    let oid = oid_of(&oid, field)?;
+    if rest.is_empty() {
+        return Ok((oid, None));
+    }
+    Ok((oid, Some(sole_element(rest, field)?)))
+}
+
 /// The content cipher, from `EncryptedContentInfo`: contentType,
 /// contentEncryptionAlgorithm, then the optional encrypted content.
 fn content_encryption_oid(info: &Tlv<'_>) -> Result<Oid, CmsReadError> {
@@ -295,7 +478,9 @@ fn algorithm_parts<'a>(
 
 const TAG_INTEGER: u8 = 0x02;
 const TAG_OCTET_STRING: u8 = 0x04;
+const TAG_NULL: u8 = 0x05;
 const TAG_OID: u8 = 0x06;
+const TAG_GENERALIZED_TIME: u8 = 0x18;
 const TAG_SEQUENCE: u8 = 0x30;
 const TAG_SET: u8 = 0x31;
 const TAG_CONTEXT_0_PRIMITIVE: u8 = 0x80;
@@ -419,7 +604,13 @@ const GCM_ICV_LENGTHS: std::ops::RangeInclusive<usize> = 12..=16;
 /// blob of ours and a blob of theirs differ in no field.
 pub const GCM_ICV_LEN: usize = 16;
 
-/// The parts of an `AuthEnvelopedData` addressed to one symmetric key.
+/// The parts of an `AuthEnvelopedData` addressed to one recipient.
+///
+/// How the content-encryption key was protected decides the `RecipientInfo`
+/// form: [`KeyProtection::AesKeyWrap`] writes a `KEKRecipientInfo` for a key
+/// both sides hold, and [`KeyProtection::RsaOaepSha256`] a
+/// `KeyTransRecipientInfo` for an RSA public key. The content is the same
+/// either way.
 ///
 /// Carried as a struct rather than assembled in place because the same fields
 /// are written on the way out and read on the way back, and a field the two
@@ -429,11 +620,13 @@ pub const GCM_ICV_LEN: usize = 16;
 /// them out again, and never holds a key.
 ///
 /// ```
-/// use rite_sdk::cms::{self, KekEnvelope};
+/// use rite_sdk::KeyProtection;
+/// use rite_sdk::cms::{self, Envelope};
 ///
 /// // Values a backend produces: the CEK wrapped under the KEK, and the
 /// // content under that CEK.
-/// let envelope = KekEnvelope {
+/// let envelope = Envelope {
+///     protection: KeyProtection::AesKeyWrap,
 ///     key_identifier: vec![0x76, 0x3c, 0xbc],
 ///     wrapped_cek: vec![0x11; 40],
 ///     nonce: vec![0x22; 12],
@@ -441,8 +634,8 @@ pub const GCM_ICV_LEN: usize = 16;
 ///     tag: vec![0x44; cms::GCM_ICV_LEN],
 /// };
 ///
-/// let der = cms::write_kek_enveloped(&envelope)?;
-/// assert_eq!(cms::read_kek_enveloped(&der)?, envelope);
+/// let der = cms::write_auth_enveloped(&envelope)?;
+/// assert_eq!(cms::read_auth_enveloped(&der)?, envelope);
 ///
 /// // And the same bytes describe the wrap that produced them.
 /// let facts = cms::describe(&der)?;
@@ -453,10 +646,15 @@ pub const GCM_ICV_LEN: usize = 16;
 /// # Ok::<(), rite_sdk::cms::CmsReadError>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KekEnvelope {
-    /// What names the key-encryption key, going in `kekid.keyIdentifier`.
+pub struct Envelope {
+    /// How `wrapped_cek` was protected, which is also which recipient form
+    /// carries it.
+    pub protection: KeyProtection,
+    /// What names the recipient key. For a symmetric key its check value, in
+    /// `kekid.keyIdentifier`; for a public key the SHA-256 of its SPKI DER, as
+    /// the `subjectKeyIdentifier` rid.
     pub key_identifier: Vec<u8>,
-    /// The content-encryption key, wrapped under the KEK with AES-KW.
+    /// The content-encryption key, as `protection` left it.
     pub wrapped_cek: Vec<u8>,
     /// The 12-byte AES-GCM nonce.
     pub nonce: Vec<u8>,
@@ -467,48 +665,38 @@ pub struct KekEnvelope {
     pub tag: Vec<u8>,
 }
 
-/// Write an `AuthEnvelopedData` addressed to one symmetric key.
+/// Write an `AuthEnvelopedData` addressed to one recipient.
 ///
-/// RFC 5083 for the structure, RFC 5652 §6.2.3 for the recipient, RFC 5084 for
-/// the `GCMParameters` the content algorithm carries. The key-encryption
-/// algorithm is `id-aes256-wrap`, matching the 256-bit KEK Rite writes.
+/// RFC 5083 for the structure, RFC 5652 §6.2 for the recipient, RFC 5084 for
+/// the `GCMParameters` the content algorithm carries.
 ///
 /// # Errors
 ///
-/// Returns [`CmsReadError`] if the tag is not a length RFC 5084 admits, or if
-/// one of this module's own object identifiers fails to encode, which is
-/// unreachable.
-pub fn write_kek_enveloped(envelope: &KekEnvelope) -> Result<Vec<u8>, CmsReadError> {
+/// Returns [`CmsReadError`] if the tag is not a length RFC 5084 admits, if the
+/// protection is one a `RecipientInfo` cannot name, or if one of this module's
+/// own object identifiers fails to encode, which is unreachable.
+pub fn write_auth_enveloped(envelope: &Envelope) -> Result<Vec<u8>, CmsReadError> {
     if !GCM_ICV_LENGTHS.contains(&envelope.tag.len()) {
         return Err(err(format!(
             "a {}-byte authentication tag is not one RFC 5084 admits",
             envelope.tag.len()
         )));
     }
-    let oid = |dotted: &str| {
-        crate::der::object_identifier(dotted)
-            .ok_or_else(|| err(format!("{dotted} is not an object identifier")))
-    };
+    assemble_auth_enveloped(envelope, recipient_info(envelope)?)
+}
 
-    // KEKRecipientInfo, tagged [2] in the RecipientInfo CHOICE. Version is
-    // always 4 (RFC 5652 §6.2.3).
-    let kekri = der::tlv(
-        TAG_CONTEXT_2_CONSTRUCTED,
-        &[
-            der::small_integer(4),
-            der::sequence(&[der::octet_string(&envelope.key_identifier)]),
-            der::sequence(&[oid(crate::types::oid::AES_256_WRAP)?]),
-            der::octet_string(&envelope.wrapped_cek),
-        ]
-        .concat(),
-    );
-
+/// The `ContentInfo` around one encoded `RecipientInfo` and the envelope's
+/// content.
+fn assemble_auth_enveloped(
+    envelope: &Envelope,
+    recipient: Vec<u8>,
+) -> Result<Vec<u8>, CmsReadError> {
     // EncryptedContentInfo. The content is implicit [0], not an OCTET STRING,
     // which is the tag a reader of this structure has to expect.
     let content = der::sequence(&[
-        oid(DATA)?,
+        encoded_oid(DATA)?,
         der::sequence(&[
-            oid(crate::types::oid::AES_256_GCM)?,
+            encoded_oid(oid::AES_256_GCM)?,
             der::sequence(&[
                 der::octet_string(&envelope.nonce),
                 der::small_integer(u8::try_from(envelope.tag.len()).unwrap_or(0)),
@@ -522,22 +710,80 @@ pub fn write_kek_enveloped(envelope: &KekEnvelope) -> Result<Vec<u8>, CmsReadErr
     // RFC 5083 requires a higher one for.
     let auth_enveloped = der::sequence(&[
         der::small_integer(0),
-        der::set_of(&[kekri]),
+        der::set_of(&[recipient]),
         content,
         der::octet_string(&envelope.tag),
     ]);
 
     Ok(der::sequence(&[
-        oid(AUTH_ENVELOPED_DATA)?,
+        encoded_oid(AUTH_ENVELOPED_DATA)?,
         der::tlv(TAG_CONTEXT_0_CONSTRUCTED, &auth_enveloped),
     ]))
 }
 
-/// Read back what [`write_kek_enveloped`] wrote.
+/// The one `RecipientInfo` an envelope carries, in the form its protection
+/// takes.
+fn recipient_info(envelope: &Envelope) -> Result<Vec<u8>, CmsReadError> {
+    match envelope.protection {
+        // KEKRecipientInfo, tagged [2] in the RecipientInfo CHOICE. Version is
+        // always 4 (RFC 5652 §6.2.3). The algorithm is `id-aes256-wrap`,
+        // matching the 256-bit KEK Rite writes.
+        KeyProtection::AesKeyWrap => Ok(der::tlv(
+            TAG_CONTEXT_2_CONSTRUCTED,
+            &[
+                der::small_integer(4),
+                der::sequence(&[der::octet_string(&envelope.key_identifier)]),
+                der::sequence(&[encoded_oid(oid::AES_256_WRAP)?]),
+                der::octet_string(&envelope.wrapped_cek),
+            ]
+            .concat(),
+        )),
+        // KeyTransRecipientInfo, the untagged SEQUENCE in the CHOICE. Version
+        // 2 because the rid is a subjectKeyIdentifier (RFC 5652 §6.2.1), which
+        // names the key itself, so no certificate is needed to address it.
+        KeyProtection::RsaOaepSha256 => Ok(der::sequence(&[
+            der::small_integer(2),
+            der::tlv(TAG_CONTEXT_0_PRIMITIVE, &envelope.key_identifier),
+            rsaes_oaep_sha256()?,
+            der::octet_string(&envelope.wrapped_cek),
+        ])),
+        KeyProtection::ProviderDefined => Err(err(
+            "a data key in its provider's own envelope names no algorithm a RecipientInfo \
+             can declare",
+        )),
+    }
+}
+
+/// `id-RSAES-OAEP` with SHA-256 for the digest and for MGF1, and the empty
+/// label.
 ///
-/// Accepts an `AuthEnvelopedData` whose single recipient is a
-/// `KEKRecipientInfo` under `id-aes256-wrap` with AES-256-GCM content and no
-/// `authAttrs`, which is what the OpenSSL CLI writes for the same inputs.
+/// RFC 4055 §4.1, encoded as OpenSSL writes it: the SHA-256 identifiers carry
+/// no parameters, and `pSourceFunc` is omitted because it equals its DEFAULT.
+fn rsaes_oaep_sha256() -> Result<Vec<u8>, CmsReadError> {
+    let sha256 = der::sequence(&[encoded_oid(oid::SHA_256)?]);
+    let mgf1 = der::sequence(&[encoded_oid(oid::MGF1)?, sha256.clone()]);
+    Ok(der::sequence(&[
+        encoded_oid(oid::RSAES_OAEP)?,
+        der::sequence(&[
+            der::tlv(TAG_CONTEXT_0_CONSTRUCTED, &sha256),
+            der::tlv(TAG_CONTEXT_1_CONSTRUCTED, &mgf1),
+        ]),
+    ]))
+}
+
+/// One of this module's object identifiers, encoded.
+fn encoded_oid(dotted: &str) -> Result<Vec<u8>, CmsReadError> {
+    der::object_identifier(dotted)
+        .ok_or_else(|| err(format!("{dotted} is not an object identifier")))
+}
+
+/// Read back what [`write_auth_enveloped`] wrote.
+///
+/// Accepts an `AuthEnvelopedData` with AES-256-GCM content, no `authAttrs`,
+/// and a single recipient that is either a `KEKRecipientInfo` under
+/// `id-aes256-wrap` or a `KeyTransRecipientInfo` under RSAES-OAEP over SHA-256
+/// that names its key by subject key identifier. That is what the OpenSSL CLI
+/// writes for the same inputs.
 ///
 /// `authAttrs` is refused rather than skipped. RFC 5083 makes it the AEAD's
 /// additional authenticated data, so a blob carrying it authenticates bytes
@@ -550,7 +796,7 @@ pub fn write_kek_enveloped(envelope: &KekEnvelope) -> Result<Vec<u8>, CmsReadErr
 /// Returns [`CmsReadError`] if the bytes are not that structure. The
 /// algorithms are checked here rather than assumed, because the caller is
 /// about to decrypt with whatever this returns.
-pub fn read_kek_enveloped(der_bytes: &[u8]) -> Result<KekEnvelope, CmsReadError> {
+pub fn read_auth_enveloped(der_bytes: &[u8]) -> Result<Envelope, CmsReadError> {
     let (content_info, rest) = read_tlv(der_bytes)?;
     if !rest.is_empty() {
         return Err(err("trailing bytes after ContentInfo"));
@@ -584,16 +830,7 @@ pub fn read_kek_enveloped(der_bytes: &[u8]) -> Result<KekEnvelope, CmsReadError>
         // silently taking the first is how a blob opens with the wrong one.
         return Err(err("more than one recipient"));
     }
-    let kekri = read_kekri(recipient.expect_tag(TAG_CONTEXT_2_CONSTRUCTED, "KEKRecipientInfo")?)?;
-    if kekri.algorithm.as_str() != crate::types::oid::AES_256_WRAP {
-        // Checked here rather than in the walker, because describing a foreign
-        // blob should report the algorithm it names, and only opening one has
-        // to insist on the algorithm this crate can run.
-        return Err(err(format!(
-            "key encryption algorithm {} is not id-aes256-wrap",
-            kekri.algorithm
-        )));
-    }
+    let (protection, key_identifier, wrapped_cek) = openable_recipient(&recipient)?;
 
     let (content_info, after_content) = read_tlv(after_recipients)?;
     let (nonce, icv_len, ciphertext) =
@@ -622,13 +859,69 @@ pub fn read_kek_enveloped(der_bytes: &[u8]) -> Result<KekEnvelope, CmsReadError>
         )));
     }
 
-    Ok(KekEnvelope {
-        key_identifier: kekri.key_identifier.to_vec(),
-        wrapped_cek: kekri.encrypted_key.to_vec(),
+    Ok(Envelope {
+        protection,
+        key_identifier: key_identifier.to_vec(),
+        wrapped_cek: wrapped_cek.to_vec(),
         nonce,
         ciphertext,
         tag: tag.to_vec(),
     })
+}
+
+/// How a recipient's CEK is protected, what names the recipient, and the
+/// protected CEK, for a recipient this crate can open.
+///
+/// The algorithms are checked here rather than in the walkers, because
+/// describing a foreign blob should report the algorithm it names, and only
+/// opening one has to insist on the algorithm this crate can run. The
+/// exception is RSAES-OAEP, whose parameters [`describe`] checks too, since
+/// the description has no field for them.
+fn openable_recipient<'a>(
+    recipient: &Tlv<'a>,
+) -> Result<(KeyProtection, &'a [u8], &'a [u8]), CmsReadError> {
+    match recipient.tag {
+        TAG_CONTEXT_2_CONSTRUCTED => {
+            let kekri = read_kekri(recipient.value)?;
+            if kekri.algorithm.as_str() != oid::AES_256_WRAP {
+                return Err(err(format!(
+                    "key encryption algorithm {} is not id-aes256-wrap",
+                    kekri.algorithm
+                )));
+            }
+            Ok((
+                KeyProtection::AesKeyWrap,
+                kekri.key_identifier,
+                kekri.encrypted_key,
+            ))
+        }
+        TAG_SEQUENCE => {
+            let ktri = read_ktri(recipient.value)?;
+            require_rsaes_oaep_sha256(&ktri.algorithm)?;
+            // A key is matched by an identifier derived from it, and there is
+            // no certificate here to match an issuer and serial against.
+            let key_identifier = ktri.key_identifier.ok_or_else(|| {
+                err(
+                    "the recipient is named by issuer and serial number, which identifies a \
+                     certificate rather than a key",
+                )
+            })?;
+            Ok((
+                KeyProtection::RsaOaepSha256,
+                key_identifier,
+                ktri.encrypted_key,
+            ))
+        }
+        TAG_CONTEXT_1_CONSTRUCTED => Err(err(
+            "the recipient is a KeyAgreeRecipientInfo, which this reader does not open",
+        )),
+        TAG_CONTEXT_4_CONSTRUCTED => Err(err(
+            "the recipient is an OtherRecipientInfo, which this reader does not open",
+        )),
+        other => Err(err(format!(
+            "RecipientInfo tag 0x{other:02x} is not a recipient this reader opens"
+        ))),
+    }
 }
 
 /// The nonce, the declared tag length, and the ciphertext out of an AES-GCM
@@ -638,7 +931,7 @@ fn read_gcm_content(body: &[u8]) -> Result<(Vec<u8>, usize, Vec<u8>), CmsReadErr
     let (algorithm, after_algorithm) = read_tlv(after_type)?;
 
     let (algorithm_body, parameters) = algorithm_parts(&algorithm, "contentEncryptionAlgorithm")?;
-    if algorithm_body.as_str() != crate::types::oid::AES_256_GCM {
+    if algorithm_body.as_str() != oid::AES_256_GCM {
         return Err(err(format!(
             "content encryption algorithm {algorithm_body} is not id-aes256-GCM"
         )));
@@ -741,8 +1034,9 @@ mod tests {
         "LrY4OxUk660cu1lXeCSFOSOpOJ7FuVyU=",
     );
 
-    fn sample_envelope() -> KekEnvelope {
-        KekEnvelope {
+    fn sample_envelope() -> Envelope {
+        Envelope {
+            protection: KeyProtection::AesKeyWrap,
             key_identifier: vec![0x76, 0x3c, 0xbc],
             wrapped_cek: vec![0x11; 40],
             nonce: vec![0x22; 12],
@@ -755,15 +1049,15 @@ mod tests {
     #[test]
     fn a_kek_envelope_round_trips() {
         let envelope = sample_envelope();
-        let der = write_kek_enveloped(&envelope).unwrap();
-        assert_eq!(read_kek_enveloped(&der).unwrap(), envelope);
+        let der = write_auth_enveloped(&envelope).unwrap();
+        assert_eq!(read_auth_enveloped(&der).unwrap(), envelope);
     }
 
     /// And `describe` reads the same bytes as a wrap, which is what puts the
     /// algorithms in the transcript and in front of `rite verify`.
     #[test]
     fn a_kek_envelope_describes_itself() {
-        let der = write_kek_enveloped(&sample_envelope()).unwrap();
+        let der = write_auth_enveloped(&sample_envelope()).unwrap();
         let facts = describe(&der).unwrap();
 
         assert_eq!(
@@ -793,7 +1087,7 @@ mod tests {
     /// not key-specific: what it carries is bytes.
     #[test]
     fn a_kek_envelope_carries_bytes_under_the_generic_content_type() {
-        let der = write_kek_enveloped(&sample_envelope()).unwrap();
+        let der = write_auth_enveloped(&sample_envelope()).unwrap();
         let data_oid = crate::der::object_identifier(DATA).unwrap();
         assert!(
             der.windows(data_oid.len()).any(|w| w == data_oid),
@@ -807,13 +1101,13 @@ mod tests {
     #[test]
     fn a_kek_envelope_round_trips_across_the_length_boundary() {
         for size in [0, 1, 127, 128, 129, 255, 256, 1024, 65_536] {
-            let envelope = KekEnvelope {
+            let envelope = Envelope {
                 ciphertext: vec![0x5a; size],
                 ..sample_envelope()
             };
-            let der = write_kek_enveloped(&envelope).unwrap();
+            let der = write_auth_enveloped(&envelope).unwrap();
             assert_eq!(
-                read_kek_enveloped(&der).unwrap(),
+                read_auth_enveloped(&der).unwrap(),
                 envelope,
                 "a {size}-byte content did not survive the round trip"
             );
@@ -825,45 +1119,310 @@ mod tests {
     #[test]
     fn a_kek_envelope_carries_the_tag_length_it_declares() {
         for length in [12usize, 13, 14, 15, 16] {
-            let envelope = KekEnvelope {
+            let envelope = Envelope {
                 tag: vec![0x44; length],
                 ..sample_envelope()
             };
-            let der = write_kek_enveloped(&envelope).unwrap();
-            assert_eq!(read_kek_enveloped(&der).unwrap().tag.len(), length);
+            let der = write_auth_enveloped(&envelope).unwrap();
+            assert_eq!(read_auth_enveloped(&der).unwrap().tag.len(), length);
         }
         for length in [0usize, 8, 11, 17] {
-            let envelope = KekEnvelope {
+            let envelope = Envelope {
                 tag: vec![0x44; length],
                 ..sample_envelope()
             };
             assert!(
-                write_kek_enveloped(&envelope).is_err(),
+                write_auth_enveloped(&envelope).is_err(),
                 "a {length}-byte tag is not one RFC 5084 admits"
             );
         }
+    }
+
+    /// An envelope whose CEK went to an RSA public key, named by the SHA-256
+    /// of its SPKI.
+    fn key_transport_envelope() -> Envelope {
+        Envelope {
+            protection: KeyProtection::RsaOaepSha256,
+            key_identifier: vec![0x89; 32],
+            wrapped_cek: vec![0x11; 256],
+            ..sample_envelope()
+        }
+    }
+
+    #[test]
+    fn a_key_transport_envelope_round_trips() {
+        let envelope = key_transport_envelope();
+        let der = write_auth_enveloped(&envelope).unwrap();
+        assert_eq!(read_auth_enveloped(&der).unwrap(), envelope);
+    }
+
+    /// `describe` reports the form and names the key the way `rite verify`
+    /// matches it, so a ktri is checked on the terms a kekri is.
+    #[test]
+    fn a_key_transport_envelope_describes_itself() {
+        let der = write_auth_enveloped(&key_transport_envelope()).unwrap();
+        let facts = describe(&der).unwrap();
+
+        assert_eq!(
+            facts.description.recipient_info,
+            Some(RecipientInfoKind::Ktri)
+        );
+        assert_eq!(
+            facts.description.key_encryption_oid.as_str(),
+            oid::RSAES_OAEP
+        );
+        assert_eq!(facts.description.kek_wrap_oid, None);
+        assert_eq!(facts.recipient_key_identifier, Some(vec![0x89; 32]));
+        assert!(crate::types::WrapScheme::CmsAes256Gcm.permits(&facts.description));
+    }
+
+    /// The `AlgorithmIdentifier` OpenSSL 4.0.3 writes for `openssl cms
+    /// -encrypt -keyopt rsa_padding_mode:oaep -keyopt rsa_oaep_md:sha256
+    /// -keyopt rsa_mgf1_md:sha256`, recorded from its output.
+    ///
+    /// The parameters admit more than one encoding, since a SHA-256 identifier
+    /// may carry NULL or nothing, and writing the same bytes as the most
+    /// widely deployed reader leaves no room for one that is strict about it.
+    const OPENSSL_RSAES_OAEP_SHA256: [u8; 58] = [
+        // AlgorithmIdentifier { id-RSAES-OAEP, RSAES-OAEP-params {
+        0x30, 0x38, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x07, 0x30, 0x2b,
+        // [0] hashFunc { id-sha256 }
+        0xa0, 0x0d, 0x30, 0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+        // [1] maskGenFunc { id-mgf1, { id-sha256 } } } }
+        0xa1, 0x1a, 0x30, 0x18, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08,
+        0x30, 0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+    ];
+
+    #[test]
+    fn writes_the_oaep_parameters_openssl_writes() {
+        assert_eq!(rsaes_oaep_sha256().unwrap(), OPENSSL_RSAES_OAEP_SHA256);
+    }
+
+    /// A ktri with `algorithm` in place of the one Rite writes, otherwise
+    /// well-formed.
+    fn with_key_transport_algorithm(algorithm: Vec<u8>) -> Vec<u8> {
+        let envelope = key_transport_envelope();
+        let ktri = der::sequence(&[
+            der::small_integer(2),
+            der::tlv(TAG_CONTEXT_0_PRIMITIVE, &envelope.key_identifier),
+            algorithm,
+            der::octet_string(&envelope.wrapped_cek),
+        ]);
+        assemble_auth_enveloped(&envelope, ktri).unwrap()
+    }
+
+    /// Every field of `RSAES-OAEP-params` defaults to SHA-1, so each one is
+    /// read for what it says, and only OAEP over SHA-256 throughout opens.
+    #[test]
+    fn opening_admits_only_oaep_over_sha256() {
+        let oid = |dotted: &str| der::object_identifier(dotted).unwrap();
+        let sha1 = der::sequence(&[oid("1.3.14.3.2.26")]);
+        let sha256 = der::sequence(&[oid(super::oid::SHA_256)]);
+        let sha256_null = der::sequence(&[oid(super::oid::SHA_256), vec![TAG_NULL, 0x00]]);
+        let mgf1 = |hash: &[u8]| {
+            der::tlv(
+                TAG_CONTEXT_1_CONSTRUCTED,
+                &der::sequence(&[oid(super::oid::MGF1), hash.to_vec()]),
+            )
+        };
+        let oaep = |fields: &[Vec<u8>]| {
+            der::sequence(&[oid(super::oid::RSAES_OAEP), der::sequence(fields)])
+        };
+        let hash = |identifier: &[u8]| der::tlv(TAG_CONTEXT_0_CONSTRUCTED, identifier);
+
+        // A NULL parameter on SHA-256 is the other encoding RFC 4055 admits.
+        let accepted = oaep(&[hash(&sha256_null), mgf1(&sha256_null)]);
+        assert_eq!(
+            read_auth_enveloped(&with_key_transport_algorithm(accepted))
+                .unwrap()
+                .protection,
+            KeyProtection::RsaOaepSha256
+        );
+
+        let refused = [
+            (
+                "PKCS#1 v1.5",
+                der::sequence(&[oid(super::oid::RSA_ENCRYPTION), vec![TAG_NULL, 0x00]]),
+                "PKCS1-v1_5",
+            ),
+            (
+                "OAEP with no parameters",
+                der::sequence(&[oid(super::oid::RSAES_OAEP)]),
+                "SHA-1",
+            ),
+            (
+                "OAEP over SHA-1",
+                oaep(&[hash(&sha1), mgf1(&sha256)]),
+                "hashFunc",
+            ),
+            ("no hashFunc", oaep(&[mgf1(&sha256)]), "hashFunc"),
+            (
+                "MGF1 over SHA-1",
+                oaep(&[hash(&sha256), mgf1(&sha1)]),
+                "maskGenFunc",
+            ),
+            ("no maskGenFunc", oaep(&[hash(&sha256)]), "maskGenFunc"),
+            (
+                "a label",
+                oaep(&[
+                    hash(&sha256),
+                    mgf1(&sha256),
+                    der::tlv(
+                        TAG_CONTEXT_2_CONSTRUCTED,
+                        &der::sequence(&[oid("1.2.840.113549.1.1.9"), der::octet_string(b"label")]),
+                    ),
+                ]),
+                "pSourceFunc",
+            ),
+        ];
+        for (case, algorithm, named) in refused {
+            let der = with_key_transport_algorithm(algorithm);
+            let error = read_auth_enveloped(&der).unwrap_err().to_string();
+            assert!(error.contains(named), "{case}: {error}");
+            // Describing reports the algorithm a foreign blob names, so
+            // PKCS#1 v1.5 still describes. OAEP with other parameters does
+            // not, because its description would be the same as OAEP over
+            // SHA-256 and a verifier comparing the two would pass it.
+            let described = describe(&der);
+            if case == "PKCS#1 v1.5" {
+                assert!(described.is_ok(), "{case}: describe should still read it");
+            } else {
+                let error = described.err().map(|e| e.to_string()).unwrap_or_default();
+                assert!(error.contains(named), "{case}: describe gave {error:?}");
+            }
+        }
+    }
+
+    /// A `KEKRecipientInfo` is read as exactly as a `KeyTransRecipientInfo`:
+    /// version 4, nothing after `encryptedKey`, and in `kekid` only the two
+    /// optional fields RFC 5652 defines.
+    #[test]
+    fn a_kek_recipient_is_read_exactly() {
+        let envelope = sample_envelope();
+        let kekri = |version: u8, kekid_extra: &[Vec<u8>], trailing: &[u8]| {
+            let mut kekid = vec![der::octet_string(&envelope.key_identifier)];
+            kekid.extend_from_slice(kekid_extra);
+            let mut body = [
+                der::small_integer(version),
+                der::sequence(&kekid),
+                der::sequence(&[der::object_identifier(super::oid::AES_256_WRAP).unwrap()]),
+                der::octet_string(&envelope.wrapped_cek),
+            ]
+            .concat();
+            body.extend_from_slice(trailing);
+            assemble_auth_enveloped(&envelope, der::tlv(TAG_CONTEXT_2_CONSTRUCTED, &body)).unwrap()
+        };
+        let date = der::tlv(TAG_GENERALIZED_TIME, b"20261026120000Z");
+
+        assert!(read_auth_enveloped(&kekri(4, &[], &[])).is_ok());
+        // A date in kekid names when the key was made, not which key it is.
+        assert!(read_auth_enveloped(&kekri(4, &[date], &[])).is_ok());
+
+        for (der, named) in [
+            (kekri(0, &[], &[]), "version 4"),
+            (kekri(4, &[], &[0x05, 0x00]), "after encryptedKey"),
+            (
+                kekri(4, &[vec![0x05, 0x00]], &[]),
+                "after its optional fields",
+            ),
+        ] {
+            let error = read_auth_enveloped(&der).unwrap_err().to_string();
+            assert!(error.contains(named), "{error}");
+            let error = describe(&der)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(error.contains(named), "describe gave {error:?}");
+        }
+    }
+
+    /// Opening reads the structure exactly: two encodings that differ only in
+    /// a field DER fixes are not both admitted as the same container.
+    #[test]
+    fn opening_refuses_a_key_transport_recipient_that_is_not_der() {
+        let envelope = key_transport_envelope();
+        let ktri = |version: u8, algorithm: Vec<u8>, trailing: &[u8]| {
+            let mut body = [
+                der::small_integer(version),
+                der::tlv(TAG_CONTEXT_0_PRIMITIVE, &envelope.key_identifier),
+                algorithm,
+                der::octet_string(&envelope.wrapped_cek),
+            ]
+            .concat();
+            body.extend_from_slice(trailing);
+            assemble_auth_enveloped(&envelope, der::tlv(TAG_SEQUENCE, &body)).unwrap()
+        };
+        let oaep = rsaes_oaep_sha256().unwrap();
+
+        assert!(read_auth_enveloped(&ktri(2, oaep.clone(), &[])).is_ok());
+
+        // The structure is checked by the walker both readers share, so
+        // describing refuses what opening refuses.
+        for (der, named) in [
+            (ktri(0, oaep.clone(), &[]), "version 2"),
+            (ktri(2, oaep.clone(), &[0x05, 0x00]), "after encryptedKey"),
+        ] {
+            let error = read_auth_enveloped(&der).unwrap_err().to_string();
+            assert!(error.contains(named), "{error}");
+            let error = describe(&der)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(error.contains(named), "describe gave {error:?}");
+        }
+
+        // A NULL slipped in after the SHA-256 identifier inside hashFunc.
+        let oid = |dotted: &str| der::object_identifier(dotted).unwrap();
+        let sha256 = der::sequence(&[oid(super::oid::SHA_256)]);
+        let padded_hash = der::tlv(
+            TAG_CONTEXT_0_CONSTRUCTED,
+            &[sha256.clone(), vec![TAG_NULL, 0x00]].concat(),
+        );
+        let mgf1 = der::tlv(
+            TAG_CONTEXT_1_CONSTRUCTED,
+            &der::sequence(&[oid(super::oid::MGF1), sha256]),
+        );
+        let algorithm = der::sequence(&[
+            oid(super::oid::RSAES_OAEP),
+            der::sequence(&[padded_hash, mgf1]),
+        ]);
+        let error = read_auth_enveloped(&ktri(2, algorithm, &[]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("hashFunc"), "{error}");
+    }
+
+    /// A data key in its provider's own envelope names no algorithm, so no
+    /// `RecipientInfo` can carry it.
+    #[test]
+    fn writing_refuses_a_provider_defined_protection() {
+        let envelope = Envelope {
+            protection: KeyProtection::ProviderDefined,
+            ..sample_envelope()
+        };
+        assert!(write_auth_enveloped(&envelope).is_err());
     }
 
     /// Reading is the half that takes untrusted bytes, so it refuses what it
     /// cannot vouch for rather than guessing.
     #[test]
     fn reading_refuses_what_is_not_this_structure() {
-        let der = write_kek_enveloped(&sample_envelope()).unwrap();
+        let der = write_auth_enveloped(&sample_envelope()).unwrap();
 
-        assert!(read_kek_enveloped(&[]).is_err(), "empty input");
+        assert!(read_auth_enveloped(&[]).is_err(), "empty input");
         assert!(
-            read_kek_enveloped(&der[..der.len() - 1]).is_err(),
+            read_auth_enveloped(&der[..der.len() - 1]).is_err(),
             "truncated input"
         );
         let mut trailing = der.clone();
         trailing.push(0x00);
-        assert!(read_kek_enveloped(&trailing).is_err(), "trailing bytes");
+        assert!(read_auth_enveloped(&trailing).is_err(), "trailing bytes");
 
         // The RFC 4134 example is a real CMS artifact of a different shape.
         let other = base64ct::Base64::decode_vec(RFC4134_ENVELOPED_DATA).unwrap();
         assert!(
-            read_kek_enveloped(&other).is_err(),
-            "an EnvelopedData with a key transport recipient is not this"
+            read_auth_enveloped(&other).is_err(),
+            "an EnvelopedData under CBC with a PKCS#1 v1.5 recipient is not this"
         );
     }
 
@@ -980,7 +1539,7 @@ mod tests {
         ))
         .unwrap();
 
-        let error = read_kek_enveloped(&der).unwrap_err();
+        let error = read_auth_enveloped(&der).unwrap_err();
         assert!(
             error.to_string().contains("authAttrs"),
             "the refusal should name the field: {error}"

@@ -130,15 +130,20 @@ pub enum ActionType {
     /// The wrapped data identifies its scheme. The step checks the recovered
     /// key against `algorithm` when one is given.
     UnwrapKey,
-    /// Encrypt data using a key held by a backend.
+    /// Encrypt data for a key held by a backend or for a public key.
     ///
-    /// The backend generates a content-encryption key, encrypts the data with
-    /// it, and protects it with the step's encryption key. The data itself is
-    /// not sent to the backend.
+    /// Reads `data` and exactly one of `encryption_key` or `recipient`. With
+    /// `encryption_key`, the backend generates a content-encryption key and
+    /// protects it with that key. With `recipient`, an RSA-2048 or RSA-4096
+    /// public key held elsewhere, the backend supplies the content-encryption
+    /// key's random bytes, which are protected with RSAES-OAEP over SHA-256.
+    /// The data itself is not sent to the backend.
     EncryptData,
-    /// Decrypt data encrypted by `encrypt_data`.
+    /// Decrypt data encrypted by `encrypt_data`, or a CMS file sealed
+    /// elsewhere and supplied as a material.
     ///
-    /// The result is a byte artifact available to later steps and erased from
+    /// The step checks that the container names the decryption key. The
+    /// result is a byte artifact available to later steps and erased from
     /// memory when the run ends.
     DecryptData,
     /// Split a secret into shares so that `threshold` of them can recover it.
@@ -719,7 +724,15 @@ impl ActionType {
                 with_field_requires: &[],
                 lists: &[],
             },
-            ActionType::EncryptData => ReadsContract::required(&["data", "encryption_key"]),
+            ActionType::EncryptData => ReadsContract {
+                required: &["data"],
+                exactly_one_of: &[&["encryption_key", "recipient"]],
+                optional: &[],
+                // As at `wrap_key`: only the public-key path has a recipient
+                // to compare.
+                with_field_requires: &[("expect_recipient", "recipient")],
+                lists: &[],
+            },
             ActionType::DecryptData => {
                 ReadsContract::required(&["encrypted_data", "decryption_key"])
             }

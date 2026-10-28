@@ -297,6 +297,22 @@ pub struct EncryptDataParams {
     #[serde(default)]
     #[schemars(schema_with = "content_schemes")]
     pub scheme: Option<WrapScheme>,
+    /// The expected fingerprint of the recipient's public key, in the form
+    /// `sha256:<64 lowercase hex digits>`, for a step that reads `recipient`.
+    /// The step fails if the recipient key does not match.
+    //
+    // Content sealed to the wrong recipient is readable by whoever holds that
+    // key and by nobody the ceremony meant. Lowercase only, for the reason
+    // given at `WrapKeyParams`.
+    #[serde(default)]
+    #[schemars(
+        regex(pattern = r"^sha256:[0-9a-f]{64}$"),
+        extend(
+            "x-message" = "'expect_recipient' must be a fingerprint of the form \
+                'sha256:<64 lowercase hex digits>'"
+        )
+    )]
+    pub expect_recipient: Option<String>,
 }
 
 /// The schemes that carry content, which are the ones `encrypt_data` writes.

@@ -1253,11 +1253,12 @@ pub enum StepFact {
         )]
         fingerprint: Option<String>,
     },
-    /// A key held outside the ceremony was used as the recipient of a wrap.
+    /// A key held outside the ceremony was used as the recipient of a wrap or
+    /// of encrypted content.
     ///
-    /// Its own fact rather than a field on the wrap operation: the method of a
-    /// wrap is publishable and the identity of a custodian may not be, and a
-    /// fact carries one confidentiality level.
+    /// Its own fact rather than a field on the operation: the method of a wrap
+    /// or an encryption is publishable and the identity of a custodian may not
+    /// be, and a fact carries one confidentiality level.
     ///
     /// The fingerprint records the bytes that were present. Nothing in the
     /// ceremony corroborates that they belong to the intended recipient, and
@@ -1266,14 +1267,17 @@ pub enum StepFact {
     #[cfg_attr(
         test,
         schemars(
-            description = "A key held outside the ceremony received a wrapped key. A separate \
-            fact from the operation, so the method of a wrap can be published while the recipient \
-            stays withheld."
+            description = "A key held outside the ceremony received a wrapped key or encrypted \
+            content. A separate fact from the operation, so the method can be published while the \
+            recipient stays withheld."
         )
     )]
     WrapRecipientRecorded {
-        /// Step that wrapped to this recipient.
-        #[cfg_attr(test, schemars(description = "The step that wrapped the key."))]
+        /// Step that wrapped or encrypted to this recipient.
+        #[cfg_attr(
+            test,
+            schemars(description = "The step that wrapped the key or encrypted the content.")
+        )]
         step: StepId,
         /// The artifact or material the recipient key came from, as named in
         /// the ceremony.

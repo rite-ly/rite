@@ -24,6 +24,7 @@ use x509_cert::der::oid::db::rfc5912::{
 };
 use x509_cert::der::oid::db::rfc8410::ID_ED_25519;
 use x509_cert::der::{Decode, Encode, Reader, SliceReader};
+use x509_cert::ext::pkix::SubjectKeyIdentifier;
 use x509_cert::spki::SubjectPublicKeyInfoRef;
 
 use crate::backend::BackendError;
@@ -102,6 +103,27 @@ impl PublicKeyDer {
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
+    }
+
+    /// The key identifier X.509 tooling derives for this key: the SHA-1 of the
+    /// `subjectPublicKey` bits, RFC 5280 §4.2.1.2 method 1.
+    ///
+    /// What a certificate's subject key identifier usually holds, and so what
+    /// `openssl cms -encrypt -keyid` names a recipient by. Rite's own name for a
+    /// key is the SHA-256 of the whole SPKI. This one is for recognising a key
+    /// in a structure someone else wrote.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::InvalidKeyFormat`] if the SPKI cannot be read,
+    /// which every constructor already rules out.
+    pub fn rfc5280_key_identifier(&self) -> Result<Vec<u8>, BackendError> {
+        let spki = SubjectPublicKeyInfoRef::from_der(&self.0)
+            .map_err(|e| BackendError::InvalidKeyFormat(format!("SPKI is unreadable: {e}")))?;
+        let identifier = SubjectKeyIdentifier::try_from(spki).map_err(|e| {
+            BackendError::InvalidKeyFormat(format!("key identifier cannot be derived: {e}"))
+        })?;
+        Ok(identifier.0.as_bytes().to_vec())
     }
 
     /// The key algorithm, read from the key's own structure.
@@ -326,6 +348,26 @@ mod tests {
         pub const ML_DSA_65: &[u8] = include_bytes!("../tests/vectors/mldsa65.spki.der");
         pub const ML_DSA_87: &[u8] = include_bytes!("../tests/vectors/mldsa87.spki.der");
         pub const CERTIFICATE: &[u8] = include_bytes!("../tests/vectors/p256.cert.der");
+    }
+
+    /// The identifier OpenSSL wrote into the vector certificate's subject key
+    /// identifier extension, read back with `openssl x509 -ext
+    /// subjectKeyIdentifier`, is the one derived from the key it certifies.
+    #[test]
+    fn derives_the_key_identifier_openssl_writes() {
+        let certificate = CertificateDer::new(vectors::CERTIFICATE.to_vec()).unwrap();
+        let identifier = certificate
+            .public_key()
+            .unwrap()
+            .rfc5280_key_identifier()
+            .unwrap();
+        assert_eq!(
+            identifier,
+            [
+                0x6f, 0x60, 0xee, 0x1f, 0xc5, 0x1e, 0x6e, 0xce, 0xad, 0xba, 0x96, 0xa2, 0x3d, 0xa0,
+                0x40, 0xaf, 0x22, 0x0a, 0x09, 0xa6
+            ]
+        );
     }
 
     #[test]

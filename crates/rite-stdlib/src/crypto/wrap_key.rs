@@ -1,6 +1,6 @@
 //! `wrap_key` action, wrap a backend-resident key for transport.
 
-use rite_model::{ActionType, ArtifactRef, StepFact};
+use rite_model::{ActionType, ArtifactRef};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, parse_params, resolve_backend_key,
@@ -91,36 +91,15 @@ impl Action for WrapKeyAction {
                 transport.wrap(key_to_wrap.key_id, wrapping_key.key_id, scheme)?
             }
             Custody::External => {
-                let recipient = crate::signatures::resolve_public_key(
-                    ctx.artifacts,
-                    &wrapping_key_id,
-                    wrapping_key_ref.property(),
-                )
-                .map_err(|e| {
-                    ActionError::Failed(format!(
-                        "Cannot resolve recipient '{}' as a public key: {e}",
-                        wrapping_key_ref.display_name()
-                    ))
-                })?;
-
-                // Who the ceremony is trusting, recorded before the wrap so an
-                // aborted run still says which key was presented.
-                let recipient_fingerprint = compute_fingerprint(recipient.as_bytes());
-                if let Some(declared) = &typed.expect_recipient
-                    && declared != &recipient_fingerprint
-                {
-                    return Err(ActionError::Failed(format!(
-                        "Recipient '{}' is {recipient_fingerprint}, but the ceremony declares {declared}. \
-                         Wrapping to an unintended recipient cannot be undone, so this step will not run.",
-                        wrapping_key_ref.display_name()
-                    )));
+                // Who the ceremony is trusting. Which recipients a scheme
+                // takes is the backend's to say, at the wrap.
+                let recipient = crate::crypto::ExternalRecipient {
+                    key_ref: wrapping_key_ref,
+                    expected: typed.expect_recipient.as_deref(),
+                    consequence: "Wrapping to an unintended recipient cannot be undone, so this \
+                                  step will not run.",
                 }
-                reporter.fact(StepFact::WrapRecipientRecorded {
-                    step: step.id.clone(),
-                    source: wrapping_key_ref.display_name(),
-                    fingerprint: recipient_fingerprint,
-                    declared: typed.expect_recipient.is_some(),
-                })?;
+                .resolve(step, ctx, reporter, |_| Ok(()))?;
 
                 let (transport, _) =
                     crate::crypto::transport_backend(backend, key_backend, "wrap a key")?;

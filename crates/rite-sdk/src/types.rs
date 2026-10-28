@@ -716,6 +716,10 @@ pub mod oid {
     pub const RSA_ENCRYPTION: &str = "1.2.840.113549.1.1.1";
     /// `id-RSAES-OAEP` (RFC 8017).
     pub const RSAES_OAEP: &str = "1.2.840.113549.1.1.7";
+    /// `id-mgf1`, the mask generation function OAEP parameters name (RFC 8017).
+    pub const MGF1: &str = "1.2.840.113549.1.1.8";
+    /// `id-sha256` (RFC 5754).
+    pub const SHA_256: &str = "2.16.840.1.101.3.4.2.1";
     /// `dhSinglePass-stdDH-sha1kdf-scheme`, one-pass ECDH with the X9.63 KDF
     /// over SHA-1 (RFC 5753).
     pub const DH_SINGLE_PASS_STDDH_SHA1KDF: &str = "1.3.133.16.840.63.0.2";

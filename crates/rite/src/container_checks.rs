@@ -635,7 +635,8 @@ mod tests {
             .generate_data_key(&kek.key_id, KeyAlgorithm::Aes256)
             .unwrap();
         let content = rite_openssl::seal_content(data_key.plaintext(), b"an archive").unwrap();
-        let blob = rite_sdk::cms::write_kek_enveloped(&rite_sdk::cms::KekEnvelope {
+        let blob = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
+            protection: data_key.protection(),
             key_identifier: check_value.as_bytes().to_vec(),
             wrapped_cek: data_key.wrapped().to_vec(),
             nonce: content.nonce,
@@ -706,6 +707,99 @@ mod tests {
             },
             "{}",
             check.describe()
+        );
+    }
+
+    /// Content sealed to a public key names it by the SHA-256 of its SPKI,
+    /// which is the fingerprint the recipient fact records, so the two compare
+    /// as a wrap's do: a match is the declared recipient, any other key is a
+    /// mismatch.
+    #[test]
+    fn an_encrypt_to_a_public_key_is_checked_against_its_recipient_fact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut backend = rite_openssl::OpenSslBackend::try_new("test").unwrap();
+        let recipient = backend
+            .generate_key(KeySpec {
+                algorithm: KeyAlgorithm::Rsa2048,
+                label: "custodian".to_string(),
+                policy: KeyPolicy::default(),
+                location_hint: None,
+            })
+            .unwrap();
+        let public = backend.export_public_key(&recipient.key_id).unwrap();
+        let fingerprint = rite_runtime::compute_fingerprint(public.as_bytes());
+        let spki_digest = fingerprint
+            .strip_prefix("sha256:")
+            .and_then(|hex| base16ct::lower::decode_vec(hex).ok())
+            .unwrap();
+        let data_key =
+            rite_openssl::data_key_for_recipient(&public, zeroize::Zeroizing::new(vec![0x5a; 32]))
+                .unwrap();
+        let content = rite_openssl::seal_content(data_key.plaintext(), b"an archive").unwrap();
+        let blob = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
+            protection: data_key.protection(),
+            key_identifier: spki_digest,
+            wrapped_cek: data_key.wrapped().to_vec(),
+            nonce: content.nonce,
+            ciphertext: content.ciphertext,
+            tag: content.tag,
+        })
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("artifacts")).unwrap();
+        std::fs::write(tmp.path().join("artifacts/sealed.p7c"), &blob).unwrap();
+
+        let facts = |fingerprint: String| {
+            vec![
+                StepFact::WrapRecipientRecorded {
+                    step: StepId::new("encrypt"),
+                    source: "custodian_public".to_string(),
+                    fingerprint,
+                    declared: true,
+                },
+                StepFact::BackendOperation {
+                    step: StepId::new("encrypt"),
+                    kind: "encrypt_data".to_string(),
+                    backend: None,
+                    inputs: json!({
+                        "scheme": "CMS-AES-256-GCM",
+                        "recipient": "custodian_public",
+                    }),
+                    outputs: json!({
+                        "encrypted_data_fingerprint": rite_runtime::compute_fingerprint(&blob),
+                        "encryption": rite_sdk::cms::describe(&blob).unwrap().description,
+                    }),
+                    fingerprint: None,
+                },
+                StepFact::ArtifactWritten {
+                    step: StepId::new("encrypt"),
+                    name: "sealed".to_string(),
+                    file: "sealed.p7c".to_string(),
+                    digest: Some(rite_model::Sha256Digest::of(&blob)),
+                },
+            ]
+        };
+
+        let recorded = facts(fingerprint);
+        let checks = check_containers(Some(tmp.path()), &borrow(&recorded));
+        let [check] = checks.as_slice() else {
+            panic!("expected one container check, got {checks:?}");
+        };
+        assert_eq!(
+            check.status,
+            ContainerStatus::Checked {
+                algorithms: AlgorithmEvidence::Derived,
+                recipient: RecipientEvidence::Declared,
+                origin: OriginEvidence::None,
+            },
+            "{}",
+            check.describe()
+        );
+
+        let another = facts(format!("sha256:{}", "ab".repeat(32)));
+        let checks = check_containers(Some(tmp.path()), &borrow(&another));
+        assert!(
+            checks.iter().all(ContainerCheck::failed),
+            "a record naming another recipient is a mismatch: {checks:?}"
         );
     }
 

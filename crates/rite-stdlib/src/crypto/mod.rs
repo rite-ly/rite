@@ -21,8 +21,9 @@ pub use unwrap_key::UnwrapKeyAction;
 pub use verify_signature::VerifySignatureAction;
 pub use wrap_key::WrapKeyAction;
 
-use rite_runtime::ActionError;
-use rite_sdk::{Backend, KeyTransportBackend};
+use rite_model::{ArtifactRef, StepFact};
+use rite_runtime::{ActionError, HandlerContext, Reporter, StepInfo, compute_fingerprint};
+use rite_sdk::{Backend, KeyTransportBackend, PublicKeyDer};
 
 /// The backend a step names, as the capability the step needs, once it is known
 /// to be the backend that holds the key.
@@ -56,4 +57,68 @@ pub(crate) fn transport_backend<'a>(
         .as_transport_mut()
         .ok_or_else(|| ActionError::Failed(format!("Backend '{name}' cannot {operation}")))?;
     Ok((transport, name))
+}
+
+/// A public key held outside the ceremony that a step addresses its output to.
+pub(crate) struct ExternalRecipient<'a> {
+    /// The input naming the key.
+    pub key_ref: &'a ArtifactRef,
+    /// The fingerprint the ceremony declared for it, if any.
+    pub expected: Option<&'a str>,
+    /// What addressing the wrong key would do, completing the sentence "...,
+    /// but the ceremony declares X." in the refusal.
+    pub consequence: &'a str,
+}
+
+impl ExternalRecipient<'_> {
+    /// Resolve the key, check it against the declared fingerprint, and record
+    /// it.
+    ///
+    /// `admits` is the step's own check that it can address this key at all,
+    /// run before the fact. A recipient the step was going to refuse is never
+    /// recorded as having received anything. The fact is recorded before the
+    /// operation itself, so an aborted run still says which key was presented.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ActionError::Failed`] if the input is not a public key, if it
+    /// is not the declared one, or if `admits` refuses it.
+    pub fn resolve(
+        &self,
+        step: &StepInfo,
+        ctx: &HandlerContext,
+        reporter: &mut Reporter<'_>,
+        admits: impl FnOnce(&PublicKeyDer) -> Result<(), ActionError>,
+    ) -> Result<PublicKeyDer, ActionError> {
+        let name = self.key_ref.display_name();
+        let recipient = crate::signatures::resolve_public_key(
+            ctx.artifacts,
+            &self.key_ref.artifact_id(),
+            self.key_ref.property(),
+        )
+        .map_err(|e| {
+            ActionError::Failed(format!(
+                "Cannot resolve recipient '{name}' as a public key: {e}"
+            ))
+        })?;
+
+        let fingerprint = compute_fingerprint(recipient.as_bytes());
+        if let Some(declared) = self.expected
+            && declared != fingerprint
+        {
+            return Err(ActionError::Failed(format!(
+                "Recipient '{name}' is {fingerprint}, but the ceremony declares {declared}. {}",
+                self.consequence
+            )));
+        }
+        admits(&recipient)?;
+
+        reporter.fact(StepFact::WrapRecipientRecorded {
+            step: step.id.clone(),
+            source: name,
+            fingerprint,
+            declared: self.expected.is_some(),
+        })?;
+        Ok(recipient)
+    }
 }

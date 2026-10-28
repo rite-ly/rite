@@ -95,9 +95,9 @@ pub fn fact_summary(fact: &StepFact) -> Option<(Icon, String)> {
         StepFact::EntropyDrawn { path, .. } => {
             Some((Icon::Info, format!("Random value drawn: {path}")))
         }
-        // Who the wrap is addressed to is the operator's last chance to stop a
-        // wrap they cannot undo, so the fingerprint is shown, not summarised
-        // away.
+        // Who a wrap or an encryption is addressed to is the operator's last
+        // chance to stop one they cannot undo, so the fingerprint is shown,
+        // not summarised away.
         StepFact::WrapRecipientRecorded {
             source,
             fingerprint,

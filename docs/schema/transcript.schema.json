@@ -803,7 +803,7 @@
           ]
         },
         {
-          "description": "A key held outside the ceremony received a wrapped key. A separate fact from the operation, so the method of a wrap can be published while the recipient stays withheld.",
+          "description": "A key held outside the ceremony received a wrapped key or encrypted content. A separate fact from the operation, so the method can be published while the recipient stays withheld.",
           "type": "object",
           "properties": {
             "declared": {
@@ -819,7 +819,7 @@
               "type": "string"
             },
             "step": {
-              "description": "The step that wrapped the key.",
+              "description": "The step that wrapped the key or encrypted the content.",
               "$ref": "#/$defs/StepId"
             },
             "type": {

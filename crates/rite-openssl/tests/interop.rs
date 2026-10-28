@@ -501,7 +501,8 @@ fn the_openssl_cli_opens_content_sealed_to_a_data_key() {
         .expect("the content pipeline encrypts under the data key");
 
     let kcv = kek.check_value.as_ref().expect("a symmetric key has one");
-    let der = rite_sdk::cms::write_kek_enveloped(&rite_sdk::cms::KekEnvelope {
+    let der = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
+        protection: data_key.protection(),
         key_identifier: kcv.as_bytes().to_vec(),
         wrapped_cek: data_key.wrapped().to_vec(),
         nonce: sealed.nonce,
@@ -552,8 +553,8 @@ fn the_openssl_cli_opens_content_sealed_to_a_data_key() {
     assert_eq!(reopened.as_slice(), data_key.plaintext());
     assert_eq!(data_key.protection(), rite_sdk::KeyProtection::AesKeyWrap);
 
-    // A protection this backend does not implement is refused rather than
-    // attempted, since one protection's bytes look like another's.
+    // A protection this key does not take is refused rather than attempted,
+    // since one protection's bytes look like another's.
     let refused = backend.open_data_key(
         &kek.key_id,
         data_key.wrapped(),
@@ -561,8 +562,275 @@ fn the_openssl_cli_opens_content_sealed_to_a_data_key() {
     );
     assert!(
         refused.is_err(),
-        "a data key protected another way must not be opened as AES-KW"
+        "a symmetric KEK must not open a data key declared as RSA-OAEP"
     );
 
     secret.fill(0);
+}
+
+/// Write `bytes` to `name` in `dir` and return the path as a string.
+fn write_file(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> String {
+    let path = dir.path().join(name);
+    std::fs::write(&path, bytes).unwrap();
+    path.to_str().unwrap().to_string()
+}
+
+/// The container `encrypt_data` assembles for a public-key recipient, opened by
+/// the command line.
+///
+/// The CLI is given the recipient's certificate as well as its key, so it
+/// selects the `KeyTransRecipientInfo` by the subject key identifier the
+/// certificate carries. That is the check that the rid names the key the way a
+/// third party computes it, rather than the way Rite happens to.
+#[test]
+fn the_openssl_cli_opens_content_sealed_to_a_public_key() {
+    if !openssl_binary_available() {
+        eprintln!("skipping: openssl binary not available");
+        return;
+    }
+
+    let recipient = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+    let spki = recipient.public_key_to_der().unwrap();
+    let public = PublicKeyDer::new(spki.clone()).unwrap();
+
+    let content = b"the custodian's copy of the recovery phrase";
+    let mut cek = zeroize::Zeroizing::new(vec![0u8; 32]);
+    openssl::rand::rand_bytes(&mut cek).unwrap();
+    let data_key = rite_openssl::data_key_for_recipient(&public, cek)
+        .expect("a data key is sealed to an RSA public key");
+    let sealed = rite_openssl::seal_content(data_key.plaintext(), content).unwrap();
+    let der = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
+        protection: data_key.protection(),
+        key_identifier: openssl::hash::hash(MessageDigest::sha256(), &spki)
+            .unwrap()
+            .to_vec(),
+        wrapped_cek: data_key.wrapped().to_vec(),
+        nonce: sealed.nonce,
+        ciphertext: sealed.ciphertext,
+        tag: sealed.tag,
+    })
+    .expect("the container assembles");
+
+    let dir = tempfile::tempdir().unwrap();
+    let blob = write_file(&dir, "sealed.der", &der);
+    let key = write_file(
+        &dir,
+        "recipient.pem",
+        &recipient.private_key_to_pem_pkcs8().unwrap(),
+    );
+    let cert = write_file(
+        &dir,
+        "recipient.crt",
+        &build_recipient_cert(&recipient).to_pem().unwrap(),
+    );
+
+    let decrypt = Command::new("openssl")
+        .args([
+            "cms", "-decrypt", "-binary", "-inform", "DER", "-in", &blob, "-inkey", &key, "-recip",
+            &cert,
+        ])
+        .output()
+        .expect("Failed to spawn openssl cms");
+    assert!(
+        decrypt.status.success(),
+        "openssl cms -decrypt -recip failed:\nstderr: {}",
+        String::from_utf8_lossy(&decrypt.stderr),
+    );
+    assert_eq!(
+        decrypt.stdout, content,
+        "the command line recovered something other than the content that went in"
+    );
+}
+
+/// The other direction: a container the command line sealed to a public key,
+/// opened by Rite.
+///
+/// The CLI writes RSA key transport as PKCS#1 v1.5 unless told otherwise, so it
+/// is told: OAEP, SHA-256 for the digest and for MGF1. The same blob written
+/// with the default is refused, by name.
+#[test]
+fn rite_opens_content_the_openssl_cli_sealed_to_a_public_key() {
+    if !openssl_binary_available() {
+        eprintln!("skipping: openssl binary not available");
+        return;
+    }
+
+    let recipient = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+    let mut backend = OpenSslBackend::try_new("interop-test").unwrap();
+    let held = backend
+        .import_key(
+            KeySpec {
+                algorithm: KeyAlgorithm::Rsa2048,
+                label: "recipient".to_string(),
+                policy: KeyPolicy {
+                    usages: rite_sdk::KeyUsages::UNWRAP,
+                    ..KeyPolicy::default()
+                },
+                location_hint: None,
+            },
+            &recipient.private_key_to_pkcs8().unwrap(),
+            None,
+        )
+        .unwrap();
+
+    let content = b"a document for someone who is not in the room";
+    let dir = tempfile::tempdir().unwrap();
+    let plain = write_file(&dir, "content.bin", content);
+    let cert = write_file(
+        &dir,
+        "recipient.crt",
+        &build_recipient_cert(&recipient).to_pem().unwrap(),
+    );
+
+    let seal = |name: &str, keyopts: &[&str]| -> Vec<u8> {
+        let out = dir.path().join(name);
+        let mut args = vec![
+            "cms",
+            "-encrypt",
+            "-binary",
+            "-aes-256-gcm",
+            "-keyid",
+            "-outform",
+            "DER",
+            "-in",
+            &plain,
+            "-out",
+            out.to_str().unwrap(),
+            "-recip",
+            &cert,
+        ];
+        for keyopt in keyopts {
+            args.extend(["-keyopt", keyopt]);
+        }
+        let encrypt = Command::new("openssl")
+            .args(&args)
+            .output()
+            .expect("Failed to spawn openssl cms");
+        assert!(
+            encrypt.status.success(),
+            "openssl cms -encrypt -recip failed:\nstderr: {}",
+            String::from_utf8_lossy(&encrypt.stderr),
+        );
+        std::fs::read(&out).unwrap()
+    };
+
+    let theirs = seal(
+        "oaep.der",
+        &[
+            "rsa_padding_mode:oaep",
+            "rsa_oaep_md:sha256",
+            "rsa_mgf1_md:sha256",
+        ],
+    );
+    let envelope = rite_sdk::cms::read_auth_enveloped(&theirs).expect("Rite reads their blob");
+    assert_eq!(envelope.protection, rite_sdk::KeyProtection::RsaOaepSha256);
+    let spki = recipient.public_key_to_der().unwrap();
+    assert_eq!(
+        envelope.key_identifier,
+        openssl::hash::hash(MessageDigest::sha256(), &spki)
+            .unwrap()
+            .to_vec(),
+        "the CLI takes the rid from the certificate's subject key identifier"
+    );
+
+    let data_key = backend
+        .open_data_key(&held.key_id, &envelope.wrapped_cek, envelope.protection)
+        .expect("the private key opens the data key the CLI protected");
+    let opened = rite_openssl::open_content(
+        &data_key,
+        &rite_openssl::SealedContent {
+            nonce: envelope.nonce,
+            ciphertext: envelope.ciphertext,
+            tag: envelope.tag,
+        },
+    )
+    .expect("the content authenticates under the recovered key");
+    assert_eq!(opened.as_slice(), content);
+
+    let legacy = seal("v15.der", &[]);
+    let refusal = rite_sdk::cms::read_auth_enveloped(&legacy)
+        .expect_err("PKCS#1 v1.5 key transport is not opened")
+        .to_string();
+    assert!(refusal.contains("PKCS1-v1_5"), "{refusal}");
+}
+
+/// A recipient certificate made by the command line with its defaults carries
+/// the SHA-1 subject key identifier of RFC 5280 method 1, and a container sealed
+/// to it with `-keyid` names the recipient by that.
+///
+/// Both the certificate and the container come from the CLI, so this checks
+/// Rite's derivation of that identifier against OpenSSL's rather than against
+/// itself.
+#[test]
+fn a_standard_certificate_names_its_key_by_the_rfc_5280_identifier() {
+    if !openssl_binary_available() {
+        eprintln!("skipping: openssl binary not available");
+        return;
+    }
+
+    let recipient = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let key = write_file(
+        &dir,
+        "recipient.pem",
+        &recipient.private_key_to_pem_pkcs8().unwrap(),
+    );
+    let cert = dir.path().join("recipient.crt");
+    let plain = write_file(&dir, "content.bin", b"a document");
+    let blob = dir.path().join("sealed.der");
+
+    let run = |args: &[&str]| {
+        let output = Command::new("openssl")
+            .args(args)
+            .output()
+            .expect("Failed to spawn openssl");
+        assert!(
+            output.status.success(),
+            "openssl {args:?} failed:\nstderr: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+    };
+    run(&[
+        "req",
+        "-new",
+        "-x509",
+        "-key",
+        &key,
+        "-subj",
+        "/CN=custodian",
+        "-days",
+        "1",
+        "-out",
+        cert.to_str().unwrap(),
+    ]);
+    run(&[
+        "cms",
+        "-encrypt",
+        "-binary",
+        "-aes-256-gcm",
+        "-keyid",
+        "-outform",
+        "DER",
+        "-in",
+        &plain,
+        "-out",
+        blob.to_str().unwrap(),
+        "-recip",
+        cert.to_str().unwrap(),
+        "-keyopt",
+        "rsa_padding_mode:oaep",
+        "-keyopt",
+        "rsa_oaep_md:sha256",
+        "-keyopt",
+        "rsa_mgf1_md:sha256",
+    ]);
+
+    let envelope = rite_sdk::cms::read_auth_enveloped(&std::fs::read(&blob).unwrap()).unwrap();
+    let public = PublicKeyDer::new(recipient.public_key_to_der().unwrap()).unwrap();
+    assert_eq!(
+        envelope.key_identifier,
+        public.rfc5280_key_identifier().unwrap(),
+        "the rid is the identifier the CLI wrote into the certificate"
+    );
+    assert_eq!(envelope.key_identifier.len(), 20, "a SHA-1 digest");
 }

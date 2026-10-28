@@ -140,12 +140,13 @@ fn issue_self_signed_root(algorithm: &str) -> Vec<u8> {
 
 #[test]
 fn every_signing_algorithm_completes_the_pki_chain() {
-    let mut algorithms = vec!["RSA-2048", "ECDSA-P256", "ECDSA-P384", "Ed25519"];
-    if rite_openssl::ML_DSA_AVAILABLE {
-        algorithms.push("ML-DSA-65");
-    }
-
-    for algorithm in algorithms {
+    for algorithm in [
+        "RSA-2048",
+        "ECDSA-P256",
+        "ECDSA-P384",
+        "Ed25519",
+        "ML-DSA-65",
+    ] {
         let der = issue_self_signed_root(algorithm);
         let cert = X509::from_der(&der).unwrap_or_else(|e| panic!("{algorithm} cert DER: {e}"));
         let public_key = cert.public_key().expect("certificate exposes a public key");

@@ -22,13 +22,12 @@ datapoint for any contribution, not as a compliance step.
 
 ## Development setup
 
-Requires Rust 1.88+ and `libssl-dev` (OpenSSL headers).
+Requires Rust 1.88+ and OpenSSL 3.5+ headers (`libssl-dev`). On a distribution with an older
+OpenSSL, `--features openssl-vendored` bundles a current one.
 
-The post-quantum algorithms additionally need a newer OpenSSL: **3.5** for
-ML-DSA and **3.6** for ML-KEM. Building against an older one succeeds, with those algorithms absent
-from the binary and their tests and examples skipped; see
-`docs/development/cryptographic-dependencies.md`. `--features openssl-vendored`
-bundles a current OpenSSL and sidesteps the question.
+Wrapping to an ML-KEM key needs OpenSSL **3.6**. Built against 3.5, ML-KEM generation and
+wrapping are refused, and their tests and the post-quantum example are skipped; see
+`docs/development/cryptographic-dependencies.md`.
 
 ```sh
 cargo build -p rite --features openssl-vendored

@@ -14,9 +14,8 @@ recover the backup.
 
 ### `root_ca_post_quantum.rite.yaml`: Post-quantum root CA
 
-Uses ML-DSA-87 for the root key and ML-KEM-768 for the transport key. ML-DSA
-requires OpenSSL 3.5 or newer at build time and ML-KEM requires 3.6; a binary
-built against an older library does not support them.
+Uses ML-DSA-87 for the root key and ML-KEM-768 for the transport key. ML-KEM
+requires a binary built against OpenSSL 3.6 or newer.
 Released binaries and the container image include a current OpenSSL.
 
 A root issued today with a 20-year validity is still a trust anchor when a

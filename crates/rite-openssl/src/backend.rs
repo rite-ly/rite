@@ -356,13 +356,11 @@ fn key_algorithm_of<T: HasPublic>(pkey: &PKeyRef<T>) -> Result<KeyAlgorithm, Bac
         }
         Id::ED25519 => Ok(KeyAlgorithm::Ed25519),
         _ => {
-            #[cfg(ossl350)]
             for (algorithm, key_type) in &ML_DSA_KEY_TYPES {
                 if pkey.is_a(*key_type) {
                     return Ok(*algorithm);
                 }
             }
-            #[cfg(ossl350)]
             for (algorithm, key_type) in &ML_KEM_KEY_TYPES {
                 if pkey.is_a(*key_type) {
                     return Ok(*algorithm);
@@ -377,14 +375,12 @@ fn key_algorithm_of<T: HasPublic>(pkey: &PKeyRef<T>) -> Result<KeyAlgorithm, Bac
 }
 
 /// Seed length shared by every ML-DSA parameter set (FIPS 204 xi is 32 bytes).
-#[cfg(ossl350)]
 const ML_DSA_SEED_LEN: usize = 32;
 
 /// The ML-DSA parameter sets, paired with their OpenSSL provider key types.
 ///
 /// Single source of truth for the mapping in both directions: key generation
 /// looks up a key type, and CMS unwrap probes each one to recover the algorithm.
-#[cfg(ossl350)]
 const ML_DSA_KEY_TYPES: [(KeyAlgorithm, openssl::pkey::KeyType); 3] = [
     (KeyAlgorithm::MlDsa44, openssl::pkey::KeyType::ML_DSA_44),
     (KeyAlgorithm::MlDsa65, openssl::pkey::KeyType::ML_DSA_65),
@@ -394,11 +390,9 @@ const ML_DSA_KEY_TYPES: [(KeyAlgorithm, openssl::pkey::KeyType); 3] = [
 /// Seed length shared by every ML-KEM parameter set.
 ///
 /// FIPS 203 derives the keypair from `d || z`, 32 bytes each.
-#[cfg(ossl350)]
 const ML_KEM_SEED_LEN: usize = 64;
 
 /// The ML-KEM parameter sets, paired with their OpenSSL provider key types.
-#[cfg(ossl350)]
 const ML_KEM_KEY_TYPES: [(KeyAlgorithm, openssl::pkey::KeyType); 3] = [
     (KeyAlgorithm::MlKem512, openssl::pkey::KeyType::ML_KEM_512),
     (KeyAlgorithm::MlKem768, openssl::pkey::KeyType::ML_KEM_768),
@@ -409,7 +403,6 @@ const ML_KEM_KEY_TYPES: [(KeyAlgorithm, openssl::pkey::KeyType); 3] = [
 ///
 /// Same route as ML-DSA: the provider expands a seed drawn here from the
 /// OpenSSL CSPRNG, which is then wiped.
-#[cfg(ossl350)]
 fn generate_ml_kem(algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendError> {
     if !crate::ML_KEM_AVAILABLE {
         return Err(unsupported_ml_kem(algorithm));
@@ -428,11 +421,6 @@ fn generate_ml_kem(algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendErro
         .map_err(|e| ossl_err("ML-KEM key generation", &e))
 }
 
-#[cfg(not(ossl350))]
-fn generate_ml_kem(algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendError> {
-    Err(unsupported_ml_kem(algorithm))
-}
-
 /// Error for generating an ML-KEM key, or wrapping to one, on a build linked
 /// against OpenSSL below 3.6.
 ///
@@ -440,7 +428,7 @@ fn generate_ml_kem(algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendErro
 /// recipient in a `KEMRecipientInfo` (RFC 9629), which OpenSSL implements from
 /// 3.6. OpenSSL 3.5 has the keys but not that, so a 3.5 build refuses here
 /// rather than fail inside `CMS_encrypt`. It still reads an ML-KEM key, to
-/// import it, verify against it or carry it as a wrapped payload.
+/// import it or carry it as a wrapped payload.
 fn unsupported_ml_kem(algorithm: KeyAlgorithm) -> BackendError {
     BackendError::UnsupportedAlgorithm(format!(
         "{algorithm} needs a build linked against OpenSSL 3.6 or later, for \
@@ -454,7 +442,6 @@ fn unsupported_ml_kem(algorithm: KeyAlgorithm) -> BackendError {
 /// `EVP_PKEY_fromdata` with a `seed` parameter is the only generation route the
 /// `openssl` crate exposes without raw FFI, so the seed is drawn from the
 /// OpenSSL CSPRNG here and wiped once the provider has expanded it.
-#[cfg(ossl350)]
 fn generate_ml_dsa(algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendError> {
     let key_type = ML_DSA_KEY_TYPES
         .iter()
@@ -468,38 +455,6 @@ fn generate_ml_dsa(algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendErro
     let seed = random_bytes(ML_DSA_SEED_LEN)?;
     PKey::private_key_from_seed(None, key_type, None, &seed)
         .map_err(|e| ossl_err("ML-DSA key generation", &e))
-}
-
-#[cfg(not(ossl350))]
-fn generate_ml_dsa(_algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendError> {
-    Err(unsupported_ml_dsa("key generation"))
-}
-
-/// Refuse ML-DSA on a build whose OpenSSL has no provider for it.
-///
-/// The signing and verification paths below are generic: `digest_for` already
-/// routes ML-DSA to the digest-free `EVP_DigestSign` path that FIPS 204 needs,
-/// so no separate implementation is required. What a pre-3.5 build does need is
-/// this, an error naming the missing provider instead of whatever OpenSSL
-/// reports when handed a key type it does not know.
-#[cfg(not(ossl350))]
-fn check_ml_dsa_available(algorithm: SignAlgorithm, operation: &str) -> Result<(), BackendError> {
-    if matches!(
-        algorithm,
-        SignAlgorithm::MlDsa44 | SignAlgorithm::MlDsa65 | SignAlgorithm::MlDsa87
-    ) {
-        return Err(unsupported_ml_dsa(operation));
-    }
-    Ok(())
-}
-
-/// Refuse ML-DSA on a build whose OpenSSL has no provider for it.
-///
-/// This build has one, so every algorithm is available.
-#[cfg(ossl350)]
-#[allow(clippy::unnecessary_wraps)]
-fn check_ml_dsa_available(_algorithm: SignAlgorithm, _operation: &str) -> Result<(), BackendError> {
-    Ok(())
 }
 
 /// The RSA padding controls `Signer` and `Verifier` both have, which the
@@ -589,8 +544,6 @@ fn sign_with_key(
     message: &[u8],
     algorithm: SignAlgorithm,
 ) -> Result<Vec<u8>, BackendError> {
-    check_ml_dsa_available(algorithm, "signing")?;
-
     let mut signer = match digest_for(algorithm)? {
         Some(digest) => Signer::new(digest, pkey),
         None => Signer::new_without_digest(pkey),
@@ -612,8 +565,6 @@ fn verify_with_key<T: HasPublic>(
     signature: &[u8],
     algorithm: SignAlgorithm,
 ) -> Result<bool, BackendError> {
-    check_ml_dsa_available(algorithm, "verification")?;
-
     let mut verifier = match digest_for(algorithm)? {
         Some(digest) => Verifier::new(digest, pkey),
         None => Verifier::new_without_digest(pkey),
@@ -648,18 +599,6 @@ pub fn verify_signature(
         PKey::public_key_from_der(public_der).map_err(|e| ossl_err("Decode public key", &e))?;
     check_key_accepted("Verify", algorithm, key_algorithm_of(&pkey)?)?;
     verify_with_key(&pkey, message, signature, algorithm)
-}
-
-/// Error for an ML-DSA `operation` on a build linked against OpenSSL below 3.5.
-///
-/// Reports the runtime version, which is the one that actually lacks the
-/// provider and the one an operator can act on.
-#[cfg(not(ossl350))]
-fn unsupported_ml_dsa(operation: &str) -> BackendError {
-    BackendError::UnsupportedAlgorithm(format!(
-        "ML-DSA {operation} requires OpenSSL 3.5 or newer, but this build links OpenSSL {}",
-        openssl::version::version()
-    ))
 }
 
 /// Parse imported private key material in either encoding.
@@ -2507,42 +2446,29 @@ mod tests {
         key.private_key_to_pkcs8().unwrap()
     }
 
-    /// Import material for the post-quantum algorithms, and nothing on a build
-    /// without them.
-    ///
-    /// Building it needs `PKey::private_key_from_seed`, which the `openssl`
-    /// crate compiles only against a version carrying those providers. ML-DSA
-    /// needs 3.5 and ML-KEM 3.6. The cfgs are confined here so the caller reads
-    /// the same either way.
+    /// Import material for the post-quantum algorithms, built from a seed.
     fn post_quantum_material() -> Vec<(KeyAlgorithm, Vec<u8>)> {
-        #[cfg(not(ossl350))]
-        {
-            Vec::new()
-        }
-        #[cfg(ossl350)]
-        {
-            use openssl::pkey::KeyType;
+        use openssl::pkey::KeyType;
 
-            [
-                (KeyAlgorithm::MlDsa44, KeyType::ML_DSA_44, ML_DSA_SEED_LEN),
-                (KeyAlgorithm::MlDsa65, KeyType::ML_DSA_65, ML_DSA_SEED_LEN),
-                (KeyAlgorithm::MlDsa87, KeyType::ML_DSA_87, ML_DSA_SEED_LEN),
-                (KeyAlgorithm::MlKem512, KeyType::ML_KEM_512, ML_KEM_SEED_LEN),
-                (KeyAlgorithm::MlKem768, KeyType::ML_KEM_768, ML_KEM_SEED_LEN),
-                (
-                    KeyAlgorithm::MlKem1024,
-                    KeyType::ML_KEM_1024,
-                    ML_KEM_SEED_LEN,
-                ),
-            ]
-            .into_iter()
-            .map(|(algorithm, key_type, seed_len)| {
-                let seed = vec![9u8; seed_len];
-                let key = PKey::private_key_from_seed(None, key_type, None, &seed).unwrap();
-                (algorithm, pkcs8_of(&key))
-            })
-            .collect()
-        }
+        [
+            (KeyAlgorithm::MlDsa44, KeyType::ML_DSA_44, ML_DSA_SEED_LEN),
+            (KeyAlgorithm::MlDsa65, KeyType::ML_DSA_65, ML_DSA_SEED_LEN),
+            (KeyAlgorithm::MlDsa87, KeyType::ML_DSA_87, ML_DSA_SEED_LEN),
+            (KeyAlgorithm::MlKem512, KeyType::ML_KEM_512, ML_KEM_SEED_LEN),
+            (KeyAlgorithm::MlKem768, KeyType::ML_KEM_768, ML_KEM_SEED_LEN),
+            (
+                KeyAlgorithm::MlKem1024,
+                KeyType::ML_KEM_1024,
+                ML_KEM_SEED_LEN,
+            ),
+        ]
+        .into_iter()
+        .map(|(algorithm, key_type, seed_len)| {
+            let seed = vec![9u8; seed_len];
+            let key = PKey::private_key_from_seed(None, key_type, None, &seed).unwrap();
+            (algorithm, pkcs8_of(&key))
+        })
+        .collect()
     }
 
     /// Every algorithm this build supports, imported once.
@@ -2553,9 +2479,7 @@ mod tests {
     ///
     /// The whole sweep lives here rather than beside the action tests in
     /// `rite-stdlib`, because reading the material is what varies per algorithm
-    /// and that is this crate's work. It is also the crate that knows which
-    /// OpenSSL it linked: post-quantum material is built from a seed, through an
-    /// API that exists only where the providers do.
+    /// and that is this crate's work.
     #[test]
     fn imports_every_algorithm_this_build_supports() {
         let ec = |nid| {
@@ -2689,7 +2613,6 @@ mod tests {
     /// The declared algorithm is checked against what the material turns out to
     /// be, including between two parameter sets of one family.
     #[test]
-    #[cfg(ossl350)]
     fn refuses_post_quantum_material_that_is_not_the_declared_algorithm() {
         use openssl::pkey::KeyType;
 
@@ -2829,7 +2752,6 @@ mod tests {
     }
 
     /// Every ML-DSA parameter set, with the FIPS 204 sizes each one fixes.
-    #[cfg(ossl350)]
     const ML_DSA_PARAMS: [(KeyAlgorithm, SignAlgorithm, usize, usize); 3] = [
         (KeyAlgorithm::MlDsa44, SignAlgorithm::MlDsa44, 1312, 2420),
         (KeyAlgorithm::MlDsa65, SignAlgorithm::MlDsa65, 1952, 3309),
@@ -2845,7 +2767,6 @@ mod tests {
     /// exercises the provider through a different entry point than the
     /// `EVP_PKEY_fromdata` path the backend uses.
     #[test]
-    #[cfg(ossl350)]
     fn ml_dsa_seed_derivation_matches_known_answer() {
         use openssl::hash::{MessageDigest, hash};
 
@@ -2887,7 +2808,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(ossl350)]
     fn ml_dsa_generate_sign_and_verify_roundtrip() {
         for (key_algorithm, sign_algorithm, public_len, signature_len) in ML_DSA_PARAMS {
             let mut backend = OpenSslBackend::try_new("test").unwrap();
@@ -2924,7 +2844,6 @@ mod tests {
     /// signature, so the same key over the same message yields different bytes.
     /// Ceremony assertions must therefore verify signatures, never compare them.
     #[test]
-    #[cfg(ossl350)]
     fn ml_dsa_signing_is_hedged() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let metadata = backend
@@ -2947,7 +2866,6 @@ mod tests {
     /// Each parameter set is its own signature scheme, so a request naming a
     /// different one is rejected rather than silently signing.
     #[test]
-    #[cfg(ossl350)]
     fn ml_dsa_rejects_mismatched_parameter_set() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let metadata = backend
@@ -2961,7 +2879,6 @@ mod tests {
     /// Two independently generated keys must differ, confirming the seed is
     /// drawn fresh per key rather than fixed.
     #[test]
-    #[cfg(ossl350)]
     fn ml_dsa_generation_uses_a_fresh_seed() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let first = backend
@@ -3966,7 +3883,6 @@ mod tests {
     /// An Ed25519 key used to fail inside the certificate builder with a
     /// digest complaint, which said nothing about the actual problem.
     #[test]
-    #[cfg(ossl350)]
     fn refuses_a_recipient_that_cannot_encapsulate() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let target = backend
@@ -3992,7 +3908,7 @@ mod tests {
     /// build refuses to generate an ML-KEM key or wrap to one, and still
     /// imports one.
     #[test]
-    #[cfg(all(ossl350, not(ossl360)))]
+    #[cfg(not(ossl360))]
     fn refuses_ml_kem_below_openssl_3_6() {
         let key = PKey::private_key_from_seed(
             None,

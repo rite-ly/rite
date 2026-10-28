@@ -117,12 +117,10 @@ jobs:
         run: |
           cargo build -p rite --features openssl-vendored
           cargo build -p rite-ls
-      # The default runner links OpenSSL 3.0, which has no ML-DSA or ML-KEM, so
-      # the Test job compiles every `ossl350` test out of `rite-openssl` and
+      # The runner links OpenSSL 3.5, which cannot wrap to an ML-KEM key, so
+      # the Test job compiles the `ossl360` tests out of `rite-openssl` and
       # skips the post-quantum example. This job bundles OpenSSL 3.6, so both
-      # run here, and anything behind that cfg is covered by this step alone.
-      # RITE_OSSL360=0 then compiles the 3.5 side, which has ML-DSA and
-      # refuses to generate an ML-KEM key or wrap to one.
+      # run here. RITE_OSSL360=0 also compiles the 3.5 side against it.
       - name: Test (vendored OpenSSL)
         run: |
           cargo test -p rite-openssl --features vendored

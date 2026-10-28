@@ -47,8 +47,8 @@ Notes that are easy to get wrong:
   `test_support` module so other crates' integration tests reuse it instead of duplicating setup.
 - **A test lives in the crate that owns what it needs.** If it names an API behind a `cfg` or a
   feature, it belongs where that gate is decided. The post-quantum import sweep sits in
-  `rite-openssl` because `ossl350` is set there; written in `rite-stdlib` it failed to compile
-  against OpenSSL 3.0, and a runtime skip cannot save a reference that must compile first.
+  `rite-openssl` because `ossl360` is set there; written in `rite-stdlib` it would fail to compile
+  against OpenSSL 3.5, and a runtime skip cannot save a reference that must compile first.
 
 ## Naming
 
@@ -142,9 +142,9 @@ cargo test --doc              # doc tests only
 cargo test -- --ignored --test-threads=1   # hardware/manual tests (need devices), one at a time
 cargo insta review            # accept/reject snapshot changes
 
-RITE_OSSL350=0 cargo test -p rite-openssl   # as the OpenSSL 3.0 CI runner sees it
+RITE_OSSL360=0 cargo test -p rite-openssl   # as the OpenSSL 3.5 CI runner sees it
 ```
 
-A dev machine usually links a newer OpenSSL than the `Test` job does, so code behind `ossl350`
+A dev machine usually links a newer OpenSSL than the `Test` job does, so code behind `ossl360`
 compiles locally and breaks in CI. Run that last line before pushing anything that touches
 `rite-openssl`.

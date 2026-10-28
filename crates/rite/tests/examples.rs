@@ -41,11 +41,10 @@ fn needs_unavailable_capability(path: &Path) -> bool {
         return true;
     }
 
-    // The post-quantum root CA needs ML-DSA, which OpenSSL provides from 3.5,
-    // and ML-KEM, which needs 3.6. Distributions shipping 3.0 (Ubuntu 24.04,
-    // and so the default CI runner) or 3.5 (Debian 13, Ubuntu 26.04) produce a
-    // binary that cannot run it. CI covers this example in the
-    // vendored-OpenSSL job instead.
+    // The post-quantum root CA wraps to an ML-KEM key, which needs OpenSSL
+    // 3.6. Distributions shipping 3.5 (Debian 13, Ubuntu 26.04, and so the CI
+    // runner) produce a binary that cannot run it. CI covers this example in
+    // the vendored-OpenSSL job instead.
     !rite_openssl::ML_KEM_AVAILABLE
         && path
             .file_name()

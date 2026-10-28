@@ -585,11 +585,6 @@ impl ReadsContract {
         }
     }
 
-    /// Whether the input named `key` holds a list under this contract.
-    pub fn is_list(&self, key: &str) -> bool {
-        self.lists.iter().any(|list| list.name == key)
-    }
-
     /// Whether this contract constrains the `reads:` map at all.
     ///
     /// `with_field_requires` is a rule over `with:`, so it is not counted here.
@@ -598,14 +593,6 @@ impl ReadsContract {
             && self.exactly_one_of.is_empty()
             && self.optional.is_empty()
             && self.lists.is_empty()
-    }
-
-    /// Whether a step of this action may name this input.
-    pub fn accepts(&self, key: &str) -> bool {
-        self.required.contains(&key)
-            || self.optional.contains(&key)
-            || self.exactly_one_of.iter().any(|group| group.contains(&key))
-            || self.lists.iter().any(|list| list.name == key)
     }
 }
 
@@ -877,8 +864,19 @@ impl std::fmt::Display for ActionType {
     }
 }
 
+impl schemars::JsonSchema for ActionType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ActionType".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let names: Vec<String> = Self::ALL.iter().map(ToString::to_string).collect();
+        schemars::json_schema!({ "type": "string", "enum": names })
+    }
+}
+
 /// Type of output produced by a ceremony.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum OutputType {
@@ -933,7 +931,7 @@ impl OutputType {
 }
 
 /// Type of a ceremony parameter.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ParameterType {
@@ -965,7 +963,7 @@ impl std::fmt::Display for ParameterType {
 ///
 /// Note: physical handling steps (sealing hardware, etc.) belong as `physical_action`
 /// steps in ceremony execution, not here.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum DutyType {

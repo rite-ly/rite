@@ -238,7 +238,7 @@ sections:
 "#;
     let message = sole_error(yaml);
     assert!(
-        message.contains("'expect_recipient' applies only when")
+        message.contains("'with.expect_recipient' applies only when")
             && message.contains("reads 'recipient'"),
         "unexpected message: {message}"
     );

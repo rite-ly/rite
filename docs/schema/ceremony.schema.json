@@ -1,0 +1,3176 @@
+{
+  "$id": "https://ritely.io/schemas/0.8.0/ceremony.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Rite ceremony definition",
+  "type": "object",
+  "properties": {
+    "acts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Act"
+      }
+    },
+    "after": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/PostCeremonyDutyBody"
+      }
+    },
+    "backends": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        },
+        "required": [
+          "provider"
+        ]
+      }
+    },
+    "description": {
+      "type": [
+        "string",
+        "number",
+        "boolean"
+      ]
+    },
+    "materials": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Material"
+      }
+    },
+    "name": {
+      "type": [
+        "string",
+        "number",
+        "boolean"
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/OutputDeclaration"
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Parameter"
+      }
+    },
+    "prerequisites": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "number",
+          "boolean"
+        ]
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/RoleDefinition"
+      }
+    },
+    "sections": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/SectionBody"
+      }
+    },
+    "version": {
+      "type": [
+        "string",
+        "number",
+        "boolean"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "name",
+    "roles",
+    "sections"
+  ],
+  "$defs": {
+    "Act": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "id": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ]
+    },
+    "ActionType": {
+      "type": "string",
+      "enum": [
+        "clock_check",
+        "confirm",
+        "check_value",
+        "oral_readback",
+        "reveal",
+        "machine_info",
+        "enter_value",
+        "enter_secret",
+        "generate_key",
+        "wrap_key",
+        "unwrap_key",
+        "import_key",
+        "encrypt_data",
+        "decrypt_data",
+        "split_secret",
+        "combine_shares",
+        "enter_share",
+        "export_public",
+        "sign_data",
+        "verify_signature",
+        "attest",
+        "gather_entropy",
+        "tpm_attest",
+        "piv_read_certificate",
+        "piv_sign",
+        "yubikey_attest_slot",
+        "issue_certificate",
+        "generate_csr"
+      ]
+    },
+    "AttestParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "statement": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "AttestSlotParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "slot": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "errorMessage": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95",
+                  "pattern": "^(piv:)?(9[acde]|8[2-9a-fA-F]|9[0-5])$",
+                  "patternErrorMessage": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95",
+                  "x-message": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "slot"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "CertProfile": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "root_ca",
+            "sub_ca",
+            "tls_server",
+            "code_signing",
+            "end_entity",
+            "intermediate_ca"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "CheckValueParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "actual": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "expected": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "sensitive": {
+              "anyOf": [
+                {
+                  "type": "boolean",
+                  "default": false
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "actual",
+            "expected"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "ClockCheckParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "ConfirmParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "DutyType": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "return_to_vault"
+        },
+        {
+          "type": "string",
+          "const": "distribute_shares"
+        },
+        {
+          "type": "string",
+          "const": "distribute_media"
+        },
+        {
+          "type": "string",
+          "const": "archive_materials"
+        },
+        {
+          "type": "string",
+          "const": "publish_record"
+        },
+        {
+          "type": "string",
+          "const": "notify_stakeholders"
+        },
+        {
+          "type": "string",
+          "const": "import_keys"
+        },
+        {
+          "type": "string",
+          "const": "custom"
+        }
+      ]
+    },
+    "EncryptDataParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "scheme": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "CMS-AES-256-GCM"
+                  ]
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "EnterShareParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "format": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "allOf": [
+                    {
+                      "errorMessage": "a share is written in paper32 or hex; words are for the secret the shares combine into",
+                      "not": {
+                        "enum": [
+                          "bip39"
+                        ]
+                      },
+                      "x-message": "a share is written in paper32 or hex; words are for the secret the shares combine into"
+                    }
+                  ],
+                  "enum": [
+                    "paper32",
+                    "hex"
+                  ]
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "length": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "allOf": [
+                    {
+                      "errorMessage": "'length' is a share's secret plus 3 header bytes, so it is longer than 3",
+                      "minimum": 4,
+                      "x-message": "'length' is a share's secret plus 3 header bytes, so it is longer than 3"
+                    }
+                  ],
+                  "maximum": 9007199254740991,
+                  "minimum": 0
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "note": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "message"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "EntryParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "format": {
+              "$ref": "#/$defs/FormatSpec"
+            },
+            "length": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 1
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "max_length": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 1
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "min_length": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 1
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "length"
+                ]
+              },
+              "then": {
+                "allOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "min_length"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "max_length"
+                      ]
+                    }
+                  }
+                ],
+                "errorMessage": "'length' is exact, so 'min_length' and 'max_length' cannot be given beside it",
+                "x-message": "'length' is exact, so 'min_length' and 'max_length' cannot be given beside it"
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "format": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "format"
+                ]
+              },
+              "then": {
+                "allOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "length"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "min_length"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "max_length"
+                      ]
+                    }
+                  }
+                ],
+                "errorMessage": "a pattern says the whole shape of the value, so 'length', 'min_length' and 'max_length' cannot be given beside it",
+                "x-message": "a pattern says the whole shape of the value, so 'length', 'min_length' and 'max_length' cannot be given beside it"
+              }
+            }
+          ],
+          "required": [
+            "message"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "Expression": {
+      "description": "A value given by an expression, known when the step runs.",
+      "type": "string",
+      "pattern": "\\$\\{"
+    },
+    "Format": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "type": "string",
+              "const": "text"
+            },
+            {
+              "type": "string",
+              "const": "digits"
+            },
+            {
+              "type": "string",
+              "const": "alphanumeric"
+            },
+            {
+              "type": "string",
+              "const": "hex"
+            },
+            {
+              "type": "string",
+              "const": "base64"
+            },
+            {
+              "type": "string",
+              "const": "paper32"
+            },
+            {
+              "type": "string",
+              "const": "bip39"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "FormatSpec": {
+      "anyOf": [
+        {
+          "errorMessage": "'format' must name a format (text, digits, alphanumeric, hex, base64, paper32, bip39) or be { pattern: \"...\" }",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Format"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "pattern": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "$ref": "#/$defs/Expression"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "pattern"
+              ]
+            }
+          ],
+          "x-message": "'format' must name a format (text, digits, alphanumeric, hex, base64, paper32, bip39) or be { pattern: \"...\" }"
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "GatherEntropyParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "instruction": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "GenerateCsrParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "san": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "$ref": "#/$defs/Expression"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "subject": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "subject"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "GenerateKeyParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/KeyAlgorithm",
+                  "default": "RSA-4096"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "policy": {
+              "$ref": "#/$defs/KeyPolicyParams"
+            },
+            "slot": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "ImportKeyParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "$ref": "#/$defs/KeyAlgorithm"
+            },
+            "expect_key": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "errorMessage": "'expect_key' must name the key either as 'sha256:<64 lowercase hex digits>', the fingerprint of a public key, or as 'cmac-aes:<6 lowercase hex digits>', the check value of a symmetric key",
+                  "pattern": "^(sha256:[0-9a-f]{64}|cmac-aes:[0-9a-f]{6})$",
+                  "patternErrorMessage": "'expect_key' must name the key either as 'sha256:<64 lowercase hex digits>', the fingerprint of a public key, or as 'cmac-aes:<6 lowercase hex digits>', the check value of a symmetric key",
+                  "x-message": "'expect_key' must name the key either as 'sha256:<64 lowercase hex digits>', the fingerprint of a public key, or as 'cmac-aes:<6 lowercase hex digits>', the check value of a symmetric key"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "label": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "default": "imported-key"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "policy": {
+              "$ref": "#/$defs/KeyPolicyParams"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "algorithm"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "IssueCertificateParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "issuer_cn": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "path_len": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 255,
+                  "minimum": 0
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CertProfile",
+                  "default": "end_entity"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "validity_days": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "default": 3650,
+                  "maximum": 4294967295,
+                  "minimum": 0
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "KeyAlgorithm": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "RSA-2048",
+            "RSA-4096",
+            "ECDSA-P256",
+            "ECDSA-P384",
+            "Ed25519",
+            "ML-DSA-44",
+            "ML-DSA-65",
+            "ML-DSA-87",
+            "ML-KEM-512",
+            "ML-KEM-768",
+            "ML-KEM-1024",
+            "AES-128",
+            "AES-256"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "KeyPolicyParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "extractable": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "persistent": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "sensitive": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "usages": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/KeyUsage"
+                  }
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "wrap_with_trusted_only": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "KeyUsage": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "sign",
+            "verify",
+            "encrypt",
+            "decrypt",
+            "wrap",
+            "unwrap",
+            "derive"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "MachineInfoParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "include_cpu": {
+              "anyOf": [
+                {
+                  "type": "boolean",
+                  "default": true
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "include_machine_id": {
+              "anyOf": [
+                {
+                  "type": "boolean",
+                  "default": true
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "include_os": {
+              "anyOf": [
+                {
+                  "type": "boolean",
+                  "default": true
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "include_security_features": {
+              "anyOf": [
+                {
+                  "type": "boolean",
+                  "default": true
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "Material": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "digital",
+            "physical"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "digital"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": true
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "physical"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "identifier": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "quantity": {
+                "type": [
+                  "integer",
+                  "string"
+                ],
+                "errorMessage": "'quantity' must be a whole number from 0 to 4294967295",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "pattern": "^0*([0-9]{1,9}|[1-3][0-9]{9}|4[01][0-9]{8}|42[0-8][0-9]{7}|429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|429496[0-6][0-9]{3}|4294967[01][0-9]{2}|42949672[0-8][0-9]|429496729[0-5])$",
+                "patternErrorMessage": "'quantity' must be a whole number from 0 to 4294967295",
+                "x-message": "'quantity' must be a whole number from 0 to 4294967295"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": true
+            },
+            "additionalProperties": false
+          }
+        }
+      ],
+      "required": [
+        "type"
+      ]
+    },
+    "OralReadbackParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "characters": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 4294967295,
+                  "minimum": 0
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "format": {
+              "$ref": "#/$defs/ReadbackFormat"
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "OutputDeclaration": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "type": {
+          "$ref": "#/$defs/OutputType"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ]
+    },
+    "OutputType": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "public_key"
+        },
+        {
+          "type": "string",
+          "const": "wrapped_key"
+        },
+        {
+          "type": "string",
+          "const": "encrypted_data"
+        },
+        {
+          "type": "string",
+          "const": "certificate"
+        },
+        {
+          "type": "string",
+          "const": "signed_rrset"
+        },
+        {
+          "type": "string",
+          "const": "sct"
+        },
+        {
+          "type": "string",
+          "const": "document"
+        },
+        {
+          "type": "string",
+          "const": "ceremony_log"
+        }
+      ]
+    },
+    "Parameter": {
+      "type": "object",
+      "properties": {
+        "default": {},
+        "description": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "type": {
+          "$ref": "#/$defs/ParameterType"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ]
+    },
+    "ParameterType": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "string"
+        },
+        {
+          "type": "string",
+          "const": "date"
+        },
+        {
+          "type": "string",
+          "const": "integer"
+        },
+        {
+          "type": "string",
+          "const": "boolean"
+        }
+      ]
+    },
+    "PivReadCertificateParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "slot": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "errorMessage": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95",
+                  "pattern": "^(piv:)?(9[acde]|8[2-9a-fA-F]|9[0-5])$",
+                  "patternErrorMessage": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95",
+                  "x-message": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "slot"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "PivSignParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "default": "ECDSA-SHA256",
+                  "enum": [
+                    "ECDSA-SHA256",
+                    "ECDSA-SHA384",
+                    "RSA-PKCS1-SHA256"
+                  ]
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "slot": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "default": "9c",
+                  "errorMessage": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95",
+                  "pattern": "^(piv:)?(9[acde]|8[2-9a-fA-F]|9[0-5])$",
+                  "patternErrorMessage": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95",
+                  "x-message": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "PostCeremonyDutyBody": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        },
+        "location": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "recipient": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "role": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "type": {
+          "$ref": "#/$defs/DutyType"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ]
+    },
+    "ReadbackFormat": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "nato_phonetic",
+            "hex",
+            "raw",
+            "nato"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "RetrySpec": {
+      "errorMessage": "'retry' must be 'never' or a map with an 'attempts' field",
+      "oneOf": [
+        {
+          "const": "never"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "attempts": {
+              "type": "integer",
+              "maximum": 4294967295,
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "attempts"
+          ]
+        }
+      ],
+      "x-message": "'retry' must be 'never' or a map with an 'attempts' field"
+    },
+    "RevealFormat": {
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "type": "string",
+              "const": "paper32"
+            },
+            {
+              "type": "string",
+              "const": "hex"
+            },
+            {
+              "type": "string",
+              "const": "bip39"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "RevealParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "format": {
+              "$ref": "#/$defs/RevealFormat"
+            },
+            "length": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 1
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "note": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "format": {
+                    "const": "bip39"
+                  }
+                },
+                "required": [
+                  "format"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "length": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          12,
+                          15,
+                          18,
+                          21,
+                          24
+                        ],
+                        "errorMessage": "'length' counts words for 'bip39', and a phrase has 12, 15, 18, 21 or 24 words",
+                        "x-message": "'length' counts words for 'bip39', and a phrase has 12, 15, 18, 21 or 24 words"
+                      },
+                      {
+                        "$ref": "#/$defs/Expression"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "required": [
+            "message"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "RoleDefinition": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "person": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SectionBody": {
+      "type": "object",
+      "properties": {
+        "act": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "role": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "steps": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/StepBody"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SharingScheme": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "rite-sss/v1"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "SignAlgorithm": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "RSA-PKCS1-SHA256",
+            "RSA-PSS-SHA256",
+            "ECDSA-SHA256",
+            "ECDSA-SHA384",
+            "Ed25519",
+            "ML-DSA-44",
+            "ML-DSA-65",
+            "ML-DSA-87"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "SignDataParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "$ref": "#/$defs/SignAlgorithm"
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "SplitSecretParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "scheme": {
+              "$ref": "#/$defs/SharingScheme"
+            },
+            "shares": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 255,
+                  "minimum": 2
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "threshold": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 255,
+                  "minimum": 2
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "properties": {
+                "shares": {
+                  "anyOf": [
+                    {
+                      "maximum": 100
+                    },
+                    {
+                      "$ref": "#/$defs/Expression"
+                    }
+                  ]
+                },
+                "threshold": {
+                  "anyOf": [
+                    {
+                      "maximum": 100
+                    },
+                    {
+                      "$ref": "#/$defs/Expression"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "scheme": {
+                    "const": "rite-sss/v1"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "shares": {
+                    "anyOf": [
+                      {
+                        "maximum": 100
+                      },
+                      {
+                        "$ref": "#/$defs/Expression"
+                      }
+                    ]
+                  },
+                  "threshold": {
+                    "anyOf": [
+                      {
+                        "maximum": 100
+                      },
+                      {
+                        "$ref": "#/$defs/Expression"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "required": [
+            "threshold",
+            "shares"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "StepBody": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ActionType"
+        },
+        "backend": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "creates": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "preconditions": {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        },
+        "reads": {},
+        "retry": {
+          "$ref": "#/$defs/RetrySpec"
+        },
+        "role": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "silent": {
+          "type": "boolean"
+        },
+        "with": {}
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "clock_check"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/ClockCheckParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "confirm"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/ConfirmParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "check_value"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/CheckValueParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "oral_readback"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/OralReadbackParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "reveal"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "value": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "value"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/RevealParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "machine_info"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/MachineInfoParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "enter_value"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "with": {
+                    "anyOf": [
+                      {
+                        "allOf": [
+                          {
+                            "$ref": "#/$defs/EntryParams"
+                          },
+                          {
+                            "properties": {
+                              "format": {
+                                "anyOf": [
+                                  {
+                                    "errorMessage": "paper32 and bip39 are for a value written down, which is a secret: use enter_secret",
+                                    "not": {
+                                      "enum": [
+                                        "paper32",
+                                        "bip39"
+                                      ]
+                                    },
+                                    "x-message": "paper32 and bip39 are for a value written down, which is a secret: use enter_secret"
+                                  },
+                                  {
+                                    "$ref": "#/$defs/Expression"
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "$ref": "#/$defs/Expression"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "enter_secret"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/EntryParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "generate_key"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'generate_key' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'generate_key' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/GenerateKeyParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wrap_key"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'wrap_key' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'wrap_key' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "key_to_wrap": {
+                        "type": "string"
+                      },
+                      "recipient": {
+                        "type": "string"
+                      },
+                      "wrapping_key": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "allOf": [
+                      {
+                        "errorMessage": "'reads' must name exactly one of 'wrapping_key', 'recipient'",
+                        "oneOf": [
+                          {
+                            "required": [
+                              "wrapping_key"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "recipient"
+                            ]
+                          }
+                        ],
+                        "x-message": "'reads' must name exactly one of 'wrapping_key', 'recipient'"
+                      }
+                    ],
+                    "required": [
+                      "key_to_wrap"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "if": {
+                  "properties": {
+                    "with": {
+                      "type": "object",
+                      "required": [
+                        "expect_recipient"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "with"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "reads": {
+                      "errorMessage": "'with.expect_recipient' applies only when 'wrap_key' reads 'recipient', which this step does not",
+                      "required": [
+                        "recipient"
+                      ],
+                      "x-message": "'with.expect_recipient' applies only when 'wrap_key' reads 'recipient', which this step does not"
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/WrapKeyParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "unwrap_key"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'unwrap_key' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'unwrap_key' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "unwrapping_key": {
+                        "type": "string"
+                      },
+                      "wrapped_data": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "unwrapping_key",
+                      "wrapped_data"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/UnwrapKeyParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "import_key"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'import_key' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'import_key' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "key_material": {
+                        "type": "string"
+                      },
+                      "passphrase": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "key_material"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/ImportKeyParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "encrypt_data"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'encrypt_data' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'encrypt_data' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "data": {
+                        "type": "string"
+                      },
+                      "encryption_key": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "data",
+                      "encryption_key"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/EncryptDataParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "decrypt_data"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'decrypt_data' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'decrypt_data' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "decryption_key": {
+                        "type": "string"
+                      },
+                      "encrypted_data": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "encrypted_data",
+                      "decryption_key"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                      },
+                      {
+                        "$ref": "#/$defs/Expression"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "split_secret"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'split_secret' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'split_secret' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "secret": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "secret"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/SplitSecretParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "combine_shares"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "shares": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 2
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "shares"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                      },
+                      {
+                        "$ref": "#/$defs/Expression"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "enter_share"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/EnterShareParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "export_public"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'export_public' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'export_public' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "with": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                      },
+                      {
+                        "$ref": "#/$defs/Expression"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "sign_data"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'sign_data' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'sign_data' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "data": {
+                        "type": "string"
+                      },
+                      "key": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "data"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/SignDataParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "verify_signature"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "data": {
+                        "type": "string"
+                      },
+                      "key": {
+                        "type": "string"
+                      },
+                      "signature": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "data",
+                      "signature"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/VerifySignatureParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "attest"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/AttestParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "gather_entropy"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/GatherEntropyParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "tpm_attest"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'tpm_attest' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'tpm_attest' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "with": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                      },
+                      {
+                        "$ref": "#/$defs/Expression"
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "piv_read_certificate"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'piv_read_certificate' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'piv_read_certificate' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/PivReadCertificateParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "piv_sign"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'piv_sign' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'piv_sign' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/PivSignParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "yubikey_attest_slot"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'yubikey_attest_slot' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'yubikey_attest_slot' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/AttestSlotParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "issue_certificate"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'issue_certificate' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'issue_certificate' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "csr": {
+                        "type": "string"
+                      },
+                      "issuer_cert": {
+                        "type": "string"
+                      },
+                      "signing_key": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "signing_key",
+                      "csr"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/IssueCertificateParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "generate_csr"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'generate_csr' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'generate_csr' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "signing_key": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "signing_key"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/GenerateCsrParams"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "required": [
+        "action"
+      ]
+    },
+    "UnwrapKeyParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "$ref": "#/$defs/KeyAlgorithm"
+            },
+            "expect_key": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "errorMessage": "'expect_key' must name the key either as 'sha256:<64 lowercase hex digits>', the fingerprint of a public key, or as 'cmac-aes:<6 lowercase hex digits>', the check value of a symmetric key",
+                  "pattern": "^(sha256:[0-9a-f]{64}|cmac-aes:[0-9a-f]{6})$",
+                  "patternErrorMessage": "'expect_key' must name the key either as 'sha256:<64 lowercase hex digits>', the fingerprint of a public key, or as 'cmac-aes:<6 lowercase hex digits>', the check value of a symmetric key",
+                  "x-message": "'expect_key' must name the key either as 'sha256:<64 lowercase hex digits>', the fingerprint of a public key, or as 'cmac-aes:<6 lowercase hex digits>', the check value of a symmetric key"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "label": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "default": "unwrapped-key"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "policy": {
+              "$ref": "#/$defs/KeyPolicyParams"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "VerifySignatureParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "$ref": "#/$defs/SignAlgorithm"
+            },
+            "message": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "WrapKeyParams": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "expect_recipient": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "errorMessage": "'expect_recipient' must be a fingerprint of the form 'sha256:<64 lowercase hex digits>'",
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "patternErrorMessage": "'expect_recipient' must be a fingerprint of the form 'sha256:<64 lowercase hex digits>'",
+                  "x-message": "'expect_recipient' must be a fingerprint of the form 'sha256:<64 lowercase hex digits>'"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "scheme": {
+              "$ref": "#/$defs/WrapScheme"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "WrapScheme": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "CMS-AES-256-GCM",
+            "RSA-OAEP-SHA256",
+            "RSA-AES-KEY-WRAP-SHA256",
+            "AES-128-KW",
+            "AES-256-KW",
+            "AES-128-KWP",
+            "AES-256-KWP"
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    }
+  }
+}

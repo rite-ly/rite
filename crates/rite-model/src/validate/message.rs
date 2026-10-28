@@ -1,5 +1,6 @@
-//! The schema of each action's `with:` block, compiled once, and what a
-//! violation of it says to the ceremony author.
+//! A schema compiled with the schema it came from, so that a violation can
+//! be said to the ceremony author: each action's `with:` block, and the
+//! whole definition.
 //!
 //! One renderer, worded per keyword. A violation about a value reads as the
 //! rule, then the value found: `'with.shares' must be at most 100, found
@@ -19,8 +20,8 @@ use super::{Keyword, Matched, Pointer, SchemaError, Validator, Violation};
 use crate::ActionType;
 use crate::params::with_schema;
 
-/// The compiled schema of one action's `with:` block.
-pub struct ParamsCheck {
+/// A compiled schema, with the schema its messages read from.
+pub struct Check {
     validator: Validator,
     schema: Value,
 }
@@ -31,18 +32,12 @@ pub struct ParamsCheck {
 ///
 /// Returns why the generated schema did not compile, which is a mistake in
 /// the generator; a test compiles every action's schema.
-pub fn params_check(action: ActionType) -> Result<&'static ParamsCheck, SchemaError> {
-    static CHECKS: OnceLock<HashMap<ActionType, Result<ParamsCheck, SchemaError>>> =
-        OnceLock::new();
+pub fn params_check(action: ActionType) -> Result<&'static Check, SchemaError> {
+    static CHECKS: OnceLock<HashMap<ActionType, Result<Check, SchemaError>>> = OnceLock::new();
     let checks = CHECKS.get_or_init(|| {
         ActionType::ALL
             .iter()
-            .map(|&action| {
-                let schema = with_schema(action).to_value();
-                let check =
-                    Validator::new(&schema).map(|validator| ParamsCheck { validator, schema });
-                (action, check)
-            })
+            .map(|&action| (action, Check::new(with_schema(action).to_value())))
             .collect()
     });
     match checks.get(&action) {
@@ -100,9 +95,18 @@ impl Violation {
     }
 }
 
-impl ParamsCheck {
-    /// Every way `with` fails the action's schema, one violation per thing
-    /// to fix.
+impl Check {
+    /// `schema`, compiled.
+    ///
+    /// # Errors
+    ///
+    /// Returns why `schema` does not compile.
+    pub fn new(schema: Value) -> Result<Self, SchemaError> {
+        let validator = Validator::new(&schema)?;
+        Ok(Self { validator, schema })
+    }
+
+    /// Every way `instance` fails the schema, one violation per thing to fix.
     ///
     /// An object with several unexpected keys gives one violation per key, so
     /// each can point at its own key. A value of the wrong type gives that
@@ -111,8 +115,8 @@ impl ParamsCheck {
     /// say more than the generic ones and are the ones kept, and of two
     /// bounds on the same side only the tighter is.
     #[must_use]
-    pub fn validate(&self, with: &Value) -> Vec<Violation> {
-        let violations = self.validator.validate(with);
+    pub fn validate(&self, instance: &Value) -> Vec<Violation> {
+        let violations = self.validator.validate(instance);
         let mut mistyped: HashSet<Pointer> = HashSet::new();
         let mut explained: HashSet<Pointer> = HashSet::new();
         let mut lowest_maximum: HashMap<Pointer, f64> = HashMap::new();
@@ -255,7 +259,7 @@ impl ParamsCheck {
             // A value of the wrong type has not reached the rule an
             // `x-message` explains, so it reads the same everywhere.
             keyword @ Keyword::Type { .. } => found(
-                self.rule(keyword, &violation.schema_path, &field),
+                self.rule(keyword, &violation.schema_path, &format!("'{field}'")),
                 values,
                 at.lookup(with),
             ),
@@ -269,7 +273,7 @@ impl ParamsCheck {
             | Keyword::Not
             | Keyword::False) => {
                 let rule = x_message(&self.schema, &violation.schema_path).map_or_else(
-                    || self.rule(keyword, &violation.schema_path, &field),
+                    || self.rule(keyword, &violation.schema_path, &format!("'{field}'")),
                     str::to_string,
                 );
                 found(rule, values, at.lookup(with))
@@ -277,7 +281,76 @@ impl ParamsCheck {
         }
     }
 
-    /// What a keyword about a value asks of `field`, in words.
+    /// The violation in words, for the author of `document`.
+    ///
+    /// `place` names the part of the document holding the violation, as
+    /// `step 'gen'`, and `within` is where the violation is inside it. An
+    /// empty `place` is the document itself. An `x-message` is said of
+    /// `place`, and a missing field may carry one too, since the document's
+    /// rules over several fields are worded there.
+    #[must_use]
+    pub fn message_in(
+        &self,
+        document: &Value,
+        violation: &Violation,
+        place: &str,
+        within: &Pointer,
+    ) -> String {
+        let subject = match (place.is_empty(), within.segments().is_empty()) {
+            (true, true) => "the ceremony".to_string(),
+            (false, true) => place.to_string(),
+            (true, false) => format!("'{}'", path_name(within)),
+            (false, false) => format!("'{}' in {place}", path_name(within)),
+        };
+        let explained = || {
+            x_message(&self.schema, &violation.schema_path).map(|message| {
+                if place.is_empty() {
+                    message.to_string()
+                } else {
+                    format!("{place}: {message}")
+                }
+            })
+        };
+        let value = violation.instance_path.lookup(document);
+        match &violation.keyword {
+            Keyword::AdditionalProperties { unexpected } => {
+                let accepted = self.accepted(&violation.schema_path);
+                let keys = unexpected.join("', '");
+                if accepted.is_empty() {
+                    format!("{subject} takes no fields, found '{keys}'")
+                } else {
+                    format!(
+                        "{subject} has no '{keys}' field. Accepted: {}",
+                        accepted.join(", ")
+                    )
+                }
+            }
+            Keyword::Required { property } => {
+                explained().unwrap_or_else(|| format!("{subject} requires '{property}'"))
+            }
+            keyword @ Keyword::Type { .. } => found(
+                self.rule(keyword, &violation.schema_path, &subject),
+                Values::Shown,
+                value,
+            ),
+            keyword @ (Keyword::Enum { .. }
+            | Keyword::Const { .. }
+            | Keyword::Pattern { .. }
+            | Keyword::Minimum { .. }
+            | Keyword::Maximum { .. }
+            | Keyword::MinItems { .. }
+            | Keyword::OneOf { .. }
+            | Keyword::Not
+            | Keyword::False) => {
+                let rule = explained()
+                    .unwrap_or_else(|| self.rule(keyword, &violation.schema_path, &subject));
+                found(rule, Values::Shown, value)
+            }
+        }
+    }
+
+    /// What a keyword about a value asks of `field`, in words. `field` is
+    /// written as the message says it: `'with.shares'`, `step 'gen'`.
     fn rule(&self, keyword: &Keyword, keyword_at: &Pointer, field: &str) -> String {
         let options = match keyword {
             Keyword::Enum { options } => Some(options.clone()),
@@ -297,35 +370,37 @@ impl ParamsCheck {
         };
         if let Some(options) = options {
             return match options.as_slice() {
-                [only] => format!("'{field}' must be {}", shown(only)),
+                [only] => format!("{field} must be {}", shown(only)),
                 _ => format!(
-                    "'{field}' must be one of: {}",
+                    "{field} must be one of: {}",
                     options.iter().map(plain).collect::<Vec<_>>().join(", ")
                 ),
             };
         }
         match keyword {
+            // A field of the definition that reads any scalar as text.
+            Keyword::Type { expected } if is_text(expected) => format!("{field} must be text"),
             Keyword::Type { expected } => {
                 let types: Vec<&str> = expected.iter().map(|t| type_name(t)).collect();
-                format!("'{field}' must be {}", types.join(" or "))
+                format!("{field} must be {}", types.join(" or "))
             }
-            Keyword::Const { expected } => format!("'{field}' must be {}", shown(expected)),
-            Keyword::Pattern { pattern } => format!("'{field}' must match {pattern}"),
-            Keyword::Minimum { limit } => format!("'{field}' must be at least {limit}"),
-            Keyword::Maximum { limit } => format!("'{field}' must be at most {limit}"),
-            Keyword::MinItems { limit } => format!("'{field}' needs at least {limit} entries"),
+            Keyword::Const { expected } => format!("{field} must be {}", shown(expected)),
+            Keyword::Pattern { pattern } => format!("{field} must match {pattern}"),
+            Keyword::Minimum { limit } => format!("{field} must be at least {limit}"),
+            Keyword::Maximum { limit } => format!("{field} must be at most {limit}"),
+            Keyword::MinItems { limit } => format!("{field} needs at least {limit} entries"),
             Keyword::OneOf {
                 matched: Matched::None,
-            } => format!("'{field}' takes none of the forms it can have"),
+            } => format!("{field} takes none of the forms it can have"),
             Keyword::OneOf {
                 matched: Matched::Several,
-            } => format!("'{field}' takes more than one of the forms it can have"),
-            Keyword::Not | Keyword::False => format!("'{field}' is not accepted here"),
+            } => format!("{field} takes more than one of the forms it can have"),
+            Keyword::Not | Keyword::False => format!("{field} is not accepted here"),
             // Worded by `message`, which names the keys involved; and an
             // enumeration is worded above.
             Keyword::Enum { .. }
             | Keyword::Required { .. }
-            | Keyword::AdditionalProperties { .. } => format!("'{field}' is not accepted"),
+            | Keyword::AdditionalProperties { .. } => format!("{field} is not accepted"),
         }
     }
 
@@ -411,18 +486,40 @@ fn found(rule: String, values: Values, value: Option<&Value>) -> String {
 
 /// `with.policy.usages[0]` for the pointer `/policy/usages/0`.
 fn field_name(at: &Pointer) -> String {
-    let mut name = "with".to_string();
+    if at.segments().is_empty() {
+        "with".to_string()
+    } else {
+        format!("with.{}", path_name(at))
+    }
+}
+
+/// `policy.usages[0]` for the pointer `/policy/usages/0`.
+fn path_name(at: &Pointer) -> String {
+    let mut name = String::new();
     for segment in at.segments() {
         if segment.parse::<usize>().is_ok() {
             name.push('[');
             name.push_str(segment);
             name.push(']');
         } else {
-            name.push('.');
+            if !name.is_empty() {
+                name.push('.');
+            }
             name.push_str(segment);
         }
     }
     name
+}
+
+/// Whether a type rule accepts every scalar but `null`, as a field of the
+/// definition that reads what is written there as text does.
+fn is_text(expected: &[String]) -> bool {
+    ["string", "number", "boolean"]
+        .iter()
+        .all(|name| expected.iter().any(|kind| kind == name))
+        && !expected
+            .iter()
+            .any(|kind| kind == "object" || kind == "array")
 }
 
 fn type_name(name: &str) -> &str {

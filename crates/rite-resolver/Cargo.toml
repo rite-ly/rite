@@ -18,9 +18,12 @@ serde_json = { workspace = true }
 marked-yaml = { workspace = true }
 thiserror = { workspace = true }
 indexmap = { workspace = true }
+schemars = { workspace = true, features = ["indexmap2"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Checks the published schema with a complete validator.
+jsonschema = { workspace = true }
 
 [lints]
 workspace = true

@@ -8,11 +8,13 @@
 use crate::serde_utils;
 use indexmap::IndexMap;
 use rite_model::{ActionType, BackendConfig, DutyType, OutputType, ParameterType, Sha256Digest};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// A complete ceremony definition as parsed from YAML.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct Ceremony {
     /// Schema version (e.g., `"0.3"`).
     pub(crate) version: String,
@@ -23,6 +25,7 @@ pub(crate) struct Ceremony {
     pub(crate) description: Option<String>,
     /// Backend declarations (name → config).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[schemars(schema_with = "crate::document::backends_schema")]
     pub(crate) backends: HashMap<String, BackendConfig>,
     /// Roles participating in the ceremony (role ID → definition).
     pub(crate) roles: IndexMap<String, RoleDefinition>,
@@ -60,7 +63,8 @@ fn unset_source_digest() -> Sha256Digest {
 }
 
 /// A role definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct RoleDefinition {
     /// Human-readable label for the role type.
     /// If absent, derived from the role ID via `derive_role_name`.
@@ -73,7 +77,8 @@ pub(crate) struct RoleDefinition {
 
 /// A high-level act grouping sections for display purposes.
 /// Acts are metadata only; they do not affect execution order.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct Act {
     /// Unique identifier for this act.
     pub(crate) id: String,
@@ -89,7 +94,8 @@ pub(crate) struct Act {
 ///
 /// Sections determine execution order: steps execute in section declaration order,
 /// and within each section in step declaration order.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct SectionBody {
     /// Reference to the act this section belongs to (optional).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,7 +115,8 @@ pub(crate) struct SectionBody {
 }
 
 /// Body of a step (the step ID is the map key in its parent section).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct StepBody {
     /// Action to perform.
     pub(crate) action: ActionType,
@@ -222,7 +229,8 @@ impl<'de> Deserialize<'de> for RetrySpec {
 }
 
 /// A parameter that can be provided when instantiating a ceremony.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct Parameter {
     /// Type of the parameter.
     #[serde(rename = "type")]
@@ -304,7 +312,8 @@ impl Material {
 }
 
 /// Declaration of a ceremony output.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct OutputDeclaration {
     /// Type of output.
     #[serde(rename = "type")]
@@ -315,7 +324,8 @@ pub(crate) struct OutputDeclaration {
 }
 
 /// Body of a post-ceremony duty (the duty ID is the map key in the `after:` block).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub(crate) struct PostCeremonyDutyBody {
     /// Type of duty.
     #[serde(rename = "type")]

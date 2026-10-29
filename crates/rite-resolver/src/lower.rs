@@ -9,9 +9,9 @@ use crate::schema::Ceremony;
 use marked_yaml::Node;
 use marked_yaml::types::MarkedScalarNode;
 use rite_model::expression::{Expression, RefType};
-use rite_model::validate::Pointer;
+use rite_model::validate::{Anchor, Keyword, Pointer};
 use rite_model::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Maximum nesting depth accepted in ceremony YAML.
@@ -25,6 +25,9 @@ pub(crate) const MAX_YAML_DEPTH: usize = 64;
 /// Parse ceremony YAML, build a `SpanMap`, and return structured diagnostics.
 ///
 /// Always returns whatever spans could be collected even if deserialization fails.
+/// Where the schema refuses part of the definition, the ceremony returned is the
+/// rest of it, for resolution to report its own errors on; an error diagnostic
+/// says the definition is refused.
 pub(crate) fn lower_ceremony(
     path: Option<&Path>,
     yaml: &str,
@@ -67,17 +70,35 @@ pub(crate) fn lower_ceremony(
     }
 
     // Step B: walk spans; always runs, even if Step C fails.
-    let (span_map, structural_diags) = Lowerer::new(path, yaml).walk(&node);
-    diags.extend(structural_diags);
+    let span_map = Lowerer::new(yaml).walk(&node);
 
-    // Step C: serde deserialization from the same Node tree.
-    let ceremony_opt = match marked_yaml::from_node::<Ceremony>(&node) {
-        Ok(mut c) => {
-            type_json_scalars(&mut c, &node);
-            diags.extend(number_diagnostics(path, &c, &span_map));
+    // The whole definition against its schema, which reports every key the
+    // reader would drop and every field missing, each where it is.
+    let (schema_diags, refused_at) = check_document(path, yaml, &node);
+    let refused = !schema_diags.is_empty();
+    diags.extend(schema_diags);
+
+    // Step C: serde deserialization from the same Node tree. Where the
+    // schema refused the definition, it has said why, so the reader's own
+    // error would repeat it. The reader then reads what the schema did not
+    // refuse, so that the rest of the definition still resolves and its
+    // errors are found with these: first without each refused value, then,
+    // if a field it needs is among them, without each part holding one.
+    let read = |node: &Node| {
+        marked_yaml::from_node::<Ceremony>(node).map(|mut c| {
+            type_json_scalars(&mut c, node);
             c.source_digest = rite_model::Sha256Digest::of(yaml.as_bytes());
+            c
+        })
+    };
+    let ceremony_opt = match read(&node) {
+        Ok(c) => {
+            diags.extend(number_diagnostics(path, &c, &span_map));
             Some(c)
         }
+        Err(_) if refused => read(&without(&node, refused_at.values))
+            .or_else(|_| read(&without(&node, refused_at.parts)))
+            .ok(),
         Err(from_node_err) => {
             let span = from_node_err.start_mark().map(|m| Span {
                 line: m.line(),
@@ -100,44 +121,24 @@ pub(crate) fn lower_ceremony(
 /// Walks the YAML node tree once and accumulates the [`SpanMap`] used by the LSP
 /// to enrich diagnostics with source locations and to power go-to-definition.
 ///
-/// Owning `yaml`, `path`, `span_map`, and `diags` together avoids the parameter
-/// sprawl that grows every time we add a new walked field.
+/// Owning `yaml` and `span_map` together avoids the parameter sprawl that
+/// grows every time we add a new walked field.
 struct Lowerer<'src> {
     yaml: &'src str,
-    path: Option<&'src Path>,
     span_map: SpanMap,
-    diags: Vec<Diagnostic>,
 }
 
 impl<'src> Lowerer<'src> {
-    fn new(path: Option<&'src Path>, yaml: &'src str) -> Self {
+    fn new(yaml: &'src str) -> Self {
         Self {
             yaml,
-            path,
             span_map: SpanMap::default(),
-            diags: Vec::new(),
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn walk(mut self, node: &Node) -> (SpanMap, Vec<Diagnostic>) {
-        const KNOWN_KEYS: &[&str] = &[
-            "version",
-            "name",
-            "description",
-            "backends",
-            "roles",
-            "acts",
-            "sections",
-            "parameters",
-            "materials",
-            "prerequisites",
-            "output",
-            "after",
-        ];
-
+    fn walk(mut self, node: &Node) -> SpanMap {
         let Some(mapping) = node.as_mapping() else {
-            return (self.span_map, self.diags);
+            return self.span_map;
         };
 
         // Sections: mapping where keys are section IDs; each section contains nested steps.
@@ -195,22 +196,13 @@ impl<'src> Lowerer<'src> {
         // Acts: sequence of mappings, each with an "id" scalar.
         if let Some(acts_seq) = mapping.get_sequence("acts") {
             for act_node in acts_seq.iter() {
-                if let Some(act_map) = act_node.as_mapping() {
-                    if !mapping_has_key(act_map, "id") {
-                        self.diags.push(Diagnostic {
-                            path: self.path.map(Path::to_owned),
-                            span: node_to_span(act_node),
-                            severity: Severity::Error,
-                            message: "Act is missing required field 'id'".to_string(),
-                        });
-                    }
-                    if let Some(id_scalar) = act_map.get_scalar("id")
-                        && let Some(span) = node_to_span(act_node)
-                    {
-                        self.span_map
-                            .acts
-                            .insert(ActId::new(id_scalar.as_str()), span);
-                    }
+                if let Some(act_map) = act_node.as_mapping()
+                    && let Some(id_scalar) = act_map.get_scalar("id")
+                    && let Some(span) = node_to_span(act_node)
+                {
+                    self.span_map
+                        .acts
+                        .insert(ActId::new(id_scalar.as_str()), span);
                 }
             }
         }
@@ -262,20 +254,7 @@ impl<'src> Lowerer<'src> {
             }
         }
 
-        // Unknown top-level key detection.
-        for (key_scalar, _) in mapping.iter() {
-            if !KNOWN_KEYS.contains(&key_scalar.as_str()) {
-                let span = self.scalar_to_span(key_scalar);
-                self.diags.push(Diagnostic {
-                    path: self.path.map(Path::to_owned),
-                    span,
-                    severity: Severity::Warning,
-                    message: format!("unknown top-level key: '{}'", key_scalar.as_str()),
-                });
-            }
-        }
-
-        (self.span_map, self.diags)
+        self.span_map
     }
 
     fn walk_step(&mut self, step_id_scalar: &MarkedScalarNode, step_node: &Node) {
@@ -288,20 +267,6 @@ impl<'src> Lowerer<'src> {
         let Some(step_map) = step_node.as_mapping() else {
             return;
         };
-
-        // Validate required field.
-        if !mapping_has_key(step_map, "action") {
-            let span = self.scalar_to_span(step_id_scalar);
-            self.diags.push(Diagnostic {
-                path: self.path.map(Path::to_owned),
-                span,
-                severity: Severity::Error,
-                message: format!(
-                    "Step '{}' is missing required field 'action'",
-                    step_id_scalar.as_str()
-                ),
-            });
-        }
 
         self.record_enum_value(step_map, "action");
 
@@ -500,28 +465,205 @@ impl<'src> Lowerer<'src> {
     /// column by 1 when the source byte is `"` or `'`. This keeps byte offsets within
     /// `as_str()` aligned with source characters for both quoted and unquoted scalars.
     fn scalar_to_span(&self, scalar: &MarkedScalarNode) -> Option<Span> {
-        let m = scalar.span().start()?;
-        let is_quoted = self
-            .yaml
-            .as_bytes()
-            .get(m.character())
-            .is_some_and(|&b| b == b'"' || b == b'\'');
-        let column = if is_quoted {
-            m.column().saturating_add(1)
-        } else {
-            m.column()
-        };
-        Some(Span {
-            line: m.line(),
-            column,
-            length: Some(scalar.as_str().len()),
-        })
+        scalar_span(self.yaml, scalar)
     }
 }
 
-/// Check whether a mapping node contains a key with the given name (any value type).
-fn mapping_has_key(map: &marked_yaml::types::MarkedMappingNode, key: &str) -> bool {
-    map.iter().any(|(k, _)| k.as_str() == key)
+/// The span of `scalar`'s text in `yaml`, from its first content character.
+fn scalar_span(yaml: &str, scalar: &MarkedScalarNode) -> Option<Span> {
+    let m = scalar.span().start()?;
+    let is_quoted = yaml
+        .as_bytes()
+        .get(m.character())
+        .is_some_and(|&b| b == b'"' || b == b'\'');
+    let column = if is_quoted {
+        m.column().saturating_add(1)
+    } else {
+        m.column()
+    };
+    Some(Span {
+        line: m.line(),
+        column,
+        length: Some(scalar.as_str().len()),
+    })
+}
+
+/// What the schema refused in a definition, by where it is.
+#[derive(Default)]
+struct Refused {
+    /// Each value the schema does not take, and each object missing a field
+    /// it requires that has no field the schema refused: removing the value
+    /// leaves the rest as it is, and an object missing a field is left to
+    /// the reader. An unknown key is not here, since the reader drops it.
+    values: Vec<Pointer>,
+    /// The step, section, role, parameter, material, output, backend or
+    /// duty holding each of them.
+    parts: Vec<Pointer>,
+}
+
+/// Every way the definition in `node` fails the ceremony schema, each
+/// pointing at the key or value it is about, in the order they are written,
+/// and what the schema refused there.
+fn check_document(path: Option<&Path>, yaml: &str, node: &Node) -> (Vec<Diagnostic>, Refused) {
+    let diagnostic = |span, message| Diagnostic {
+        path: path.map(Path::to_owned),
+        span,
+        severity: Severity::Error,
+        message,
+    };
+    let check = match crate::document::ceremony_check() {
+        Ok(check) => check,
+        Err(error) => {
+            return (
+                vec![diagnostic(None, error.to_string())],
+                Refused::default(),
+            );
+        }
+    };
+    let mut document = typed_json(node);
+    crate::document::normalize(&mut document);
+    let mut reported = HashSet::new();
+    let mut refused = Refused::default();
+    let mut diags: Vec<Diagnostic> = check
+        .validate(&document)
+        .into_iter()
+        .filter_map(|violation| {
+            let (place, within) = crate::document::place(&violation.instance_path);
+            let at = &violation.instance_path;
+            match violation.keyword {
+                Keyword::AdditionalProperties { .. } => {}
+                Keyword::Required { .. } => {
+                    refused.parts.push(part(at, &within));
+                }
+                _ => {
+                    refused.values.push(at.clone());
+                    refused.parts.push(part(at, &within));
+                }
+            }
+            let message = check.message_in(&document, &violation, &place, &within);
+            let (at, anchor) = violation.anchor();
+            let span = span_at(yaml, node, &at, anchor);
+            // Two keywords can say the same thing about one entry.
+            let key = (message.clone(), span.map(|span| (span.line, span.column)));
+            reported.insert(key).then(|| diagnostic(span, message))
+        })
+        .collect();
+    diags.sort_by_key(|diag| diag.span.map(|span| (span.line, span.column)));
+    (diags, refused)
+}
+
+/// The part of the definition holding `at`, where `at` is at `within` in it.
+fn part(at: &Pointer, within: &Pointer) -> Pointer {
+    let segments = at.segments();
+    let length = segments.len().saturating_sub(within.segments().len());
+    segments
+        .get(..length)
+        .unwrap_or_default()
+        .iter()
+        .fold(Pointer::root(), |pointer, segment| pointer.join(segment))
+}
+
+/// `node` without the entries at `refused`. The definition itself is never
+/// removed, and an entry of a list is removed after those that follow it, so
+/// that each index still names what it did.
+fn without(node: &Node, mut refused: Vec<Pointer>) -> Node {
+    let order = |pointer: &Pointer| {
+        pointer
+            .segments()
+            .iter()
+            .map(|segment| (segment.parse::<usize>().ok(), segment.clone()))
+            .collect::<Vec<_>>()
+    };
+    refused.sort_by_key(|pointer| std::cmp::Reverse(order(pointer)));
+    let mut node = node.clone();
+    for pointer in &refused {
+        if let Some((last, parents)) = pointer.segments().split_last() {
+            remove(&mut node, parents, last);
+        }
+    }
+    node
+}
+
+/// Remove the entry `last` of the map or list at `parents` in `node`, if it
+/// is there.
+fn remove(node: &mut Node, parents: &[String], last: &str) {
+    let mut current = node;
+    for segment in parents {
+        let next = if current.as_mapping().is_some() {
+            current
+                .as_mapping_mut()
+                .and_then(|map| map.get_mut(&MarkedScalarNode::from(segment.as_str())))
+        } else {
+            current
+                .as_sequence_mut()
+                .and_then(|items| items.get_mut(segment.parse::<usize>().ok()?))
+        };
+        let Some(next) = next else {
+            return;
+        };
+        current = next;
+    }
+    if let Some(map) = current.as_mapping_mut() {
+        map.remove(&MarkedScalarNode::from(last));
+    } else if let (Some(items), Ok(index)) = (current.as_sequence_mut(), last.parse::<usize>())
+        && index < items.len()
+    {
+        items.remove(index);
+    }
+}
+
+/// The span of the key or the value at `at` in `node`.
+///
+/// Where `at` names nothing written, as an empty `reads:` the check reads in
+/// for one left out, it is the key of the nearest entry that is written.
+fn span_at(yaml: &str, node: &Node, at: &Pointer, anchor: Anchor) -> Option<Span> {
+    let mut segments = at.segments();
+    let mut anchor = anchor;
+    loop {
+        if let Some(span) = locate(yaml, node, segments, anchor) {
+            return Some(span);
+        }
+        segments = segments.split_last()?.1;
+        anchor = Anchor::Key;
+    }
+}
+
+/// The span of the key or the value the path `segments` leads to in `node`,
+/// if it is written. A map or a list as a value is shown by its key, since
+/// it starts on the next line, and so is a key with nothing after it; an
+/// entry of a list has no key, so its first key is used, and so is the
+/// document's.
+fn locate(yaml: &str, node: &Node, segments: &[String], anchor: Anchor) -> Option<Span> {
+    let mut current = node;
+    let mut key = None;
+    for segment in segments {
+        if let Some(map) = current.as_mapping() {
+            let (entry_key, value) = map.iter().find(|(k, _)| k.as_str() == segment)?;
+            key = Some(entry_key);
+            current = value;
+        } else {
+            current = current.as_sequence()?.get(segment.parse::<usize>().ok()?)?;
+            key = None;
+        }
+    }
+    let key_span = key.and_then(|key| scalar_span(yaml, key));
+    let first_key = || {
+        current
+            .as_mapping()
+            .and_then(|map| map.iter().next())
+            .and_then(|(key, _)| scalar_span(yaml, key))
+    };
+    let value = || match current.as_scalar() {
+        Some(scalar) if !scalar.as_str().is_empty() => scalar_span(yaml, scalar),
+        Some(_) | None => key_span
+            .or_else(first_key)
+            .or_else(|| node_to_span(current)),
+    };
+    if anchor == Anchor::Key {
+        key_span.or_else(value)
+    } else {
+        value()
+    }
 }
 
 /// Check whether the node tree nests deeper than [`MAX_YAML_DEPTH`].
@@ -650,7 +792,7 @@ fn type_json_scalars(ceremony: &mut Ceremony, node: &Node) {
 ///
 /// The depth guard in `lower_ceremony` has rejected trees nested past
 /// [`MAX_YAML_DEPTH`], so the recursion is bounded.
-fn typed_json(node: &Node) -> serde_json::Value {
+pub(crate) fn typed_json(node: &Node) -> serde_json::Value {
     if let Some(scalar) = node.as_scalar() {
         let text = scalar.as_str();
         let typed = if !scalar.may_coerce() {
@@ -739,9 +881,10 @@ fn coerce_scalar(s: &str) -> Option<serde_json::Value> {
     None
 }
 
-/// Convert a diagnostic back to a `ResolveError::Yaml` when needed.
+/// The error a diagnostic found while reading the definition is, for a
+/// caller that reports errors rather than diagnostics.
 pub(crate) fn diagnostic_to_resolve_error(d: Diagnostic) -> ResolveError {
-    ResolveError::Yaml {
+    ResolveError::Definition {
         message: d.message,
         location: d.span.map(|s| (s.line, s.column)),
     }
@@ -1315,11 +1458,15 @@ sections:
         action: confirm
         silent: "true"
 "#;
-        let (ceremony, _, diags) = lower_ceremony(None, yaml);
-        assert!(ceremony.is_none());
-        assert!(
-            diags.iter().any(|d| d.severity == Severity::Error),
-            "{diags:?}"
+        let (_, _, diags) = lower_ceremony(None, yaml);
+        let errors: Vec<&str> = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(
+            errors,
+            ["'silent' in step 'step' must be true or false, found 'true'"]
         );
 
         let plain = yaml.replace("silent: \"true\"", "silent: true");
@@ -1488,19 +1635,285 @@ sections:
         assert!(diags.iter().all(|d| d.severity != Severity::Error));
     }
 
+    fn errors(yaml: &str) -> Vec<(String, String)> {
+        let (_, _, diags) = lower_ceremony(None, yaml);
+        diags
+            .into_iter()
+            .filter(|d| d.severity == Severity::Error)
+            .map(|d| {
+                let text = d
+                    .span
+                    .map(|span| crate::test_helpers::span_text(yaml, span).to_string())
+                    .unwrap_or_default();
+                (text, d.message)
+            })
+            .collect()
+    }
+
+    /// A key the reader would drop is refused wherever it is, and the
+    /// diagnostic underlines it.
     #[test]
-    fn warns_on_unknown_top_level_key() {
+    fn an_unknown_key_is_refused_at_every_level() {
         let yaml = r#"
 version: "0.3"
 name: "Test"
+unknown_key: value
+roles:
+  admin: { persn: Alice }
+sections:
+  main:
+    rol: admin
+    steps:
+      ask:
+        action: confirm
+        silnt: true
+"#;
+        assert_eq!(
+            errors(yaml),
+            [
+                (
+                    "unknown_key".to_string(),
+                    "the ceremony has no 'unknown_key' field. Accepted: acts, after, backends, \
+                     description, materials, name, output, parameters, prerequisites, roles, \
+                     sections, version"
+                        .to_string()
+                ),
+                (
+                    "persn".to_string(),
+                    "role 'admin' has no 'persn' field. Accepted: name, person".to_string()
+                ),
+                (
+                    "rol".to_string(),
+                    "section 'main' has no 'rol' field. Accepted: act, description, name, \
+                     role, steps"
+                        .to_string()
+                ),
+                (
+                    "silnt".to_string(),
+                    "step 'ask' has no 'silnt' field. Accepted: action, backend, creates, \
+                     description, preconditions, reads, retry, role, silent, with"
+                        .to_string()
+                ),
+            ]
+        );
+    }
+
+    /// A field the reader takes as text takes a plain scalar of any type, as
+    /// YAML writes it unquoted.
+    #[test]
+    fn a_text_field_takes_any_scalar() {
+        let yaml = r"
+version: 0.3
+name: 2026
 roles: {}
 sections: {}
-unknown_key: value
-"#;
+";
+        assert_eq!(errors(yaml), []);
+    }
+
+    /// A key with nothing after it is YAML's null, which no field outside
+    /// `with:` takes, and the diagnostic underlines the key.
+    #[test]
+    fn an_empty_value_is_refused_at_its_key() {
+        let yaml = r"
+version: 0.3
+name: Test
+roles:
+  admin:
+    name:
+sections: {}
+";
+        assert_eq!(
+            errors(yaml),
+            [(
+                "name".to_string(),
+                "'name' in role 'admin' must be text, found null".to_string()
+            )]
+        );
+    }
+
+    /// A field missing from the definition itself points at where it
+    /// starts, and two places saying the same thing are both reported.
+    #[test]
+    fn every_error_has_a_place_and_none_hides_another() {
+        let yaml = r"
+name: Test
+roles: {}
+backends:
+  ssl: { provider: openssl }
+sections:
+  one:
+    steps:
+      gen: { action: generate_key, creates: a, with: { algorithm: RSA-4096 } }
+  two:
+    steps:
+      gen: { action: generate_key, creates: b, with: { algorithm: RSA-4096 } }
+";
         let (_, _, diags) = lower_ceremony(None, yaml);
-        let warning = diags
+        let found: Vec<(Option<usize>, &str)> = diags
             .iter()
-            .find(|d| d.severity == Severity::Warning && d.message.contains("unknown_key"));
-        assert!(warning.is_some(), "should warn about unknown top-level key");
+            .map(|d| (d.span.map(|span| span.line), d.message.as_str()))
+            .collect();
+        let backend =
+            "step 'gen': action 'generate_key' requires a backend; add a 'backend:' field";
+        assert_eq!(
+            found,
+            [
+                (Some(2), "the ceremony requires 'version'"),
+                (Some(9), backend),
+                (Some(12), backend),
+            ]
+        );
+    }
+
+    /// A quoted quantity is read as a number, so it is held to the range of
+    /// one.
+    #[test]
+    fn a_quoted_quantity_is_held_to_its_range() {
+        let material = |quantity: &str| {
+            format!(
+                "version: \"0.3\"\nname: Test\nroles: {{}}\nsections: {{}}\nmaterials:\n  \
+                 stick: {{ type: physical, quantity: \"{quantity}\" }}\n"
+            )
+        };
+        assert_eq!(errors(&material("4294967295")), []);
+        assert_eq!(errors(&material("0007")), []);
+        assert_eq!(errors(&material("4294967296")).len(), 1);
+        assert_eq!(errors(&material("99999999999")).len(), 1);
+    }
+
+    fn with_steps(steps: &str) -> String {
+        format!(
+            r#"
+version: "0.3"
+name: "Test"
+roles: {{}}
+backends:
+  ssl: {{ provider: openssl }}
+sections:
+  main:
+    steps:
+{steps}"#
+        )
+    }
+
+    /// What an action asks of its step is checked with the rest of the
+    /// definition: its backend, its `reads:` inputs, and a `with:` field
+    /// that needs one of them.
+    #[test]
+    fn a_step_is_held_to_what_its_action_asks() {
+        let yaml = with_steps(
+            r#"      gen:
+        action: generate_key
+        creates: k
+        with: { algorithm: RSA-4096 }
+      wrap:
+        action: wrap_key
+        backend: ssl
+        reads:
+          key_to_wrap: ${artifact.k}
+          passprhase: ${artifact.k}
+        with: { expect_recipient: abc }
+      combine:
+        action: combine_shares
+        backend: ssl
+        reads: { shares: ["${artifact.a}"] }
+      unwrap:
+        action: unwrap_key
+        backend: ssl
+"#,
+        );
+        assert_eq!(
+            errors(&yaml),
+            [
+                (
+                    "gen".to_string(),
+                    "step 'gen': action 'generate_key' requires a backend; add a 'backend:' \
+                     field"
+                        .to_string()
+                ),
+                (
+                    "reads".to_string(),
+                    "step 'wrap': 'reads' must name exactly one of 'wrapping_key', 'recipient'"
+                        .to_string()
+                ),
+                (
+                    "reads".to_string(),
+                    "step 'wrap': 'with.expect_recipient' applies only when 'wrap_key' reads \
+                     'recipient', which this step does not"
+                        .to_string()
+                ),
+                (
+                    "passprhase".to_string(),
+                    "'reads' in step 'wrap' has no 'passprhase' field. Accepted: key_to_wrap, \
+                     recipient, wrapping_key"
+                        .to_string()
+                ),
+                (
+                    "shares".to_string(),
+                    "'reads.shares' in step 'combine' needs at least 2 entries".to_string()
+                ),
+                (
+                    "unwrap".to_string(),
+                    "'reads' in step 'unwrap' requires 'unwrapping_key'".to_string()
+                ),
+                (
+                    "unwrap".to_string(),
+                    "'reads' in step 'unwrap' requires 'wrapped_data'".to_string()
+                ),
+            ]
+        );
+    }
+
+    /// A rule that needs a `with:` field reads it only from a map, so a
+    /// block of another type gives no error here. The resolver reports it.
+    #[test]
+    fn a_with_rule_reads_only_a_map() {
+        let yaml = with_steps(
+            r#"      wrap:
+        action: wrap_key
+        backend: ssl
+        reads: { key_to_wrap: "${artifact.a}", wrapping_key: "${artifact.b}" }
+        with: oops
+"#,
+        );
+        assert_eq!(errors(&yaml), []);
+    }
+
+    /// An input takes one reference or a list as its action says, and an
+    /// optional input may be named or not.
+    #[test]
+    fn a_reads_input_has_the_shape_its_action_takes() {
+        let yaml = with_steps(
+            r#"      combine:
+        action: combine_shares
+        backend: ssl
+        reads: { shares: "${artifact.a}" }
+      split:
+        action: split_secret
+        backend: ssl
+        reads: { secret: ["${artifact.a}"] }
+        with: { shares: 3, threshold: 2 }
+      import:
+        action: import_key
+        backend: ssl
+        reads: { key_material: "${artifact.a}" }
+        with: { algorithm: RSA-4096 }
+"#,
+        );
+        assert_eq!(
+            errors(&yaml),
+            [
+                (
+                    "${artifact.a}".to_string(),
+                    "'reads.shares' in step 'combine' must be a list, found '${artifact.a}'"
+                        .to_string()
+                ),
+                (
+                    "secret".to_string(),
+                    "'reads.secret' in step 'split' must be a string".to_string()
+                ),
+            ]
+        );
     }
 }

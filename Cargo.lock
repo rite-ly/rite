@@ -2222,8 +2222,10 @@ name = "rite-resolver"
 version = "0.8.0"
 dependencies = [
  "indexmap",
+ "jsonschema",
  "marked-yaml",
  "rite-model",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -2399,6 +2401,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab508826f74a77ca9d5aba6ff19b522583ee3eaf28a19384ff3d0e5835fadf6e"
 dependencies = [
  "dyn-clone",
+ "indexmap",
  "ref-cast",
  "schemars_derive",
  "serde",

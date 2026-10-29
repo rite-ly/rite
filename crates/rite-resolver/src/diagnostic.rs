@@ -342,11 +342,13 @@ impl SpanMap {
     // also in the dispatch test table (`lib.rs`).
     fn span_for_error(&self, err: &ResolveError) -> Option<Span> {
         match err {
-            ResolveError::Yaml { location, .. } => location.map(|(line, col)| Span {
-                line,
-                column: col,
-                length: None,
-            }),
+            ResolveError::Yaml { location, .. } | ResolveError::Definition { location, .. } => {
+                location.map(|(line, col)| Span {
+                    line,
+                    column: col,
+                    length: None,
+                })
+            }
             ResolveError::Io { .. }
             | ResolveError::UnsupportedVersion { .. }
             | ResolveError::DutyUnknownRole { .. }
@@ -364,14 +366,7 @@ impl SpanMap {
             }
             ResolveError::UnknownSection { step, .. }
             | ResolveError::UnknownArtifact { step, .. }
-            | ResolveError::MissingRequiredBackend { step, .. }
-            | ResolveError::WithFieldNeedsInput { step, .. }
             | ResolveError::InvalidWithValue { step, .. }
-            | ResolveError::MissingReadsInput { step, .. }
-            | ResolveError::UnknownReadsInput { step, .. }
-            | ResolveError::AmbiguousReadsInput { step, .. }
-            | ResolveError::TooFewReadsInputs { step, .. }
-            | ResolveError::ReadsInputShape { step, .. }
             | ResolveError::InvalidRetryAttempts { step }
             | ResolveError::ArtifactNeverProduced { step, .. } => self.steps.get(step).copied(),
             ResolveError::SchemaViolation {

@@ -31,6 +31,16 @@ pub enum ResolveError {
         location: Option<(usize, usize)>,
     },
 
+    /// The definition is refused as it is read: it breaks the ceremony
+    /// schema, or holds a value the reader cannot take.
+    #[error("{}{message}", at(*location))]
+    Definition {
+        /// What is wrong, phrased for the ceremony author.
+        message: String,
+        /// Source location `(line, column)` if known.
+        location: Option<(usize, usize)>,
+    },
+
     /// Failed to read a file.
     #[error("Failed to read file '{path}': {message}")]
     Io {
@@ -186,35 +196,6 @@ pub enum ResolveError {
         backend: String,
     },
 
-    /// Step uses an action that requires a backend but has no `backend:` field.
-    #[error("Step '{step}': action '{action}' requires a backend; add a 'backend:' field")]
-    MissingRequiredBackend {
-        /// The step ID.
-        step: StepId,
-        /// The action that requires a backend.
-        action: ActionType,
-    },
-
-    /// Step `with:` block holds a field that only means something alongside a
-    /// `reads:` input the step does not name.
-    ///
-    /// The field would be parsed and then never consulted, so a guard the
-    /// author asked for would be absent with nothing saying so.
-    #[error(
-        "Step '{step}': '{field}' applies only when '{action}' reads '{requires}', \
-         which this step does not"
-    )]
-    WithFieldNeedsInput {
-        /// The step ID.
-        step: StepId,
-        /// The action whose block holds the field.
-        action: ActionType,
-        /// The `with:` field that needs an input.
-        field: &'static str,
-        /// The `reads:` input it needs.
-        requires: &'static str,
-    },
-
     /// Step `with:` block fails its action's schema.
     ///
     /// The schema says which keys an action takes and requires and what each
@@ -249,87 +230,6 @@ pub enum ResolveError {
         /// What is wrong, phrased for the ceremony author. Names the `with:`
         /// key it is about.
         message: String,
-    },
-
-    /// Step `reads:` map is missing an input the action requires.
-    #[error("Step '{step}': action '{action}' requires 'reads.{field}'")]
-    MissingReadsInput {
-        /// The step ID.
-        step: StepId,
-        /// The action whose input is missing.
-        action: ActionType,
-        /// The missing `reads:` key.
-        field: &'static str,
-    },
-
-    /// Step `reads:` map names an input the action never reads.
-    ///
-    /// The same failure as an unknown `with:` key, and reported for the same
-    /// reason: the value would be resolved and then ignored, and the step
-    /// would run without what its author gave it. Only actions that declare
-    /// their inputs are checked, since a contract that names none accepts
-    /// whatever the step reads.
-    #[error("Step '{step}': action '{action}' reads no '{field}' input. Accepted: {accepted}")]
-    UnknownReadsInput {
-        /// The step ID.
-        step: StepId,
-        /// The action whose contract lacks the key.
-        action: ActionType,
-        /// The `reads:` key nothing reads.
-        field: String,
-        /// The inputs the action does read, quoted and comma-separated.
-        accepted: String,
-    },
-
-    /// Step `reads:` map names neither or both of two alternative inputs, so
-    /// the path the action would take is undetermined.
-    #[error(
-        "Step '{step}': action '{action}' requires exactly one of {alternatives}, found {found}"
-    )]
-    AmbiguousReadsInput {
-        /// The step ID.
-        step: StepId,
-        /// The action whose input group is unsatisfied.
-        action: ActionType,
-        /// The alternatives, quoted and comma-separated.
-        alternatives: String,
-        /// What the step names instead: `none`, or the keys it declares.
-        found: String,
-    },
-
-    /// The action takes a list under one of its inputs and the step gives
-    /// too few entries, or no list at all.
-    #[error(
-        "Step '{step}': action '{action}' input '{name}' is a list of at least {at_least} \
-         references; found {found}"
-    )]
-    TooFewReadsInputs {
-        /// The step ID.
-        step: StepId,
-        /// The action whose list is short.
-        action: ActionType,
-        /// The input that holds the list.
-        name: &'static str,
-        /// Fewest entries the action accepts.
-        at_least: usize,
-        /// What the step gives instead: `none`, or how many.
-        found: String,
-    },
-
-    /// A `reads:` input holds a list where the action takes one reference,
-    /// or one reference where it takes a list.
-    #[error("Step '{step}': action '{action}' input '{name}' holds {expected}; found {found}")]
-    ReadsInputShape {
-        /// The step ID.
-        step: StepId,
-        /// The action whose contract sets the shape.
-        action: ActionType,
-        /// The input.
-        name: String,
-        /// `one reference` or `a list of references`.
-        expected: &'static str,
-        /// The YAML type found instead.
-        found: &'static str,
     },
 
     /// Step `retry: { attempts: N }` has a zero attempt budget, which can never
@@ -619,4 +519,11 @@ impl<T> From<Result<T, ResolveError>> for ResolveResult<T> {
             Err(error) => Self::err(error),
         }
     }
+}
+
+/// `line 3, column 5: `, the place a message is about, or nothing.
+fn at(location: Option<(usize, usize)>) -> String {
+    location.map_or_else(String::new, |(line, column)| {
+        format!("line {line}, column {column}: ")
+    })
 }

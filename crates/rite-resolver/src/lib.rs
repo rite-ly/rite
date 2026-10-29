@@ -27,6 +27,7 @@
 #![warn(missing_docs)]
 
 mod diagnostic;
+mod document;
 mod error;
 mod lower;
 mod resolve;
@@ -39,6 +40,7 @@ pub(crate) mod test_helpers;
 pub use diagnostic::{
     Diagnostic, ReferenceContext, ReferenceEntry, ReferenceTarget, Severity, Span, SpanMap,
 };
+pub use document::{CEREMONY_SCHEMA, editor_schema};
 pub use error::{ResolveError, ResolveResult, ResolveWarning};
 
 use rite_model::MaterialSource;
@@ -222,6 +224,7 @@ pub fn analyze_str(
     let Some(ceremony) = ceremony_opt else {
         return (None, span_map, diags);
     };
+    let refused = has_errors(&diags);
 
     let result = resolve::resolve_ceremony(ceremony, None);
 
@@ -232,7 +235,8 @@ pub fn analyze_str(
         diags.push(span_map.warning_to_diagnostic(path, w));
     }
 
-    (result.into_result().ok(), span_map, diags)
+    let resolved = result.into_result().ok().filter(|_| !refused);
+    (resolved, span_map, diags)
 }
 
 /// Parse and validate a ceremony file, returning both the resolved ceremony and diagnostics.
@@ -278,6 +282,7 @@ pub fn analyze_with_spans(
     let Some(ceremony) = ceremony_opt else {
         return (None, span_map, diags);
     };
+    let refused = has_errors(&diags);
 
     let result = resolve_with_material_paths(ceremony, ceremony_path, inputs);
 
@@ -288,8 +293,14 @@ pub fn analyze_with_spans(
         diags.push(span_map.warning_to_diagnostic(Some(ceremony_path), w));
     }
 
-    let resolved = result.into_result().ok();
+    let resolved = result.into_result().ok().filter(|_| !refused);
     (resolved, span_map, diags)
+}
+
+/// Whether reading the definition found an error, which refuses it however
+/// the rest resolves.
+fn has_errors(diags: &[Diagnostic]) -> bool {
+    diags.iter().any(|d| d.severity == Severity::Error)
 }
 
 #[cfg(test)]
@@ -808,11 +819,82 @@ sections:
         );
     }
 
+    /// What reading the definition refuses keeps its place for a caller of
+    /// `resolve`, and stops `analyze` from handing back a ceremony.
+    #[test]
+    fn a_refused_definition_does_not_resolve() {
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles: {}
+stray: 1
+sections: {}
+"#;
+        let result = resolve(yaml, None);
+        let messages: Vec<String> = result.errors.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            messages,
+            [
+                "line 5, column 1: the ceremony has no 'stray' field. Accepted: acts, after, \
+              backends, description, materials, name, output, parameters, prerequisites, roles, \
+              sections, version"
+            ]
+        );
+        let (resolved, _, _) = analyze_str(None, yaml);
+        assert!(resolved.is_none());
+    }
+
+    /// A value the schema refuses, even one the reader cannot read, leaves
+    /// the rest of the definition to resolve, so its errors are reported
+    /// with the schema's and none follows from the refusal.
+    #[test]
+    fn the_rest_resolves_beside_what_the_schema_refuses() {
+        let errors = |steps: &str| {
+            let yaml = format!(
+                "version: \"0.3\"\nname: Test\nroles: {{}}\n\
+                 backends: {{ ssl: {{ provider: openssl }} }}\n\
+                 sections:\n  main:\n    steps:\n{steps}"
+            );
+            let (_, _, diags) = analyze_str(None, &yaml);
+            diags
+                .into_iter()
+                .filter(|d| d.severity == Severity::Error)
+                .map(|d| d.message)
+                .collect::<Vec<_>>()
+        };
+        let ghost = "      ghost:\n        action: export_public\n        backend: ssl\n        \
+                     reads: ${artifact.nothing}\n";
+        let never_produced = "Artifact 'nothing' is used in step 'ghost' but is never produced";
+
+        // A retry the reader cannot read, and a step without the backend it
+        // needs that creates an artifact a later step reads.
+        let yaml = format!(
+            "      gen:\n        action: generate_key\n        creates: key\n        \
+             with: {{ algorithm: RSA-4096 }}\n        retry: nevr\n      \
+             export:\n        action: export_public\n        backend: ssl\n        \
+             reads: ${{artifact.key}}\n{ghost}"
+        );
+        assert_eq!(
+            errors(&yaml),
+            [
+                "step 'gen': action 'generate_key' requires a backend; add a 'backend:' field",
+                "step 'gen': 'retry' must be 'never' or a map with an 'attempts' field, found 'nevr'",
+                never_produced,
+            ]
+        );
+
+        // A step without the action the reader requires.
+        let yaml = format!("      first:\n        action: confrim\n{ghost}");
+        let found = errors(&yaml);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!(found.last().map(String::as_str), Some(never_produced));
+    }
+
     #[test]
     fn missing_action_diagnostic_spans_step_id_with_full_length() {
-        // The "step is missing required field 'action'" diagnostic must point at
-        // the step key ("my_step") with its full length, so editors can underline
-        // the identifier rather than showing a zero-width squiggly.
+        // The diagnostic that the step has no 'action' must point at the step
+        // key ("my_step") with its full length, so editors can underline the
+        // identifier rather than showing a zero-width squiggly.
         let yaml = r#"
 version: "0.3"
 name: "Test"
@@ -826,7 +908,7 @@ sections:
         let (_, _, diags) = analyze_str(None, yaml);
         let diag = diags
             .iter()
-            .find(|d| d.message.contains("missing required field 'action'"))
+            .find(|d| d.message == "step 'my_step' requires 'action'")
             .expect("should have a missing-action diagnostic");
         let span = diag.span.expect("diagnostic must have a span");
 
@@ -1134,7 +1216,7 @@ version: "0.3"
 name: "Test"
 roles:
   op:
-    title: "Operator"
+    name: "Operator"
 parameters:
   outdir:
     type: string

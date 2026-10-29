@@ -553,8 +553,6 @@ impl ResolveContext {
 
                 self.validate_step_backend(&id, step, ceremony);
                 self.validate_step_with(&id, step.action, &with_json, &resolved.with);
-                self.validate_step_with_fields(&id, step);
-                self.validate_step_reads(&id, step);
 
                 steps.push(resolved);
             }
@@ -579,12 +577,6 @@ impl ResolveContext {
             self.add_error(ResolveError::UndeclaredBackend {
                 step: id.clone(),
                 backend: backend_name.clone(),
-            });
-        }
-        if step.action.backend_usage() == BackendUsage::Required && step.backend.is_none() {
-            self.add_error(ResolveError::MissingRequiredBackend {
-                step: id.clone(),
-                action: step.action,
             });
         }
     }
@@ -659,23 +651,6 @@ impl ResolveContext {
         self.validate_step_cross_field(id, action, with, &mut reported);
     }
 
-    fn validate_step_with_fields(&mut self, id: &StepId, step: &schema::StepBody) {
-        let with_obj = step.with.as_ref().and_then(|w| w.as_object());
-
-        // A parameter that belongs to one branch of an `exactly_one_of` group
-        // is inert on the other, where it would be parsed and never read.
-        for &(field, requires) in step.action.reads_contract().with_field_requires {
-            if with_obj.is_some_and(|m| m.contains_key(field)) && !reads_names(step, requires) {
-                self.add_error(ResolveError::WithFieldNeedsInput {
-                    step: id.clone(),
-                    action: step.action,
-                    field,
-                    requires,
-                });
-            }
-        }
-    }
-
     /// Check the literal `with:` values against the rules over several
     /// values, which a schema cannot say.
     ///
@@ -702,125 +677,6 @@ impl ResolveContext {
                 action,
                 message: error.message,
             });
-        }
-    }
-
-    /// Check a step's `reads:` map against its action's input contract.
-    ///
-    /// A step that names a single positional input has no keys to check, so it
-    /// is reported as naming none of them.
-    fn validate_step_reads(&mut self, id: &StepId, step: &schema::StepBody) {
-        let contract = step.action.reads_contract();
-        if contract.is_empty() {
-            return;
-        }
-        let names = |key: &str| reads_names(step, key);
-        let quote = |keys: &[&str]| {
-            keys.iter()
-                .map(|key| format!("'{key}'"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        for field in contract.required {
-            if !names(field) {
-                self.add_error(ResolveError::MissingReadsInput {
-                    step: id.clone(),
-                    action: step.action,
-                    field,
-                });
-            }
-        }
-
-        let found = |present: &[&str]| {
-            if present.is_empty() {
-                "none".to_string()
-            } else {
-                quote(present)
-            }
-        };
-
-        // Keys the action never reads, checked by name as `with:` keys are.
-        let declared: Vec<&str> = step
-            .reads
-            .as_ref()
-            .and_then(|r| r.as_object())
-            .map(|m| m.keys().map(String::as_str).collect())
-            .unwrap_or_default();
-        for field in declared {
-            if !contract.accepts(field) {
-                let accepted: Vec<&str> = contract
-                    .required
-                    .iter()
-                    .chain(
-                        contract
-                            .exactly_one_of
-                            .iter()
-                            .flat_map(|group| group.iter()),
-                    )
-                    .chain(contract.optional.iter())
-                    .copied()
-                    .chain(contract.lists.iter().map(|list| list.name))
-                    .collect();
-                self.add_error(ResolveError::UnknownReadsInput {
-                    step: id.clone(),
-                    action: step.action,
-                    field: field.to_string(),
-                    accepted: quote(&accepted),
-                });
-            }
-        }
-
-        for group in contract.exactly_one_of {
-            let present: Vec<&str> = group.iter().copied().filter(|key| names(key)).collect();
-            if present.len() == 1 {
-                continue;
-            }
-            self.add_error(ResolveError::AmbiguousReadsInput {
-                step: id.clone(),
-                action: step.action,
-                alternatives: quote(group),
-                found: found(&present),
-            });
-        }
-
-        // Each input has one shape under the contract: a list where the
-        // action takes a list, one reference everywhere else. A handler asks
-        // for the shape it expects, so the other would read as absent.
-        let inputs = step.reads.as_ref().and_then(|r| r.as_object());
-        for (key, value) in inputs.into_iter().flatten() {
-            let takes_list = contract.is_list(key);
-            if takes_list != value.is_array() {
-                self.add_error(ResolveError::ReadsInputShape {
-                    step: id.clone(),
-                    action: step.action,
-                    name: key.clone(),
-                    expected: if takes_list {
-                        "a list of references"
-                    } else {
-                        "one reference"
-                    },
-                    found: value_type_name(value),
-                });
-            }
-        }
-
-        // The count is a floor, with no rule on which entries are present:
-        // a drill brings two of three shares, and which two is the
-        // ceremony's business.
-        for list in contract.lists {
-            let entries = inputs
-                .and_then(|m| m.get(list.name))
-                .map(|v| v.as_array().map_or(1, Vec::len));
-            if entries.is_none_or(|n| n < list.at_least) {
-                self.add_error(ResolveError::TooFewReadsInputs {
-                    step: id.clone(),
-                    action: step.action,
-                    name: list.name,
-                    at_least: list.at_least,
-                    found: entries.map_or_else(|| "none".to_string(), |n| n.to_string()),
-                });
-            }
         }
     }
 
@@ -1288,17 +1144,6 @@ fn literal_length(step: &Step) -> Option<u64> {
         .get("length")?
         .as_literal_integer()
         .and_then(|n| u64::try_from(n).ok())
-}
-
-/// Whether a step's `reads:` map names this input.
-///
-/// A step that names a single positional input has no keys, so it names none
-/// of them.
-fn reads_names(step: &schema::StepBody, key: &str) -> bool {
-    step.reads
-        .as_ref()
-        .and_then(|r| r.as_object())
-        .is_some_and(|m| m.contains_key(key))
 }
 
 /// Interpret a scalar that must hold exactly one reference.
@@ -2121,57 +1966,6 @@ sections:
     }
 
     #[test]
-    fn errors_on_missing_required_backend() {
-        let mut ceremony = minimal_ceremony();
-        let mut step = make_step_body();
-        step.action = ActionType::GenerateKey;
-        // No backend set
-        ceremony
-            .sections
-            .get_mut("main")
-            .unwrap()
-            .steps
-            .insert("gen".to_string(), step);
-
-        let result = resolve_ceremony(ceremony, None);
-        assert!(result.is_err());
-        assert!(result.errors.iter().any(|e| matches!(
-            e,
-            ResolveError::MissingRequiredBackend { step, action }
-                if step.as_str() == "gen" && *action == ActionType::GenerateKey
-        )));
-    }
-
-    #[test]
-    fn no_missing_backend_error_when_backend_provided() {
-        let mut ceremony = minimal_ceremony();
-        ceremony.backends.insert(
-            "ssl".to_string(),
-            BackendConfig {
-                provider: "openssl".to_string(),
-                extra: serde_json::json!({}),
-            },
-        );
-        let mut step = make_step_body();
-        step.action = ActionType::GenerateKey;
-        step.backend = Some("ssl".to_string());
-        ceremony
-            .sections
-            .get_mut("main")
-            .unwrap()
-            .steps
-            .insert("gen".to_string(), step);
-
-        let result = resolve_ceremony(ceremony, None);
-        assert!(
-            !result
-                .errors
-                .iter()
-                .any(|e| matches!(e, ResolveError::MissingRequiredBackend { .. }))
-        );
-    }
-
-    #[test]
     fn errors_on_missing_required_with_field() {
         let mut ceremony = minimal_ceremony();
         let mut step = make_step_body();
@@ -2336,177 +2130,6 @@ sections:
                 .errors
                 .iter()
                 .any(|e| matches!(e, ResolveError::InvalidWithValue { .. })),
-            "{:?}",
-            result.errors
-        );
-    }
-
-    fn resolve_wrap_step(reads: serde_json::Value) -> ResolveResult<Ceremony> {
-        resolve_reading_step(ActionType::WrapKey, reads, serde_json::json!({}))
-    }
-
-    fn resolve_reading_step(
-        action: ActionType,
-        reads: serde_json::Value,
-        with: serde_json::Value,
-    ) -> ResolveResult<Ceremony> {
-        let mut ceremony = minimal_ceremony();
-        ceremony.backends.insert(
-            "openssl".to_string(),
-            BackendConfig {
-                provider: "openssl".to_string(),
-                extra: serde_json::json!({}),
-            },
-        );
-        let mut step = make_step_body();
-        step.action = action;
-        step.backend = Some("openssl".to_string());
-        step.reads = Some(reads);
-        step.with = Some(with);
-        ceremony
-            .sections
-            .get_mut("main")
-            .unwrap()
-            .steps
-            .insert("wrap".to_string(), step);
-
-        resolve_ceremony(ceremony, None)
-    }
-
-    #[test]
-    fn errors_on_missing_required_reads_input() {
-        let result = resolve_wrap_step(serde_json::json!({ "recipient": "${artifact.pubkey}" }));
-        let missing: Vec<&str> = result
-            .errors
-            .iter()
-            .filter_map(|e| match e {
-                ResolveError::MissingReadsInput { field, .. } => Some(*field),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(missing, vec!["key_to_wrap"]);
-    }
-
-    #[test]
-    fn errors_when_both_alternative_inputs_are_named() {
-        let result = resolve_wrap_step(serde_json::json!({
-            "key_to_wrap": "${artifact.keypair}",
-            "wrapping_key": "${artifact.kek}",
-            "recipient": "${artifact.pubkey}",
-        }));
-        let found: Vec<&str> = result
-            .errors
-            .iter()
-            .filter_map(|e| match e {
-                ResolveError::AmbiguousReadsInput { found, .. } => Some(found.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(found, vec!["'wrapping_key', 'recipient'"]);
-    }
-
-    #[test]
-    fn errors_when_neither_alternative_input_is_named() {
-        let result = resolve_wrap_step(serde_json::json!({ "key_to_wrap": "${artifact.keypair}" }));
-        let found: Vec<&str> = result
-            .errors
-            .iter()
-            .filter_map(|e| match e {
-                ResolveError::AmbiguousReadsInput { found, .. } => Some(found.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(found, vec!["none"]);
-    }
-
-    #[test]
-    fn accepts_either_alternative_input_alone() {
-        for key in ["wrapping_key", "recipient"] {
-            let result = resolve_wrap_step(serde_json::json!({
-                "key_to_wrap": "${artifact.keypair}",
-                key: "${artifact.other}",
-            }));
-            assert!(
-                !result.errors.iter().any(|e| matches!(
-                    e,
-                    ResolveError::AmbiguousReadsInput { .. }
-                        | ResolveError::MissingReadsInput { .. }
-                )),
-                "'{key}' alone must satisfy the contract: {:?}",
-                result.errors
-            );
-        }
-    }
-
-    /// A `reads:` key nothing reads is refused as an unknown `with:` key is:
-    /// the value would be resolved and then ignored.
-    #[test]
-    fn errors_on_a_reads_input_the_action_never_reads() {
-        let result = resolve_reading_step(
-            ActionType::ImportKey,
-            serde_json::json!({
-                "key_material": "${artifact.escrowed}",
-                "passprhase": "${artifact.escrow_passphrase}",
-            }),
-            serde_json::json!({ "algorithm": "RSA-4096" }),
-        );
-        let unknown: Vec<(&str, &str)> = result
-            .errors
-            .iter()
-            .filter_map(|e| match e {
-                ResolveError::UnknownReadsInput {
-                    field, accepted, ..
-                } => Some((field.as_str(), accepted.as_str())),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            unknown,
-            vec![("passprhase", "'key_material', 'passphrase'")]
-        );
-    }
-
-    #[test]
-    fn accepts_an_optional_reads_input_named_or_not() {
-        for reads in [
-            serde_json::json!({ "key_material": "${artifact.escrowed}" }),
-            serde_json::json!({
-                "key_material": "${artifact.escrowed}",
-                "passphrase": "${artifact.escrow_passphrase}",
-            }),
-        ] {
-            let result = resolve_reading_step(
-                ActionType::ImportKey,
-                reads,
-                serde_json::json!({ "algorithm": "RSA-4096" }),
-            );
-            assert!(
-                !result.errors.iter().any(|e| matches!(
-                    e,
-                    ResolveError::UnknownReadsInput { .. } | ResolveError::MissingReadsInput { .. }
-                )),
-                "{:?}",
-                result.errors
-            );
-        }
-    }
-
-    #[test]
-    fn accepts_the_issuer_certificate_of_a_subordinate_issue() {
-        let result = resolve_reading_step(
-            ActionType::IssueCertificate,
-            serde_json::json!({
-                "signing_key": "${artifact.root_key}",
-                "csr": "${artifact.intermediate_csr}",
-                "issuer_cert": "${artifact.root_cert}",
-            }),
-            serde_json::json!({}),
-        );
-        assert!(
-            !result
-                .errors
-                .iter()
-                .any(|e| matches!(e, ResolveError::UnknownReadsInput { .. })),
             "{:?}",
             result.errors
         );
@@ -2730,61 +2353,15 @@ sections:
         resolve_ceremony(ceremony, None)
     }
 
-    fn reads_errors(result: &ResolveResult<Ceremony>) -> Vec<String> {
-        result
-            .errors
-            .iter()
-            .filter_map(|e| match e {
-                ResolveError::TooFewReadsInputs {
-                    name,
-                    at_least,
-                    found,
-                    ..
-                } => Some(format!("{name} {at_least} {found}")),
-                ResolveError::ReadsInputShape {
-                    name,
-                    expected,
-                    found,
-                    ..
-                } => Some(format!("{name} {expected} {found}")),
-                _ => None,
-            })
-            .collect()
-    }
-
+    /// Which shares are present is the ceremony's business, and they reach
+    /// the handler in the order written.
     #[test]
-    fn combine_shares_takes_a_list_of_at_least_two_shares() {
+    fn combine_shares_reads_its_shares_in_the_order_written() {
         use serde_json::json;
-        assert_eq!(
-            reads_errors(&resolve_combine_with_reads(json!({
-                "shares": ["${artifact.shares.share_1}"]
-            }))),
-            ["shares 2 1"]
-        );
-        assert_eq!(
-            reads_errors(&resolve_combine_with_reads(json!({}))),
-            ["shares 2 none"]
-        );
-        // One reference where the list goes, and a list where one goes.
-        assert_eq!(
-            reads_errors(&resolve_combine_with_reads(json!({
-                "shares": "${artifact.shares.share_1}"
-            }))),
-            ["shares a list of references string", "shares 2 1"]
-        );
-        assert_eq!(
-            reads_errors(&resolve_combine_with_reads(json!({
-                "shares": ["${artifact.shares.share_1}", "${artifact.shares.share_2}"],
-                "extra": ["${artifact.shares.share_3}"]
-            }))),
-            ["extra one reference array"]
-        );
-        // Which shares are present is the ceremony's business, and they
-        // reach the handler in the order written.
         let result = resolve_combine_with_reads(json!({
             "shares": ["${artifact.shares.share_5}", "${artifact.shares.share_2}"]
         }));
-        assert!(reads_errors(&result).is_empty());
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
         let ceremony = result.value.expect("resolves");
         let step = ceremony
             .execution_plan

@@ -276,8 +276,20 @@ pub fn analyze_with_spans(
             );
         }
     };
+    analyze_text_with_spans(ceremony_path, &yaml, inputs)
+}
 
-    let (ceremony_opt, span_map, mut diags) = lower::lower_ceremony(Some(ceremony_path), &yaml);
+/// Same as [`analyze_with_spans`], for a definition whose text is not read
+/// from `ceremony_path`, such as an editor's unsaved buffer.
+///
+/// `ceremony_path` still names the definition: diagnostics point at it, and
+/// material paths resolve against its directory.
+pub fn analyze_text_with_spans(
+    ceremony_path: &Path,
+    yaml: &str,
+    inputs: Option<&CeremonyInputs>,
+) -> (Option<rite_model::Ceremony>, SpanMap, Vec<Diagnostic>) {
+    let (ceremony_opt, span_map, mut diags) = lower::lower_ceremony(Some(ceremony_path), yaml);
 
     let Some(ceremony) = ceremony_opt else {
         return (None, span_map, diags);
@@ -308,6 +320,51 @@ mod tests {
     use super::*;
     use crate::test_helpers::span_text;
     use rite_model::{ParamId, RoleId};
+
+    /// A definition given as text resolves its material paths against the
+    /// directory of the path that names it, and the file at that path, which
+    /// does not parse, is never read.
+    #[test]
+    fn text_resolves_material_paths_against_its_named_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("key.pem"), "key").expect("write material");
+        let named = dir.path().join("saved.rite.yaml");
+        std::fs::write(&named, "not: [a ceremony").expect("write the saved file");
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles:
+  operator: {}
+materials:
+  key:
+    type: bytes
+    path: key.pem
+sections:
+  s:
+    role: ${role.operator}
+    steps:
+      check:
+        action: confirm
+"#;
+        let (resolved, _, diags) = analyze_text_with_spans(&named, yaml, None);
+        assert!(!has_errors(&diags), "{diags:?}");
+        let resolved = resolved.expect("resolves");
+        let material = resolved.materials.values().next().expect("one material");
+        let rite_model::MaterialKind::File {
+            source: Some(rite_model::MaterialSource::File { file }),
+            ..
+        } = &material.kind
+        else {
+            panic!("a file material: {material:?}");
+        };
+        assert_eq!(
+            file.canonicalize().expect("material exists"),
+            dir.path()
+                .join("key.pem")
+                .canonicalize()
+                .expect("written above")
+        );
+    }
 
     #[test]
     fn rejects_material_path_escaping_ceremony_dir() {

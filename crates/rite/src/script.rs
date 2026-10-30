@@ -13,6 +13,14 @@ use std::path::{Path, PathBuf};
 pub struct Args {
     /// Path to the ceremony YAML file
     pub file: PathBuf,
+    /// Read the ceremony from stdin instead of FILE
+    ///
+    /// FILE still names it: diagnostics point at it, material paths resolve
+    /// against its directory, and the default script path sits beside it.
+    /// The worksheets are written only when `--worksheets` names a path. For
+    /// an editor that renders a buffer it has not saved.
+    #[arg(long)]
+    pub stdin: bool,
     /// Output path (`-` for stdout)
     ///
     /// Defaults to the ceremony file name with the document extension, next to
@@ -38,7 +46,8 @@ pub struct Args {
 
 pub fn run(args: &Args) {
     let inputs = build_inputs_or_exit(&args.input);
-    let resolved = resolve_or_exit(&args.file, (!inputs.is_empty()).then_some(&inputs));
+    let inputs = (!inputs.is_empty()).then_some(&inputs);
+    let (resolved, _) = resolve_or_exit(&args.file, args.stdin, inputs);
     let branding = build_branding_or_exit(&args.branding);
 
     let html =
@@ -46,25 +55,33 @@ pub fn run(args: &Args) {
             eprintln!("Failed to render script: {e}");
             std::process::exit(1);
         });
-    // Rendered before anything is written, so a failure leaves no script
-    // without its sheets.
-    let sheets = rite_render::render_worksheets(&resolved, &branding, args.theme.into())
-        .unwrap_or_else(|e| {
-            eprintln!("Failed to render worksheets: {e}");
-            std::process::exit(1);
-        });
-
-    let default = default_output_path(&args.file, "html");
-    write_document(&html, args.output.as_deref(), &default);
-
-    if let Some(sheets) = sheets {
-        let path = args.worksheets.clone().unwrap_or_else(|| {
+    // A buffer read from stdin is not saved, so its sheets must not replace
+    // the ones beside the saved file.
+    let sheets_path = args.worksheets.clone().or_else(|| {
+        (!args.stdin).then(|| {
             worksheets_path(
                 &args.file,
                 args.output.as_deref().filter(|p| *p != Path::new("-")),
             )
-        });
-        write_document(&sheets, Some(&path), &path);
+        })
+    });
+    // Rendered before anything is written, so a failure leaves no script
+    // without its sheets.
+    let sheets = match &sheets_path {
+        Some(path) => rite_render::render_worksheets(&resolved, &branding, args.theme.into())
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to render worksheets: {e}");
+                std::process::exit(1);
+            })
+            .map(|sheets| (sheets, path)),
+        None => None,
+    };
+
+    let default = default_output_path(&args.file, "html");
+    write_document(&html, args.output.as_deref(), &default);
+
+    if let Some((sheets, path)) = sheets {
+        write_document(&sheets, Some(path), path);
     }
 }
 

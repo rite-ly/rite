@@ -9,6 +9,21 @@
 
 program=$1
 
+# Apply the settings chosen in rite-setup: cage reads the XKB variables and
+# session programs read TZ. The settings file is root-owned before the session
+# starts. If it is absent or invalid, the session uses US and UTC.
+# shellcheck disable=SC1091
+source /usr/lib/rite/setup-values
+if [[ -r $SETTINGS ]]; then
+    while IFS='=' read -r key value; do
+        case $key in
+            layout) valid_layout "$value" && export XKB_DEFAULT_LAYOUT=$value ;;
+            variant) valid_variant "$value" && export XKB_DEFAULT_VARIANT=$value ;;
+            timezone) valid_zone "$value" && export TZ=$value ;;
+        esac
+    done < "$SETTINGS"
+fi
+
 if ! grep -qwF 'rite.console' /proc/cmdline; then
     # cage takes the display, which only the terminal on screen can do: the
     # second terminal starts cage when the operator first switches to it.

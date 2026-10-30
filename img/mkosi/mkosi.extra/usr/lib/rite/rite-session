@@ -69,6 +69,12 @@ else
     echo "WARNING: no RITE-OUT partition. Outputs in $OUTPUTS are lost at power off."
 fi
 echo ""
+# Set by rite-kiosk from the choice made in rite-setup.
+# shellcheck disable=SC1091
+source /usr/lib/rite/setup-values
+echo "Keyboard:  $(layout_name "${XKB_DEFAULT_LAYOUT:-us}" "${XKB_DEFAULT_VARIANT:-}")"
+echo "Time zone: ${TZ:-UTC}"
+echo ""
 echo "Terminals: Ctrl+Alt+F2 opens a second terminal, Ctrl+Alt+F1 returns here."
 echo ""
 

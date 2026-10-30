@@ -1,0 +1,40 @@
+# The keyboard layout and time zone, chosen on tty1 before the sessions start
+# (rite-setup), as the rite user. The sessions start whether setup succeeds or
+# not. On failure, the stop command removes the settings and restores the US
+# console keymap.
+[Unit]
+Description=Rite keyboard layout and time zone
+After=systemd-user-sessions.service
+Before=rite-session.service rite-shell.service
+ConditionPathExists=/dev/tty1
+
+[Service]
+Type=oneshot
+# Once per boot.
+RemainAfterExit=yes
+# Kernel messages would print over the menus.
+ExecStartPre=+/usr/bin/dmesg --console-off
+ExecStart=/usr/lib/rite/rite-setup
+# Restore kernel messages and protect settings before the sessions start.
+# On failure, the stop command also restores the US keymap.
+ExecStartPost=+/usr/bin/dmesg --console-on
+ExecStartPost=+/usr/bin/chown -R root:root /run/rite-setup
+ExecStopPost=+/usr/bin/dmesg --console-on
+ExecStopPost=+/usr/bin/chown -R root:root /run/rite-setup
+ExecStopPost=+/bin/sh -c 'test "$SERVICE_RESULT" = success || { rm -f /run/rite-setup/settings; ckbcomp us | loadkeys -q; }'
+User=rite
+# Loading the console keymap takes CAP_SYS_TTY_CONFIG, even on the process's
+# own terminal.
+AmbientCapabilities=CAP_SYS_TTY_CONFIG
+RuntimeDirectory=rite-setup
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=infinity
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+
+[Install]
+WantedBy=multi-user.target

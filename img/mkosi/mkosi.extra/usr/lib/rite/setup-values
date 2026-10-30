@@ -1,0 +1,56 @@
+# shellcheck shell=bash
+# /usr/lib/rite/setup-values
+# The keyboard layout and time zone values: their checks and the names the
+# screens show. Sourced by rite-setup, which writes them, and by rite-kiosk and
+# rite-session, which read them back.
+
+# Used by the scripts that source this file.
+# shellcheck disable=SC2034
+SETTINGS=/run/rite-setup/settings
+XKB_RULES=/usr/share/X11/xkb/rules/evdev.lst
+ZONE_TAB=/usr/share/zoneinfo/zone.tab
+
+valid_layout() {
+    [[ $1 =~ ^[a-z0-9_]+$ ]]
+}
+
+# Some variants have capitals: de T3, jp OADG109A.
+valid_variant() {
+    [[ -z $1 || $1 =~ ^[A-Za-z0-9_][A-Za-z0-9_-]*$ ]]
+}
+
+# UTC, or a zone of zone.tab, which lists one or more zones per country.
+valid_zone() {
+    [[ $1 == UTC ]] && return 0
+    [[ $1 =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ ]] \
+        && grep -v '^#' "$ZONE_TAB" | cut -f3 | grep -qxF -- "$1"
+}
+
+# Prints the entries of section $1 of the XKB rules ("layout", "variant"), one
+# per line: the name, then the description. A variant's description starts
+# with its layout: "fr  ch: French (Switzerland)".
+xkb_section() {
+    awk -v want="$1" '/^! / { section = $2; next } NF && section == want {
+        sub(/^ +/, ""); print }' "$XKB_RULES"
+}
+
+# Prints the description of layout $1 with variant $2 from the XKB rules, such
+# as "French (Switzerland)", or nothing if the rules do not list them. awk reads
+# the file itself: a lookup that stops early must not leave a writer on a closed
+# pipe, since systemd services ignore SIGPIPE.
+xkb_description() {
+    awk -v layout="$1" -v variant="$2" '
+        /^! / { section = $2; next }
+        variant == "" && section == "layout" && $1 == layout {
+            sub(/^ *[^ ]+ +/, ""); print; exit }
+        variant != "" && section == "variant" && $1 == variant && $2 == layout ":" {
+            sub(/^ *[^ ]+ +[^ ]+ +/, ""); print; exit }' "$XKB_RULES"
+}
+
+# Prints the name of layout $1 with variant $2, or the codes if the XKB rules
+# do not list it.
+layout_name() {
+    local name
+    name=$(xkb_description "$1" "$2")
+    echo "${name:-$1${2:+ ($2)}}"
+}

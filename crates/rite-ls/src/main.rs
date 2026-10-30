@@ -3,10 +3,10 @@
 //! Runs as a standalone LSP server over stdio. Provides diagnostics (parse errors,
 //! semantic validation), hover documentation, and completion for ceremony YAML files.
 
-mod actions;
 mod complete;
 mod convert;
 mod document;
+mod fields;
 mod goto;
 mod hover;
 mod inlay_hints;

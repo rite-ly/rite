@@ -97,10 +97,7 @@ impl Action for OralReadbackAction {
     ) -> Result<StepResult, ActionError> {
         let typed: OralReadbackParams = parse_params(params)?;
 
-        let value = typed
-            .value
-            .as_deref()
-            .ok_or_else(|| ActionError::Failed("'value' is required".to_string()))?;
+        let value = typed.value.as_str();
 
         let display_value: String = match typed.characters {
             Some(limit) => value.chars().take(limit as usize).collect(),

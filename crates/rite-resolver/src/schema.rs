@@ -4,6 +4,10 @@
 //! They are `pub(crate)` only; the crate's public API produces `rite_model` IR types.
 //!
 //! After parsing, the resolver transforms these into `rite_model::Ceremony` (IR).
+//!
+//! The doc comments on these types and their fields are the descriptions in
+//! the ceremony schema, which editors show to ceremony authors. Notes for
+//! this code's readers go in `//` comments.
 
 use crate::serde_utils;
 use indexmap::IndexMap;
@@ -12,48 +16,54 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// A complete ceremony definition as parsed from YAML.
+/// A Rite ceremony definition.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(crate) struct Ceremony {
-    /// Schema version (e.g., `"0.3"`).
+    /// The ceremony definition format version, currently `"0.3"`.
     pub(crate) version: String,
-    /// Ceremony name.
+    /// The ceremony's name, shown in the script and the report.
     pub(crate) name: String,
-    /// Optional ceremony description.
+    /// What the ceremony is for, shown in the script and the report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
-    /// Backend declarations (name → config).
+    /// Backend configurations, keyed by name. Steps refer to a backend by name
+    /// in `backend`.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     #[schemars(schema_with = "crate::document::backends_schema")]
     pub(crate) backends: HashMap<String, BackendConfig>,
-    /// Roles participating in the ceremony (role ID → definition).
+    /// Roles taking part in the ceremony, keyed by ID. Steps and sections refer
+    /// to a role as `${role.<id>}`.
     pub(crate) roles: IndexMap<String, RoleDefinition>,
-    /// Acts grouping sections (optional, for script organization).
+    /// Optional groups of sections in the script and report. Acts do not change
+    /// step execution order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) acts: Vec<Act>,
-    /// Sections containing steps: determines execution order (section ID → body).
+    /// Sections, keyed by ID. Steps run in the order the sections and steps are
+    /// written.
     pub(crate) sections: IndexMap<String, SectionBody>,
-    /// Parameters that can be provided at ceremony instantiation.
+    /// Values supplied when the ceremony runs, keyed by name and available as
+    /// `${param.<name>}`.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub(crate) parameters: HashMap<String, Parameter>,
-    /// Materials required before ceremony starts.
+    /// Files and physical items needed for the ceremony, keyed by ID. Files are
+    /// available as `${artifact.<id>}`; physical items appear in the script.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub(crate) materials: HashMap<String, Material>,
-    /// Pre-ceremony conditions (prose-only checklist).
+    /// Conditions met before the ceremony starts, printed as a checklist.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) prerequisites: Vec<String>,
-    /// Output declarations for ceremony products.
+    /// Declared outputs, keyed by artifact ID.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub(crate) output: HashMap<String, OutputDeclaration>,
-    /// Duties to be completed after the ceremony runtime stops (duty ID → body).
+    /// Post-ceremony duties, keyed by ID and printed as a checklist.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub(crate) after: IndexMap<String, PostCeremonyDutyBody>,
-    /// Digest of the YAML text this definition was parsed from.
-    ///
-    /// Never read from YAML. `lower_ceremony`, the only place a definition is
-    /// deserialized, overwrites the placeholder with the digest of the text it
-    /// parsed.
+    // Digest of the YAML text this definition was parsed from.
+    //
+    // Never read from YAML. `lower_ceremony`, the only place a definition is
+    // deserialized, overwrites the placeholder with the digest of the text it
+    // parsed.
     #[serde(skip, default = "unset_source_digest")]
     pub(crate) source_digest: Sha256Digest,
 }
@@ -62,90 +72,92 @@ fn unset_source_digest() -> Sha256Digest {
     Sha256Digest::of(b"")
 }
 
-/// A role definition.
+/// A role in the ceremony.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(crate) struct RoleDefinition {
-    /// Human-readable label for the role type.
-    /// If absent, derived from the role ID via `derive_role_name`.
+    /// The role's display name. If omitted, it is derived from the role ID.
+    //
+    // See `derive_role_name`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<String>,
-    /// The person assigned to this role slot.
+    /// The person assigned to this role.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) person: Option<String>,
 }
 
-/// A high-level act grouping sections for display purposes.
-/// Acts are metadata only; they do not affect execution order.
+/// An act, a group of sections in the script and the report.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(crate) struct Act {
-    /// Unique identifier for this act.
+    /// The act's ID, which a section names under `act`.
     pub(crate) id: String,
-    /// Human-readable name (for scripts).
+    /// The name shown in the script and the report.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<String>,
-    /// Preamble text displayed at the start of the act.
+    /// Shown at the start of the act.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
 }
 
-/// Body of a section (the section ID is the map key in the ceremony YAML).
-///
-/// Sections determine execution order: steps execute in section declaration order,
-/// and within each section in step declaration order.
+/// A section: steps that run in the order written.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(crate) struct SectionBody {
-    /// Reference to the act this section belongs to (optional).
+    /// The ID of the act that contains this section.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) act: Option<String>,
-    /// Human-readable name (for scripts).
+    /// The name shown in the script and the report.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<String>,
-    /// Longer description.
+    /// Shown at the start of the section.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
-    /// Default role for steps in this section.
+    /// The default role for steps in this section, written as `${role.<id>}`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) role: Option<String>,
-    /// Steps in this section (step ID → body). Execution order follows declaration order.
+    /// The section's steps, by ID, in the order they run.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub(crate) steps: IndexMap<String, StepBody>,
 }
 
-/// Body of a step (the step ID is the map key in its parent section).
+/// A step: one action, performed by one role.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(crate) struct StepBody {
-    /// Action to perform.
+    /// What the step does.
     pub(crate) action: ActionType,
-    /// Backend to use for this step (if action requires one).
+    /// The name of a backend declared in `backends`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) backend: Option<String>,
-    /// Action-specific parameters.
+    /// Parameters for the action. Values can be expressions, such as
+    /// `${param.subject}`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) with: Option<serde_json::Value>,
-    /// Role that performs this step (overrides section default).
+    /// The role that performs this step, written as `${role.<id>}`. Defaults to
+    /// the section's role.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) role: Option<String>,
-    /// Human-confirmed preconditions before this step executes.
+    /// Conditions a person confirms before the step runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) preconditions: Vec<String>,
-    /// Artifact ID this step produces.
+    /// The ID assigned to the artifact produced by this step. Later steps refer
+    /// to it as `${artifact.<id>}`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) creates: Option<String>,
-    /// Input artifact(s) for this step: can be a string or structured object.
+    /// The inputs the step's action reads, under the names it expects. For
+    /// example, `key: ${artifact.root_key}`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) reads: Option<serde_json::Value>,
-    /// Human-readable description for paper scripts.
+    /// What the step does, in the script and on screen.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
-    /// Skip the default pause after step completion.
+    /// Whether to continue to the next step without pausing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) silent: bool,
-    /// How a transient failure of this step is treated. Absent means the
-    /// default (prompt the operator to retry or abort).
+    /// What happens if the step fails. By default, the operator chooses whether
+    /// to retry or abort. Use `never` to forbid retries, or `{ attempts: N }`
+    /// to set the total number of attempts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) retry: Option<RetrySpec>,
 }
@@ -228,17 +240,18 @@ impl<'de> Deserialize<'de> for RetrySpec {
     }
 }
 
-/// A parameter that can be provided when instantiating a ceremony.
+/// A value given when the ceremony runs.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(crate) struct Parameter {
-    /// Type of the parameter.
+    /// The kind of value this parameter accepts.
     #[serde(rename = "type")]
     pub(crate) param_type: ParameterType,
-    /// Human-readable description.
+    /// A description shown when the parameter is requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
-    /// Default value if not provided. When absent, the parameter is required.
+    /// The value used when none is supplied. If omitted, the parameter is
+    /// required.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) default: Option<serde_json::Value>,
 }
@@ -311,39 +324,38 @@ impl Material {
     }
 }
 
-/// Declaration of a ceremony output.
+/// Something the ceremony produces.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(crate) struct OutputDeclaration {
-    /// Type of output.
+    /// The kind of artifact declared as an output.
     #[serde(rename = "type")]
     pub(crate) artifact_type: OutputType,
-    /// Human-readable description.
+    /// A description of the declared output.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
 }
 
-/// Body of a post-ceremony duty (the duty ID is the map key in the `after:` block).
+/// A duty done after the run ends.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(crate) struct PostCeremonyDutyBody {
-    /// Type of duty.
+    /// The kind of post-ceremony duty.
     #[serde(rename = "type")]
     pub(crate) kind: DutyType,
-    /// Role responsible for this duty (plain role ID, e.g. `"ceremony_admin"`).
+    /// The ID of the role responsible for this duty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) role: Option<String>,
-    /// Description of this duty. Overrides built-in prose for the type.
-    /// Required when `kind` is `custom`.
+    /// Instructions for this duty. For `custom`, this field is required.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
-    /// Checklist sub-items.
+    /// Checklist items for this duty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) items: Vec<String>,
-    /// For `distribute_*` types: who receives.
+    /// The recipient of the distributed items.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) recipient: Option<String>,
-    /// For storage/archive types: where.
+    /// The location where items are stored or archived.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) location: Option<String>,
 }

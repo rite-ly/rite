@@ -625,7 +625,7 @@ code, .hash {
         </tr>
         <tr>
           <td class="step-num">1.2</td>
-          <td class="step-action"><p>Record system and environment information.</p></td>
+          <td class="step-action"><p>Record which machine runs the ceremony.</p></td>
           <td class="role"><abbr title="Crypto Officer">CO</abbr></td>
         </tr>
         <tr>

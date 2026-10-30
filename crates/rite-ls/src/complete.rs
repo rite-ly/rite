@@ -1,12 +1,13 @@
 //! Completion logic for ceremony YAML.
 //!
-//! Implemented:
-//! - `action:` field value completions (ActionType variants)
+//! Implemented here:
 //! - `${...}` expression completions (roles, params, materials from SpanMap)
 //! - `section:`, `role:`, `act:`, `backend:` field value completions from declarations
 //! - `retry:` field value completions (the `never` keyword and the `{ attempts: N }` form)
+//!
+//! Field names, and the values of a field that takes one from a list, such
+//! as `action:`, come from the schema: see [`crate::fields`].
 
-use crate::actions;
 use rite_model::Ceremony;
 use rite_resolver::SpanMap;
 use tower_lsp_server::ls_types::{
@@ -15,8 +16,6 @@ use tower_lsp_server::ls_types::{
 
 /// Context detected from the line at the cursor position.
 pub enum CompletionContext {
-    /// Cursor is after `action:`; offer `ActionType` values.
-    Action,
     /// Cursor is inside a `${...}` expression; offer entity references.
     Expression {
         /// Text typed after `${`, e.g. `""`, `"r"`, `"role."`, `"role.op"`.
@@ -46,10 +45,6 @@ pub enum CompletionContext {
 /// `col` is the 0-indexed cursor column (LSP convention).
 /// `cursor_line` is the 0-indexed line number (for building TextEdits).
 pub fn detect_context(line: &str, col: usize, cursor_line: u32) -> Option<CompletionContext> {
-    if line.trim_start().starts_with("action:") {
-        return Some(CompletionContext::Action);
-    }
-
     // Look for the last `${` before the cursor.
     let before = &line[..col.min(line.len())];
     if let Some(dollar_pos) = before.rfind("${") {
@@ -101,7 +96,6 @@ pub fn completions_for(
     resolved: Option<&Ceremony>,
 ) -> Vec<CompletionItem> {
     match ctx {
-        CompletionContext::Action => action_completions(),
         CompletionContext::Expression {
             typed,
             dollar_col,
@@ -132,8 +126,8 @@ pub fn completions_for(
 /// `{ attempts: N }` mapping. Static, since the set is fixed by the schema.
 fn retry_completions(typed: &str) -> Vec<CompletionItem> {
     [
-        ("never", "Forbid retries on this step"),
-        ("{ attempts: 3 }", "Cap retries at N total attempts"),
+        ("never", "The step is never retried."),
+        ("{ attempts: 3 }", "How many attempts the step has in all."),
     ]
     .into_iter()
     .filter(|(value, _)| value.starts_with(typed))
@@ -154,18 +148,6 @@ fn declaration_completions<'a>(
         .filter(|id| id.starts_with(typed))
         .map(|id| CompletionItem {
             label: id.to_string(),
-            kind: Some(CompletionItemKind::VALUE),
-            ..Default::default()
-        })
-        .collect()
-}
-
-fn action_completions() -> Vec<CompletionItem> {
-    actions::ALL
-        .iter()
-        .map(|a| CompletionItem {
-            label: a.name.into(),
-            detail: Some(a.short.into()),
             kind: Some(CompletionItemKind::VALUE),
             ..Default::default()
         })
@@ -280,11 +262,8 @@ mod tests {
     // ── detect_context ────────────────────────────────────────────────────────
 
     #[test]
-    fn detect_action_context() {
-        assert!(matches!(
-            detect_context("  action: ", 10, 0),
-            Some(CompletionContext::Action)
-        ));
+    fn action_is_left_to_the_schema() {
+        assert!(detect_context("  action: ", 10, 0).is_none());
     }
 
     #[test]

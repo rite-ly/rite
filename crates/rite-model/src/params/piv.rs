@@ -23,34 +23,33 @@ pub const PIV_SIGN_ALGORITHMS: [SignAlgorithm; 3] = [
     SignAlgorithm::RsaPkcs1Sha256,
 ];
 
-/// Parameters for the `piv_read_certificate` action.
+/// The `with` block of `piv_read_certificate`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct PivReadCertificateParams {
-    /// PIV slot to read: `9a`, `9c`, `9d`, `9e`, or a retired slot key
-    /// reference in hex (`82`..`95`).
+    /// The PIV slot to read, such as `9a` or `9c`.
     #[schemars(regex(pattern = PIV_SLOT), extend("x-message" = PIV_SLOT_MESSAGE))]
     pub slot: String,
-    /// Optional display message.
+    /// Shown to the operator when the step starts.
     #[serde(default)]
     pub message: Option<String>,
 }
 
-/// Parameters for the `piv_sign` action.
+/// The `with` block of `piv_sign`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct PivSignParams {
-    /// PIV slot containing the signing key.
+    /// The PIV slot containing the signing key. Defaults to `9c`.
     #[serde(default = "default_sign_slot")]
     #[schemars(regex(pattern = PIV_SLOT), extend("x-message" = PIV_SLOT_MESSAGE))]
     pub slot: String,
-    /// Signing algorithm: `ECDSA-SHA256`, `ECDSA-SHA384`, `RSA-PKCS1-SHA256`.
+    /// The signature algorithm to use. Defaults to `ECDSA-SHA256`.
     #[serde(default = "default_sign_algorithm")]
     #[schemars(schema_with = "piv_sign_algorithms")]
     pub algorithm: SignAlgorithm,
-    /// Optional display message.
+    /// Shown to the operator when the step starts.
     #[serde(default)]
     pub message: Option<String>,
 }
@@ -72,15 +71,15 @@ fn piv_sign_algorithms(_: &mut SchemaGenerator) -> Schema {
     schema
 }
 
-/// Parameters for the `yubikey_attest_slot` action.
+/// The `with` block of `yubikey_attest_slot`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct AttestSlotParams {
-    /// PIV slot to attest (e.g., `9a`, `9c`, `9d`, `9e`).
+    /// The PIV slot containing the key to attest.
     #[schemars(regex(pattern = PIV_SLOT), extend("x-message" = PIV_SLOT_MESSAGE))]
     pub slot: String,
-    /// Custom message to display before the attestation step.
+    /// Shown to the operator when the step starts.
     #[serde(default)]
     pub message: Option<String>,
 }

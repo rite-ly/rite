@@ -1,7 +1,7 @@
 //! LSP server implementation for the Rite ceremony DSL.
 
 use crate::{
-    complete, convert, document::DocumentAnalysis, goto, hover, inlay_hints, references,
+    complete, convert, document::DocumentAnalysis, fields, goto, hover, inlay_hints, references,
     semantic_tokens, symbols,
 };
 use dashmap::DashMap;
@@ -144,11 +144,12 @@ impl LanguageServer for RiteLanguageServer {
         let line = analysis.text.lines().nth(pos.line as usize).unwrap_or("");
         let col = pos.character as usize;
 
-        let items = complete::detect_context(line, col, pos.line)
-            .map(|ctx| {
+        let items = match complete::detect_context(line, col, pos.line) {
+            Some(ctx) => {
                 complete::completions_for(ctx, &analysis.span_map, analysis.resolved.as_ref())
-            })
-            .unwrap_or_default();
+            }
+            None => fields::completions(&analysis.text, pos),
+        };
 
         if items.is_empty() {
             Ok(None)

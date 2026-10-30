@@ -50,11 +50,9 @@ pub const CEREMONY_SCHEMA: &str = concat!(
 /// that references resolve, that an artifact is produced before it is read,
 /// and the rules over several `with:` values.
 ///
-/// It carries no descriptions yet: the types' own documentation is written
-/// for this code's readers, not for a ceremony's authors. Each `x-message`
-/// is also given as `errorMessage`, and as `patternErrorMessage` beside a
-/// pattern, which editors built on VS Code's schema support show in place
-/// of their own words.
+/// Each `x-message` is also given as `errorMessage`, and as
+/// `patternErrorMessage` beside a pattern, which editors built on VS Code's
+/// schema support show in place of their own words.
 #[must_use]
 pub fn editor_schema() -> Schema {
     let mut definitions = serde_json::Map::new();
@@ -64,12 +62,10 @@ pub fn editor_schema() -> Schema {
         let shared = schema.as_object_mut().and_then(|o| o.remove("$defs"));
         if let Some(Value::Object(shared)) = shared {
             for (name, mut definition) in shared {
-                without_descriptions(&mut definition);
                 accept_expressions(&mut definition);
                 definitions.entry(name).or_insert(definition);
             }
         }
-        without_descriptions(&mut schema);
         accept_expressions(&mut schema);
         with.insert(action, schema);
     }
@@ -81,9 +77,7 @@ pub fn editor_schema() -> Schema {
             "pattern": "\\$\\{",
         }),
     );
-    let mut generated = build(|action| with.remove(&action));
-    without_descriptions(&mut generated);
-    let Value::Object(generated) = generated else {
+    let Value::Object(generated) = build(|action| with.remove(&action)) else {
         return Schema::default();
     };
     let mut schema = serde_json::Map::new();
@@ -323,42 +317,30 @@ fn reads_schema(contract: &ReadsContract) -> Value {
     schema
 }
 
-/// `schema` with no `description` keyword. A property or a definition of
-/// that name is kept.
-fn without_descriptions(schema: &mut Value) {
-    match schema {
-        Value::Object(object) => {
-            object.remove("description");
-            for (key, child) in object.iter_mut() {
-                match (key.as_str(), child) {
-                    ("properties" | "$defs", Value::Object(named)) => {
-                        named.values_mut().for_each(without_descriptions);
-                    }
-                    (_, child) => without_descriptions(child),
-                }
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(without_descriptions),
-        _ => {}
-    }
-}
-
 /// Let `schema`, and every value it holds, be an expression instead, as the
 /// resolver leaves any value carrying one to run time: a single value, a
 /// list, a map, or the whole block.
 ///
 /// A rule that only refers to a definition is left as it is, since the
 /// definition takes an expression itself. So is a condition: an expression
-/// is not known to meet it.
+/// is not known to meet it. A description stays outside the alternatives,
+/// so an editor shows it whichever one the value matches.
 fn accept_expressions(schema: &mut Value) {
     within(schema);
     let Value::Object(object) = schema else {
         return;
     };
-    if object.is_empty() || (object.len() == 1 && object.contains_key("$ref")) {
+    let reference = object.contains_key("$ref")
+        && object
+            .keys()
+            .all(|key| key == "$ref" || key == "description");
+    if object.is_empty() || reference {
         return;
     }
-    let rule = std::mem::take(object);
+    let mut rule = std::mem::take(object);
+    if let Some(description) = rule.remove("description") {
+        object.insert("description".to_string(), description);
+    }
     object.insert(
         "anyOf".to_string(),
         json!([Value::Object(rule), { "$ref": "#/$defs/Expression" }]),
@@ -412,7 +394,12 @@ pub(crate) fn backends_schema(_: &mut SchemaGenerator) -> Schema {
         "type": "object",
         "additionalProperties": {
             "type": "object",
-            "properties": { "provider": { "type": "string" } },
+            "properties": {
+                "provider": {
+                    "description": "The backend provider, such as `openssl`, `piv`, or `yubikey`.",
+                    "type": "string",
+                },
+            },
             "required": ["provider"],
         },
     })
@@ -426,11 +413,16 @@ impl JsonSchema for RetrySpec {
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({
             "oneOf": [
-                { "const": "never" },
+                { "const": "never", "description": "The step is never retried." },
                 {
                     "type": "object",
                     "properties": {
-                        "attempts": { "type": "integer", "minimum": 0, "maximum": u32::MAX },
+                        "attempts": {
+                            "description": "The total number of attempts allowed for the step.",
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": u32::MAX,
+                        },
                     },
                     "required": ["attempts"],
                     "additionalProperties": false,
@@ -455,7 +447,9 @@ impl JsonSchema for Material {
     /// The fields a material takes depend on its `type:`. `quantity` takes a
     /// number written quoted as well, as the reader does.
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        let text = json!({ "type": "string" });
+        let text = |description: &str| json!({ "description": description, "type": "string" });
+        let title = text("The name shown for this material in the script.");
+        let description = text("A description of the material, shown in the script.");
         let of_type = |name: &str, fields: Value| {
             json!({
                 "if": {
@@ -468,22 +462,29 @@ impl JsonSchema for Material {
         json_schema!({
             "type": "object",
             "properties": {
-                "type": { "type": "string", "enum": ["digital", "physical"] },
+                "type": {
+                    "description": "Use `digital` for a file or `physical` for an item brought to the ceremony.",
+                    "type": "string",
+                    "enum": ["digital", "physical"],
+                },
             },
             "required": ["type"],
             "allOf": [
                 of_type("digital", json!({
                     "type": true,
-                    "title": text,
-                    "description": text,
-                    "path": text,
+                    "title": title,
+                    "description": description,
+                    "path": text("The default file path, relative to the ceremony definition."),
                 })),
                 of_type("physical", json!({
                     "type": true,
-                    "title": text,
-                    "description": text,
-                    "identifier": text,
+                    "title": title,
+                    "description": description,
+                    "identifier": text(
+                        "The default identifier, such as a serial number, label, or batch code."
+                    ),
                     "quantity": {
+                        "description": "The number of items listed in the checklist.",
                         "type": ["integer", "string"],
                         "pattern": U32_TEXT,
                         "minimum": 0,
@@ -658,5 +659,71 @@ mod tests {
         found.dedup();
         assert!(found.is_empty(), "outside the keywords: {found:?}");
         ceremony_check().unwrap();
+    }
+
+    /// Every field a definition writes has a description, and every
+    /// description is plain text for ceremony authors: no Rust syntax, each
+    /// paragraph on one line, ending in a full stop.
+    #[test]
+    fn every_field_is_described_for_authors() {
+        fn texts(value: &Value, at: &str, wrong: &mut Vec<String>) {
+            match value {
+                Value::Object(object) => {
+                    if let Some(Value::String(text)) = object.get("description") {
+                        let plain = !text.contains("](")
+                            && !text.contains("::")
+                            && !text.replace("\n\n", "").contains('\n')
+                            && text.ends_with('.');
+                        if !plain {
+                            wrong.push(format!("{at}: {text:?}"));
+                        }
+                    }
+                    for (key, child) in object {
+                        texts(child, &format!("{at}/{key}"), wrong);
+                    }
+                }
+                Value::Array(items) => {
+                    for (index, child) in items.iter().enumerate() {
+                        texts(child, &format!("{at}/{index}"), wrong);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // A map is a schema that says it is one; a rule over a map's fields,
+        // or a condition on them, does not. `reads:` inputs are named by
+        // the action's own description.
+        fn fields(value: &Value, at: &str, wrong: &mut Vec<String>) {
+            match value {
+                Value::Object(object) => {
+                    let map = object.get("type") == Some(&json!("object"))
+                        || object.get("additionalProperties") == Some(&json!(false));
+                    let named = object.get("properties").and_then(Value::as_object);
+                    if map && !at.ends_with("/properties/reads") {
+                        for (field, schema) in named.into_iter().flatten() {
+                            if schema.is_object() && schema.get("description").is_none() {
+                                wrong.push(format!("{at}/properties/{field} has no description"));
+                            }
+                        }
+                    }
+                    for (key, child) in object {
+                        if key != "if" {
+                            fields(child, &format!("{at}/{key}"), wrong);
+                        }
+                    }
+                }
+                Value::Array(items) => {
+                    for (index, child) in items.iter().enumerate() {
+                        fields(child, &format!("{at}/{index}"), wrong);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let schema = editor_schema().to_value();
+        let mut wrong = Vec::new();
+        texts(&schema, "", &mut wrong);
+        fields(&schema, "", &mut wrong);
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 }

@@ -61,8 +61,10 @@ pub use protocol::{
 
 // Structured machine/build/environment facts carried by UI signals.
 pub use system_info::{
-    BackendVersion, BuildInfo, Disk, Environment, FeatureCheck, FeatureStatus, Hardening, HostInfo,
-    ParseError as SystemInfoParseError, StartupSnapshot, SystemInfo,
+    BackendVersion, BuildInfo, Container, Counters, Disk, Environment, FeatureCheck, FeatureStatus,
+    Hardening, HostInfo, InterfaceKind, NetworkInterface, NetworkSnapshot, OsIdentity,
+    ParseError as SystemInfoParseError, Platform, Radio, RiteLive, StartupSnapshot, SystemInfo,
+    Virtualization,
 };
 
 // Shared formatter for live frontends.

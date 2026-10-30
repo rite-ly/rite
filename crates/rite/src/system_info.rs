@@ -2,8 +2,8 @@
 //!
 //! This is the single source for build identity: the `RITE_BUILD_*` constants
 //! are produced by this crate's `build.rs`, so they are only reachable here.
-//! Both the System tab (via UI signals) and `rite version --verbose` consume
-//! what this module gathers.
+//! The System tab (via UI signals), `rite version --verbose` and `rite system`
+//! consume what this module gathers.
 
 use rite_runtime::{BuildInfo, Environment, HostInfo, SystemInfo};
 
@@ -30,7 +30,7 @@ pub fn gather_environment() -> Environment {
     }
 }
 
-fn build_info() -> BuildInfo {
+pub(crate) fn build_info() -> BuildInfo {
     BuildInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit: env!("RITE_BUILD_COMMIT").to_string(),

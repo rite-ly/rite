@@ -1,0 +1,8 @@
+os: debian 13 (Debian GNU/Linux 13 (trixie))
+rite live: no
+container: not detected
+virtualization: qemu (QEMU / QEMU Virtual Machine)
+ram encryption: unknown (no CPU vendor in /proc/cpuinfo (not x86))
+secure boot: unavailable (no SecureBoot variable)
+interface enp0s1: Ethernet, carrier
+radios: none

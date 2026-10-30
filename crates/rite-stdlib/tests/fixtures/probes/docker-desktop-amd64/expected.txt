@@ -1,0 +1,17 @@
+os: debian 13 (Debian GNU/Linux 13 (trixie))
+rite live: no
+container: docker image -
+virtualization: not detected
+ram encryption: unknown (CPU vendor VirtualApple not checked)
+secure boot: unknown (/sys/firmware is not visible (a container hides it))
+interface erspan0: Virtual, carrier unknown
+interface eth0: Virtual, carrier
+interface gre0: Virtual, carrier unknown
+interface gretap0: Virtual, carrier unknown
+interface ip6_vti0: Virtual, carrier unknown
+interface ip6gre0: Virtual, carrier unknown
+interface ip6tnl0: Virtual, carrier unknown
+interface ip_vti0: Virtual, carrier unknown
+interface sit0: Virtual, carrier unknown
+interface tunl0: Virtual, carrier unknown
+radios: none

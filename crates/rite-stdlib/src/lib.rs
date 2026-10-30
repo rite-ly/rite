@@ -86,7 +86,8 @@ pub use sharing::{CombineSharesAction, EnterShareAction, RevealAction, SplitSecr
 #[cfg(feature = "verification")]
 pub use verification::{
     CheckValueAction, ClockCheckAction, ConfirmAction, HostInfoScope, MachineInfoAction,
-    OralReadbackAction, gather_environment, gather_host_info,
+    OralReadbackAction, detect_platform, gather_environment, gather_host_info, network_snapshot,
+    probe_report,
 };
 
 /// Create a new action registry with all standard-library actions registered.

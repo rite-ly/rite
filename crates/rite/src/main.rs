@@ -13,6 +13,7 @@ mod report;
 mod run;
 #[cfg(feature = "render")]
 mod script;
+mod system;
 mod system_info;
 mod verify;
 mod version;
@@ -116,6 +117,14 @@ enum Commands {
     Report(report::Args),
     /// Print version and build information
     Version(version::Args),
+    /// Print what the platform and network probes report on this machine
+    ///
+    /// The operating system, a Rite Live system, a container or virtual
+    /// machine, the security features, each network interface with its
+    /// traffic, the default routes and the radios. Addresses and MAC addresses
+    /// are counted, not printed.
+    #[command(hide = true)]
+    System,
     /// Print a shell completion script
     #[command(hide = true)]
     Completions {
@@ -135,6 +144,7 @@ fn main() {
         #[cfg(feature = "render")]
         Commands::Report(args) => report::run(&args),
         Commands::Version(args) => version::run(&args),
+        Commands::System => system::run(),
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             let bin_name = cmd.get_name().to_string();

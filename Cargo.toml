@@ -81,7 +81,7 @@ crossterm = "0.29.0"
 dashmap = "6.1.0"
 subtle = "2.6.1"
 regex-lite = "0.1.8"
-sysinfo = { version = "0.39.0", default-features = false, features = ["system", "disk"] }
+sysinfo = { version = "0.39.0", default-features = false, features = ["system", "disk", "network"] }
 x509-cert = { version = "0.3.0", features = ["builder"] }
 signature = "3.0.0"
 sha2 = "0.11.0"

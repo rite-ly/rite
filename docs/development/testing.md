@@ -45,6 +45,9 @@ Notes that are easy to get wrong:
   public item as a review nit.
 - **Shared harness code** (e.g. `rite_runtime::test_support::ReporterHarness`) lives behind a
   `test_support` module so other crates' integration tests reuse it instead of duplicating setup.
+- **Probes that read the running system** (platform, network, security features) are checked
+  against files captured on real systems, under `crates/rite-stdlib/tests/fixtures/probes/`; the
+  module comment of `rite-stdlib`'s `verification/probe_fixtures.rs` says how to add one.
 - **A test lives in the crate that owns what it needs.** If it names an API behind a `cfg` or a
   feature, it belongs where that gate is decided. The post-quantum import sweep sits in
   `rite-openssl` because `ossl360` is set there; written in `rite-stdlib` it would fail to compile

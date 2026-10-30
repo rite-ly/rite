@@ -1,0 +1,8 @@
+os: debian 13 (Debian GNU/Linux 13 (trixie))
+rite live: no
+container: not detected
+virtualization: qemu (QEMU / Standard PC (Q35 + ICH9, 2009))
+ram encryption: inactive (AMD CPU; SME not supported, disabled in firmware or off (mem_encrypt))
+secure boot: unavailable (no SecureBoot variable)
+interface enp0s2: Ethernet, carrier
+radios: none

@@ -48,9 +48,10 @@ runs; `rite run` checks it then. `rite check` checks more than the schema says: 
 artifact is produced before it is read, and the rules over several `with:` values, such as a threshold no larger than
 the number of shares.
 
-The schema carries no descriptions yet. Where `rite check` words a rule itself, the schema gives the same words as
-`errorMessage` and `patternErrorMessage`, which editors built on VS Code's JSON Schema support show in place of their
-own.
+Each action and field the schema names carries a description for ceremony authors, and so do the values of some
+fields, such as a duty's `type`. Where `rite check` words a
+rule itself, the schema gives the same words as `errorMessage` and `patternErrorMessage`, which editors built on VS
+Code's JSON Schema support show in place of their own.
 
 The Rite extensions for VS Code and IntelliJ run `rite-ls`, which checks a definition against the same schema and
 everything `rite check` checks beyond it. With one of them installed, do not also map this schema to `*.rite.yaml`:
@@ -61,7 +62,7 @@ each mistake would be reported twice.
 The schemas are generated from the Rust types that read and write the files, by the tests of `rite-model`, and a test
 fails when the committed files differ.
 
-The descriptions are not the Rust doc comments. They are written for readers of the files, as a
+The transcript and bundle descriptions are not the Rust doc comments. They are written for readers of the files, as a
 `schemars(description = "...")` attribute on each type, variant and field, so editing the code's documentation never
 changes a schema. An item without one falls back to its doc comment, so a new fact or field needs one.
 
@@ -72,7 +73,9 @@ RITE_UPDATE_SCHEMA=1 cargo test -p rite-model schema
 ```
 
 The ceremony schema is generated from the types the definition is read into and the parameters of each action, by the
-tests of `rite-resolver`:
+tests of `rite-resolver`. Its descriptions are the doc comments of those types, their fields and the `ActionType`
+variants, so those are written for ceremony authors and notes for contributors go in `//` comments. A test fails when a
+field has no description or one holds Rust syntax.
 
 ```sh
 RITE_UPDATE_SCHEMA=1 cargo test -p rite-resolver schema

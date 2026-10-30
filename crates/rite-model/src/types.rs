@@ -1,7 +1,9 @@
 //! Shared semantic types for the ceremony domain model.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
+use std::sync::OnceLock;
 
 /// Ceremony metadata (name and optional description).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,182 +62,161 @@ pub fn derive_role_name(id: &str) -> String {
         .join(" ")
 }
 
-/// Action types available in ceremony steps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// What a step does.
+//
+// Each variant's documentation is the text ceremony authors read: the schema
+// carries it as the action's description, and editors show it on hover. The
+// first paragraph is the summary, one sentence. Notes for this code's
+// readers go in `//` comments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ActionType {
-    /// Verify system clock is correct before ceremony proceeds.
+    /// Check the system clock before the ceremony continues.
     ///
-    /// Displays current time and requires operator confirmation.
-    /// Should be placed as the first step to ensure all timestamps are valid.
+    /// Shows the current system time and asks the operator to confirm that
+    /// it is correct. Place it first, so that every recorded time can be
+    /// trusted.
     ClockCheck,
-    /// Human attests to something with yes/no decision (single person).
+    /// Record one person's yes-or-no decision.
     ///
-    /// Use when the verification requires human judgment about external state.
-    /// Example: "Verify all network cables are disconnected".
+    /// Use it for a check that needs human judgment or knowledge of
+    /// something outside the machine, such as "Verify that every network
+    /// cable is disconnected".
     Confirm,
-    /// Machine compares two known values and records pass/fail (automatic).
+    /// Compare two values and fail the step if they do not match.
     ///
-    /// Use when both values are known to the system and comparison is deterministic.
-    /// Example: Compare computed `SHA-256` hash against expected value.
+    /// Use it for a check the machine can make on its own, such as comparing a
+    /// computed SHA-256 digest with an expected one.
     CheckValue,
-    /// Two-party verbal verification: reader speaks value aloud, confirmer verifies.
+    /// Have one person read a value aloud for another to check.
     ///
-    /// Use when a value must be verified against something external (physical label,
-    /// document). Supports NATO phonetic alphabet and hex formatting.
+    /// Use it to check a value against something outside the machine, such
+    /// as a label or a printed document. The value is shown in the NATO
+    /// phonetic alphabet or in hexadecimal.
     OralReadback,
-    /// Show a value on screen for a person to write down, then withdraw it.
+    /// Show a value for someone to copy, then remove it from the screen.
     ///
-    /// Reads `value:`, a share or any byte artifact, and shows it in a
-    /// chosen encoding while a prompt is up; on acknowledgement it is gone.
-    /// The transcript records that the value was shown and nothing of it.
-    /// `rite script` prints a page for the step, one box per character
-    /// in rows, the parity cells set apart.
+    /// The operator reveals the value once and confirms that every row is
+    /// written down. The transcript records that it was shown, not its value.
+    /// `rite script` prints a worksheet for the step. A headless run that is
+    /// not a dry run stops here.
     Reveal,
-    /// Capture machine information (hostname, CPU, OS) as evidence.
+    /// Record which machine runs the ceremony.
     ///
-    /// Records device identity to prove which machine ran the ceremony.
-    /// Should be placed early in ceremony to establish machine context.
+    /// Records details such as the hostname, the processor and the operating
+    /// system as evidence. Place it early in the ceremony.
     MachineInfo,
-    /// A person types a value the ceremony needs and can record: a serial
-    /// number read off a device, an address shown on a screen.
+    /// Ask someone to enter a value and record it as an artifact.
     ///
-    /// The value becomes a text artifact, so a later step compares it or
-    /// prints it, and the transcript carries it. `format:` and the length
-    /// fields say what shape the value has, so a slip is refused at the
-    /// keyboard rather than found at the end.
+    /// The value is recorded in the transcript. The input format and length
+    /// fields constrain what can be entered.
     EnterValue,
-    /// A person types a secret the ceremony needs and must not record: a
-    /// passphrase, a PIN.
+    /// Ask someone to enter a secret without recording its value.
     ///
-    /// `enter_value` for a value the transcript may not carry. Echo is off,
-    /// the artifact is held wiped in memory, and the transcript records that
-    /// a secret was entered at this step and nothing derived from it. A step
-    /// names it in `reads:`, which borrows the value. An expression in
-    /// `with:` copies it into the step's parameters, as it would opened
-    /// content.
+    /// The input is hidden, and the secret is erased from memory when the run
+    /// ends. The transcript records that a secret was entered, not its value. A
+    /// later step can read it as an input.
     EnterSecret,
 
-    /// Generate a key: a keypair for an asymmetric algorithm, one secret for
-    /// a symmetric one.
+    /// Generate a key in a backend.
     GenerateKey,
-    /// Encrypt a private key under another key so it can leave the machine.
+    /// Encrypt a private key for transport.
     ///
-    /// The OpenSSL backend produces a CMS `AuthEnvelopedData` under
-    /// AES-256-GCM. Which encapsulation that takes follows the recipient key,
-    /// and the transcript records what the wrap actually did.
-    ///
-    /// Reads `wrapping_key:` to wrap under a key the backend holds, or
-    /// `recipient:` to wrap to a public key held outside the ceremony.
+    /// Reads `key_to_wrap` and exactly one of `wrapping_key` or `recipient`.
     WrapKey,
-    /// Decrypt a wrapped key and import it into a backend under a new label.
+    /// Decrypt a wrapped key and import the recovered key into a backend.
+    ///
+    /// The wrapped data identifies its scheme. The step checks the recovered
+    /// key against `algorithm` when one is given.
     UnwrapKey,
-    /// Encrypt content for a recipient, producing an encrypted-data artifact.
+    /// Encrypt data using a key held by a backend.
     ///
-    /// `wrap_key` for bytes that are not a key. The container is the same one,
-    /// and the claim is not: a wrap says a key left a backend under protection,
-    /// while encrypted content makes no custody claim at all.
-    ///
-    /// Reads `encryption_key:`, a key-encryption key the backend holds. The key
-    /// protects a fresh content-encryption key, and the content is encrypted
-    /// under that.
+    /// The backend generates a content-encryption key, encrypts the data with
+    /// it, and protects it with the step's encryption key. The data itself is
+    /// not sent to the backend.
     EncryptData,
-    /// Decrypt an encrypted-data artifact back to bytes.
+    /// Decrypt data encrypted by `encrypt_data`.
     ///
-    /// The bytes become an ordinary artifact, so a later step reads them as a
-    /// material: `import_key` lifts them into a key, `check_value` compares
-    /// them, `sign_data` signs them.
+    /// The result is a byte artifact available to later steps and erased from
+    /// memory when the run ends.
     DecryptData,
-    /// Split a secret into shares of which a threshold reconstruct it.
+    /// Split a secret into shares so that `threshold` of them can recover it.
     ///
-    /// Shamir over GF(2^8), the `rite-sss/v1` format, with the polynomial
-    /// coefficients drawn from the step's backend. Reads `secret:` and
-    /// creates one artifact holding every share, reached as
-    /// `${artifact.<name>.share_N}` under a later step's `reads:`. At most
-    /// 100 shares. Every subset of `threshold` shares is combined and
-    /// checked before the step completes, so a share that leaves the room
-    /// has been shown to work; a split with more than 100,000 such subsets
-    /// is refused at run time.
+    /// The step uses the backend for randomness and checks every subset of
+    /// `threshold` shares before it completes. The shares are stored in one
+    /// artifact, and later steps can read individual shares.
     SplitSecret,
-    /// Reconstruct a secret from shares `split_secret` made.
+    /// Recover a secret from shares.
     ///
-    /// Reads `shares:`, a list of at least two, each a share of a set or a
-    /// share a custodian typed back. Each share records how many are
-    /// needed, so too few shares is an error before anything is computed.
-    /// The result stays in memory and is erased when the run ends, like the
-    /// content `decrypt_data` opens.
+    /// The shares must have the same threshold and length. Shares from
+    /// different splits can produce an incorrect result without an error, so
+    /// verify the recovered secret separately. The result is erased from memory
+    /// when the run ends.
     CombineShares,
-    /// Type a share back from its sheet, row by row.
+    /// Enter a share from its worksheet.
     ///
-    /// Each row is checked as it is typed: a wrong character is corrected
-    /// and named, two unreadable ones are recovered, and a row that needs
-    /// more is typed again. Rows that are not a share are refused before
-    /// the step ends. Creates a share `combine_shares` reads, named without
-    /// a `share_N` property. The transcript records the share's index and
-    /// which rows were repaired, never the rows.
+    /// Each row is checked as it is typed. The step creates a share artifact
+    /// for later use by `combine_shares`.
     EnterShare,
-    /// Install key material the ceremony holds as a key of a named algorithm.
+    /// Import key material into a backend.
     ///
-    /// `unwrap_key` without the decrypt. The bytes can be a material carried
-    /// into the room or an artifact an earlier step produced, and `algorithm:`
-    /// says how to read them, because raw material says nothing about itself.
+    /// The material can come from a file or an artifact. The action imports the
+    /// bytes as the key type named by `algorithm`.
     ImportKey,
-    /// Export public key from keypair.
+    /// Export a keypair's public key as an artifact.
     ExportPublic,
-    /// Sign arbitrary data with a backend-managed key.
+    /// Sign data with a key held by a backend.
     ///
-    /// The signature algorithm follows from the key unless `algorithm:` names
-    /// another one the key accepts. Requires a backend implementing `SignBackend`.
+    /// The key determines the signature algorithm unless `algorithm` names
+    /// another one supported by the key.
+    // The backend must implement `SignBackend`.
     SignData,
-    /// Verify a signature over data, given the signer's public key.
+    /// Verify a signature using the signer's public key.
     ///
-    /// Needs no backend: verification takes only a public key, so it works on
-    /// evidence the ceremony did not produce. The key may be a bare public key
-    /// or a certificate carrying one. Naming a `backend:` delegates the check
-    /// to that backend instead.
+    /// A backend is optional. Without one, the action verifies in software.
     VerifySignature,
-    /// Formal attestation statement.
+    /// Record a formal statement in the transcript.
     Attest,
-    /// Fold human-supplied entropy into the ceremony seed.
+    /// Add a participant-supplied random value to the ceremony's entropy.
     ///
-    /// A participant supplies a free-form random value (for example, the
-    /// result of rolling physical dice), which is mixed into the entropy
-    /// source's ratchet. Any later drawn value reflects the contribution and
-    /// stays re-derivable by `rite verify`.
+    /// Later values drawn from the entropy source depend on this contribution.
     GatherEntropy,
-    /// TPM attestation with PCR measurements and cryptographic quotes.
+    /// Record a TPM-signed quote of the device's measurements.
     ///
-    /// Requires the `rite-tpm` backend.
+    /// No build of Rite currently supports this action.
+    // Requires the `rite-tpm` backend, which does not exist yet.
     TpmAttest,
 
-    /// Read X.509 certificate from PIV smart card slot.
+    /// Read a certificate from a PIV card.
     ///
-    /// No PIN required; reading certificates is unauthenticated on PIV cards.
-    /// Requires a PIV backend.
+    /// Reading a certificate from a PIV slot does not require a PIN.
+    // Requires a PIV backend.
     PivReadCertificate,
-    /// Sign data using PIV smart card on-device key.
+    /// Sign data using a key on a PIV card.
     ///
-    /// Handles PIN verification internally before signing.
-    /// Requires a PIV backend.
+    /// The step asks for the PIN before signing.
+    // Requires a PIV backend.
     PivSign,
-    /// Generate a `YubiKey` attestation certificate for a PIV slot (Yubico extension).
+    /// Produce a YubiKey attestation for a PIV key.
     ///
-    /// Slot `F9` signs the key's certificate to prove it was generated on-device.
-    /// Requires the `rite-yubikey` backend.
+    /// The YubiKey attestation key in slot F9 signs a certificate for the key
+    /// in the named slot.
+    // Requires the `rite-yubikey` backend.
     YubikeyAttestSlot,
 
-    /// Issue an X.509 certificate from a PKCS#10 CSR.
+    /// Issue an X.509 certificate for a certificate signing request.
     ///
-    /// Takes a CSR and a backend-managed signing key, assembles the `TBSCertificate`,
-    /// signs it via the backend's `SignBackend`, and produces a DER-encoded certificate.
-    /// Works with any backend implementing `SignBackend` (software, PKCS#11, `YubiKey`).
+    /// Reads the request and a signing key.
+    // Assembles the `TBSCertificate` and signs it through the backend's
+    // `SignBackend`, so any backend that signs can issue.
     IssueCertificate,
-    /// Generate a PKCS#10 CSR signed by a backend-managed key.
+    /// Create a PKCS#10 certificate signing request.
     ///
-    /// Takes a backend-managed signing key and subject parameters, assembles a
-    /// `CertReqInfo`, signs it via the backend's `SignBackend`, and produces a
-    /// `DER`-encoded `CSR`.
+    /// The request is built from `subject` and `san`, then signed with a key
+    /// held by a backend.
+    // Assembles the `CertReqInfo` and signs it through the backend's
+    // `SignBackend`.
     GenerateCsr,
 }
 
@@ -789,43 +770,38 @@ impl ActionType {
         }
     }
 
-    /// Short human-readable description of what this action does.
-    ///
-    /// Used as fallback prose in script generation, TUI step display, and LSP
-    /// hover when no explicit `description` or `message` parameter is present.
-    pub fn describe(&self) -> &'static str {
-        match self {
-            ActionType::ClockCheck => "Verify system clock against a reference time.",
-            ActionType::Confirm => "Confirm readiness or completion of a manual step.",
-            ActionType::CheckValue => "Verify a value matches an expected result.",
-            ActionType::OralReadback => "Read back a value aloud for verification.",
-            ActionType::Reveal => "Show a value for a person to write down.",
-            ActionType::MachineInfo => "Record system and environment information.",
-            ActionType::EnterValue => "Type a value the ceremony records.",
-            ActionType::EnterSecret => "Type a secret the ceremony holds and never records.",
-            ActionType::Attest => "Record a signed attestation from a participant.",
-            ActionType::GatherEntropy => "Fold human-supplied entropy into the ceremony seed.",
-            ActionType::TpmAttest => "Record TPM platform attestation (PCR values).",
-            ActionType::GenerateKey => "Generate a cryptographic key.",
-            ActionType::ExportPublic => "Export the public component of a keypair.",
-            ActionType::SignData => "Sign data with a ceremony key.",
-            ActionType::VerifySignature => "Verify a signature against a public key.",
-            ActionType::WrapKey => "Encrypt a key under another key for transport.",
-            ActionType::UnwrapKey => "Decrypt a wrapped key and import it into a backend.",
-            ActionType::GenerateCsr => "Generate a Certificate Signing Request.",
-            ActionType::IssueCertificate => "Issue an X.509 certificate from a CSR.",
-            ActionType::PivReadCertificate => "Read a certificate from a PIV smart card slot.",
-            ActionType::PivSign => "Sign data using a PIV smart card key.",
-            ActionType::YubikeyAttestSlot => "Attest a YubiKey PIV slot key.",
-            ActionType::ImportKey => "Import a key from material the ceremony holds.",
-            ActionType::EncryptData => "Encrypt content under a key held by a backend.",
-            ActionType::DecryptData => "Decrypt an encrypted-data artifact back to bytes.",
-            ActionType::SplitSecret => {
-                "Split a secret into shares a threshold of which reconstruct it."
-            }
-            ActionType::CombineShares => "Reconstruct a secret from its shares.",
-            ActionType::EnterShare => "Type a share back from its sheet.",
-        }
+    /// What the action does, for ceremony authors: the variant's
+    /// documentation, as the schema carries it.
+    #[must_use]
+    pub fn description(self) -> &'static str {
+        static DESCRIPTIONS: OnceLock<HashMap<ActionType, String>> = OnceLock::new();
+        DESCRIPTIONS
+            .get_or_init(|| {
+                let schema = crate::params::generator().into_root_schema_for::<ActionType>();
+                schema
+                    .get("oneOf")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|variant| {
+                        let action = serde_json::from_value(variant.get("const")?.clone()).ok()?;
+                        let text = variant.get("description")?.as_str()?;
+                        Some((action, text.to_string()))
+                    })
+                    .collect()
+            })
+            .get(&self)
+            .map_or("", String::as_str)
+    }
+
+    /// The first paragraph of [`description`](Self::description), one
+    /// sentence.
+    #[must_use]
+    pub fn summary(self) -> &'static str {
+        let description = self.description();
+        description
+            .split_once("\n\n")
+            .map_or(description, |(summary, _)| summary)
     }
 }
 
@@ -864,39 +840,28 @@ impl std::fmt::Display for ActionType {
     }
 }
 
-impl schemars::JsonSchema for ActionType {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        "ActionType".into()
-    }
-
-    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        let names: Vec<String> = Self::ALL.iter().map(ToString::to_string).collect();
-        schemars::json_schema!({ "type": "string", "enum": names })
-    }
-}
-
-/// Type of output produced by a ceremony.
+/// What kind of output a ceremony produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum OutputType {
-    /// Public key in PEM format.
+    /// A public key.
     PublicKey,
     /// A key wrapped for transport, in the container its scheme names.
     WrappedKey,
     /// Content encrypted for a recipient, in the container its scheme names.
     EncryptedData,
-    /// X.509 certificate.
+    /// An X.509 certificate.
     Certificate,
-    /// DNSSEC signed resource record set.
+    /// A signed DNSSEC resource record set.
     SignedRrset,
-    /// Certificate Transparency Signed Certificate Timestamp.
+    /// A Certificate Transparency signed certificate timestamp.
     Sct,
 
     // Documents
-    /// Generic document.
+    /// A document.
     Document,
-    /// Ceremony log or transcript.
+    /// A ceremony log or transcript.
     CeremonyLog,
 }
 
@@ -930,18 +895,18 @@ impl OutputType {
     }
 }
 
-/// Type of a ceremony parameter.
+/// What kind of value a ceremony parameter takes.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ParameterType {
-    /// Text value.
+    /// Text.
     String,
-    /// Date value (`YYYY-MM-DD`).
+    /// A date in `YYYY-MM-DD` format.
     Date,
-    /// Integer value.
+    /// A whole number.
     Integer,
-    /// Boolean value.
+    /// A Boolean value, `true` or `false`.
     Boolean,
 }
 
@@ -956,32 +921,29 @@ impl std::fmt::Display for ParameterType {
     }
 }
 
-/// Typed preset for common post-ceremony duty categories.
+/// What kind of duty is done after the run.
 ///
-/// Provides built-in prose for scripts when no description is given.
-/// Use `Custom` for duties that don't fit a preset; description is then required.
-///
-/// Note: physical handling steps (sealing hardware, etc.) belong as `physical_action`
-/// steps in ceremony execution, not here.
+/// Each kind gives the duty a text for the script, used when it has no
+/// `description`. Use `custom` for any other duty, with a `description`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum DutyType {
-    /// Return materials to secure storage location.
+    /// Return materials to secure storage.
     ReturnToVault,
-    /// Hand key shares to assigned custodians.
+    /// Give the shares to their custodians.
     DistributeShares,
-    /// Distribute backup media to designated recipients.
+    /// Give the backup media to its recipients.
     DistributeMedia,
-    /// Archive ceremony materials at storage locations.
+    /// Store the ceremony's materials in an archive.
     ArchiveMaterials,
-    /// Publish ceremony record and witness attestations.
+    /// Publish the ceremony record and witness attestations.
     PublishRecord,
-    /// Notify stakeholders of ceremony completion.
+    /// Notify stakeholders that the ceremony is complete.
     NotifyStakeholders,
-    /// Import generated keys into operational system.
+    /// Import the generated keys into the system that uses them.
     ImportKeys,
-    /// Free-form duty; description is required.
+    /// A duty described in `description`.
     Custom,
 }
 
@@ -1286,8 +1248,8 @@ mod tests {
     /// The match below is exhaustive, so adding a variant fails to compile
     /// here. That is the whole mechanism: it puts a compiler error next to the
     /// list an author has to extend. The name check then catches a variant
-    /// listed twice, and `rite-ls` compares its own catalogue against `ALL`,
-    /// which is what catches one left out.
+    /// listed twice, and `every_action_is_described` compares `ALL` with the
+    /// derived schema, which is what catches one left out.
     #[test]
     fn all_lists_every_action_type() {
         for action in ActionType::ALL {
@@ -1330,5 +1292,34 @@ mod tests {
             ActionType::ALL.len(),
             "two actions share a DSL name"
         );
+    }
+
+    /// The schema derived from the enum names every variant, so it holds
+    /// `ALL` to the enum; and each action has a description whose summary
+    /// is one sentence.
+    #[test]
+    fn every_action_is_described() {
+        let schema = crate::params::generator().into_root_schema_for::<ActionType>();
+        let derived: std::collections::BTreeSet<String> = schema
+            .get("oneOf")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|variant| variant.get("const")?.as_str().map(str::to_string))
+            .collect();
+        let listed: std::collections::BTreeSet<String> =
+            ActionType::ALL.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            derived, listed,
+            "ActionType::ALL is out of step with the enum"
+        );
+
+        for &action in ActionType::ALL {
+            let summary = action.summary();
+            assert!(
+                summary.ends_with('.') && !summary.trim_end_matches('.').contains(". "),
+                "{action}: the summary is not one sentence: {summary:?}"
+            );
+        }
     }
 }

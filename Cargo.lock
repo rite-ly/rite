@@ -2151,6 +2151,7 @@ dependencies = [
  "dashmap",
  "rite-model",
  "rite-resolver",
+ "serde_json",
  "tokio",
  "tower-lsp-server",
 ]

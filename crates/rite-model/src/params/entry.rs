@@ -7,31 +7,32 @@ use serde_json::json;
 use super::FormatSpec;
 use super::schema::add_rule;
 
-/// Params for the `enter_value` and `enter_secret` actions.
-///
-/// The shape fields are turned into one rule by
-/// [`EntryShape`](super::EntryShape), which is also what
-/// `rite check` applies to them.
+/// The `with` block of `enter_value` and `enter_secret`.
+//
+// The shape fields are turned into one rule by `EntryShape`, which is also
+// what `rite check` applies to them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(transform = one_rule)]
 #[non_exhaustive]
 pub struct EntryParams {
-    /// What the person is asked for, shown at the prompt.
+    /// The prompt shown to the person entering the value.
     pub message: String,
-    /// What kind of value it is: a format name, or `{ pattern: "..." }`.
-    /// Text by default. An encoding makes the artifact the decoded bytes.
+    /// The value's format, such as `hex` or `base64`, or a pattern object such
+    /// as `{ pattern: "..." }`. If omitted, the value is treated as text.
+    /// Encoded input is stored as decoded bytes.
     #[serde(default)]
     pub format: Option<FormatSpec>,
-    /// An exact length, in characters for text and bytes for an encoding.
+    /// The exact length required. The unit depends on `format`: characters for
+    /// text, bytes for encodings, or words for `bip39`.
     #[serde(default)]
     #[schemars(range(min = 1))]
     pub length: Option<usize>,
-    /// The fewest units accepted.
+    /// The minimum accepted length, in the unit set by `format`.
     #[serde(default)]
     #[schemars(range(min = 1))]
     pub min_length: Option<usize>,
-    /// The most units accepted.
+    /// The maximum accepted length, in the unit set by `format`.
     #[serde(default)]
     #[schemars(range(min = 1))]
     pub max_length: Option<usize>,

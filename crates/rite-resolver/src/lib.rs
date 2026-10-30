@@ -595,6 +595,7 @@ sections:
       bad_item:
         action: oral_readback
         with:
+          value: abc
           format: nato_phonetik
       missing:
         action: check_value

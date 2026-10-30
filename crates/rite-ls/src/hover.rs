@@ -7,11 +7,10 @@
 //!    material, backend, artifact). If the resolved ceremony is available, the
 //!    target's metadata is rendered as Markdown.
 //!
-//! 2. **Action hover**: falls back to extracting the word at the cursor and looking
-//!    it up in the static action table. Only fires when the cursor is not on a
-//!    known reference value.
+//! 2. **Schema hover**: a key's field description, or the description of a
+//!    value the field takes from a list, such as an action. Only fires when
+//!    the cursor is not on a known reference value. See [`crate::fields`].
 
-use crate::actions;
 use rite_model::{ArtifactId, Ceremony, MaterialId, MaterialKind};
 use rite_resolver::{ReferenceTarget, SpanMap};
 use tower_lsp_server::ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
@@ -30,12 +29,7 @@ pub fn hover_at(
         .find_target_at(line, col)
         .and_then(|t| hover_for_target(t, span_map, resolved))
         .map(markdown_hover)
-        .or_else(|| {
-            let word = crate::convert::word_at_position(text, pos)?;
-            Some(markdown_hover(
-                actions::hover_description(&word)?.to_string(),
-            ))
-        })
+        .or_else(|| crate::fields::hover(text, pos).map(markdown_hover))
 }
 
 /// Build Markdown hover content for a resolved reference target.
@@ -189,26 +183,38 @@ mod tests {
         );
     }
 
+    const STEP: &str = "sections:\n  s:\n    steps:\n      check:\n        action: confirm\n";
+
     #[test]
-    fn action_hover_via_fallback() {
+    fn an_action_is_described_by_the_schema() {
         let span_map = SpanMap::default();
-        let text = "    action: confirm\n";
         let pos = Position {
-            line: 0,
-            character: 14,
+            line: 4,
+            character: 18,
         };
-        assert!(hover_at(text, &span_map, None, pos).is_some());
+        let Some(Hover {
+            contents: HoverContents::Markup(markup),
+            ..
+        }) = hover_at(STEP, &span_map, None, pos)
+        else {
+            panic!("no hover");
+        };
+        assert!(
+            markup
+                .value
+                .contains(rite_model::ActionType::Confirm.summary())
+        );
     }
 
     #[test]
-    fn returns_none_for_unknown_word() {
+    fn returns_none_for_unknown_action() {
         let span_map = SpanMap::default();
-        let text = "    action: unknown_action\n";
+        let text = STEP.replace("confirm", "unknown_action");
         let pos = Position {
-            line: 0,
-            character: 14,
+            line: 4,
+            character: 18,
         };
-        assert!(hover_at(text, &span_map, None, pos).is_none());
+        assert!(hover_at(&text, &span_map, None, pos).is_none());
     }
 
     #[test]

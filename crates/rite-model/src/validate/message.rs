@@ -892,7 +892,10 @@ mod tests {
                 ActionType::EnterSecret,
                 json!({"message": "m", "format": "paper32", "length": 32}),
             ),
-            (ActionType::OralReadback, json!({"format": "nato"})),
+            (
+                ActionType::OralReadback,
+                json!({"value": "v", "format": "nato"}),
+            ),
             (
                 ActionType::PivSign,
                 json!({"slot": "piv:9d", "algorithm": "ECDSA-SHA384"}),

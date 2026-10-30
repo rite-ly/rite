@@ -7,26 +7,23 @@ use serde_json::json;
 use super::schema::{add_rule, names, property};
 use crate::{RevealFormat, SharingScheme, bip39};
 
-/// Params for `reveal` action.
+/// The `with` block of `reveal`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(transform = phrase_lengths)]
 #[non_exhaustive]
 pub struct RevealParams {
-    /// What the value is and what to do with it, shown above it and
-    /// printed on the sheet.
+    /// The heading shown above the value and printed on the worksheet.
     pub message: String,
-    /// The encoding: `paper32` (the default), `hex`, or `bip39` for a
-    /// wallet's recovery phrase.
+    /// The format used to display the value. Defaults to `paper32`.
     #[serde(default)]
     pub format: Option<RevealFormat>,
-    /// Text printed on the sheet: where it goes, who keeps it.
+    /// A note printed on the worksheet, such as where the value goes or who
+    /// keeps it.
     #[serde(default)]
     pub note: Option<String>,
-    /// The value's length in the format's unit, words for `bip39` and
-    /// bytes otherwise, when the author knows it, so the sheet has exactly
-    /// the right number of rows; a value of another size is refused. A
-    /// share counts the three header bytes in front of its secret.
+    /// The value's exact length. The unit is words for `bip39` and bytes
+    /// otherwise. For a share, include its three-byte header in this length.
     #[serde(default)]
     #[schemars(range(min = 1))]
     pub length: Option<u64>,
@@ -57,25 +54,23 @@ fn phrase_lengths(schema: &mut Schema) {
     );
 }
 
-/// Params for `enter_share` action.
+/// The `with` block of `enter_share`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(transform = longer_than_a_header)]
 #[non_exhaustive]
 pub struct EnterShareParams {
-    /// What the share is, shown above the rows: the sheet's heading.
+    /// The heading shown above the share's rows.
     pub message: String,
-    /// The encoding the sheet was written in: `paper32` (the default) or
-    /// `hex`.
+    /// The format used to enter the share. Defaults to `paper32`.
     #[serde(default)]
     #[schemars(schema_with = "share_formats")]
     pub format: Option<RevealFormat>,
-    /// Shown with the rows: where the sheet came from, who types it.
+    /// A note shown with the share's rows, such as where the worksheet came
+    /// from.
     #[serde(default)]
     pub note: Option<String>,
-    /// The share's length in bytes, its secret's plus three header bytes,
-    /// when the author knows it, so the prompt asks for exactly the right
-    /// rows; a share of another size is refused.
+    /// The share's exact length in bytes, including its three-byte header.
     #[serde(default)]
     pub length: Option<u64>,
 }
@@ -117,25 +112,23 @@ fn longer_than_a_header(schema: &mut Schema) {
     );
 }
 
-/// Params for `split_secret` action.
+/// The `with` block of `split_secret`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(transform = share_limits)]
 #[non_exhaustive]
 pub struct SplitSecretParams {
-    /// The sharing scheme, defaulting to `rite-sss/v1`, the only one this
-    /// build implements. Named so the transcript says which one was used.
+    /// The secret-sharing scheme to use. Defaults to `rite-sss/v1`.
     #[serde(default)]
     pub scheme: Option<SharingScheme>,
-    /// How many shares reconstruct the secret, from 2 to the scheme's limit.
+    /// The number of shares required to recover the secret.
     //
     // One share is not a split.
     #[schemars(range(min = 2))]
     pub threshold: u8,
-    /// How many shares to make, from `threshold` to the scheme's limit, 100
-    /// for `rite-sss/v1`. Every subset of `threshold` shares is checked
-    /// before the step completes, so a split with more than 100,000 such
-    /// subsets is refused as well.
+    /// The number of shares to create. It must be at least the threshold. A
+    /// split with more than 100,000 threshold-sized subsets is refused when the
+    /// step runs.
     #[schemars(range(min = 2))]
     pub shares: u8,
 }

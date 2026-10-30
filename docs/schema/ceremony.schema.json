@@ -2,26 +2,31 @@
   "$id": "https://ritely.io/schemas/0.8.0/ceremony.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Rite ceremony definition",
+  "description": "A Rite ceremony definition.",
   "type": "object",
   "properties": {
     "acts": {
+      "description": "Optional groups of sections in the script and report. Acts do not change step execution order.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/Act"
       }
     },
     "after": {
+      "description": "Post-ceremony duties, keyed by ID and printed as a checklist.",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/PostCeremonyDutyBody"
       }
     },
     "backends": {
+      "description": "Backend configurations, keyed by name. Steps refer to a backend by name in `backend`.",
       "type": "object",
       "additionalProperties": {
         "type": "object",
         "properties": {
           "provider": {
+            "description": "The backend provider, such as `openssl`, `piv`, or `yubikey`.",
             "type": [
               "string",
               "number",
@@ -35,6 +40,7 @@
       }
     },
     "description": {
+      "description": "What the ceremony is for, shown in the script and the report.",
       "type": [
         "string",
         "number",
@@ -42,12 +48,14 @@
       ]
     },
     "materials": {
+      "description": "Files and physical items needed for the ceremony, keyed by ID. Files are available as `${artifact.<id>}`; physical items appear in the script.",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/Material"
       }
     },
     "name": {
+      "description": "The ceremony's name, shown in the script and the report.",
       "type": [
         "string",
         "number",
@@ -55,18 +63,21 @@
       ]
     },
     "output": {
+      "description": "Declared outputs, keyed by artifact ID.",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/OutputDeclaration"
       }
     },
     "parameters": {
+      "description": "Values supplied when the ceremony runs, keyed by name and available as `${param.<name>}`.",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/Parameter"
       }
     },
     "prerequisites": {
+      "description": "Conditions met before the ceremony starts, printed as a checklist.",
       "type": "array",
       "items": {
         "type": [
@@ -77,18 +88,21 @@
       }
     },
     "roles": {
+      "description": "Roles taking part in the ceremony, keyed by ID. Steps and sections refer to a role as `${role.<id>}`.",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/RoleDefinition"
       }
     },
     "sections": {
+      "description": "Sections, keyed by ID. Steps run in the order the sections and steps are written.",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/$defs/SectionBody"
       }
     },
     "version": {
+      "description": "The ceremony definition format version, currently `\"0.3\"`.",
       "type": [
         "string",
         "number",
@@ -105,9 +119,11 @@
   ],
   "$defs": {
     "Act": {
+      "description": "An act, a group of sections in the script and the report.",
       "type": "object",
       "properties": {
         "description": {
+          "description": "Shown at the start of the act.",
           "type": [
             "string",
             "number",
@@ -115,6 +131,7 @@
           ]
         },
         "id": {
+          "description": "The act's ID, which a section names under `act`.",
           "type": [
             "string",
             "number",
@@ -122,6 +139,7 @@
           ]
         },
         "name": {
+          "description": "The name shown in the script and the report.",
           "type": [
             "string",
             "number",
@@ -135,44 +153,158 @@
       ]
     },
     "ActionType": {
-      "type": "string",
-      "enum": [
-        "clock_check",
-        "confirm",
-        "check_value",
-        "oral_readback",
-        "reveal",
-        "machine_info",
-        "enter_value",
-        "enter_secret",
-        "generate_key",
-        "wrap_key",
-        "unwrap_key",
-        "import_key",
-        "encrypt_data",
-        "decrypt_data",
-        "split_secret",
-        "combine_shares",
-        "enter_share",
-        "export_public",
-        "sign_data",
-        "verify_signature",
-        "attest",
-        "gather_entropy",
-        "tpm_attest",
-        "piv_read_certificate",
-        "piv_sign",
-        "yubikey_attest_slot",
-        "issue_certificate",
-        "generate_csr"
+      "description": "What a step does.",
+      "oneOf": [
+        {
+          "description": "Check the system clock before the ceremony continues.\n\nShows the current system time and asks the operator to confirm that it is correct. Place it first, so that every recorded time can be trusted.",
+          "type": "string",
+          "const": "clock_check"
+        },
+        {
+          "description": "Record one person's yes-or-no decision.\n\nUse it for a check that needs human judgment or knowledge of something outside the machine, such as \"Verify that every network cable is disconnected\".",
+          "type": "string",
+          "const": "confirm"
+        },
+        {
+          "description": "Compare two values and fail the step if they do not match.\n\nUse it for a check the machine can make on its own, such as comparing a computed SHA-256 digest with an expected one.",
+          "type": "string",
+          "const": "check_value"
+        },
+        {
+          "description": "Have one person read a value aloud for another to check.\n\nUse it to check a value against something outside the machine, such as a label or a printed document. The value is shown in the NATO phonetic alphabet or in hexadecimal.",
+          "type": "string",
+          "const": "oral_readback"
+        },
+        {
+          "description": "Show a value for someone to copy, then remove it from the screen.\n\nThe operator reveals the value once and confirms that every row is written down. The transcript records that it was shown, not its value. `rite script` prints a worksheet for the step. A headless run that is not a dry run stops here.",
+          "type": "string",
+          "const": "reveal"
+        },
+        {
+          "description": "Record which machine runs the ceremony.\n\nRecords details such as the hostname, the processor and the operating system as evidence. Place it early in the ceremony.",
+          "type": "string",
+          "const": "machine_info"
+        },
+        {
+          "description": "Ask someone to enter a value and record it as an artifact.\n\nThe value is recorded in the transcript. The input format and length fields constrain what can be entered.",
+          "type": "string",
+          "const": "enter_value"
+        },
+        {
+          "description": "Ask someone to enter a secret without recording its value.\n\nThe input is hidden, and the secret is erased from memory when the run ends. The transcript records that a secret was entered, not its value. A later step can read it as an input.",
+          "type": "string",
+          "const": "enter_secret"
+        },
+        {
+          "description": "Generate a key in a backend.",
+          "type": "string",
+          "const": "generate_key"
+        },
+        {
+          "description": "Encrypt a private key for transport.\n\nReads `key_to_wrap` and exactly one of `wrapping_key` or `recipient`.",
+          "type": "string",
+          "const": "wrap_key"
+        },
+        {
+          "description": "Decrypt a wrapped key and import the recovered key into a backend.\n\nThe wrapped data identifies its scheme. The step checks the recovered key against `algorithm` when one is given.",
+          "type": "string",
+          "const": "unwrap_key"
+        },
+        {
+          "description": "Encrypt data using a key held by a backend.\n\nThe backend generates a content-encryption key, encrypts the data with it, and protects it with the step's encryption key. The data itself is not sent to the backend.",
+          "type": "string",
+          "const": "encrypt_data"
+        },
+        {
+          "description": "Decrypt data encrypted by `encrypt_data`.\n\nThe result is a byte artifact available to later steps and erased from memory when the run ends.",
+          "type": "string",
+          "const": "decrypt_data"
+        },
+        {
+          "description": "Split a secret into shares so that `threshold` of them can recover it.\n\nThe step uses the backend for randomness and checks every subset of `threshold` shares before it completes. The shares are stored in one artifact, and later steps can read individual shares.",
+          "type": "string",
+          "const": "split_secret"
+        },
+        {
+          "description": "Recover a secret from shares.\n\nThe shares must have the same threshold and length. Shares from different splits can produce an incorrect result without an error, so verify the recovered secret separately. The result is erased from memory when the run ends.",
+          "type": "string",
+          "const": "combine_shares"
+        },
+        {
+          "description": "Enter a share from its worksheet.\n\nEach row is checked as it is typed. The step creates a share artifact for later use by `combine_shares`.",
+          "type": "string",
+          "const": "enter_share"
+        },
+        {
+          "description": "Import key material into a backend.\n\nThe material can come from a file or an artifact. The action imports the bytes as the key type named by `algorithm`.",
+          "type": "string",
+          "const": "import_key"
+        },
+        {
+          "description": "Export a keypair's public key as an artifact.",
+          "type": "string",
+          "const": "export_public"
+        },
+        {
+          "description": "Sign data with a key held by a backend.\n\nThe key determines the signature algorithm unless `algorithm` names another one supported by the key.",
+          "type": "string",
+          "const": "sign_data"
+        },
+        {
+          "description": "Verify a signature using the signer's public key.\n\nA backend is optional. Without one, the action verifies in software.",
+          "type": "string",
+          "const": "verify_signature"
+        },
+        {
+          "description": "Record a formal statement in the transcript.",
+          "type": "string",
+          "const": "attest"
+        },
+        {
+          "description": "Add a participant-supplied random value to the ceremony's entropy.\n\nLater values drawn from the entropy source depend on this contribution.",
+          "type": "string",
+          "const": "gather_entropy"
+        },
+        {
+          "description": "Record a TPM-signed quote of the device's measurements.\n\nNo build of Rite currently supports this action.",
+          "type": "string",
+          "const": "tpm_attest"
+        },
+        {
+          "description": "Read a certificate from a PIV card.\n\nReading a certificate from a PIV slot does not require a PIN.",
+          "type": "string",
+          "const": "piv_read_certificate"
+        },
+        {
+          "description": "Sign data using a key on a PIV card.\n\nThe step asks for the PIN before signing.",
+          "type": "string",
+          "const": "piv_sign"
+        },
+        {
+          "description": "Produce a YubiKey attestation for a PIV key.\n\nThe YubiKey attestation key in slot F9 signs a certificate for the key in the named slot.",
+          "type": "string",
+          "const": "yubikey_attest_slot"
+        },
+        {
+          "description": "Issue an X.509 certificate for a certificate signing request.\n\nReads the request and a signing key.",
+          "type": "string",
+          "const": "issue_certificate"
+        },
+        {
+          "description": "Create a PKCS#10 certificate signing request.\n\nThe request is built from `subject` and `san`, then signed with a key held by a backend.",
+          "type": "string",
+          "const": "generate_csr"
+        }
       ]
     },
     "AttestParams": {
+      "description": "The `with` block of `attest`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "statement": {
+              "description": "The statement recorded in the transcript.",
               "anyOf": [
                 {
                   "type": "string"
@@ -191,11 +323,13 @@
       ]
     },
     "AttestSlotParams": {
+      "description": "The `with` block of `yubikey_attest_slot`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "message": {
+              "description": "Shown to the operator when the step starts.",
               "anyOf": [
                 {
                   "type": "string"
@@ -206,6 +340,7 @@
               ]
             },
             "slot": {
+              "description": "The PIV slot containing the key to attest.",
               "anyOf": [
                 {
                   "type": "string",
@@ -249,11 +384,13 @@
       ]
     },
     "CheckValueParams": {
+      "description": "The `with` block of `check_value`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "actual": {
+              "description": "The value to compare with `expected`.",
               "anyOf": [
                 {
                   "type": "string"
@@ -264,6 +401,7 @@
               ]
             },
             "expected": {
+              "description": "The value that `actual` must match.",
               "anyOf": [
                 {
                   "type": "string"
@@ -274,6 +412,7 @@
               ]
             },
             "message": {
+              "description": "A description of the check, shown with its result.",
               "anyOf": [
                 {
                   "type": "string"
@@ -284,6 +423,7 @@
               ]
             },
             "sensitive": {
+              "description": "Whether to hide the compared values when they do not match.",
               "anyOf": [
                 {
                   "type": "boolean",
@@ -307,11 +447,13 @@
       ]
     },
     "ClockCheckParams": {
+      "description": "The `with` block of `clock_check`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "message": {
+              "description": "Shown above the time.",
               "anyOf": [
                 {
                   "type": "string"
@@ -330,11 +472,13 @@
       ]
     },
     "ConfirmParams": {
+      "description": "The `with` block of `confirm`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "message": {
+              "description": "The question the person answers.",
               "anyOf": [
                 {
                   "type": "string"
@@ -353,47 +497,58 @@
       ]
     },
     "DutyType": {
+      "description": "What kind of duty is done after the run.\n\nEach kind gives the duty a text for the script, used when it has no `description`. Use `custom` for any other duty, with a `description`.",
       "oneOf": [
         {
+          "description": "Return materials to secure storage.",
           "type": "string",
           "const": "return_to_vault"
         },
         {
+          "description": "Give the shares to their custodians.",
           "type": "string",
           "const": "distribute_shares"
         },
         {
+          "description": "Give the backup media to its recipients.",
           "type": "string",
           "const": "distribute_media"
         },
         {
+          "description": "Store the ceremony's materials in an archive.",
           "type": "string",
           "const": "archive_materials"
         },
         {
+          "description": "Publish the ceremony record and witness attestations.",
           "type": "string",
           "const": "publish_record"
         },
         {
+          "description": "Notify stakeholders that the ceremony is complete.",
           "type": "string",
           "const": "notify_stakeholders"
         },
         {
+          "description": "Import the generated keys into the system that uses them.",
           "type": "string",
           "const": "import_keys"
         },
         {
+          "description": "A duty described in `description`.",
           "type": "string",
           "const": "custom"
         }
       ]
     },
     "EncryptDataParams": {
+      "description": "The `with` block of `encrypt_data`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "scheme": {
+              "description": "The scheme used to encrypt the data. Defaults to `CMS-AES-256-GCM`.",
               "anyOf": [
                 {
                   "type": "string",
@@ -415,11 +570,13 @@
       ]
     },
     "EnterShareParams": {
+      "description": "The `with` block of `enter_share`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "format": {
+              "description": "The format used to enter the share. Defaults to `paper32`.",
               "anyOf": [
                 {
                   "type": "string",
@@ -445,6 +602,7 @@
               ]
             },
             "length": {
+              "description": "The share's exact length in bytes, including its three-byte header.",
               "anyOf": [
                 {
                   "type": "integer",
@@ -464,6 +622,7 @@
               ]
             },
             "message": {
+              "description": "The heading shown above the share's rows.",
               "anyOf": [
                 {
                   "type": "string"
@@ -474,6 +633,7 @@
               ]
             },
             "note": {
+              "description": "A note shown with the share's rows, such as where the worksheet came from.",
               "anyOf": [
                 {
                   "type": "string"
@@ -495,14 +655,17 @@
       ]
     },
     "EntryParams": {
+      "description": "The `with` block of `enter_value` and `enter_secret`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "format": {
+              "description": "The value's format, such as `hex` or `base64`, or a pattern object such as `{ pattern: \"...\" }`. If omitted, the value is treated as text. Encoded input is stored as decoded bytes.",
               "$ref": "#/$defs/FormatSpec"
             },
             "length": {
+              "description": "The exact length required. The unit depends on `format`: characters for text, bytes for encodings, or words for `bip39`.",
               "anyOf": [
                 {
                   "type": "integer",
@@ -515,6 +678,7 @@
               ]
             },
             "max_length": {
+              "description": "The maximum accepted length, in the unit set by `format`.",
               "anyOf": [
                 {
                   "type": "integer",
@@ -527,6 +691,7 @@
               ]
             },
             "message": {
+              "description": "The prompt shown to the person entering the value.",
               "anyOf": [
                 {
                   "type": "string"
@@ -537,6 +702,7 @@
               ]
             },
             "min_length": {
+              "description": "The minimum accepted length, in the unit set by `format`.",
               "anyOf": [
                 {
                   "type": "integer",
@@ -633,34 +799,42 @@
       "pattern": "\\$\\{"
     },
     "Format": {
+      "description": "What kind of value a person types.",
       "anyOf": [
         {
           "oneOf": [
             {
+              "description": "Anything the person can type.",
               "type": "string",
               "const": "text"
             },
             {
+              "description": "Decimal digits only.",
               "type": "string",
               "const": "digits"
             },
             {
+              "description": "ASCII letters and digits.",
               "type": "string",
               "const": "alphanumeric"
             },
             {
+              "description": "Bytes as hexadecimal, in either case, two digits per byte.",
               "type": "string",
               "const": "hex"
             },
             {
+              "description": "Bytes as standard base64 with padding.",
               "type": "string",
               "const": "base64"
             },
             {
+              "description": "Bytes as paper32 rows, typed a row at a time from a sheet, a wrong character in a row corrected.",
               "type": "string",
               "const": "paper32"
             },
             {
+              "description": "A BIP-39 recovery phrase in the English list, typed a word at a time; the value is its entropy, and a length counts words.",
               "type": "string",
               "const": "bip39"
             }
@@ -683,6 +857,7 @@
               "type": "object",
               "properties": {
                 "pattern": {
+                  "description": "A regular expression the whole value must match.",
                   "anyOf": [
                     {
                       "type": "string"
@@ -707,11 +882,13 @@
       ]
     },
     "GatherEntropyParams": {
+      "description": "The `with` block of `gather_entropy`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "instruction": {
+              "description": "Instructions shown to the participant for producing the random value. Without them, the prompt suggests rolling a die.",
               "anyOf": [
                 {
                   "type": "string"
@@ -730,11 +907,13 @@
       ]
     },
     "GenerateCsrParams": {
+      "description": "The `with` block of `generate_csr`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "san": {
+              "description": "Subject alternative names to include, such as `DNS:example.com` or `IP:192.0.2.1`.",
               "anyOf": [
                 {
                   "type": "array",
@@ -755,6 +934,7 @@
               ]
             },
             "subject": {
+              "description": "The certificate subject, written as an RFC 4514 name such as `CN=example.com,O=Acme,C=US`.",
               "anyOf": [
                 {
                   "type": "string"
@@ -776,11 +956,13 @@
       ]
     },
     "GenerateKeyParams": {
+      "description": "The `with` block of `generate_key`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "algorithm": {
+              "description": "The algorithm of the key to generate. Defaults to `RSA-4096`.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/KeyAlgorithm",
@@ -792,9 +974,11 @@
               ]
             },
             "policy": {
+              "description": "The key's permitted operations and whether it can be exported from the backend. A key used by a later `wrap_key` step must be extractable.",
               "$ref": "#/$defs/KeyPolicyParams"
             },
             "slot": {
+              "description": "A backend-specific location for the key, such as a PIV slot or PKCS#11 slot. The software backend ignores this field.",
               "anyOf": [
                 {
                   "type": "string"
@@ -813,14 +997,17 @@
       ]
     },
     "ImportKeyParams": {
+      "description": "The `with` block of `import_key`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "algorithm": {
+              "description": "The algorithm of the key the bytes hold.\n\nFor an AES algorithm the bytes are the key; for any other they are PKCS#8 DER.",
               "$ref": "#/$defs/KeyAlgorithm"
             },
             "expect_key": {
+              "description": "The expected identity of the key: a `sha256:` fingerprint for a keypair or a `cmac-aes:` check value for a symmetric key. The step fails if the key does not match.",
               "anyOf": [
                 {
                   "type": "string",
@@ -835,6 +1022,7 @@
               ]
             },
             "label": {
+              "description": "The label to assign to the key. Defaults to `imported-key`.",
               "anyOf": [
                 {
                   "type": "string",
@@ -846,6 +1034,7 @@
               ]
             },
             "policy": {
+              "description": "The operations the imported key may perform and whether it may be exported from the backend.",
               "$ref": "#/$defs/KeyPolicyParams"
             }
           },
@@ -860,11 +1049,13 @@
       ]
     },
     "IssueCertificateParams": {
+      "description": "The `with` block of `issue_certificate`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "issuer_cn": {
+              "description": "The issuer's common name when the step does not read an issuer certificate.",
               "anyOf": [
                 {
                   "type": "string"
@@ -875,6 +1066,7 @@
               ]
             },
             "path_len": {
+              "description": "For `sub_ca`, how many CA certificates may follow this one in a chain. Defaults to 0.",
               "anyOf": [
                 {
                   "type": "integer",
@@ -887,6 +1079,7 @@
               ]
             },
             "profile": {
+              "description": "The certificate profile, which determines its extensions. Defaults to `end_entity`.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/CertProfile",
@@ -898,6 +1091,7 @@
               ]
             },
             "validity_days": {
+              "description": "The certificate's validity period in days. Defaults to 3650 days.",
               "anyOf": [
                 {
                   "type": "integer",
@@ -944,11 +1138,13 @@
       ]
     },
     "KeyPolicyParams": {
+      "description": "What a key may do, in PKCS#11 terms.\n\nA field left out takes the restrictive choice: the key is persistent, sensitive and not extractable, and its usages are what its algorithm permits, sign and verify for a keypair, wrap and unwrap for an AES key. The key usage in a certificate is a different thing, set by `profile` on `issue_certificate`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "extractable": {
+              "description": "Whether the key may be exported from the backend.",
               "anyOf": [
                 {
                   "type": "boolean"
@@ -959,6 +1155,7 @@
               ]
             },
             "persistent": {
+              "description": "Whether the key remains available after the session ends.",
               "anyOf": [
                 {
                   "type": "boolean"
@@ -969,6 +1166,7 @@
               ]
             },
             "sensitive": {
+              "description": "Whether the backend marks the key as sensitive and prevents plaintext access.",
               "anyOf": [
                 {
                   "type": "boolean"
@@ -979,6 +1177,7 @@
               ]
             },
             "usages": {
+              "description": "The operations the key may perform, such as `sign` or `unwrap`.",
               "anyOf": [
                 {
                   "type": "array",
@@ -992,6 +1191,7 @@
               ]
             },
             "wrap_with_trusted_only": {
+              "description": "Whether the key may be wrapped only by a trusted key.",
               "anyOf": [
                 {
                   "type": "boolean"
@@ -1029,11 +1229,13 @@
       ]
     },
     "MachineInfoParams": {
+      "description": "The `with` block of `machine_info`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "include_cpu": {
+              "description": "Whether to record the processor model. Defaults to `true`.",
               "anyOf": [
                 {
                   "type": "boolean",
@@ -1045,6 +1247,7 @@
               ]
             },
             "include_machine_id": {
+              "description": "Whether to record a hash of the machine ID. Defaults to `true`.",
               "anyOf": [
                 {
                   "type": "boolean",
@@ -1056,6 +1259,7 @@
               ]
             },
             "include_os": {
+              "description": "Whether to record the operating system and kernel versions. Defaults to `true`.",
               "anyOf": [
                 {
                   "type": "boolean",
@@ -1067,6 +1271,7 @@
               ]
             },
             "include_security_features": {
+              "description": "Whether to record the machine's memory protections: RAM encryption, IOMMU DMA protection, and zeroing of freed pages. Defaults to `true`.",
               "anyOf": [
                 {
                   "type": "boolean",
@@ -1078,6 +1283,7 @@
               ]
             },
             "message": {
+              "description": "Shown to the operator when the step starts.",
               "anyOf": [
                 {
                   "type": "string"
@@ -1099,6 +1305,7 @@
       "type": "object",
       "properties": {
         "type": {
+          "description": "Use `digital` for a file or `physical` for an item brought to the ceremony.",
           "type": "string",
           "enum": [
             "digital",
@@ -1121,6 +1328,7 @@
           "then": {
             "properties": {
               "description": {
+                "description": "A description of the material, shown in the script.",
                 "type": [
                   "string",
                   "number",
@@ -1128,6 +1336,7 @@
                 ]
               },
               "path": {
+                "description": "The default file path, relative to the ceremony definition.",
                 "type": [
                   "string",
                   "number",
@@ -1135,6 +1344,7 @@
                 ]
               },
               "title": {
+                "description": "The name shown for this material in the script.",
                 "type": [
                   "string",
                   "number",
@@ -1160,6 +1370,7 @@
           "then": {
             "properties": {
               "description": {
+                "description": "A description of the material, shown in the script.",
                 "type": [
                   "string",
                   "number",
@@ -1167,6 +1378,7 @@
                 ]
               },
               "identifier": {
+                "description": "The default identifier, such as a serial number, label, or batch code.",
                 "type": [
                   "string",
                   "number",
@@ -1174,6 +1386,7 @@
                 ]
               },
               "quantity": {
+                "description": "The number of items listed in the checklist.",
                 "type": [
                   "integer",
                   "string"
@@ -1186,6 +1399,7 @@
                 "x-message": "'quantity' must be a whole number from 0 to 4294967295"
               },
               "title": {
+                "description": "The name shown for this material in the script.",
                 "type": [
                   "string",
                   "number",
@@ -1203,11 +1417,13 @@
       ]
     },
     "OralReadbackParams": {
+      "description": "The `with` block of `oral_readback`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "characters": {
+              "description": "The number of characters to read aloud from the start of the value.",
               "anyOf": [
                 {
                   "type": "integer",
@@ -1220,9 +1436,11 @@
               ]
             },
             "format": {
+              "description": "The format used to display the value. Defaults to `nato_phonetic`.",
               "$ref": "#/$defs/ReadbackFormat"
             },
             "message": {
+              "description": "A prompt shown before the value is read aloud.",
               "anyOf": [
                 {
                   "type": "string"
@@ -1233,6 +1451,7 @@
               ]
             },
             "value": {
+              "description": "The value to read aloud, such as a fingerprint from an artifact.",
               "anyOf": [
                 {
                   "type": "string"
@@ -1243,7 +1462,10 @@
               ]
             }
           },
-          "additionalProperties": false
+          "additionalProperties": false,
+          "required": [
+            "value"
+          ]
         },
         {
           "$ref": "#/$defs/Expression"
@@ -1251,9 +1473,11 @@
       ]
     },
     "OutputDeclaration": {
+      "description": "Something the ceremony produces.",
       "type": "object",
       "properties": {
         "description": {
+          "description": "A description of the declared output.",
           "type": [
             "string",
             "number",
@@ -1261,6 +1485,7 @@
           ]
         },
         "type": {
+          "description": "The kind of artifact declared as an output.",
           "$ref": "#/$defs/OutputType"
         }
       },
@@ -1270,46 +1495,59 @@
       ]
     },
     "OutputType": {
+      "description": "What kind of output a ceremony produces.",
       "oneOf": [
         {
+          "description": "A public key.",
           "type": "string",
           "const": "public_key"
         },
         {
+          "description": "A key wrapped for transport, in the container its scheme names.",
           "type": "string",
           "const": "wrapped_key"
         },
         {
+          "description": "Content encrypted for a recipient, in the container its scheme names.",
           "type": "string",
           "const": "encrypted_data"
         },
         {
+          "description": "An X.509 certificate.",
           "type": "string",
           "const": "certificate"
         },
         {
+          "description": "A signed DNSSEC resource record set.",
           "type": "string",
           "const": "signed_rrset"
         },
         {
+          "description": "A Certificate Transparency signed certificate timestamp.",
           "type": "string",
           "const": "sct"
         },
         {
+          "description": "A document.",
           "type": "string",
           "const": "document"
         },
         {
+          "description": "A ceremony log or transcript.",
           "type": "string",
           "const": "ceremony_log"
         }
       ]
     },
     "Parameter": {
+      "description": "A value given when the ceremony runs.",
       "type": "object",
       "properties": {
-        "default": {},
+        "default": {
+          "description": "The value used when none is supplied. If omitted, the parameter is required."
+        },
         "description": {
+          "description": "A description shown when the parameter is requested.",
           "type": [
             "string",
             "number",
@@ -1317,6 +1555,7 @@
           ]
         },
         "type": {
+          "description": "The kind of value this parameter accepts.",
           "$ref": "#/$defs/ParameterType"
         }
       },
@@ -1326,31 +1565,38 @@
       ]
     },
     "ParameterType": {
+      "description": "What kind of value a ceremony parameter takes.",
       "oneOf": [
         {
+          "description": "Text.",
           "type": "string",
           "const": "string"
         },
         {
+          "description": "A date in `YYYY-MM-DD` format.",
           "type": "string",
           "const": "date"
         },
         {
+          "description": "A whole number.",
           "type": "string",
           "const": "integer"
         },
         {
+          "description": "A Boolean value, `true` or `false`.",
           "type": "string",
           "const": "boolean"
         }
       ]
     },
     "PivReadCertificateParams": {
+      "description": "The `with` block of `piv_read_certificate`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "message": {
+              "description": "Shown to the operator when the step starts.",
               "anyOf": [
                 {
                   "type": "string"
@@ -1361,6 +1607,7 @@
               ]
             },
             "slot": {
+              "description": "The PIV slot to read, such as `9a` or `9c`.",
               "anyOf": [
                 {
                   "type": "string",
@@ -1386,11 +1633,13 @@
       ]
     },
     "PivSignParams": {
+      "description": "The `with` block of `piv_sign`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "algorithm": {
+              "description": "The signature algorithm to use. Defaults to `ECDSA-SHA256`.",
               "anyOf": [
                 {
                   "type": "string",
@@ -1407,6 +1656,7 @@
               ]
             },
             "message": {
+              "description": "Shown to the operator when the step starts.",
               "anyOf": [
                 {
                   "type": "string"
@@ -1417,6 +1667,7 @@
               ]
             },
             "slot": {
+              "description": "The PIV slot containing the signing key. Defaults to `9c`.",
               "anyOf": [
                 {
                   "type": "string",
@@ -1440,9 +1691,11 @@
       ]
     },
     "PostCeremonyDutyBody": {
+      "description": "A duty done after the run ends.",
       "type": "object",
       "properties": {
         "description": {
+          "description": "Instructions for this duty. For `custom`, this field is required.",
           "type": [
             "string",
             "number",
@@ -1450,6 +1703,7 @@
           ]
         },
         "items": {
+          "description": "Checklist items for this duty.",
           "type": "array",
           "items": {
             "type": [
@@ -1460,6 +1714,7 @@
           }
         },
         "location": {
+          "description": "The location where items are stored or archived.",
           "type": [
             "string",
             "number",
@@ -1467,6 +1722,7 @@
           ]
         },
         "recipient": {
+          "description": "The recipient of the distributed items.",
           "type": [
             "string",
             "number",
@@ -1474,6 +1730,7 @@
           ]
         },
         "role": {
+          "description": "The ID of the role responsible for this duty.",
           "type": [
             "string",
             "number",
@@ -1481,6 +1738,7 @@
           ]
         },
         "type": {
+          "description": "The kind of post-ceremony duty.",
           "$ref": "#/$defs/DutyType"
         }
       },
@@ -1509,12 +1767,14 @@
       "errorMessage": "'retry' must be 'never' or a map with an 'attempts' field",
       "oneOf": [
         {
+          "description": "The step is never retried.",
           "const": "never"
         },
         {
           "type": "object",
           "properties": {
             "attempts": {
+              "description": "The total number of attempts allowed for the step.",
               "type": "integer",
               "maximum": 4294967295,
               "minimum": 0
@@ -1529,18 +1789,22 @@
       "x-message": "'retry' must be 'never' or a map with an 'attempts' field"
     },
     "RevealFormat": {
+      "description": "The encoding a value is written on paper in.",
       "anyOf": [
         {
           "oneOf": [
             {
+              "description": "Rows of 32 base-32 characters, 28 of data and 4 of parity; a wrong character in a row is corrected.",
               "type": "string",
               "const": "paper32"
             },
             {
+              "description": "Two hexadecimal digits per byte, in rows of 32.",
               "type": "string",
               "const": "hex"
             },
             {
+              "description": "Words from the BIP-39 English list, one per row, for a wallet's recovery phrase.",
               "type": "string",
               "const": "bip39"
             }
@@ -1552,14 +1816,17 @@
       ]
     },
     "RevealParams": {
+      "description": "The `with` block of `reveal`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "format": {
+              "description": "The format used to display the value. Defaults to `paper32`.",
               "$ref": "#/$defs/RevealFormat"
             },
             "length": {
+              "description": "The value's exact length. The unit is words for `bip39` and bytes otherwise. For a share, include its three-byte header in this length.",
               "anyOf": [
                 {
                   "type": "integer",
@@ -1572,6 +1839,7 @@
               ]
             },
             "message": {
+              "description": "The heading shown above the value and printed on the worksheet.",
               "anyOf": [
                 {
                   "type": "string"
@@ -1582,6 +1850,7 @@
               ]
             },
             "note": {
+              "description": "A note printed on the worksheet, such as where the value goes or who keeps it.",
               "anyOf": [
                 {
                   "type": "string"
@@ -1639,9 +1908,11 @@
       ]
     },
     "RoleDefinition": {
+      "description": "A role in the ceremony.",
       "type": "object",
       "properties": {
         "name": {
+          "description": "The role's display name. If omitted, it is derived from the role ID.",
           "type": [
             "string",
             "number",
@@ -1649,6 +1920,7 @@
           ]
         },
         "person": {
+          "description": "The person assigned to this role.",
           "type": [
             "string",
             "number",
@@ -1659,9 +1931,11 @@
       "additionalProperties": false
     },
     "SectionBody": {
+      "description": "A section: steps that run in the order written.",
       "type": "object",
       "properties": {
         "act": {
+          "description": "The ID of the act that contains this section.",
           "type": [
             "string",
             "number",
@@ -1669,6 +1943,7 @@
           ]
         },
         "description": {
+          "description": "Shown at the start of the section.",
           "type": [
             "string",
             "number",
@@ -1676,6 +1951,7 @@
           ]
         },
         "name": {
+          "description": "The name shown in the script and the report.",
           "type": [
             "string",
             "number",
@@ -1683,6 +1959,7 @@
           ]
         },
         "role": {
+          "description": "The default role for steps in this section, written as `${role.<id>}`.",
           "type": [
             "string",
             "number",
@@ -1690,6 +1967,7 @@
           ]
         },
         "steps": {
+          "description": "The section's steps, by ID, in the order they run.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/StepBody"
@@ -1732,14 +2010,17 @@
       ]
     },
     "SignDataParams": {
+      "description": "The `with` block of `sign_data`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "algorithm": {
+              "description": "The signature algorithm to use. If omitted, it is inferred from the key.",
               "$ref": "#/$defs/SignAlgorithm"
             },
             "message": {
+              "description": "Shown to the operator when the step starts.",
               "anyOf": [
                 {
                   "type": "string"
@@ -1758,14 +2039,17 @@
       ]
     },
     "SplitSecretParams": {
+      "description": "The `with` block of `split_secret`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "scheme": {
+              "description": "The secret-sharing scheme to use. Defaults to `rite-sss/v1`.",
               "$ref": "#/$defs/SharingScheme"
             },
             "shares": {
+              "description": "The number of shares to create. It must be at least the threshold. A split with more than 100,000 threshold-sized subsets is refused when the step runs.",
               "anyOf": [
                 {
                   "type": "integer",
@@ -1778,6 +2062,7 @@
               ]
             },
             "threshold": {
+              "description": "The number of shares required to recover the secret.",
               "anyOf": [
                 {
                   "type": "integer",
@@ -1861,12 +2146,15 @@
       ]
     },
     "StepBody": {
+      "description": "A step: one action, performed by one role.",
       "type": "object",
       "properties": {
         "action": {
+          "description": "What the step does.",
           "$ref": "#/$defs/ActionType"
         },
         "backend": {
+          "description": "The name of a backend declared in `backends`.",
           "type": [
             "string",
             "number",
@@ -1874,6 +2162,7 @@
           ]
         },
         "creates": {
+          "description": "The ID assigned to the artifact produced by this step. Later steps refer to it as `${artifact.<id>}`.",
           "type": [
             "string",
             "number",
@@ -1881,6 +2170,7 @@
           ]
         },
         "description": {
+          "description": "What the step does, in the script and on screen.",
           "type": [
             "string",
             "number",
@@ -1888,6 +2178,7 @@
           ]
         },
         "preconditions": {
+          "description": "Conditions a person confirms before the step runs.",
           "type": "array",
           "items": {
             "type": [
@@ -1897,11 +2188,15 @@
             ]
           }
         },
-        "reads": {},
+        "reads": {
+          "description": "The inputs the step's action reads, under the names it expects. For example, `key: ${artifact.root_key}`."
+        },
         "retry": {
+          "description": "What happens if the step fails. By default, the operator chooses whether to retry or abort. Use `never` to forbid retries, or `{ attempts: N }` to set the total number of attempts.",
           "$ref": "#/$defs/RetrySpec"
         },
         "role": {
+          "description": "The role that performs this step, written as `${role.<id>}`. Defaults to the section's role.",
           "type": [
             "string",
             "number",
@@ -1909,9 +2204,12 @@
           ]
         },
         "silent": {
+          "description": "Whether to continue to the next step without pausing.",
           "type": "boolean"
         },
-        "with": {}
+        "with": {
+          "description": "Parameters for the action. Values can be expressions, such as `${param.subject}`."
+        }
       },
       "additionalProperties": false,
       "allOf": [
@@ -3054,14 +3352,17 @@
       ]
     },
     "UnwrapKeyParams": {
+      "description": "The `with` block of `unwrap_key`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "algorithm": {
+              "description": "The algorithm of the recovered key. Required for a symmetric key; optional for a keypair, whose algorithm can be read from the key.",
               "$ref": "#/$defs/KeyAlgorithm"
             },
             "expect_key": {
+              "description": "The expected identity of the key: a `sha256:` fingerprint for a keypair or a `cmac-aes:` check value for a symmetric key. The step fails if the key does not match.",
               "anyOf": [
                 {
                   "type": "string",
@@ -3076,6 +3377,7 @@
               ]
             },
             "label": {
+              "description": "The label to assign to the key. Defaults to `unwrapped-key`.",
               "anyOf": [
                 {
                   "type": "string",
@@ -3087,6 +3389,7 @@
               ]
             },
             "policy": {
+              "description": "The operations the recovered key may perform and whether it may be exported from the backend. Without this field, the key may sign, verify, and be wrapped again. To use it as a wrapping key, set `usages: [wrap, unwrap]`.",
               "$ref": "#/$defs/KeyPolicyParams"
             }
           },
@@ -3098,14 +3401,17 @@
       ]
     },
     "VerifySignatureParams": {
+      "description": "The `with` block of `verify_signature`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "algorithm": {
+              "description": "The signature algorithm to use. If omitted, it is inferred from the key. For an RSA-PSS signature, specify this field because an RSA key does not identify that scheme.",
               "$ref": "#/$defs/SignAlgorithm"
             },
             "message": {
+              "description": "Shown to the operator when the step starts.",
               "anyOf": [
                 {
                   "type": "string"
@@ -3124,11 +3430,13 @@
       ]
     },
     "WrapKeyParams": {
+      "description": "The `with` block of `wrap_key`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "expect_recipient": {
+              "description": "The expected fingerprint of the recipient's public key, in the form `sha256:<64 lowercase hex digits>`. The step fails if the recipient key does not match.",
               "anyOf": [
                 {
                   "type": "string",
@@ -3143,6 +3451,7 @@
               ]
             },
             "scheme": {
+              "description": "The wrapping scheme to use. Defaults to `CMS-AES-256-GCM`.",
               "$ref": "#/$defs/WrapScheme"
             }
           },

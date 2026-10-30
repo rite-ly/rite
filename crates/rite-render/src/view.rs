@@ -584,7 +584,7 @@ fn step_prose(step: &Step) -> String {
     {
         return format!("Attest: \"{stmt}\"");
     }
-    step.action.describe().to_string()
+    step.action.summary().to_string()
 }
 
 /// Render a multi-line instruction string as safe HTML.

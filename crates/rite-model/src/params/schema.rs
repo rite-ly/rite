@@ -196,6 +196,8 @@ pub(super) fn property<'a>(
 ///   absent, but nothing in a ceremony means it, so the schema leaves it out
 ///   rather than adding `null` to every optional field.
 /// - A `null` default says nothing and is dropped.
+/// - A description taken from a doc comment keeps its paragraphs, and the
+///   line breaks inside each become spaces.
 #[derive(Clone)]
 struct Strict;
 
@@ -221,6 +223,9 @@ impl Transform for Strict {
         if schema.get("default") == Some(&Value::Null) {
             schema.remove("default");
         }
+        if let Some(Value::String(text)) = schema.get_mut("description") {
+            *text = paragraphs(text);
+        }
         if schema.get("type").and_then(Value::as_str) == Some("integer") {
             let (low, high) = match schema.remove("format").as_ref().and_then(Value::as_str) {
                 Some("uint8") => (0, i64::from(u8::MAX)),
@@ -245,6 +250,16 @@ impl Transform for Strict {
         }
         transform_subschemas(self, schema);
     }
+}
+
+/// `text` with each paragraph on one line, the paragraphs apart by a blank
+/// line.
+fn paragraphs(text: &str) -> String {
+    text.split("\n\n")
+        .map(|paragraph| paragraph.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|paragraph| !paragraph.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 #[cfg(test)]

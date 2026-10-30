@@ -5,22 +5,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::Vocabulary;
 
-/// Params for `clock_check` action.
+/// The `with` block of `clock_check`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ClockCheckParams {
-    /// Message to display before showing the time.
+    /// Shown above the time.
     #[serde(default)]
     pub message: Option<String>,
 }
 
-/// Params for `confirm` action.
+/// The `with` block of `confirm`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ConfirmParams {
-    /// Message to display for confirmation.
+    /// The question the person answers.
     #[serde(default)]
     pub message: Option<String>,
 }
@@ -74,65 +74,62 @@ impl JsonSchema for ReadbackFormat {
     }
 }
 
-/// Params for `oral_readback` action.
+/// The `with` block of `oral_readback`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct OralReadbackParams {
-    /// Instruction shown before the readback, as on the other verification
-    /// actions.
+    /// A prompt shown before the value is read aloud.
     #[serde(default)]
     pub message: Option<String>,
-    /// Value to read aloud. Can be a literal string or artifact reference.
-    #[serde(default)]
-    pub value: Option<String>,
-    /// Display format. Defaults to NATO phonetic.
+    /// The value to read aloud, such as a fingerprint from an artifact.
+    pub value: String,
+    /// The format used to display the value. Defaults to `nato_phonetic`.
     #[serde(default)]
     pub format: Option<ReadbackFormat>,
-    /// Limit number of characters to read (for long values).
+    /// The number of characters to read aloud from the start of the value.
     #[serde(default)]
     pub characters: Option<u32>,
 }
 
-/// Params for `check_value` action.
-///
-/// Machine-verified comparison of two values. Use this when both values are known
-/// to the system and comparison is deterministic (e.g., hash verification).
+/// The `with` block of `check_value`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct CheckValueParams {
-    /// The computed or actual value to verify (required).
+    /// The value to compare with `expected`.
     pub actual: String,
-    /// The expected value to compare against (required).
+    /// The value that `actual` must match.
     pub expected: String,
-    /// Human-readable description of what is being verified (for transcript/display).
+    /// A description of the check, shown with its result.
     #[serde(default)]
     pub message: Option<String>,
-    /// If true, only record pass/fail result in evidence (no values or lengths).
+    /// Whether to hide the compared values when they do not match.
     #[serde(default)]
     pub sensitive: bool,
 }
 
-/// Params for `machine_info` action.
+/// The `with` block of `machine_info`.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct MachineInfoParams {
-    /// Include hashed machine ID in evidence (default: true).
+    /// Whether to record a hash of the machine ID. Defaults to `true`.
     #[serde(default = "default_true")]
     pub include_machine_id: bool,
-    /// Include CPU model in evidence (default: true).
+    /// Whether to record the processor model. Defaults to `true`.
     #[serde(default = "default_true")]
     pub include_cpu: bool,
-    /// Include OS information in evidence (default: true).
+    /// Whether to record the operating system and kernel versions. Defaults to
+    /// `true`.
     #[serde(default = "default_true")]
     pub include_os: bool,
-    /// Include memory protection status in evidence (default: true).
+    /// Whether to record the machine's memory protections: RAM encryption,
+    /// IOMMU DMA protection, and zeroing of freed pages. Defaults to `true`.
     #[serde(default = "default_true")]
     pub include_security_features: bool,
-    /// Custom message to display before capturing machine info.
+    /// Shown to the operator when the step starts.
     #[serde(default)]
     pub message: Option<String>,
 }

@@ -5,38 +5,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::CertProfile;
 
-/// Params for `generate_csr` action.
+/// The `with` block of `generate_csr`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct GenerateCsrParams {
-    /// Subject as RFC 4514 DN string: `"CN=example.com,O=Acme,C=US"`
+    /// The certificate subject, written as an RFC 4514 name such as
+    /// `CN=example.com,O=Acme,C=US`.
     pub subject: String,
-    /// Subject Alternative Names: `"DNS:foo.com"`, `"IP:1.2.3.4"`, `"email:u@example.com"`
+    /// Subject alternative names to include, such as `DNS:example.com` or
+    /// `IP:192.0.2.1`.
     #[serde(default)]
     pub san: Option<Vec<String>>,
 }
 
-/// Params for `issue_certificate` action.
+/// The `with` block of `issue_certificate`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct IssueCertificateParams {
-    /// Certificate profile controlling extensions. `sub_ca` is also
-    /// accepted as `intermediate_ca`.
+    /// The certificate profile, which determines its extensions. Defaults to
+    /// `end_entity`.
     //
     // The least privileged shape is the default.
     #[serde(default = "end_entity")]
     pub profile: CertProfile,
-    /// Certificate validity period in days, about ten years by default.
+    /// The certificate's validity period in days. Defaults to 3650 days.
     #[serde(default = "ten_years")]
     pub validity_days: u32,
-    /// Issuer Common Name override (as `CN=<value>`) when no `issuer_cert`
-    /// input is provided. Defaults to the CSR subject, producing a
-    /// self-issued certificate.
+    /// The issuer's common name when the step does not read an issuer
+    /// certificate.
     #[serde(default)]
     pub issuer_cn: Option<String>,
-    /// `pathLenConstraint` for `sub_ca` profile (default: 0).
+    /// For `sub_ca`, how many CA certificates may follow this one in a chain.
+    /// Defaults to 0.
     #[serde(default)]
     pub path_len: Option<u8>,
 }

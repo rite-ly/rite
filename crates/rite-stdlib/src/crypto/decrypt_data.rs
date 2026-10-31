@@ -5,10 +5,11 @@ use rite_runtime::{
     Action, ActionError, ArtifactValue, BackendKeyMeta, HandlerContext, Icon, Reporter, StepInfo,
     StepResult, compute_fingerprint, resolve_backend_key,
 };
-use rite_sdk::{Backend, EncryptedData, KeyCheckValue, KeyProtection, WrapScheme, cms};
+use rite_sdk::{
+    Backend, EncryptedData, KeyCheckValue, KeyProtection, PublicKeyDer, WrapScheme, cms,
+};
 use secrecy::SecretBox;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::crypto::content::{self, SealedContent};
 
@@ -203,27 +204,21 @@ fn container_from_material(
     })
 }
 
-/// The decryption key, by the names a container may give its recipient.
-enum KeyName {
+/// The decryption key, in the form a container's recipient identifier is
+/// matched against.
+enum KeyName<'a> {
     /// A symmetric key, named by its check value.
     CheckValue(KeyCheckValue),
-    /// A public key. Rite names it by the SHA-256 of its SPKI, which is what
-    /// the transcript records and what `encrypt_data` writes. X.509 tooling
-    /// names it by the SHA-1 of RFC 5280 method 1, which is what a certificate's
-    /// subject key identifier usually holds, so a container sealed to a
-    /// certificate with `openssl cms -keyid` names it that way.
-    PublicKey {
-        fingerprint: String,
-        spki_digest: Vec<u8>,
-        rfc5280: Vec<u8>,
-    },
+    /// A public key, which a container may name by its fingerprint or by its
+    /// RFC 5280 identifier.
+    PublicKey(&'a PublicKeyDer),
 }
 
-impl KeyName {
+impl<'a> KeyName<'a> {
     /// The names `key` answers to, for a container whose content key is
     /// protected with `protection`.
     fn of(
-        key: &BackendKeyMeta<'_>,
+        key: &BackendKeyMeta<'a>,
         protection: KeyProtection,
         display_name: &str,
     ) -> Result<Self, ActionError> {
@@ -255,13 +250,7 @@ impl KeyName {
                         key.algorithm
                     ))
                 })?;
-                Ok(Self::PublicKey {
-                    fingerprint: compute_fingerprint(public_key.as_bytes()),
-                    spki_digest: Sha256::digest(public_key.as_bytes()).to_vec(),
-                    rfc5280: public_key
-                        .rfc5280_key_identifier()
-                        .map_err(|e| ActionError::Failed(e.to_string()))?,
-                })
+                Ok(Self::PublicKey(public_key))
             }
             other => Err(ActionError::Failed(format!(
                 "This container protects its content key with {other}, which decrypt_data does \
@@ -271,36 +260,36 @@ impl KeyName {
     }
 
     /// Whether the container's recipient identifier names this key.
-    fn answers_to(&self, identifier: &[u8]) -> bool {
+    fn answers_to(&self, identifier: &cms::RecipientIdentifier) -> bool {
         match self {
-            Self::CheckValue(check_value) => identifier == check_value.as_bytes(),
-            Self::PublicKey {
-                spki_digest,
-                rfc5280,
-                ..
-            } => identifier == spki_digest.as_slice() || identifier == rfc5280.as_slice(),
+            Self::CheckValue(check_value) => identifier.is_check_value(check_value),
+            Self::PublicKey(public_key) => identifier.names_key(public_key),
         }
     }
 
-    /// Why a container naming `identifier` is not this key's, with both sides
-    /// rendered alike.
-    fn refusal(&self, identifier: &[u8], display_name: &str) -> String {
+    /// Why a container naming `identifier` is not this key's.
+    ///
+    /// The identifier is shown as the bytes it is, and the key by the names a
+    /// container could give it, in the same hex, so the reader compares like
+    /// with like. Read as a check value or a fingerprint, any identifier would
+    /// look like one.
+    fn refusal(&self, identifier: &cms::RecipientIdentifier, display_name: &str) -> String {
         match self {
             Self::CheckValue(check_value) => format!(
-                "This artifact is addressed to the key with check value {}, and \
-                 '{display_name}' has {check_value}",
-                named_check_value(identifier)
+                "This artifact is addressed to the key identified by {identifier}, and \
+                 '{display_name}' has check value {check_value}"
             ),
-            Self::PublicKey {
-                fingerprint,
-                rfc5280,
-                ..
-            } => format!(
-                "This artifact is addressed to the key with subject key identifier {}, and \
-                 '{display_name}' is {fingerprint}, or {} by RFC 5280",
-                named_key_identifier(identifier),
-                base16ct::lower::encode_string(rfc5280)
-            ),
+            Self::PublicKey(public_key) => {
+                let rfc5280 = public_key.rfc5280_key_identifier().map_or_else(
+                    |_| String::new(),
+                    |id| format!(", or by {id}, its RFC 5280 identifier"),
+                );
+                format!(
+                    "This artifact is addressed to the key identified by {identifier}, and \
+                     '{display_name}' is identified by {}, its fingerprint{rfc5280}",
+                    cms::RecipientIdentifier::from(public_key.fingerprint())
+                )
+            }
         }
     }
 
@@ -308,7 +297,7 @@ impl KeyName {
     fn field(&self) -> &'static str {
         match self {
             Self::CheckValue(_) => "decryption_key_check_value",
-            Self::PublicKey { .. } => "decryption_key_fingerprint",
+            Self::PublicKey(_) => "decryption_key_fingerprint",
         }
     }
 
@@ -316,35 +305,7 @@ impl KeyName {
     fn recorded(&self) -> String {
         match self {
             Self::CheckValue(check_value) => check_value.to_string(),
-            Self::PublicKey { fingerprint, .. } => fingerprint.clone(),
+            Self::PublicKey(public_key) => public_key.fingerprint().to_string(),
         }
     }
-}
-
-/// A subject key identifier, as a `sha256:` fingerprint where it is the length
-/// of one and as hex otherwise, so a SHA-1 identifier is not presented as a
-/// fingerprint the transcript could hold.
-fn named_key_identifier(identifier: &[u8]) -> String {
-    let hex = base16ct::lower::encode_string(identifier);
-    if identifier.len() == 32 {
-        format!("sha256:{hex}")
-    } else {
-        hex
-    }
-}
-
-/// A `kekid.keyIdentifier`, as a check value where the bytes are one, so the
-/// message invites a reader to compare two values that are alike, and hex
-/// otherwise rather than a claim to be a check value it is not.
-fn named_check_value(identifier: &[u8]) -> String {
-    // The length is the whole of what distinguishes the two, since
-    // `from_cmac` keeps the leftmost three bytes of anything at least that
-    // long. Without this a twenty-byte subject key identifier would be
-    // announced as a check value it is not.
-    if identifier.len() == KeyCheckValue::LEN
-        && let Ok(kcv) = KeyCheckValue::from_cmac(identifier)
-    {
-        return kcv.to_string();
-    }
-    base16ct::lower::encode_string(identifier)
 }

@@ -7,11 +7,10 @@ use rite_runtime::{
     compute_fingerprint, parse_params, resolve_artifact_bytes, resolve_backend_key,
 };
 use rite_sdk::{
-    Backend, DataKey, EncryptedData, KeyAlgorithm, KeyCheckValue, KeyProtection, PublicKeyDer,
-    RandomBackend, WrapScheme, cms,
+    Backend, DataKey, EncryptedData, KeyAlgorithm, KeyCheckValue, KeyFingerprint, KeyProtection,
+    PublicKeyDer, RandomBackend, WrapScheme, cms,
 };
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::crypto::content;
@@ -87,7 +86,9 @@ impl Action for EncryptDataAction {
                 let random = random_source(backend)?;
                 let recipient = crate::crypto::ExternalRecipient {
                     key_ref,
-                    expected: typed.expect_recipient.as_deref(),
+                    expected: crate::crypto::declared_fingerprint(
+                        typed.expect_recipient.as_deref(),
+                    )?,
                     consequence: "Content encrypted to it would be readable by that key's \
                                   holder and not by the one intended, so this step will not run.",
                 }
@@ -180,10 +181,10 @@ fn recipient_input(step: &StepInfo) -> Result<(Path, &ArtifactRef), ActionError>
 enum Addressee {
     /// A symmetric key, by its check value, in a `KEKRecipientInfo`.
     CheckValue(KeyCheckValue),
-    /// A public key, by the SHA-256 of its SPKI, in a `KeyTransRecipientInfo`.
-    /// The same digest the transcript writes as the key's `sha256:`
-    /// fingerprint, so a blob and a record compare without holding the key.
-    PublicKey(Vec<u8>),
+    /// A public key, by its fingerprint, in a `KeyTransRecipientInfo`. The
+    /// value the transcript records for the key, so a blob and a record
+    /// compare without holding the key.
+    PublicKey(KeyFingerprint),
 }
 
 impl Addressee {
@@ -195,10 +196,10 @@ impl Addressee {
         }
     }
 
-    fn key_identifier(&self) -> Vec<u8> {
+    fn key_identifier(&self) -> cms::RecipientIdentifier {
         match self {
-            Self::CheckValue(check_value) => check_value.as_bytes().to_vec(),
-            Self::PublicKey(spki_digest) => spki_digest.clone(),
+            Self::CheckValue(check_value) => check_value.into(),
+            Self::PublicKey(fingerprint) => (*fingerprint).into(),
         }
     }
 }
@@ -272,8 +273,7 @@ fn recipient_data_key(
 ) -> Result<(DataKey, Addressee), ActionError> {
     let cek = Zeroizing::new(random.generate_random(content::KEY_BYTES)?);
     let data_key = content::protect_for(recipient, cek)?;
-    let spki_digest = Sha256::digest(recipient.as_bytes()).to_vec();
-    Ok((data_key, Addressee::PublicKey(spki_digest)))
+    Ok((data_key, Addressee::PublicKey(recipient.fingerprint())))
 }
 
 /// Encrypt the content under the data key and assemble the container around

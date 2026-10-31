@@ -503,7 +503,7 @@ fn the_openssl_cli_opens_content_sealed_to_a_data_key() {
     let kcv = kek.check_value.as_ref().expect("a symmetric key has one");
     let der = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
         protection: data_key.protection(),
-        key_identifier: kcv.as_bytes().to_vec(),
+        key_identifier: kcv.into(),
         wrapped_cek: data_key.wrapped().to_vec(),
         nonce: sealed.nonce,
         ciphertext: sealed.ciphertext,
@@ -601,9 +601,11 @@ fn the_openssl_cli_opens_content_sealed_to_a_public_key() {
     let sealed = rite_openssl::seal_content(data_key.plaintext(), content).unwrap();
     let der = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
         protection: data_key.protection(),
-        key_identifier: openssl::hash::hash(MessageDigest::sha256(), &spki)
-            .unwrap()
-            .to_vec(),
+        key_identifier: rite_sdk::cms::RecipientIdentifier::new(
+            openssl::hash::hash(MessageDigest::sha256(), &spki)
+                .unwrap()
+                .to_vec(),
+        ),
         wrapped_cek: data_key.wrapped().to_vec(),
         nonce: sealed.nonce,
         ciphertext: sealed.ciphertext,
@@ -726,10 +728,8 @@ fn rite_opens_content_the_openssl_cli_sealed_to_a_public_key() {
     assert_eq!(envelope.protection, rite_sdk::KeyProtection::RsaOaepSha256);
     let spki = recipient.public_key_to_der().unwrap();
     assert_eq!(
-        envelope.key_identifier,
-        openssl::hash::hash(MessageDigest::sha256(), &spki)
-            .unwrap()
-            .to_vec(),
+        envelope.key_identifier.as_bytes(),
+        &openssl::hash::hash(MessageDigest::sha256(), &spki).unwrap()[..],
         "the CLI takes the rid from the certificate's subject key identifier"
     );
 
@@ -828,9 +828,12 @@ fn a_standard_certificate_names_its_key_by_the_rfc_5280_identifier() {
     let envelope = rite_sdk::cms::read_auth_enveloped(&std::fs::read(&blob).unwrap()).unwrap();
     let public = PublicKeyDer::new(recipient.public_key_to_der().unwrap()).unwrap();
     assert_eq!(
-        envelope.key_identifier,
-        public.rfc5280_key_identifier().unwrap(),
+        envelope.key_identifier.as_bytes(),
+        public.rfc5280_key_identifier().unwrap().as_bytes(),
         "the rid is the identifier the CLI wrote into the certificate"
     );
-    assert_eq!(envelope.key_identifier.len(), 20, "a SHA-1 digest");
+    assert!(
+        envelope.key_identifier.names_key(&public),
+        "and Rite recognises the key by it"
+    );
 }

@@ -2122,7 +2122,6 @@ name = "rite"
 version = "0.8.0"
 dependencies = [
  "assert_cmd",
- "base16ct 1.0.0",
  "chrono",
  "clap",
  "clap_complete",
@@ -2260,11 +2259,13 @@ dependencies = [
 name = "rite-sdk"
 version = "0.8.0"
 dependencies = [
+ "base16ct 1.0.0",
  "base64ct",
  "bitflags",
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "thiserror",
  "x509-cert 0.3.0",
  "zeroize",
@@ -2286,7 +2287,6 @@ dependencies = [
  "secrecy 0.10.3",
  "serde",
  "serde_json",
- "sha2 0.11.1",
  "signature 3.0.0",
  "subtle",
  "sysinfo",

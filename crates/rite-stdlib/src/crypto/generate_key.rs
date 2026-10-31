@@ -3,7 +3,7 @@
 use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
-    compute_fingerprint, parse_params,
+    parse_params,
 };
 use rite_sdk::{Backend, KeyAlgorithm, KeyMetadata, KeyPolicy, KeySpec};
 use serde_json::json;
@@ -88,7 +88,7 @@ impl Action for GenerateKeyAction {
         let public_key_fingerprint = metadata
             .public_key
             .as_ref()
-            .map(|key| compute_fingerprint(key.as_bytes()));
+            .map(|key| key.fingerprint().to_string());
 
         let key = ArtifactValue::BackendKey {
             backend_name: backend_name.clone(),

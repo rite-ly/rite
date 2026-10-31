@@ -11,8 +11,13 @@
 //! its first member. A foreign blob addressed to several recipients is
 //! described by the first of them, and the others are not reported.
 
+use std::fmt;
+
 use crate::der;
-use crate::types::{KeyProtection, Oid, RecipientInfoKind, WrapDescription, oid};
+use crate::key_material::PublicKeyDer;
+use crate::types::{
+    KeyCheckValue, KeyFingerprint, KeyProtection, Oid, RecipientInfoKind, WrapDescription, oid,
+};
 
 /// `id-envelopedData` (RFC 5652 §6).
 const ENVELOPED_DATA: &str = "1.2.840.113549.1.7.3";
@@ -31,10 +36,95 @@ pub struct CmsReadError(String);
 pub struct CmsFacts {
     /// The algorithm identifiers, as recorded on the wrap.
     pub description: WrapDescription,
-    /// The recipient's subject key identifier, when the artifact names the
-    /// recipient that way. `None` when the recipient is named by issuer and
-    /// serial, which identifies a certificate rather than a key.
-    pub recipient_key_identifier: Option<Vec<u8>>,
+    /// What the artifact names its recipient by. `None` when the recipient is
+    /// named by issuer and serial, which identifies a certificate rather than
+    /// a key.
+    pub recipient_key_identifier: Option<RecipientIdentifier>,
+}
+
+/// The bytes a CMS container names its recipient by: `kekid.keyIdentifier` in
+/// a `KEKRecipientInfo`, the `subjectKeyIdentifier` rid in a
+/// `KeyTransRecipientInfo`.
+///
+/// Opaque. A container Rite writes carries a [`KeyCheckValue`] or a
+/// [`KeyFingerprint`] here, and one written elsewhere carries whatever its
+/// writer chose, an [`Rfc5280KeyId`](crate::Rfc5280KeyId) more often than not.
+/// Nothing in the bytes says which, their length included: 32 bytes need not
+/// be a SHA-256, and a SHA-256 need not be over the SPKI. So the bytes are
+/// never read as a name. They are compared with a name a key has:
+/// [`names_key`](Self::names_key) with the key at hand, or
+/// [`is_fingerprint`](Self::is_fingerprint) and
+/// [`is_check_value`](Self::is_check_value) with a name the transcript
+/// recorded.
+///
+/// Rendered as bare hex, since a `sha256:` or `cmac-aes:` prefix would claim
+/// to know what the bytes are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipientIdentifier(Vec<u8>);
+
+impl RecipientIdentifier {
+    /// Bytes a writer chose to name a recipient by.
+    ///
+    /// Nothing is checked, since nothing is claimed: the bytes name a key only
+    /// once they match one.
+    #[must_use]
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+
+    /// The bytes as the container carries them.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Whether these bytes name `key`, by either name it goes by in a
+    /// container: its [`KeyFingerprint`], which Rite writes, or its
+    /// [`Rfc5280KeyId`](crate::Rfc5280KeyId), which a container sealed to a
+    /// certificate usually carries.
+    #[must_use]
+    pub fn names_key(&self, key: &PublicKeyDer) -> bool {
+        // The SPKI parsed when `key` was built, so the identifier derives; a
+        // key that somehow did not would not be named by it either.
+        self.is_fingerprint(&key.fingerprint())
+            || key
+                .rfc5280_key_identifier()
+                .is_ok_and(|id| self.0 == id.as_bytes())
+    }
+
+    /// Whether these bytes are `fingerprint`.
+    ///
+    /// For comparing a container with a recorded name, where no key is at
+    /// hand. A container naming the same key by its RFC 5280 identifier does
+    /// not match, because that name cannot be derived from a fingerprint.
+    #[must_use]
+    pub fn is_fingerprint(&self, fingerprint: &KeyFingerprint) -> bool {
+        self.0 == fingerprint.as_bytes()
+    }
+
+    /// Whether these bytes are `check_value`.
+    #[must_use]
+    pub fn is_check_value(&self, check_value: &KeyCheckValue) -> bool {
+        self.0 == check_value.as_bytes()
+    }
+}
+
+impl From<KeyFingerprint> for RecipientIdentifier {
+    fn from(fingerprint: KeyFingerprint) -> Self {
+        Self(fingerprint.as_bytes().to_vec())
+    }
+}
+
+impl From<&KeyCheckValue> for RecipientIdentifier {
+    fn from(check_value: &KeyCheckValue) -> Self {
+        Self(check_value.as_bytes().to_vec())
+    }
+}
+
+impl fmt::Display for RecipientIdentifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&base16ct::lower::encode_string(&self.0))
+    }
 }
 
 /// Read a CMS `ContentInfo` DER into the facts of its wrap.
@@ -95,7 +185,7 @@ pub fn describe(der: &[u8]) -> Result<CmsFacts, CmsReadError> {
 /// What one `RecipientInfo` contributes to the description.
 struct Recipient {
     description: WrapDescription,
-    key_identifier: Option<Vec<u8>>,
+    key_identifier: Option<RecipientIdentifier>,
 }
 
 fn read_recipient(info: &Tlv<'_>) -> Result<Recipient, CmsReadError> {
@@ -112,7 +202,9 @@ fn read_recipient(info: &Tlv<'_>) -> Result<Recipient, CmsReadError> {
             }
             Ok(Recipient {
                 description: WrapDescription::new(RecipientInfoKind::Ktri, algorithm),
-                key_identifier: ktri.key_identifier.map(<[u8]>::to_vec),
+                key_identifier: ktri
+                    .key_identifier
+                    .map(|bytes| RecipientIdentifier(bytes.to_vec())),
             })
         }
         TAG_CONTEXT_1_CONSTRUCTED => read_kari(info.value),
@@ -120,7 +212,7 @@ fn read_recipient(info: &Tlv<'_>) -> Result<Recipient, CmsReadError> {
             let kekri = read_kekri(info.value)?;
             Ok(Recipient {
                 description: WrapDescription::new(RecipientInfoKind::Kekri, kekri.algorithm),
-                key_identifier: Some(kekri.key_identifier.to_vec()),
+                key_identifier: Some(RecipientIdentifier(kekri.key_identifier.to_vec())),
             })
         }
         TAG_CONTEXT_3_CONSTRUCTED => Err(err("PasswordRecipientInfo is not a key wrap")),
@@ -359,18 +451,18 @@ fn read_kari(body: &[u8]) -> Result<Recipient, CmsReadError> {
 
 /// `RecipientEncryptedKeys`: a SEQUENCE OF `RecipientEncryptedKey`, whose rid
 /// is either an `IssuerAndSerialNumber` or `[0] RecipientKeyIdentifier`.
-fn agreed_key_identifier(body: &[u8]) -> Result<Option<Vec<u8>>, CmsReadError> {
+fn agreed_key_identifier(body: &[u8]) -> Result<Option<RecipientIdentifier>, CmsReadError> {
     let (first, _) = read_tlv(body)?;
     let (rid, _) = read_tlv(first.expect_tag(TAG_SEQUENCE, "RecipientEncryptedKey")?)?;
     if rid.tag != TAG_CONTEXT_0_CONSTRUCTED {
         return Ok(None);
     }
     let (key_id, _) = read_tlv(rid.value)?;
-    Ok(Some(
+    Ok(Some(RecipientIdentifier(
         key_id
             .expect_tag(TAG_OCTET_STRING, "subjectKeyIdentifier")?
             .to_vec(),
-    ))
+    )))
 }
 
 /// `OtherRecipientInfo`: an `oriType` OID and a value read according to it.
@@ -418,7 +510,8 @@ fn read_kemri(body: &[u8]) -> Result<Recipient, CmsReadError> {
 
     Ok(Recipient {
         description,
-        key_identifier: (rid.tag == TAG_CONTEXT_0_PRIMITIVE).then(|| rid.value.to_vec()),
+        key_identifier: (rid.tag == TAG_CONTEXT_0_PRIMITIVE)
+            .then(|| RecipientIdentifier(rid.value.to_vec())),
     })
 }
 
@@ -620,14 +713,15 @@ pub const GCM_ICV_LEN: usize = 16;
 /// them out again, and never holds a key.
 ///
 /// ```
-/// use rite_sdk::KeyProtection;
 /// use rite_sdk::cms::{self, Envelope};
+/// use rite_sdk::{KeyCheckValue, KeyProtection};
 ///
-/// // Values a backend produces: the CEK wrapped under the KEK, and the
-/// // content under that CEK.
+/// // Values a backend produces: the KEK's check value, the CEK wrapped under
+/// // the KEK, and the content under that CEK.
+/// let check_value: KeyCheckValue = "cmac-aes:763cbc".parse()?;
 /// let envelope = Envelope {
 ///     protection: KeyProtection::AesKeyWrap,
-///     key_identifier: vec![0x76, 0x3c, 0xbc],
+///     key_identifier: (&check_value).into(),
 ///     wrapped_cek: vec![0x11; 40],
 ///     nonce: vec![0x22; 12],
 ///     ciphertext: vec![0x33; 64],
@@ -639,21 +733,23 @@ pub const GCM_ICV_LEN: usize = 16;
 ///
 /// // And the same bytes describe the wrap that produced them.
 /// let facts = cms::describe(&der)?;
-/// assert_eq!(
-///     facts.recipient_key_identifier.as_deref(),
-///     Some(&[0x76, 0x3c, 0xbc][..])
+/// assert!(
+///     facts
+///         .recipient_key_identifier
+///         .is_some_and(|named| named.is_check_value(&check_value))
 /// );
-/// # Ok::<(), rite_sdk::cms::CmsReadError>(())
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Envelope {
     /// How `wrapped_cek` was protected, which is also which recipient form
     /// carries it.
     pub protection: KeyProtection,
-    /// What names the recipient key. For a symmetric key its check value, in
-    /// `kekid.keyIdentifier`; for a public key the SHA-256 of its SPKI DER, as
-    /// the `subjectKeyIdentifier` rid.
-    pub key_identifier: Vec<u8>,
+    /// What names the recipient key. Rite writes a symmetric key's check value,
+    /// in `kekid.keyIdentifier`, and a public key's fingerprint, as the
+    /// `subjectKeyIdentifier` rid. A container read back carries what its
+    /// writer put there.
+    pub key_identifier: RecipientIdentifier,
     /// The content-encryption key, as `protection` left it.
     pub wrapped_cek: Vec<u8>,
     /// The 12-byte AES-GCM nonce.
@@ -732,7 +828,7 @@ fn recipient_info(envelope: &Envelope) -> Result<Vec<u8>, CmsReadError> {
             TAG_CONTEXT_2_CONSTRUCTED,
             &[
                 der::small_integer(4),
-                der::sequence(&[der::octet_string(&envelope.key_identifier)]),
+                der::sequence(&[der::octet_string(envelope.key_identifier.as_bytes())]),
                 der::sequence(&[encoded_oid(oid::AES_256_WRAP)?]),
                 der::octet_string(&envelope.wrapped_cek),
             ]
@@ -743,7 +839,7 @@ fn recipient_info(envelope: &Envelope) -> Result<Vec<u8>, CmsReadError> {
         // names the key itself, so no certificate is needed to address it.
         KeyProtection::RsaOaepSha256 => Ok(der::sequence(&[
             der::small_integer(2),
-            der::tlv(TAG_CONTEXT_0_PRIMITIVE, &envelope.key_identifier),
+            der::tlv(TAG_CONTEXT_0_PRIMITIVE, envelope.key_identifier.as_bytes()),
             rsaes_oaep_sha256()?,
             der::octet_string(&envelope.wrapped_cek),
         ])),
@@ -861,7 +957,7 @@ pub fn read_auth_enveloped(der_bytes: &[u8]) -> Result<Envelope, CmsReadError> {
 
     Ok(Envelope {
         protection,
-        key_identifier: key_identifier.to_vec(),
+        key_identifier: RecipientIdentifier(key_identifier.to_vec()),
         wrapped_cek: wrapped_cek.to_vec(),
         nonce,
         ciphertext,
@@ -1037,7 +1133,7 @@ mod tests {
     fn sample_envelope() -> Envelope {
         Envelope {
             protection: KeyProtection::AesKeyWrap,
-            key_identifier: vec![0x76, 0x3c, 0xbc],
+            key_identifier: RecipientIdentifier(vec![0x76, 0x3c, 0xbc]),
             wrapped_cek: vec![0x11; 40],
             nonce: vec![0x22; 12],
             ciphertext: vec![0x33; 64],
@@ -1078,7 +1174,7 @@ mod tests {
         );
         assert_eq!(
             facts.recipient_key_identifier,
-            Some(vec![0x76, 0x3c, 0xbc]),
+            Some(RecipientIdentifier(vec![0x76, 0x3c, 0xbc])),
             "the recipient is named by the key's check value"
         );
     }
@@ -1143,7 +1239,7 @@ mod tests {
     fn key_transport_envelope() -> Envelope {
         Envelope {
             protection: KeyProtection::RsaOaepSha256,
-            key_identifier: vec![0x89; 32],
+            key_identifier: RecipientIdentifier(vec![0x89; 32]),
             wrapped_cek: vec![0x11; 256],
             ..sample_envelope()
         }
@@ -1172,7 +1268,10 @@ mod tests {
             oid::RSAES_OAEP
         );
         assert_eq!(facts.description.kek_wrap_oid, None);
-        assert_eq!(facts.recipient_key_identifier, Some(vec![0x89; 32]));
+        assert_eq!(
+            facts.recipient_key_identifier,
+            Some(RecipientIdentifier(vec![0x89; 32]))
+        );
         assert!(crate::types::WrapScheme::CmsAes256Gcm.permits(&facts.description));
     }
 
@@ -1204,7 +1303,7 @@ mod tests {
         let envelope = key_transport_envelope();
         let ktri = der::sequence(&[
             der::small_integer(2),
-            der::tlv(TAG_CONTEXT_0_PRIMITIVE, &envelope.key_identifier),
+            der::tlv(TAG_CONTEXT_0_PRIMITIVE, envelope.key_identifier.as_bytes()),
             algorithm,
             der::octet_string(&envelope.wrapped_cek),
         ]);
@@ -1293,6 +1392,44 @@ mod tests {
         }
     }
 
+    /// A container's identifier names a key by its fingerprint or its RFC 5280
+    /// identifier, and by no other digest of it.
+    #[test]
+    fn a_recipient_identifier_names_a_key_by_either_of_its_names_only() {
+        use sha2::Digest as _;
+        use x509_cert::der::Decode as _;
+
+        let key =
+            crate::CertificateDer::new(include_bytes!("../tests/vectors/p256.cert.der").to_vec())
+                .unwrap()
+                .public_key()
+                .unwrap();
+        let other =
+            PublicKeyDer::new(include_bytes!("../tests/vectors/p384.spki.der").to_vec()).unwrap();
+
+        let by_fingerprint = RecipientIdentifier::from(key.fingerprint());
+        let by_rfc5280 =
+            RecipientIdentifier(key.rfc5280_key_identifier().unwrap().as_bytes().to_vec());
+        assert!(by_fingerprint.names_key(&key));
+        assert!(by_rfc5280.names_key(&key));
+        assert!(!by_fingerprint.names_key(&other));
+        assert!(!by_rfc5280.names_key(&other));
+
+        // 32 bytes derived from the key are not its fingerprint unless they
+        // are that digest: here the SHA-256 of the key bits alone.
+        let bits = x509_cert::spki::SubjectPublicKeyInfoRef::from_der(key.as_bytes())
+            .unwrap()
+            .subject_public_key
+            .raw_bytes()
+            .to_vec();
+        let lookalike = RecipientIdentifier(sha2::Sha256::digest(&bits).to_vec());
+        assert!(!lookalike.names_key(&key));
+
+        // Without the key, only the fingerprint can be compared.
+        assert!(by_fingerprint.is_fingerprint(&key.fingerprint()));
+        assert!(!by_rfc5280.is_fingerprint(&key.fingerprint()));
+    }
+
     /// A `KEKRecipientInfo` is read as exactly as a `KeyTransRecipientInfo`:
     /// version 4, nothing after `encryptedKey`, and in `kekid` only the two
     /// optional fields RFC 5652 defines.
@@ -1300,7 +1437,7 @@ mod tests {
     fn a_kek_recipient_is_read_exactly() {
         let envelope = sample_envelope();
         let kekri = |version: u8, kekid_extra: &[Vec<u8>], trailing: &[u8]| {
-            let mut kekid = vec![der::octet_string(&envelope.key_identifier)];
+            let mut kekid = vec![der::octet_string(envelope.key_identifier.as_bytes())];
             kekid.extend_from_slice(kekid_extra);
             let mut body = [
                 der::small_integer(version),
@@ -1344,7 +1481,7 @@ mod tests {
         let ktri = |version: u8, algorithm: Vec<u8>, trailing: &[u8]| {
             let mut body = [
                 der::small_integer(version),
-                der::tlv(TAG_CONTEXT_0_PRIMITIVE, &envelope.key_identifier),
+                der::tlv(TAG_CONTEXT_0_PRIMITIVE, envelope.key_identifier.as_bytes()),
                 algorithm,
                 der::octet_string(&envelope.wrapped_cek),
             ]

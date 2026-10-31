@@ -1289,7 +1289,7 @@ pub enum StepFact {
             )
         )]
         source: String,
-        /// `sha256:<hex>` over the recipient's SPKI DER.
+        /// The recipient's fingerprint.
         #[cfg_attr(
             test,
             schemars(
@@ -1298,7 +1298,7 @@ pub enum StepFact {
                 with = "Sha256Digest"
             )
         )]
-        fingerprint: String,
+        fingerprint: rite_sdk::KeyFingerprint,
         /// Whether the ceremony declared this fingerprint in advance, so the
         /// runtime checked the key it received against the definition rather
         /// than recording whatever arrived.
@@ -2223,19 +2223,20 @@ mod schema_snapshot_tests {
 
     #[test]
     fn wrap_recipient_recorded() {
-        let fingerprint = Sha256Digest::of(b"escrow spki").to_string();
+        let fingerprint: rite_sdk::KeyFingerprint =
+            Sha256Digest::of(b"escrow spki").as_str().parse().unwrap();
         assert_json(
             &StepFact::WrapRecipientRecorded {
                 step: StepId::new("s1"),
                 source: "escrow_pubkey".to_string(),
-                fingerprint: fingerprint.clone(),
+                fingerprint,
                 declared: true,
             },
             &json!({
                 "type": "wrap_recipient_recorded",
                 "step": "s1",
                 "source": "escrow_pubkey",
-                "fingerprint": fingerprint,
+                "fingerprint": fingerprint.to_string(),
                 "declared": true,
             }),
         );

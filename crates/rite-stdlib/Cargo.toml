@@ -40,8 +40,6 @@ serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }
 chrono     = { workspace = true }
-base16ct   = { workspace = true }
-sha2       = { workspace = true }
 zeroize    = { workspace = true }
 secrecy    = { workspace = true }
 
@@ -53,6 +51,7 @@ signature = { workspace = true, optional = true }
 [dev-dependencies]
 rite-openssl = { workspace = true }
 openssl      = { workspace = true }
+base16ct     = { workspace = true }
 
 [lints]
 workspace = true

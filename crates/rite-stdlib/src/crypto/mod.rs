@@ -22,8 +22,8 @@ pub use verify_signature::VerifySignatureAction;
 pub use wrap_key::WrapKeyAction;
 
 use rite_model::{ArtifactRef, StepFact};
-use rite_runtime::{ActionError, HandlerContext, Reporter, StepInfo, compute_fingerprint};
-use rite_sdk::{Backend, KeyTransportBackend, PublicKeyDer};
+use rite_runtime::{ActionError, HandlerContext, Reporter, StepInfo};
+use rite_sdk::{Backend, KeyFingerprint, KeyTransportBackend, PublicKeyDer};
 
 /// The backend a step names, as the capability the step needs, once it is known
 /// to be the backend that holds the key.
@@ -59,12 +59,33 @@ pub(crate) fn transport_backend<'a>(
     Ok((transport, name))
 }
 
+/// The fingerprint an `expect_recipient` parameter declares.
+///
+/// The parameter stays text in the step's parameters, where the ceremony
+/// schema checks its form and says what is wrong with it. This is where it
+/// becomes a fingerprint, so a malformed value that reached the handler some
+/// other way is refused rather than compared as text.
+pub(crate) fn declared_fingerprint(
+    value: Option<&str>,
+) -> Result<Option<KeyFingerprint>, ActionError> {
+    value
+        .map(|text| {
+            text.parse().map_err(|_| {
+                ActionError::Failed(format!(
+                    "expect_recipient '{text}' is not a fingerprint of the form \
+                     'sha256:<64 lowercase hex digits>'"
+                ))
+            })
+        })
+        .transpose()
+}
+
 /// A public key held outside the ceremony that a step addresses its output to.
 pub(crate) struct ExternalRecipient<'a> {
     /// The input naming the key.
     pub key_ref: &'a ArtifactRef,
     /// The fingerprint the ceremony declared for it, if any.
-    pub expected: Option<&'a str>,
+    pub expected: Option<KeyFingerprint>,
     /// What addressing the wrong key would do, completing the sentence "...,
     /// but the ceremony declares X." in the refusal.
     pub consequence: &'a str,
@@ -102,7 +123,7 @@ impl ExternalRecipient<'_> {
             ))
         })?;
 
-        let fingerprint = compute_fingerprint(recipient.as_bytes());
+        let fingerprint = recipient.fingerprint();
         if let Some(declared) = self.expected
             && declared != fingerprint
         {

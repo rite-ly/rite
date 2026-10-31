@@ -65,7 +65,7 @@ impl Action for WrapKeyAction {
         // and exactly one of the two is present.
         let target_fingerprint = key_to_wrap
             .public_key
-            .map(|key| compute_fingerprint(key.as_bytes()));
+            .map(|key| key.fingerprint().to_string());
         let target_check_value = key_to_wrap.check_value.map(ToString::to_string);
 
         let key_backend = key_to_wrap.backend_name;
@@ -95,7 +95,9 @@ impl Action for WrapKeyAction {
                 // takes is the backend's to say, at the wrap.
                 let recipient = crate::crypto::ExternalRecipient {
                     key_ref: wrapping_key_ref,
-                    expected: typed.expect_recipient.as_deref(),
+                    expected: crate::crypto::declared_fingerprint(
+                        typed.expect_recipient.as_deref(),
+                    )?,
                     consequence: "Wrapping to an unintended recipient cannot be undone, so this \
                                   step will not run.",
                 }

@@ -3,7 +3,7 @@
 use rite_model::{ActionType, ArtifactRef};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
-    compute_fingerprint, parse_params, resolve_artifact_bytes,
+    parse_params, resolve_artifact_bytes,
 };
 use rite_sdk::{Backend, KeyAlgorithm, KeySpec};
 use secrecy::ExposeSecret;
@@ -95,7 +95,7 @@ impl Action for ImportKeyAction {
         let imported_fingerprint = metadata
             .public_key
             .as_ref()
-            .map(|key| compute_fingerprint(key.as_bytes()));
+            .map(|key| key.fingerprint().to_string());
 
         // A keypair answers to its public half and a symmetric key to its
         // check value. One `expect_key` covers both, discriminated by the

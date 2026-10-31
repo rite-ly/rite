@@ -17,6 +17,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 bitflags = { workspace = true }
 x509-cert = { workspace = true }
+sha2 = { workspace = true }
+base16ct = { workspace = true }
 zeroize = { workspace = true }
 schemars = { workspace = true, optional = true }
 

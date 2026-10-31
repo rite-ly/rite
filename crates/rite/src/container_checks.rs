@@ -15,11 +15,12 @@
 //! thought. A container that cannot be checked is reported as unchecked rather
 //! than counted as evidence.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use rite_model::StepFact;
-use rite_sdk::{KeyCheckValue, RecipientInfoKind, WrapDescription, WrapScheme};
+use rite_sdk::cms::RecipientIdentifier;
+use rite_sdk::{KeyCheckValue, KeyFingerprint, RecipientInfoKind, WrapDescription, WrapScheme};
 
 use crate::verify::digest_hex;
 use rite_model::bundle::artifact_path;
@@ -229,18 +230,18 @@ pub fn check_containers(dir: Option<&Path>, facts: &[&StepFact]) -> Vec<Containe
 struct Index<'a> {
     /// Keys this ceremony generated, by whatever names them: a fingerprint
     /// for a keypair, a check value for a symmetric key.
-    generated: HashSet<&'a str>,
+    generated: Vec<RecordedKey>,
     /// Keys this ceremony imported, named the same way. Kept apart from
     /// `generated` because the two support different claims: one says the
     /// ceremony made the key, the other only that it received it.
-    imported: HashSet<&'a str>,
+    imported: Vec<RecordedKey>,
     /// Recipient a wrap was given, by the step that wrapped to it, with
     /// whether the ceremony declared it in advance.
     ///
     /// Keyed by step because both facts come from one step. Keying by the
     /// input name instead would let two steps reading the same input share an
     /// entry, and the first `declared` would then stand for both.
-    recipients: HashMap<&'a str, (&'a str, bool)>,
+    recipients: HashMap<&'a str, (KeyFingerprint, bool)>,
     /// Artifact file names by the digest recorded for their contents.
     artifacts: HashMap<&'a str, &'a str>,
 }
@@ -248,8 +249,8 @@ struct Index<'a> {
 impl<'a> Index<'a> {
     fn of(facts: &[&'a StepFact]) -> Self {
         let mut index = Index {
-            generated: HashSet::new(),
-            imported: HashSet::new(),
+            generated: Vec::new(),
+            imported: Vec::new(),
             recipients: HashMap::new(),
             artifacts: HashMap::new(),
         };
@@ -257,22 +258,20 @@ impl<'a> Index<'a> {
             match fact {
                 StepFact::BackendOperation { kind, outputs, .. } if kind == "generate_key" => {
                     // A keypair is named by its public half and a symmetric
-                    // key by its check value. Both go in one set, because both
-                    // are what a blob's recipient identifier renders to.
-                    if let Some(fingerprint) = string_field(outputs, "public_key_fingerprint") {
-                        index.generated.insert(fingerprint);
-                    }
-                    if let Some(check_value) = string_field(outputs, "key_check_value") {
-                        index.generated.insert(check_value);
-                    }
+                    // key by its check value. Both go in one list, because a
+                    // blob's recipient identifier may be either.
+                    index.generated.extend(RecordedKey::named_in(
+                        outputs,
+                        "public_key_fingerprint",
+                        "key_check_value",
+                    ));
                 }
                 StepFact::BackendOperation { kind, outputs, .. } if kind == "import_key" => {
-                    if let Some(fingerprint) = string_field(outputs, "imported_key_fingerprint") {
-                        index.imported.insert(fingerprint);
-                    }
-                    if let Some(check_value) = string_field(outputs, "imported_key_check_value") {
-                        index.imported.insert(check_value);
-                    }
+                    index.imported.extend(RecordedKey::named_in(
+                        outputs,
+                        "imported_key_fingerprint",
+                        "imported_key_check_value",
+                    ));
                 }
                 StepFact::WrapRecipientRecorded {
                     step,
@@ -283,7 +282,7 @@ impl<'a> Index<'a> {
                     index
                         .recipients
                         .entry(step.as_str())
-                        .or_insert((fingerprint.as_str(), *declared));
+                        .or_insert((*fingerprint, *declared));
                 }
                 StepFact::ArtifactWritten {
                     file,
@@ -326,12 +325,11 @@ fn check_one(
         return unchecked("the fact records no scheme");
     };
 
-    // Whichever form names the wrapped key. Both land in one set, so a
+    // Whichever form names the wrapped key. Both land in one list, so a
     // symmetric payload traces to its generate step the way a keypair does.
-    let wrapped_key_names: Vec<&str> = ["key_to_wrap_fingerprint", "key_to_wrap_check_value"]
-        .iter()
-        .filter_map(|field| string_field(inputs, field))
-        .collect();
+    let wrapped_key_names: Vec<RecordedKey> =
+        RecordedKey::named_in(inputs, "key_to_wrap_fingerprint", "key_to_wrap_check_value")
+            .collect();
     let origin = if wrapped_key_names
         .iter()
         .any(|target| index.generated.contains(target))
@@ -394,39 +392,45 @@ fn check_one(
         };
     }
 
-    // The recipient identifier in the blob is what names the recipient key,
-    // which is the form both the recipient fact and a generate_key fact
-    // record, so they compare without holding any key.
-    let recipient = match from_blob.recipient_key_identifier.as_deref() {
+    // The recipient identifier in the blob is compared with the names the
+    // recipient fact and a generate_key fact record, so the two compare
+    // without holding any key. A blob that names its recipient by an RFC 5280
+    // identifier matches no record, since no record holds that name.
+    let form = from_blob.description.recipient_info;
+    let recipient = match from_blob.recipient_key_identifier.as_ref() {
         None => RecipientEvidence::None,
-        Some(identifier) => {
-            let named = names_recipient(&from_blob.description, identifier);
-            match index.recipients.get(step) {
-                Some(&(recorded, declared)) if recorded == named => {
-                    if declared {
-                        RecipientEvidence::Declared
-                    } else {
-                        RecipientEvidence::Recorded
-                    }
+        Some(identifier) => match index.recipients.get(step) {
+            Some(&(recorded, declared))
+                if RecordedKey::Fingerprint(recorded).names(identifier, form) =>
+            {
+                if declared {
+                    RecipientEvidence::Declared
+                } else {
+                    RecipientEvidence::Recorded
                 }
-                Some(&(recorded, _)) => {
-                    return ContainerStatus::Mismatch {
-                        detail: format!(
-                            "the transcript records recipient {recorded}, \
-                             the artifact names {named}"
-                        ),
-                    };
-                }
-                // No recipient fact: the wrap went to a key the backend holds,
-                // and the transcript names that key only where it was
-                // generated.
-                None if index.generated.contains(named.as_str()) => {
-                    RecipientEvidence::GeneratedHere
-                }
-                None if index.imported.contains(named.as_str()) => RecipientEvidence::ImportedHere,
-                None => RecipientEvidence::None,
             }
-        }
+            Some(&(recorded, _)) => {
+                return ContainerStatus::Mismatch {
+                    detail: format!(
+                        "the transcript records recipient {recorded}, \
+                         the artifact names the key identified by {identifier}"
+                    ),
+                };
+            }
+            // No recipient fact: the wrap went to a key the backend holds,
+            // and the transcript names that key only where it was generated.
+            None if index
+                .generated
+                .iter()
+                .any(|key| key.names(identifier, form)) =>
+            {
+                RecipientEvidence::GeneratedHere
+            }
+            None if index.imported.iter().any(|key| key.names(identifier, form)) => {
+                RecipientEvidence::ImportedHere
+            }
+            None => RecipientEvidence::None,
+        },
     };
 
     ContainerStatus::Checked {
@@ -436,18 +440,55 @@ fn check_one(
     }
 }
 
-/// Render a blob's recipient identifier the way the transcript names that key.
+/// A key as a fact names it: a keypair by its fingerprint, a symmetric key by
+/// its check value.
 ///
-/// A public-key recipient is identified by a digest of its SPKI, which the
-/// transcript writes as a `sha256:` fingerprint. A symmetric recipient has no
-/// public half, so `KEKRecipientInfo` carries the key's check value instead,
-/// which the transcript writes with its own method prefix. Rendering here is
-/// what lets one comparison serve both.
-fn names_recipient(description: &WrapDescription, identifier: &[u8]) -> String {
-    let hex = base16ct::lower::encode_string(identifier);
-    match description.recipient_info {
-        Some(RecipientInfoKind::Kekri) => format!("{}:{hex}", KeyCheckValue::METHOD),
-        _ => format!("sha256:{hex}"),
+/// Parsed from the transcript, which is untrusted input. Each field is read as
+/// the kind of name it is called, so a value in another form, a check value
+/// recorded as a fingerprint for instance, names no key rather than being
+/// compared as whatever it parses as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RecordedKey {
+    Fingerprint(KeyFingerprint),
+    CheckValue(KeyCheckValue),
+}
+
+impl RecordedKey {
+    /// The names a fact gives one key, from the field that holds each kind.
+    fn named_in(
+        value: &serde_json::Value,
+        fingerprint_field: &str,
+        check_value_field: &str,
+    ) -> impl Iterator<Item = Self> {
+        let fingerprint = string_field(value, fingerprint_field)
+            .and_then(|text| text.parse().ok())
+            .map(Self::Fingerprint);
+        let check_value = string_field(value, check_value_field)
+            .and_then(|text| text.parse().ok())
+            .map(Self::CheckValue);
+        fingerprint.into_iter().chain(check_value)
+    }
+
+    /// Whether a blob's recipient identifier is this name, in a recipient of
+    /// `form`.
+    ///
+    /// A `KEKRecipientInfo` names a symmetric key, by its check value. The
+    /// public-key forms name a key by its fingerprint. A name of the other
+    /// kind is never compared, so bytes that happen to equal it are not taken
+    /// as evidence the recipient form rules out.
+    fn names(&self, identifier: &RecipientIdentifier, form: Option<RecipientInfoKind>) -> bool {
+        let public_key_form = matches!(
+            form,
+            Some(RecipientInfoKind::Ktri | RecipientInfoKind::Kari | RecipientInfoKind::Kemri)
+        );
+        match self {
+            Self::Fingerprint(fingerprint) => {
+                public_key_form && identifier.is_fingerprint(fingerprint)
+            }
+            Self::CheckValue(check_value) => {
+                form == Some(RecipientInfoKind::Kekri) && identifier.is_check_value(check_value)
+            }
+        }
     }
 }
 
@@ -547,8 +588,7 @@ mod tests {
             .unwrap();
         let description = wrapped.description();
 
-        let fingerprint =
-            |key: &rite_sdk::PublicKeyDer| rite_runtime::compute_fingerprint(key.as_bytes());
+        let fingerprint = |key: &rite_sdk::PublicKeyDer| key.fingerprint().to_string();
         Wrap {
             target_fingerprint: fingerprint(&backend.export_public_key(&target.key_id).unwrap()),
             recipient_fingerprint: fingerprint(&backend.export_public_key(&kek.key_id).unwrap()),
@@ -580,7 +620,7 @@ mod tests {
             StepFact::WrapRecipientRecorded {
                 step: StepId::new("wrap"),
                 source: "kek".to_string(),
-                fingerprint: wrap.recipient_fingerprint.clone(),
+                fingerprint: wrap.recipient_fingerprint.parse().unwrap(),
                 declared: true,
             },
             StepFact::BackendOperation {
@@ -637,7 +677,7 @@ mod tests {
         let content = rite_openssl::seal_content(data_key.plaintext(), b"an archive").unwrap();
         let blob = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
             protection: data_key.protection(),
-            key_identifier: check_value.as_bytes().to_vec(),
+            key_identifier: check_value.into(),
             wrapped_cek: data_key.wrapped().to_vec(),
             nonce: content.nonce,
             ciphertext: content.ciphertext,
@@ -727,18 +767,14 @@ mod tests {
             })
             .unwrap();
         let public = backend.export_public_key(&recipient.key_id).unwrap();
-        let fingerprint = rite_runtime::compute_fingerprint(public.as_bytes());
-        let spki_digest = fingerprint
-            .strip_prefix("sha256:")
-            .and_then(|hex| base16ct::lower::decode_vec(hex).ok())
-            .unwrap();
+        let fingerprint = public.fingerprint();
         let data_key =
             rite_openssl::data_key_for_recipient(&public, zeroize::Zeroizing::new(vec![0x5a; 32]))
                 .unwrap();
         let content = rite_openssl::seal_content(data_key.plaintext(), b"an archive").unwrap();
         let blob = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
             protection: data_key.protection(),
-            key_identifier: spki_digest,
+            key_identifier: fingerprint.into(),
             wrapped_cek: data_key.wrapped().to_vec(),
             nonce: content.nonce,
             ciphertext: content.ciphertext,
@@ -748,7 +784,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("artifacts")).unwrap();
         std::fs::write(tmp.path().join("artifacts/sealed.p7c"), &blob).unwrap();
 
-        let facts = |fingerprint: String| {
+        let facts = |fingerprint: rite_sdk::KeyFingerprint| {
             vec![
                 StepFact::WrapRecipientRecorded {
                     step: StepId::new("encrypt"),
@@ -795,7 +831,7 @@ mod tests {
             check.describe()
         );
 
-        let another = facts(format!("sha256:{}", "ab".repeat(32)));
+        let another = facts(format!("sha256:{}", "ab".repeat(32)).parse().unwrap());
         let checks = check_containers(Some(tmp.path()), &borrow(&another));
         assert!(
             checks.iter().all(ContainerCheck::failed),
@@ -1281,6 +1317,39 @@ mod tests {
         );
     }
 
+    /// A field is read as the kind of name it is called, and a name is compared
+    /// only in the recipient form that carries that kind.
+    #[test]
+    fn a_recorded_name_is_read_by_its_field_and_compared_by_the_recipient_form() {
+        let fingerprint = format!("sha256:{}", "ab".repeat(32));
+        let check_value = "cmac-aes:763cbc";
+
+        // A check value under a fingerprint field, and the reverse, name nothing.
+        let swapped = json!({ "fp": check_value, "kcv": fingerprint });
+        assert_eq!(RecordedKey::named_in(&swapped, "fp", "kcv").count(), 0);
+
+        let named: Vec<RecordedKey> = RecordedKey::named_in(
+            &json!({ "fp": fingerprint, "kcv": check_value }),
+            "fp",
+            "kcv",
+        )
+        .collect();
+        let [by_fingerprint, by_check_value] = named.as_slice() else {
+            panic!("both names read, got {named:?}");
+        };
+
+        let digest = RecipientIdentifier::new(vec![0xab; 32]);
+        let kcv = RecipientIdentifier::new(vec![0x76, 0x3c, 0xbc]);
+        let ktri = Some(RecipientInfoKind::Ktri);
+        let kekri = Some(RecipientInfoKind::Kekri);
+        assert!(by_fingerprint.names(&digest, ktri));
+        assert!(by_check_value.names(&kcv, kekri));
+        // The same bytes in the form that cannot carry that kind of name.
+        assert!(!by_fingerprint.names(&digest, kekri));
+        assert!(!by_check_value.names(&kcv, ktri));
+        assert!(!by_fingerprint.names(&digest, None));
+    }
+
     #[test]
     fn a_record_naming_the_wrong_recipient_is_a_mismatch() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1288,7 +1357,7 @@ mod tests {
         let mut facts = transcript(tmp.path(), wrap, wrap.outputs.clone());
         for fact in &mut facts {
             if let StepFact::WrapRecipientRecorded { fingerprint, .. } = fact {
-                *fingerprint = "sha256:00".to_string();
+                *fingerprint = format!("sha256:{}", "00".repeat(32)).parse().unwrap();
             }
         }
 

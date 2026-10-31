@@ -23,9 +23,10 @@ use openssl::symm::Cipher;
 use openssl::x509::{X509Builder, X509Extension, X509NameBuilder};
 use rite_sdk::cms;
 use rite_sdk::{
-    Backend, BackendError, DataKey, KeyAlgorithm, KeyCheckValue, KeyId, KeyMetadata, KeyPolicy,
-    KeyProtection, KeySpec, KeyStoreBackend, KeyTransportBackend, KeyUsages, PublicKeyDer,
-    RandomBackend, SignAlgorithm, SignBackend, VerifyBackend, WrapScheme, WrappedKey,
+    Backend, BackendError, DataKey, KeyAlgorithm, KeyCheckValue, KeyFingerprint, KeyId,
+    KeyMetadata, KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend, KeyTransportBackend,
+    KeyUsages, PublicKeyDer, RandomBackend, SignAlgorithm, SignBackend, VerifyBackend, WrapScheme,
+    WrappedKey,
 };
 use std::collections::HashMap;
 use zeroize::Zeroizing;
@@ -978,21 +979,18 @@ fn throwaway_signer() -> Result<PKey<Private>, BackendError> {
     PKey::from_ec_key(key).map_err(|e| ossl_err("Wrap throwaway signer", &e))
 }
 
-/// The SHA-256 digest of a public key's SPKI DER.
+/// A public key's fingerprint, taken the one way every fingerprint is.
 ///
 /// Used as the certificate's subject key identifier, which CMS then carries as
-/// the recipient identifier. It is the same digest `compute_fingerprint`
-/// records for a public key, so a transcript's recipient fingerprint and a
+/// the recipient identifier, so a transcript's recipient fingerprint and a
 /// blob's `rid` are the same value and can be compared.
-fn spki_digest(
+fn fingerprint_of(
     subject_pub: &PKeyRef<impl openssl::pkey::HasPublic>,
-) -> Result<Vec<u8>, BackendError> {
+) -> Result<KeyFingerprint, BackendError> {
     let spki = subject_pub
         .public_key_to_der()
         .map_err(|e| ossl_err("Export subject public key", &e))?;
-    let digest = openssl::hash::hash(MessageDigest::sha256(), &spki)
-        .map_err(|e| ossl_err("Digest subject public key", &e))?;
-    Ok(digest.to_vec())
+    Ok(PublicKeyDer::new(spki)?.fingerprint())
 }
 
 /// Build an X.509 cert with the given subject public key, signed by the given signing key.
@@ -1046,11 +1044,11 @@ fn build_cert(
 
     // extnValue for subjectKeyIdentifier is a DER OCTET STRING wrapping the
     // identifier, so the digest is prefixed with its own tag and length.
-    let key_identifier = spki_digest(subject_pub)?;
-    let length = u8::try_from(key_identifier.len())
+    let key_identifier = fingerprint_of(subject_pub)?;
+    let length = u8::try_from(KeyFingerprint::LEN)
         .map_err(|_| BackendError::Other("subject key identifier is too long".to_string()))?;
     let mut extn_value = vec![0x04, length];
-    extn_value.extend_from_slice(&key_identifier);
+    extn_value.extend_from_slice(key_identifier.as_bytes());
     let extn_value = Asn1OctetString::new_from_bytes(&extn_value)
         .map_err(|e| ossl_err("Encode subject key identifier", &e))?;
     let ski_oid = Asn1Object::from_str(SUBJECT_KEY_IDENTIFIER_OID)
@@ -1381,7 +1379,7 @@ fn cms_encrypt_kek(kek: &StoredKey, payload: &[u8]) -> Result<WrappedKey, Backen
             kek.label, kek.algorithm
         )));
     }
-    let data = cms_seal_to_kek(secret, check_value.as_bytes(), payload)?;
+    let data = cms_seal_to_kek(secret, check_value, payload)?;
 
     // Described by reading the artifact back, not by restating what was just
     // written. A description that disagreed with the bytes is exactly what
@@ -1401,7 +1399,7 @@ fn cms_encrypt_kek(kek: &StoredKey, payload: &[u8]) -> Result<WrappedKey, Backen
 /// the backend holds and what artifact type comes out, belong to the caller.
 fn cms_seal_to_kek(
     secret: &[u8],
-    key_identifier: &[u8],
+    check_value: &KeyCheckValue,
     payload: &[u8],
 ) -> Result<Vec<u8>, BackendError> {
     // A fresh content-encryption key per message, as RFC 5652 requires: the
@@ -1411,7 +1409,7 @@ fn cms_seal_to_kek(
     let sealed = crate::content::seal_content(&cek, payload)?;
     let envelope = cms::Envelope {
         protection: KeyProtection::AesKeyWrap,
-        key_identifier: key_identifier.to_vec(),
+        key_identifier: check_value.into(),
         wrapped_cek: aes_key_wrap(secret, &cek, KeyWrap::Plain, true)?,
         nonce: sealed.nonce,
         ciphertext: sealed.ciphertext,
@@ -1470,15 +1468,13 @@ fn cms_open_from_kek(
 
     // Not covered by the content tag, which authenticates the content and
     // nothing around it, so this comparison is what refuses a blob addressed
-    // elsewhere. Both values render the same way, or the message invites the
-    // reader to compare two things that are not alike.
-    if envelope.key_identifier != check_value.as_bytes() {
-        let named = KeyCheckValue::from_cmac(&envelope.key_identifier).map_or_else(
-            |_| base16ct::lower::encode_string(&envelope.key_identifier),
-            |kcv| kcv.to_string(),
-        );
+    // elsewhere. The identifier is shown as the bytes it is: read as a check
+    // value, any identifier would look like one.
+    if !envelope.key_identifier.is_check_value(check_value) {
         return Err(BackendError::InvalidData(format!(
-            "this blob is addressed to the key with check value {named}"
+            "this blob is addressed to the key identified by {}, and the key held here has \
+             check value {check_value}",
+            envelope.key_identifier
         )));
     }
 
@@ -2488,7 +2484,10 @@ mod tests {
         let kek_public = backend.export_public_key(&kek.key_id).unwrap();
         let expected = openssl::hash::hash(MessageDigest::sha256(), kek_public.as_bytes()).unwrap();
         assert_eq!(
-            facts.recipient_key_identifier.as_deref(),
+            facts
+                .recipient_key_identifier
+                .as_ref()
+                .map(cms::RecipientIdentifier::as_bytes),
             Some(&expected[..])
         );
     }
@@ -3196,9 +3195,10 @@ mod tests {
 
         // The blob names the KEK by its check value, so a transcript and an
         // artifact compare without either side holding the key.
-        assert_eq!(
-            facts.recipient_key_identifier.as_deref(),
-            Some(kek.check_value.as_ref().unwrap().as_bytes().as_slice())
+        assert!(
+            facts
+                .recipient_key_identifier
+                .is_some_and(|named| named.is_check_value(kek.check_value.as_ref().unwrap()))
         );
 
         let restored = backend
@@ -3483,7 +3483,9 @@ mod tests {
             (
                 "recipient identifier",
                 cms::Envelope {
-                    key_identifier: flip(&good.key_identifier),
+                    key_identifier: cms::RecipientIdentifier::new(flip(
+                        good.key_identifier.as_bytes(),
+                    )),
                     ..good.clone()
                 },
             ),
@@ -4030,7 +4032,10 @@ mod tests {
         let kek_public = backend.export_public_key(&kek.key_id).unwrap();
         let expected = openssl::hash::hash(MessageDigest::sha256(), kek_public.as_bytes()).unwrap();
         assert_eq!(
-            facts.recipient_key_identifier.as_deref(),
+            facts
+                .recipient_key_identifier
+                .as_ref()
+                .map(cms::RecipientIdentifier::as_bytes),
             Some(&expected[..])
         );
     }

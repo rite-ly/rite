@@ -4,6 +4,7 @@
 //! algorithm identifiers, attestation evidence, and hardware-specific metadata.
 
 use serde::{Deserialize, Serialize};
+use sha2::Digest as _;
 use std::fmt;
 
 use crate::backend::BackendError;
@@ -144,11 +145,12 @@ impl KeyCheckValue {
 
 impl fmt::Display for KeyCheckValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:", Self::METHOD)?;
-        for byte in self.0 {
-            write!(f, "{byte:02x}")?;
-        }
-        Ok(())
+        write!(
+            f,
+            "{}:{}",
+            Self::METHOD,
+            base16ct::lower::encode_string(&self.0)
+        )
     }
 }
 
@@ -156,24 +158,26 @@ impl std::str::FromStr for KeyCheckValue {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let hex = s
-            .strip_prefix(Self::METHOD)
-            .and_then(|rest| rest.strip_prefix(':'))
-            // Lowercase only, so the string a `KeyCheckValue` parses from is
-            // the string it renders back to and two records of one key
-            // compare as text.
-            .filter(|hex| {
-                hex.len() == 2 * Self::LEN
-                    && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-            })
-            .ok_or_else(|| ParseError(s.to_owned()))?;
-        let (pairs, _) = hex.as_bytes().as_chunks::<2>();
-        let mut bytes = [0u8; Self::LEN];
-        for (byte, pair) in bytes.iter_mut().zip(pairs) {
-            let pair = std::str::from_utf8(pair).map_err(|_| ParseError(s.to_owned()))?;
-            *byte = u8::from_str_radix(pair, 16).map_err(|_| ParseError(s.to_owned()))?;
-        }
-        Ok(Self(bytes))
+        parse_prefixed(s, Self::METHOD).map(Self)
+    }
+}
+
+/// The bytes of `<method>:<hex>`, exactly `N` of them.
+///
+/// Lowercase only, so the string a value parses from is the string it renders
+/// back to, and two records of one key compare as text.
+fn parse_prefixed<const N: usize>(s: &str, method: &str) -> Result<[u8; N], ParseError> {
+    let mut bytes = [0u8; N];
+    // `decode` refuses uppercase, an odd length and more than `N` bytes; fewer
+    // come back as a shorter slice.
+    let decoded = s
+        .strip_prefix(method)
+        .and_then(|rest| rest.strip_prefix(':'))
+        .and_then(|hex| base16ct::lower::decode(hex, &mut bytes).ok())
+        .map(<[u8]>::len);
+    match decoded {
+        Some(len) if len == N => Ok(bytes),
+        _ => Err(ParseError(s.to_owned())),
     }
 }
 
@@ -188,6 +192,149 @@ impl TryFrom<String> for KeyCheckValue {
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         s.parse()
+    }
+}
+
+/// The name Rite gives a public key: the SHA-256 of its SPKI DER.
+///
+/// One value serves three readers. A person compares it, in
+/// `expect_recipient:` or on screen. The transcript records it, as
+/// `public_key_fingerprint` or in `wrap_recipient_recorded`. And a CMS
+/// container Rite writes carries its bytes as the recipient's subject key
+/// identifier, so `rite verify` matches a container to a recorded key without
+/// holding the key.
+///
+/// Only [`PublicKeyDer::fingerprint`] computes one, over the encoding
+/// [`PublicKeyDer::new`] keeps. Parsing accepts the lowercase form only, so
+/// the string a fingerprint parses from is the string it renders, and two
+/// records of one key compare as text.
+///
+/// What it does not do:
+///
+/// - It names an encoding of a key. `PublicKeyDer` settles the one choice an
+///   RSA SPKI leaves open, but an EC point may be compressed or not, and the
+///   two encodings of one EC key have two fingerprints.
+/// - It is not the name X.509 tooling uses for a key; that is
+///   [`Rfc5280KeyId`].
+/// - 32 bytes in a container written elsewhere are not a fingerprint until
+///   they match a key. They are a
+///   [`RecipientIdentifier`](crate::cms::RecipientIdentifier) until then.
+///
+/// ```
+/// use rite_sdk::KeyFingerprint;
+///
+/// let text = format!("sha256:{}", "ab".repeat(32));
+/// let fingerprint: KeyFingerprint = text.parse()?;
+/// assert_eq!(fingerprint.to_string(), text);
+/// assert_eq!(fingerprint.as_bytes(), &[0xab; 32]);
+///
+/// // Uppercase hex is a different string for the same bytes, so it is not one.
+/// let upper = format!("sha256:{}", "AB".repeat(32));
+/// assert!(upper.parse::<KeyFingerprint>().is_err());
+/// # Ok::<(), rite_sdk::ParseError>(())
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+pub struct KeyFingerprint([u8; Self::LEN]);
+
+impl KeyFingerprint {
+    /// Bytes in a SHA-256 digest.
+    pub const LEN: usize = 32;
+
+    /// The hash, and the string's prefix.
+    pub const METHOD: &'static str = "sha256";
+
+    /// The fingerprint of SPKI DER bytes that [`PublicKeyDer`] has
+    /// already put in its canonical form.
+    pub(crate) fn of_spki(der: &[u8]) -> Self {
+        Self(sha2::Sha256::digest(der).into())
+    }
+
+    /// The digest bytes, which is also the subject key identifier a container
+    /// Rite writes names the key by.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; Self::LEN] {
+        &self.0
+    }
+}
+
+impl fmt::Display for KeyFingerprint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}:{}",
+            Self::METHOD,
+            base16ct::lower::encode_string(&self.0)
+        )
+    }
+}
+
+/// The text form, so a failed comparison shows the value a reader would look
+/// up in a transcript.
+impl fmt::Debug for KeyFingerprint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "KeyFingerprint({self})")
+    }
+}
+
+impl std::str::FromStr for KeyFingerprint {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_prefixed(s, Self::METHOD).map(Self)
+    }
+}
+
+impl From<KeyFingerprint> for String {
+    fn from(fingerprint: KeyFingerprint) -> String {
+        fingerprint.to_string()
+    }
+}
+
+impl TryFrom<String> for KeyFingerprint {
+    type Error = ParseError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+/// The name X.509 tooling gives a public key: the SHA-1 of its
+/// `subjectPublicKey` bits, RFC 5280 §4.2.1.2 method 1.
+///
+/// What a certificate's subject key identifier usually holds, and so what
+/// `openssl cms -encrypt -keyid` names a recipient by. Rite reads this name and
+/// never writes it. It hashes the key without its algorithm identifier, with
+/// SHA-1, so it is not a [`KeyFingerprint`] and the transcript records none.
+///
+/// Method 1 is a convention, not a rule. RFC 5280 also describes a truncated
+/// method 2, and a CA may put any value in a subject key identifier, so a
+/// container naming its recipient another way does not match this name.
+///
+/// Rendered as bare hex. It has no prefix of its own in Rite, because no
+/// record holds one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rfc5280KeyId([u8; Self::LEN]);
+
+impl Rfc5280KeyId {
+    /// Bytes in a SHA-1 digest.
+    pub const LEN: usize = 20;
+
+    /// Keep a method 1 identifier [`PublicKeyDer`] has derived.
+    pub(crate) fn new(bytes: [u8; Self::LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// The identifier bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; Self::LEN] {
+        &self.0
+    }
+}
+
+impl fmt::Display for Rfc5280KeyId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&base16ct::lower::encode_string(&self.0))
     }
 }
 
@@ -2032,5 +2179,42 @@ mod tests {
             !policy.usages.contains(KeyUsages::WRAP),
             "signing-only default must not permit wrapping"
         );
+    }
+
+    /// Each name parses from exactly the string it renders, and from nothing
+    /// that differs from it in case, length or prefix.
+    #[test]
+    fn a_key_name_parses_only_from_the_string_it_renders() {
+        fn refuses<T: std::str::FromStr>(text: &str) -> bool {
+            text.parse::<T>().is_err()
+        }
+
+        let fingerprint = format!("sha256:{}", "0a".repeat(32));
+        let parsed: KeyFingerprint = fingerprint.parse().unwrap();
+        assert_eq!(parsed.to_string(), fingerprint);
+        for bad in [
+            format!("sha256:{}", "0A".repeat(32)),
+            format!("sha256:{}", "0a".repeat(31)),
+            format!("sha256:{}", "0a".repeat(33)),
+            format!("sha256:{}0", "0a".repeat(31)),
+            format!("sha256{}", "0a".repeat(32)),
+            format!("SHA256:{}", "0a".repeat(32)),
+            "0a".repeat(32),
+        ] {
+            assert!(refuses::<KeyFingerprint>(&bad), "{bad}");
+        }
+
+        let check_value: KeyCheckValue = "cmac-aes:0a1b2c".parse().unwrap();
+        assert_eq!(check_value.to_string(), "cmac-aes:0a1b2c");
+        for bad in [
+            "cmac-aes:0A1B2C",
+            "cmac-aes:0a1b",
+            "cmac-aes:0a1b2c3d",
+            "cmac-aes:0a1b2",
+            "cmac-aes0a1b2c",
+            "0a1b2c",
+        ] {
+            assert!(refuses::<KeyCheckValue>(bad), "{bad}");
+        }
     }
 }

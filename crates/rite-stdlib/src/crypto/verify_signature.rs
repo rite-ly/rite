@@ -126,7 +126,7 @@ impl Action for VerifySignatureAction {
             }),
             json!({
                 "verified": true,
-                "public_key_fingerprint": compute_fingerprint(public_key.as_bytes()),
+                "public_key_fingerprint": public_key.fingerprint().to_string(),
                 "signature_fingerprint": compute_fingerprint(signature),
             }),
             None,

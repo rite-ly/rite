@@ -9,7 +9,7 @@
 //! Actions call [`seal`] and [`open`] rather than `rite_openssl`, so swapping
 //! the provider is a change to this file and nothing else.
 
-use rite_sdk::BackendError;
+use rite_sdk::{BackendError, DataKey, PublicKeyDer};
 use zeroize::Zeroizing;
 
 /// Content and the values a container carries beside it.
@@ -17,6 +17,10 @@ use zeroize::Zeroizing;
 /// Re-exported rather than named from the provider at each call site, so the
 /// claim above holds: an action names this module and never `rite_openssl`.
 pub use rite_openssl::SealedContent;
+
+/// The length of a content-encryption key: AES-256-GCM, the one content
+/// cipher.
+pub const KEY_BYTES: usize = 32;
 
 /// Encrypt `payload` under a content-encryption key, with a fresh nonce.
 ///
@@ -35,4 +39,21 @@ pub fn seal(cek: &[u8], payload: &[u8]) -> Result<SealedContent, BackendError> {
 /// which is also the answer a wrong key gets.
 pub fn open(cek: &[u8], sealed: &SealedContent) -> Result<Zeroizing<Vec<u8>>, BackendError> {
     rite_openssl::open_content(cek, sealed)
+}
+
+/// Protect a content-encryption key for the holder of `recipient`.
+///
+/// No backend takes part: encrypting to a public key uses no secret, so the
+/// step's backend has nothing to contribute beyond the key's random bytes,
+/// which the caller draws from it.
+///
+/// # Errors
+///
+/// Returns [`BackendError`] if the recipient is not a key a container can
+/// address.
+pub fn protect_for(
+    recipient: &PublicKeyDer,
+    cek: Zeroizing<Vec<u8>>,
+) -> Result<DataKey, BackendError> {
+    rite_openssl::data_key_for_recipient(recipient, cek)
 }

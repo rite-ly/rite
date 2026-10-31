@@ -211,12 +211,12 @@
           "const": "unwrap_key"
         },
         {
-          "description": "Encrypt data using a key held by a backend.\n\nThe backend generates a content-encryption key, encrypts the data with it, and protects it with the step's encryption key. The data itself is not sent to the backend.",
+          "description": "Encrypt data for a key held by a backend or for a public key.\n\nReads `data` and exactly one of `encryption_key` or `recipient`. With `encryption_key`, the backend generates a content-encryption key and protects it with that key. With `recipient`, an RSA-2048 or RSA-4096 public key held elsewhere, the backend supplies the content-encryption key's random bytes, which are protected with RSAES-OAEP over SHA-256. The data itself is not sent to the backend.",
           "type": "string",
           "const": "encrypt_data"
         },
         {
-          "description": "Decrypt data encrypted by `encrypt_data`.\n\nThe result is a byte artifact available to later steps and erased from memory when the run ends.",
+          "description": "Decrypt data encrypted by `encrypt_data`, or a CMS file sealed elsewhere and supplied as a material.\n\nThe step checks that the container names the decryption key. The result is a byte artifact available to later steps and erased from memory when the run ends.",
           "type": "string",
           "const": "decrypt_data"
         },
@@ -547,6 +547,21 @@
         {
           "type": "object",
           "properties": {
+            "expect_recipient": {
+              "description": "The expected fingerprint of the recipient's public key, in the form `sha256:<64 lowercase hex digits>`, for a step that reads `recipient`. The step fails if the recipient key does not match.",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "errorMessage": "'expect_recipient' must be a fingerprint of the form 'sha256:<64 lowercase hex digits>'",
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "patternErrorMessage": "'expect_recipient' must be a fingerprint of the form 'sha256:<64 lowercase hex digits>'",
+                  "x-message": "'expect_recipient' must be a fingerprint of the form 'sha256:<64 lowercase hex digits>'"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
             "scheme": {
               "description": "The scheme used to encrypt the data. Defaults to `CMS-AES-256-GCM`.",
               "anyOf": [
@@ -2712,18 +2727,64 @@
                       },
                       "encryption_key": {
                         "type": "string"
+                      },
+                      "recipient": {
+                        "type": "string"
                       }
                     },
                     "additionalProperties": false,
+                    "allOf": [
+                      {
+                        "errorMessage": "'reads' must name exactly one of 'encryption_key', 'recipient'",
+                        "oneOf": [
+                          {
+                            "required": [
+                              "encryption_key"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "recipient"
+                            ]
+                          }
+                        ],
+                        "x-message": "'reads' must name exactly one of 'encryption_key', 'recipient'"
+                      }
+                    ],
                     "required": [
-                      "data",
-                      "encryption_key"
+                      "data"
                     ]
                   }
                 },
                 "required": [
                   "reads"
                 ]
+              },
+              {
+                "if": {
+                  "properties": {
+                    "with": {
+                      "type": "object",
+                      "required": [
+                        "expect_recipient"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "with"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "reads": {
+                      "errorMessage": "'with.expect_recipient' applies only when 'encrypt_data' reads 'recipient', which this step does not",
+                      "required": [
+                        "recipient"
+                      ],
+                      "x-message": "'with.expect_recipient' applies only when 'encrypt_data' reads 'recipient', which this step does not"
+                    }
+                  }
+                }
               },
               {
                 "properties": {

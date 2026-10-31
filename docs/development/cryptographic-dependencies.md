@@ -20,7 +20,10 @@ primitive. A new algorithm needs work on both sides: an OID and identifier in
 `CertificateDer` parse their own encoding with `x509-cert` so a build with no
 crypto provider can still tell a key from a certificate and read a key's
 algorithm. A new key algorithm also needs its OID in
-`rite-sdk/src/key_material.rs`.
+`rite-sdk/src/key_material.rs`. `PublicKeyDer::rfc5280_key_identifier` derives
+the SHA-1 name X.509 tooling gives a key through `x509-cert`, as
+`issue_certificate` does for the certificates it writes: it is a name read off
+public bits, not an operation under a key.
 
 ## Why one provider for primitives
 

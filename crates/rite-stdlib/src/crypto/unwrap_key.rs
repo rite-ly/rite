@@ -102,7 +102,7 @@ impl Action for UnwrapKeyAction {
         let recovered_fingerprint = key_metadata
             .public_key
             .as_ref()
-            .map(|key| compute_fingerprint(key.as_bytes()));
+            .map(|key| key.fingerprint().to_string());
 
         // A symmetric key has no public half, so what names it is its check
         // value, which is also what a custodian reads off the token. One

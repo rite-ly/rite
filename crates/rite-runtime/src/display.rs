@@ -95,9 +95,9 @@ pub fn fact_summary(fact: &StepFact) -> Option<(Icon, String)> {
         StepFact::EntropyDrawn { path, .. } => {
             Some((Icon::Info, format!("Random value drawn: {path}")))
         }
-        // Who the wrap is addressed to is the operator's last chance to stop a
-        // wrap they cannot undo, so the fingerprint is shown, not summarised
-        // away.
+        // Who a wrap or an encryption is addressed to is the operator's last
+        // chance to stop one they cannot undo, so the fingerprint is shown,
+        // not summarised away.
         StepFact::WrapRecipientRecorded {
             source,
             fingerprint,
@@ -168,13 +168,13 @@ mod tests {
         let (_, line) = fact_summary(&StepFact::WrapRecipientRecorded {
             step: StepId::new("wrap"),
             source: "escrow_pubkey".to_string(),
-            fingerprint: "sha256:abcd".to_string(),
+            fingerprint: format!("sha256:{}", "ab".repeat(32)).parse().unwrap(),
             declared: false,
         })
         .expect("the live feed surfaces the recipient");
         assert_ne!(line, UNSUMMARISED);
         assert!(line.contains("escrow_pubkey"), "{line}");
-        assert!(line.contains("sha256:abcd"), "{line}");
+        assert!(line.contains("sha256:abab"), "{line}");
     }
 
     #[test]

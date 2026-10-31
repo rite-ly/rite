@@ -21,6 +21,7 @@ use rite_stdlib::{
     OralReadbackAction, RevealAction, SplitSecretAction, UnwrapKeyAction, WrapKeyAction,
 };
 use secrecy::{ExposeSecret, SecretBox, SecretString};
+use zeroize::Zeroizing;
 
 fn make_state() -> ExecutionState {
     ExecutionState::new(HashMap::new(), HashMap::new(), HashMap::new(), false)
@@ -1383,8 +1384,8 @@ fn encrypt_data_produces_a_container_addressed_to_the_key() {
     // The container names its recipient, so a holder of the key can tell
     // whether the blob is theirs without decrypting anything.
     let envelope =
-        rite_sdk::cms::read_kek_enveloped(encrypted.data()).expect("the container reads back");
-    assert_eq!(envelope.key_identifier, expected.as_bytes());
+        rite_sdk::cms::read_auth_enveloped(encrypted.data()).expect("the container reads back");
+    assert!(envelope.key_identifier.is_check_value(expected));
     assert_eq!(encrypted.scheme(), rite_sdk::WrapScheme::CmsAes256Gcm);
 
     // The ciphertext is not the plaintext, which is the one thing a round trip
@@ -1476,9 +1477,267 @@ fn decrypt_data_refuses_a_container_addressed_to_another_key() {
     // the blob wants rather than that a tag failed.
     let message = error.to_string();
     assert!(
-        message.contains("addressed to the key with check value"),
+        message.contains("addressed to the key identified by"),
         "the refusal must name the recipient, got: {message}"
     );
+}
+
+/// An RSA key the backend holds, allowed to open what is sealed to it.
+fn rsa_recipient(backend: &mut MockBackend, id: &str) -> (ArtifactId, ArtifactValue) {
+    backend_key_with(
+        backend,
+        id,
+        KeyAlgorithm::Rsa2048,
+        KeyPolicy {
+            usages: rite_sdk::KeyUsages::UNWRAP,
+            ..KeyPolicy::default()
+        },
+    )
+}
+
+/// The public half of an RSA key artifact.
+fn public_half(key: &ArtifactValue) -> &rite_sdk::PublicKeyDer {
+    let ArtifactValue::BackendKey {
+        public_key: Some(public_key),
+        ..
+    } = key
+    else {
+        panic!("an RSA key has a public half")
+    };
+    public_key
+}
+
+/// Rite's name for a public key: the SHA-256 of its SPKI.
+fn spki_digest(public_key: &rite_sdk::PublicKeyDer) -> Vec<u8> {
+    openssl::hash::hash(
+        openssl::hash::MessageDigest::sha256(),
+        public_key.as_bytes(),
+    )
+    .unwrap()
+    .to_vec()
+}
+
+/// The name X.509 tooling gives an RSA key, RFC 5280 method 1: the SHA-1 of
+/// the `subjectPublicKey` bits, which for RSA are the PKCS#1 `RSAPublicKey`.
+/// Computed here from OpenSSL rather than through Rite.
+fn rfc5280_identifier(public_key: &rite_sdk::PublicKeyDer) -> Vec<u8> {
+    let rsa = openssl::rsa::Rsa::public_key_from_der(public_key.as_bytes()).unwrap();
+    let bits = rsa.public_key_to_der_pkcs1().unwrap();
+    openssl::hash::hash(openssl::hash::MessageDigest::sha1(), &bits)
+        .unwrap()
+        .to_vec()
+}
+
+/// Content sealed to `recipient`'s public key the way a third party holding
+/// only that key would seal it, as an `EncryptedData` artifact.
+fn sealed_to_public_key(recipient: &ArtifactValue, payload: &[u8]) -> ArtifactValue {
+    let der = sealed_der(recipient, payload, spki_digest);
+    let facts = rite_sdk::cms::describe(&der).unwrap();
+    ArtifactValue::EncryptedData(
+        rite_sdk::EncryptedData::new(rite_sdk::WrapScheme::CmsAes256Gcm, facts.description, der)
+            .unwrap(),
+    )
+}
+
+/// The container's bytes, naming the recipient by `identifier`.
+fn sealed_der(
+    recipient: &ArtifactValue,
+    payload: &[u8],
+    identifier: fn(&rite_sdk::PublicKeyDer) -> Vec<u8>,
+) -> Vec<u8> {
+    let public_key = public_half(recipient);
+    let data_key =
+        rite_openssl::data_key_for_recipient(public_key, Zeroizing::new(vec![0x5a; 32])).unwrap();
+    let sealed = rite_openssl::seal_content(data_key.plaintext(), payload).unwrap();
+    rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
+        protection: data_key.protection(),
+        key_identifier: rite_sdk::cms::RecipientIdentifier::new(identifier(public_key)),
+        wrapped_cek: data_key.wrapped().to_vec(),
+        nonce: sealed.nonce,
+        ciphertext: sealed.ciphertext,
+        tag: sealed.tag,
+    })
+    .unwrap()
+}
+
+/// Run `decrypt_data` on `sealed` with `key`, returning the result and the
+/// facts it recorded.
+fn decrypt_with(
+    backend: &mut MockBackend,
+    sealed: ArtifactValue,
+    key: (ArtifactId, ArtifactValue),
+) -> (
+    Result<rite_runtime::StepResult, rite_runtime::ActionError>,
+    Vec<StepFact>,
+) {
+    let sealed_id = ArtifactId::new("sealed");
+    let (key_id, key) = key;
+    let state = make_state()
+        .with_material(sealed_id.clone(), sealed)
+        .with_material(key_id.clone(), key);
+    let step = step_named(
+        "decrypt",
+        "recovered",
+        &[("encrypted_data", sealed_id), ("decryption_key", key_id)],
+    );
+
+    let mut harness = ReporterHarness::new();
+    let result = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        DecryptDataAction.execute(
+            &step,
+            &ctx,
+            &serde_json::json!({}),
+            &mut reporter,
+            Some(backend),
+        )
+    };
+    (result, harness.facts().to_vec())
+}
+
+/// A container whose content key went to an RSA public key opens under the
+/// private half the backend holds, and the record names that key by the
+/// fingerprint the container's recipient identifier carries.
+#[test]
+fn decrypt_data_opens_content_sealed_to_a_public_key() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let recipient = rsa_recipient(&mut backend, "custodian_key");
+    let sealed = sealed_to_public_key(&recipient.1, b"the recovery phrase");
+    let fingerprint = rite_runtime::compute_fingerprint(public_half(&recipient.1).as_bytes());
+
+    let (result, facts) = decrypt_with(&mut backend, sealed, recipient);
+    let result = result.expect("decrypt_data completes");
+    match produced(&result.artifacts, "recovered") {
+        ArtifactValue::Secret(bytes) => {
+            assert_eq!(bytes.expose_secret().as_slice(), b"the recovery phrase");
+        }
+        other => panic!("decrypt_data must produce Secret, got {other:?}"),
+    }
+
+    let recorded = facts.iter().find_map(|fact| match fact {
+        StepFact::BackendOperation { kind, inputs, .. } if kind == "decrypt_data" => {
+            inputs.get("decryption_key_fingerprint").cloned()
+        }
+        _ => None,
+    });
+    assert_eq!(recorded, Some(serde_json::json!(fingerprint)));
+}
+
+/// Addressed to another public key, the container is refused before any
+/// decrypt, and the refusal names both keys the way the transcript does.
+#[test]
+fn decrypt_data_refuses_content_sealed_to_another_public_key() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let intended = rsa_recipient(&mut backend, "intended");
+    let sealed = sealed_to_public_key(&intended.1, b"the recovery phrase");
+    let other = rsa_recipient(&mut backend, "other");
+
+    let (result, _) = decrypt_with(&mut backend, sealed, other);
+    let message = result
+        .expect_err("a container addressed elsewhere does not open")
+        .to_string();
+    let named = base16ct::lower::encode_string(public_half(&intended.1).fingerprint().as_bytes());
+    assert!(
+        message.contains(&format!("addressed to the key identified by {named},")),
+        "the refusal must name the recipient, got: {message}"
+    );
+}
+
+/// A container sealed outside the ceremony arrives as a material's bytes, and
+/// names its recipient the way a standard certificate does: by the SHA-1
+/// identifier of RFC 5280. It opens under the key it names, and the record
+/// still names that key by Rite's own fingerprint.
+#[test]
+fn decrypt_data_opens_a_material_addressed_by_the_rfc_5280_identifier() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let recipient = rsa_recipient(&mut backend, "custodian_key");
+    let der = sealed_der(&recipient.1, b"a document", rfc5280_identifier);
+    let fingerprint = rite_runtime::compute_fingerprint(public_half(&recipient.1).as_bytes());
+
+    let (result, facts) = decrypt_with(&mut backend, ArtifactValue::Bytes(der), recipient);
+    let result = result.expect("decrypt_data opens a material container");
+    match produced(&result.artifacts, "recovered") {
+        ArtifactValue::Secret(bytes) => assert_eq!(bytes.expose_secret().as_slice(), b"a document"),
+        other => panic!("decrypt_data must produce Secret, got {other:?}"),
+    }
+    let recorded = facts.iter().find_map(|fact| match fact {
+        StepFact::BackendOperation { kind, inputs, .. } if kind == "decrypt_data" => {
+            inputs.get("decryption_key_fingerprint").cloned()
+        }
+        _ => None,
+    });
+    assert_eq!(recorded, Some(serde_json::json!(fingerprint)));
+}
+
+/// An identifier for another key is shown as the bytes it is, not as a
+/// fingerprint or check value it might be.
+#[test]
+fn decrypt_data_names_a_foreign_identifier_as_plain_hex() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let intended = rsa_recipient(&mut backend, "intended");
+    let der = sealed_der(&intended.1, b"a document", rfc5280_identifier);
+    let other = rsa_recipient(&mut backend, "other");
+
+    let (result, _) = decrypt_with(&mut backend, ArtifactValue::Bytes(der), other);
+    let message = result.expect_err("addressed elsewhere").to_string();
+    let named = base16ct::lower::encode_string(&rfc5280_identifier(public_half(&intended.1)));
+    assert!(
+        message.contains(&format!("identified by {named},")),
+        "{message}"
+    );
+}
+
+/// A container whose protected content key opens to a length AES-256-GCM does
+/// not take is refused by name, before the cipher sees it.
+#[test]
+fn decrypt_data_refuses_a_content_key_of_the_wrong_length() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let recipient = rsa_recipient(&mut backend, "custodian_key");
+    let public_key = public_half(&recipient.1);
+    let short =
+        rite_openssl::data_key_for_recipient(public_key, Zeroizing::new(vec![0x5a; 16])).unwrap();
+    let der = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
+        protection: short.protection(),
+        key_identifier: rite_sdk::cms::RecipientIdentifier::new(spki_digest(public_key)),
+        wrapped_cek: short.wrapped().to_vec(),
+        nonce: vec![0; 12],
+        ciphertext: vec![0; 16],
+        tag: vec![0; 16],
+    })
+    .unwrap();
+
+    let (result, _) = decrypt_with(&mut backend, ArtifactValue::Bytes(der), recipient);
+    let message = result.expect_err("a 16-byte content key").to_string();
+    assert!(message.contains("16 bytes"), "{message}");
+}
+
+/// Bytes that are not a CMS container are refused as such.
+#[test]
+fn decrypt_data_refuses_a_material_that_is_not_a_container() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let recipient = rsa_recipient(&mut backend, "custodian_key");
+
+    let (result, _) = decrypt_with(
+        &mut backend,
+        ArtifactValue::Bytes(b"not a container".to_vec()),
+        recipient,
+    );
+    let message = result.expect_err("plain bytes do not open").to_string();
+    assert!(message.contains("CMS container"), "{message}");
+}
+
+/// A symmetric key has no public half to match a key transport recipient.
+#[test]
+fn decrypt_data_refuses_a_symmetric_key_for_a_public_key_recipient() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let intended = rsa_recipient(&mut backend, "intended");
+    let sealed = sealed_to_public_key(&intended.1, b"the recovery phrase");
+    let (kek_id, kek_meta) = kek(&mut backend, "a_kek");
+
+    let (result, _) = decrypt_with(&mut backend, sealed, (kek_id, key_artifact(&kek_meta)));
+    let message = result.expect_err("an AES key does not open it").to_string();
+    assert!(message.contains("RSA-2048 or RSA-4096"), "{message}");
 }
 
 #[test]
@@ -1518,13 +1777,284 @@ fn encrypt_data_refuses_a_key_that_is_not_a_256_bit_secret() {
     );
 }
 
+/// Run `encrypt_data` on `payload` to the public key in `recipient`, returning
+/// the result and the facts it recorded.
+fn encrypt_to_recipient(
+    backend: &mut MockBackend,
+    payload: &[u8],
+    recipient: ArtifactValue,
+    params: &serde_json::Value,
+) -> (
+    Result<rite_runtime::StepResult, rite_runtime::ActionError>,
+    Vec<StepFact>,
+) {
+    let content_id = ArtifactId::new("archive");
+    let recipient_id = ArtifactId::new("custodian_public");
+    let state = make_state()
+        .with_material(content_id.clone(), ArtifactValue::Bytes(payload.to_vec()))
+        .with_material(recipient_id.clone(), recipient);
+    let step = step_named(
+        "encrypt",
+        "sealed",
+        &[("data", content_id), ("recipient", recipient_id)],
+    );
+
+    let mut harness = ReporterHarness::new();
+    let result = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        EncryptDataAction.execute(&step, &ctx, params, &mut reporter, Some(backend))
+    };
+    (result, harness.facts().to_vec())
+}
+
+/// Content encrypted to a public key read off a disk is addressed to that key
+/// by the SHA-256 of its SPKI, and the holder of the private half opens it.
+/// The recipient is recorded in a fact of its own, as a wrap's is, and the
+/// operation names it only by the input.
+#[test]
+fn encrypt_data_seals_content_to_a_public_key_its_holder_opens() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let custodian = rsa_recipient(&mut backend, "custodian_key");
+    let public_key = public_half(&custodian.1).clone();
+    let fingerprint = rite_runtime::compute_fingerprint(public_key.as_bytes());
+
+    let (result, facts) = encrypt_to_recipient(
+        &mut backend,
+        b"the recovery phrase",
+        ArtifactValue::Bytes(public_key.as_bytes().to_vec()),
+        &serde_json::json!({}),
+    );
+    let mut result = result.expect("encrypt_data completes");
+    let sealed = result.artifacts.pop().expect("one artifact").1;
+    let ArtifactValue::EncryptedData(encrypted) = &sealed else {
+        panic!("encrypt_data must produce EncryptedData, got {sealed:?}")
+    };
+    let envelope =
+        rite_sdk::cms::read_auth_enveloped(encrypted.data()).expect("the container reads back");
+    assert_eq!(envelope.protection, rite_sdk::KeyProtection::RsaOaepSha256);
+    assert_eq!(
+        envelope.key_identifier.as_bytes(),
+        spki_digest(&public_key).as_slice()
+    );
+
+    let recorded = facts.iter().find_map(|fact| match fact {
+        StepFact::WrapRecipientRecorded {
+            fingerprint,
+            declared,
+            source,
+            ..
+        } => Some((fingerprint.to_string(), *declared, source.clone())),
+        _ => None,
+    });
+    assert_eq!(
+        recorded,
+        Some((fingerprint.clone(), false, "custodian_public".to_string()))
+    );
+    let inputs = facts
+        .iter()
+        .find_map(|fact| match fact {
+            StepFact::BackendOperation { kind, inputs, .. } if kind == "encrypt_data" => {
+                Some(inputs.clone())
+            }
+            _ => None,
+        })
+        .expect("the operation is recorded");
+    assert_eq!(
+        inputs.get("recipient"),
+        Some(&serde_json::json!("custodian_public"))
+    );
+    assert!(
+        !inputs.to_string().contains(&fingerprint),
+        "the recipient's fingerprint belongs to its own fact: {inputs}"
+    );
+
+    let (opened, _) = decrypt_with(&mut backend, sealed, custodian);
+    match produced(
+        &opened.expect("decrypt_data completes").artifacts,
+        "recovered",
+    ) {
+        ArtifactValue::Secret(bytes) => {
+            assert_eq!(bytes.expose_secret().as_slice(), b"the recovery phrase");
+        }
+        other => panic!("decrypt_data must produce Secret, got {other:?}"),
+    }
+}
+
+/// An RSA-2048 SPKI as some encoders write it, with the NULL algorithm
+/// parameters left out. OpenSSL reads it as the same key.
+fn without_rsa_parameters(spki: &[u8]) -> Vec<u8> {
+    const RSA_ENCRYPTION: [u8; 11] = [
+        0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,
+    ];
+    // SEQUENCE { SEQUENCE { rsaEncryption, NULL }, BIT STRING }: leaving out
+    // the NULL shortens both SEQUENCEs by its two bytes.
+    let head = [
+        &[0x30, 0x82, 0x01, 0x22, 0x30, 0x0d][..],
+        &RSA_ENCRYPTION,
+        &[0x05, 0x00],
+    ]
+    .concat();
+    let key_bits = spki
+        .strip_prefix(head.as_slice())
+        .expect("an RSA-2048 SPKI as OpenSSL writes it");
+    [
+        &[0x30, 0x82, 0x01, 0x20, 0x30, 0x0b][..],
+        &RSA_ENCRYPTION,
+        key_bits,
+    ]
+    .concat()
+}
+
+/// A recipient key supplied without its NULL parameters is still the key the
+/// custodian holds: the fact names it as the custodian's backend does, and the
+/// custodian opens what was sealed to it.
+#[test]
+fn encrypt_data_to_an_rsa_key_written_without_parameters_opens_under_its_holder() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let custodian = rsa_recipient(&mut backend, "custodian_key");
+    let held = public_half(&custodian.1).clone();
+    let supplied = without_rsa_parameters(held.as_bytes());
+
+    let (result, facts) = encrypt_to_recipient(
+        &mut backend,
+        b"the recovery phrase",
+        ArtifactValue::Bytes(supplied),
+        &serde_json::json!({}),
+    );
+    let sealed = result
+        .expect("encrypt_data completes")
+        .artifacts
+        .pop()
+        .expect("one artifact")
+        .1;
+    let recorded = facts.iter().find_map(|fact| match fact {
+        StepFact::WrapRecipientRecorded { fingerprint, .. } => Some(*fingerprint),
+        _ => None,
+    });
+    assert_eq!(recorded, Some(held.fingerprint()));
+
+    let (result, _) = decrypt_with(&mut backend, sealed, custodian);
+    result.expect("the custodian opens content sealed to their key");
+}
+
+/// A recipient other than the one the ceremony declared is refused before
+/// anything is encrypted or recorded.
+#[test]
+fn encrypt_data_refuses_a_recipient_other_than_the_declared_one() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let presented = rsa_recipient(&mut backend, "presented");
+    let declared = format!("sha256:{}", "ab".repeat(32));
+
+    let (result, facts) = encrypt_to_recipient(
+        &mut backend,
+        b"the recovery phrase",
+        presented.1,
+        &serde_json::json!({ "expect_recipient": declared }),
+    );
+    let message = result
+        .expect_err("a recipient the ceremony did not declare is refused")
+        .to_string();
+    assert!(message.contains(&declared), "{message}");
+    assert!(
+        facts.iter().all(|fact| !matches!(
+            fact,
+            StepFact::BackendOperation { .. } | StepFact::WrapRecipientRecorded { .. }
+        )),
+        "nothing is recorded for a refused recipient: {facts:?}"
+    );
+}
+
+/// Declared in advance, the recipient's fact says so.
+#[test]
+fn encrypt_data_records_a_declared_recipient_as_declared() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let custodian = rsa_recipient(&mut backend, "custodian_key");
+    let fingerprint = rite_runtime::compute_fingerprint(public_half(&custodian.1).as_bytes());
+
+    let (result, facts) = encrypt_to_recipient(
+        &mut backend,
+        b"the recovery phrase",
+        custodian.1,
+        &serde_json::json!({ "expect_recipient": fingerprint }),
+    );
+    result.expect("encrypt_data completes");
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, StepFact::WrapRecipientRecorded { declared: true, .. }))
+    );
+}
+
+/// A public key the container cannot address is refused by name.
+#[test]
+fn encrypt_data_refuses_a_recipient_that_is_not_an_rsa_key() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let (_, ec) = backend_key(&mut backend, "signing_key", KeyAlgorithm::EcdsaP256);
+
+    let (result, facts) = encrypt_to_recipient(
+        &mut backend,
+        b"the recovery phrase",
+        ec,
+        &serde_json::json!({}),
+    );
+    let message = result
+        .expect_err("an EC recipient has no key transport here")
+        .to_string();
+    assert!(message.contains("ECDSA-P256"), "{message}");
+    // Refused before the recipient is recorded, so the transcript does not
+    // say the key received content it never did.
+    assert!(
+        !facts
+            .iter()
+            .any(|fact| matches!(fact, StepFact::WrapRecipientRecorded { .. })),
+        "{facts:?}"
+    );
+}
+
+/// A key of another kind than the container is addressed to is refused as
+/// the wrong kind of key, not as a different key of the right kind.
+#[test]
+fn decrypt_data_names_a_key_of_the_wrong_kind_for_a_public_key_recipient() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let custodian = rsa_recipient(&mut backend, "custodian_key");
+    let sealed = sealed_to_public_key(&custodian.1, b"the recovery phrase");
+    let ec = backend_key(&mut backend, "signing_key", KeyAlgorithm::EcdsaP256);
+
+    let (result, _) = decrypt_with(&mut backend, sealed, ec);
+    let message = result
+        .expect_err("an EC key does not open an RSA recipient")
+        .to_string();
+    assert!(
+        message.contains("ECDSA-P256") && message.contains("RSA-2048 or RSA-4096"),
+        "{message}"
+    );
+}
+
 #[test]
 fn decrypt_data_refuses_a_wrapped_key() {
     let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
     let (kek_id, meta) = kek(&mut backend, "transport_kek");
+    let target = backend
+        .generate_key(key_spec_with(
+            "target",
+            KeyAlgorithm::Aes256,
+            KeyPolicy {
+                extractable: true,
+                ..KeyPolicy::default_for(KeyAlgorithm::Aes256)
+            },
+        ))
+        .unwrap();
+    let wrapped = rite_sdk::KeyTransportBackend::wrap(
+        &mut backend,
+        &target.key_id,
+        &meta.key_id,
+        rite_sdk::WrapScheme::CmsAes256Gcm,
+    )
+    .unwrap();
     let wrapped_id = ArtifactId::new("wrapped");
     let state = make_state()
-        .with_material(wrapped_id.clone(), ArtifactValue::Bytes(vec![0u8; 16]))
+        .with_material(wrapped_id.clone(), ArtifactValue::WrappedKey(wrapped))
         .with_material(kek_id.clone(), key_artifact(&meta));
     let step = step_named(
         "decrypt",

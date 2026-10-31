@@ -3,7 +3,7 @@
 use rite_model::{ActionType, StepInputs};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
-    compute_fingerprint, resolve_backend_key,
+    resolve_backend_key,
 };
 use rite_sdk::Backend;
 use serde_json::json;
@@ -59,7 +59,7 @@ impl Action for ExportPublicAction {
             keystore.export_public_key(source_key.key_id)?
         };
 
-        let fingerprint = compute_fingerprint(exported.as_bytes());
+        let fingerprint = exported.fingerprint().to_string();
         let public_key = ArtifactValue::PublicKey(exported);
 
         reporter.backend_operation(

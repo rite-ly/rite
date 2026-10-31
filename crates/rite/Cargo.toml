@@ -41,7 +41,6 @@ rite-render = { workspace = true, optional = true }
 rite-stdlib = { workspace = true }
 rite-tui = { workspace = true, optional = true }
 openssl = { workspace = true, optional = true }
-base16ct = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 serde_json = { workspace = true }

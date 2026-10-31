@@ -23,9 +23,10 @@ use openssl::symm::Cipher;
 use openssl::x509::{X509Builder, X509Extension, X509NameBuilder};
 use rite_sdk::cms;
 use rite_sdk::{
-    Backend, BackendError, DataKey, KeyAlgorithm, KeyCheckValue, KeyId, KeyMetadata, KeyPolicy,
-    KeyProtection, KeySpec, KeyStoreBackend, KeyTransportBackend, KeyUsages, PublicKeyDer,
-    RandomBackend, SignAlgorithm, SignBackend, VerifyBackend, WrapScheme, WrappedKey,
+    Backend, BackendError, DataKey, KeyAlgorithm, KeyCheckValue, KeyFingerprint, KeyId,
+    KeyMetadata, KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend, KeyTransportBackend,
+    KeyUsages, PublicKeyDer, RandomBackend, SignAlgorithm, SignBackend, VerifyBackend, WrapScheme,
+    WrappedKey,
 };
 use std::collections::HashMap;
 use zeroize::Zeroizing;
@@ -978,21 +979,18 @@ fn throwaway_signer() -> Result<PKey<Private>, BackendError> {
     PKey::from_ec_key(key).map_err(|e| ossl_err("Wrap throwaway signer", &e))
 }
 
-/// The SHA-256 digest of a public key's SPKI DER.
+/// A public key's fingerprint, taken the one way every fingerprint is.
 ///
 /// Used as the certificate's subject key identifier, which CMS then carries as
-/// the recipient identifier. It is the same digest `compute_fingerprint`
-/// records for a public key, so a transcript's recipient fingerprint and a
+/// the recipient identifier, so a transcript's recipient fingerprint and a
 /// blob's `rid` are the same value and can be compared.
-fn spki_digest(
+fn fingerprint_of(
     subject_pub: &PKeyRef<impl openssl::pkey::HasPublic>,
-) -> Result<Vec<u8>, BackendError> {
+) -> Result<KeyFingerprint, BackendError> {
     let spki = subject_pub
         .public_key_to_der()
         .map_err(|e| ossl_err("Export subject public key", &e))?;
-    let digest = openssl::hash::hash(MessageDigest::sha256(), &spki)
-        .map_err(|e| ossl_err("Digest subject public key", &e))?;
-    Ok(digest.to_vec())
+    Ok(PublicKeyDer::new(spki)?.fingerprint())
 }
 
 /// Build an X.509 cert with the given subject public key, signed by the given signing key.
@@ -1046,11 +1044,11 @@ fn build_cert(
 
     // extnValue for subjectKeyIdentifier is a DER OCTET STRING wrapping the
     // identifier, so the digest is prefixed with its own tag and length.
-    let key_identifier = spki_digest(subject_pub)?;
-    let length = u8::try_from(key_identifier.len())
+    let key_identifier = fingerprint_of(subject_pub)?;
+    let length = u8::try_from(KeyFingerprint::LEN)
         .map_err(|_| BackendError::Other("subject key identifier is too long".to_string()))?;
     let mut extn_value = vec![0x04, length];
-    extn_value.extend_from_slice(&key_identifier);
+    extn_value.extend_from_slice(key_identifier.as_bytes());
     let extn_value = Asn1OctetString::new_from_bytes(&extn_value)
         .map_err(|e| ossl_err("Encode subject key identifier", &e))?;
     let ski_oid = Asn1Object::from_str(SUBJECT_KEY_IDENTIFIER_OID)
@@ -1182,6 +1180,47 @@ fn rsa_oaep_decrypt(
     ctx.decrypt_to_vec(ciphertext, &mut out)
         .map_err(|e| ossl_err("RSA-OAEP decrypt", &e))?;
     Ok(out)
+}
+
+/// Pair a content-encryption key with a copy of it only `recipient` opens.
+///
+/// The counterpart of [`KeyTransportBackend::generate_data_key`] for a
+/// recipient that is someone else's public key. Protecting a data key needs
+/// only the public half, so no backend key and no device take part, and the
+/// holder of the private key opens it with
+/// [`KeyTransportBackend::open_data_key`].
+///
+/// The caller supplies the key's bytes, so the caller chooses their source.
+/// The padding seed RSA-OAEP needs comes from OpenSSL's generator, as the
+/// content nonce does.
+///
+/// An RSA-2048 or RSA-4096 recipient takes RSAES-OAEP over SHA-256, which is
+/// what a CMS `KeyTransRecipientInfo` declares for it. Those are the RSA sizes
+/// every other path in this backend accepts, so a data key is not sealed to a
+/// key the backend would refuse to wrap to.
+///
+/// # Errors
+///
+/// Returns [`BackendError::UnsupportedAlgorithm`] if the recipient is not one
+/// of those keys, and [`BackendError::Other`] if the public key cannot be
+/// parsed.
+pub fn data_key_for_recipient(
+    recipient: &PublicKeyDer,
+    cek: Zeroizing<Vec<u8>>,
+) -> Result<DataKey, BackendError> {
+    let recipient = PKey::public_key_from_der(recipient.as_bytes())
+        .map_err(|e| ossl_err("Parse recipient public key", &e))?;
+    // Refuses an RSA size outside the two by name.
+    let recipient_algorithm = key_algorithm_of(&recipient)?;
+    if !WrapScheme::RsaOaepSha256.accepts_recipient(recipient_algorithm) {
+        return Err(BackendError::UnsupportedAlgorithm(format!(
+            "a data key is sealed to an RSA public key, and this recipient is \
+             {recipient_algorithm}"
+        )));
+    }
+
+    let wrapped = rsa_oaep_encrypt(&recipient, &cek)?;
+    Ok(DataKey::new(cek, wrapped, KeyProtection::RsaOaepSha256))
 }
 
 /// SHA-256 for both the OAEP digest and MGF1.
@@ -1340,7 +1379,7 @@ fn cms_encrypt_kek(kek: &StoredKey, payload: &[u8]) -> Result<WrappedKey, Backen
             kek.label, kek.algorithm
         )));
     }
-    let data = cms_seal_to_kek(secret, check_value.as_bytes(), payload)?;
+    let data = cms_seal_to_kek(secret, check_value, payload)?;
 
     // Described by reading the artifact back, not by restating what was just
     // written. A description that disagreed with the bytes is exactly what
@@ -1360,7 +1399,7 @@ fn cms_encrypt_kek(kek: &StoredKey, payload: &[u8]) -> Result<WrappedKey, Backen
 /// the backend holds and what artifact type comes out, belong to the caller.
 fn cms_seal_to_kek(
     secret: &[u8],
-    key_identifier: &[u8],
+    check_value: &KeyCheckValue,
     payload: &[u8],
 ) -> Result<Vec<u8>, BackendError> {
     // A fresh content-encryption key per message, as RFC 5652 requires: the
@@ -1368,14 +1407,15 @@ fn cms_seal_to_kek(
     let cek = random_bytes(32)?;
 
     let sealed = crate::content::seal_content(&cek, payload)?;
-    let envelope = cms::KekEnvelope {
-        key_identifier: key_identifier.to_vec(),
+    let envelope = cms::Envelope {
+        protection: KeyProtection::AesKeyWrap,
+        key_identifier: check_value.into(),
         wrapped_cek: aes_key_wrap(secret, &cek, KeyWrap::Plain, true)?,
         nonce: sealed.nonce,
         ciphertext: sealed.ciphertext,
         tag: sealed.tag,
     };
-    cms::write_kek_enveloped(&envelope).map_err(|e| BackendError::InvalidData(e.to_string()))
+    cms::write_auth_enveloped(&envelope).map_err(|e| BackendError::InvalidData(e.to_string()))
 }
 
 /// Undo [`cms_encrypt_kek`].
@@ -1402,8 +1442,9 @@ fn cms_open_from_kek(
     check_value: &KeyCheckValue,
     der: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, BackendError> {
-    // The reader insists the blob declare `id-aes256-wrap`, and the cipher
-    // below follows the local secret's length, so without this a blob naming
+    // The reader admits a symmetric recipient only under `id-aes256-wrap`, and
+    // the protection check below refuses every other recipient form. The
+    // cipher follows the local secret's length, so without this a blob naming
     // one algorithm could be opened under another and the run would record the
     // name rather than what it did. The seal side refuses the same size.
     if secret.len() != 32 {
@@ -1414,19 +1455,26 @@ fn cms_open_from_kek(
         )));
     }
     let envelope =
-        cms::read_kek_enveloped(der).map_err(|e| BackendError::InvalidData(e.to_string()))?;
+        cms::read_auth_enveloped(der).map_err(|e| BackendError::InvalidData(e.to_string()))?;
+    // The reader also admits a key transport recipient, whose content key an
+    // AES key wrap must not be run over.
+    if envelope.protection != KeyProtection::AesKeyWrap {
+        return Err(BackendError::InvalidData(format!(
+            "this container protects its content key with {}, and the key held here is a \
+             symmetric one",
+            envelope.protection
+        )));
+    }
 
     // Not covered by the content tag, which authenticates the content and
     // nothing around it, so this comparison is what refuses a blob addressed
-    // elsewhere. Both values render the same way, or the message invites the
-    // reader to compare two things that are not alike.
-    if envelope.key_identifier != check_value.as_bytes() {
-        let named = KeyCheckValue::from_cmac(&envelope.key_identifier).map_or_else(
-            |_| base16ct::lower::encode_string(&envelope.key_identifier),
-            |kcv| kcv.to_string(),
-        );
+    // elsewhere. The identifier is shown as the bytes it is: read as a check
+    // value, any identifier would look like one.
+    if !envelope.key_identifier.is_check_value(check_value) {
         return Err(BackendError::InvalidData(format!(
-            "this blob is addressed to the key with check value {named}"
+            "this blob is addressed to the key identified by {}, and the key held here has \
+             check value {check_value}",
+            envelope.key_identifier
         )));
     }
 
@@ -1761,26 +1809,37 @@ impl KeyTransportBackend for OpenSslBackend {
         wrapped: &[u8],
         protection: KeyProtection,
     ) -> Result<Zeroizing<Vec<u8>>, BackendError> {
-        // Refused rather than attempted. The bytes of one protection are
-        // indistinguishable from another's, so opening under the wrong one
-        // either fails obscurely or, for an unauthenticated mechanism, returns
-        // something that is not the key.
-        if protection != KeyProtection::AesKeyWrap {
-            return Err(BackendError::UnsupportedAlgorithm(format!(
-                "this backend opens a data key protected with {}, and this one is protected \
-                 with {protection}",
-                KeyProtection::AesKeyWrap
-            )));
-        }
         let kek = self.get_key(kek)?;
         kek.policy.require(KeyUsages::UNWRAP, "open a data key")?;
-        let (secret, _) = kek.secret()?;
-        Ok(Zeroizing::new(aes_key_wrap(
-            secret,
-            wrapped,
-            KeyWrap::Plain,
-            false,
-        )?))
+        // The protection says which key the opening needs, and a key of the
+        // other kind is refused by the accessor, which names it. Nothing is
+        // attempted under an assumption: one protection's bytes are
+        // indistinguishable from another's.
+        match protection {
+            KeyProtection::AesKeyWrap => {
+                let (secret, _) = kek.secret()?;
+                Ok(Zeroizing::new(aes_key_wrap(
+                    secret,
+                    wrapped,
+                    KeyWrap::Plain,
+                    false,
+                )?))
+            }
+            KeyProtection::RsaOaepSha256 => {
+                let pkey = kek.pkey()?;
+                if pkey.id() != Id::RSA {
+                    return Err(BackendError::UnsupportedAlgorithm(format!(
+                        "a data key protected with {protection} opens under an RSA key, and \
+                         '{}' is {}",
+                        kek.label, kek.algorithm
+                    )));
+                }
+                rsa_oaep_decrypt(pkey, wrapped)
+            }
+            _ => Err(BackendError::UnsupportedAlgorithm(format!(
+                "this backend does not open a data key protected with {protection}"
+            ))),
+        }
     }
 
     fn wrap_to_public(
@@ -1844,6 +1903,98 @@ mod tests {
             },
             ..spec(algorithm, label)
         }
+    }
+
+    /// A data key sealed to a public key needs no backend key on the way in,
+    /// and the private key the backend holds opens it on the way out.
+    #[test]
+    fn a_data_key_sealed_to_a_public_key_opens_under_its_private_half() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let recipient = backend
+            .generate_key(kek(KeyAlgorithm::Rsa2048, "recipient"))
+            .unwrap();
+        let public = backend.export_public_key(&recipient.key_id).unwrap();
+
+        let data_key = data_key_for_recipient(&public, random_bytes(32).unwrap()).unwrap();
+        assert_eq!(data_key.protection(), KeyProtection::RsaOaepSha256);
+        assert_eq!(data_key.plaintext().len(), 32);
+        assert_eq!(data_key.wrapped().len(), 256, "one RSA-2048 block");
+
+        let opened = backend
+            .open_data_key(
+                &recipient.key_id,
+                data_key.wrapped(),
+                KeyProtection::RsaOaepSha256,
+            )
+            .unwrap();
+        assert_eq!(opened.as_slice(), data_key.plaintext());
+    }
+
+    #[test]
+    fn a_data_key_is_sealed_only_to_an_rsa_public_key() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let ec = backend
+            .generate_key(kek(KeyAlgorithm::EcdsaP256, "ec"))
+            .unwrap();
+        let public = backend.export_public_key(&ec.key_id).unwrap();
+        let message = data_key_for_recipient(&public, random_bytes(32).unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("ECDSA-P256"), "{message}");
+
+        // An RSA size the rest of the backend refuses is refused here too,
+        // though a 32-byte key would fit under its OAEP ceiling.
+        let weak = PKey::from_rsa(Rsa::generate(1024).unwrap()).unwrap();
+        let weak = PublicKeyDer::new(weak.public_key_to_der().unwrap()).unwrap();
+        let message = data_key_for_recipient(&weak, random_bytes(32).unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("1024"), "{message}");
+    }
+
+    /// Opening follows the protection the container names, and a key of the
+    /// other kind, or one whose policy does not allow it, is refused.
+    #[test]
+    fn an_rsa_protected_data_key_opens_only_under_an_rsa_key_allowed_to() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let recipient = backend
+            .generate_key(kek(KeyAlgorithm::Rsa2048, "recipient"))
+            .unwrap();
+        let public = backend.export_public_key(&recipient.key_id).unwrap();
+        let data_key = data_key_for_recipient(&public, random_bytes(32).unwrap()).unwrap();
+
+        let ec = backend
+            .generate_key(kek(KeyAlgorithm::EcdsaP256, "ec"))
+            .unwrap();
+        let aes = backend
+            .generate_key(spec(KeyAlgorithm::Aes256, "aes"))
+            .unwrap();
+        let signing_only = backend
+            .generate_key(spec(KeyAlgorithm::Rsa2048, "signer"))
+            .unwrap();
+        for (key, case) in [
+            (&ec.key_id, "an EC key"),
+            (&aes.key_id, "a symmetric key"),
+            (&signing_only.key_id, "an RSA key without the unwrap usage"),
+        ] {
+            assert!(
+                backend
+                    .open_data_key(key, data_key.wrapped(), KeyProtection::RsaOaepSha256)
+                    .is_err(),
+                "{case} must not open it"
+            );
+        }
+
+        // The right key under the wrong protection is refused too.
+        assert!(
+            backend
+                .open_data_key(
+                    &recipient.key_id,
+                    data_key.wrapped(),
+                    KeyProtection::AesKeyWrap
+                )
+                .is_err()
+        );
     }
 
     /// Check a signature against the key's exported public half.
@@ -2333,7 +2484,10 @@ mod tests {
         let kek_public = backend.export_public_key(&kek.key_id).unwrap();
         let expected = openssl::hash::hash(MessageDigest::sha256(), kek_public.as_bytes()).unwrap();
         assert_eq!(
-            facts.recipient_key_identifier.as_deref(),
+            facts
+                .recipient_key_identifier
+                .as_ref()
+                .map(cms::RecipientIdentifier::as_bytes),
             Some(&expected[..])
         );
     }
@@ -3041,9 +3195,10 @@ mod tests {
 
         // The blob names the KEK by its check value, so a transcript and an
         // artifact compare without either side holding the key.
-        assert_eq!(
-            facts.recipient_key_identifier.as_deref(),
-            Some(kek.check_value.as_ref().unwrap().as_bytes().as_slice())
+        assert!(
+            facts
+                .recipient_key_identifier
+                .is_some_and(|named| named.is_check_value(kek.check_value.as_ref().unwrap()))
         );
 
         let restored = backend
@@ -3187,7 +3342,7 @@ mod tests {
 
     /// The CMS path refuses the same mismatch.
     ///
-    /// `read_kek_enveloped` insists the blob declare id-aes256-wrap, and the
+    /// A symmetric recipient is admitted only under id-aes256-wrap, and the
     /// CEK is then unwrapped with a cipher chosen from the local secret, so
     /// without this guard a container could name one algorithm and be opened
     /// under another.
@@ -3287,7 +3442,7 @@ mod tests {
         let wrapped = backend
             .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
             .unwrap();
-        let good = cms::read_kek_enveloped(wrapped.data()).unwrap();
+        let good = cms::read_auth_enveloped(wrapped.data()).unwrap();
 
         let flip = |bytes: &[u8]| {
             let mut bytes = bytes.to_vec();
@@ -3299,43 +3454,45 @@ mod tests {
         let variants = [
             (
                 "ciphertext",
-                cms::KekEnvelope {
+                cms::Envelope {
                     ciphertext: flip(&good.ciphertext),
                     ..good.clone()
                 },
             ),
             (
                 "tag",
-                cms::KekEnvelope {
+                cms::Envelope {
                     tag: flip(&good.tag),
                     ..good.clone()
                 },
             ),
             (
                 "nonce",
-                cms::KekEnvelope {
+                cms::Envelope {
                     nonce: flip(&good.nonce),
                     ..good.clone()
                 },
             ),
             (
                 "wrapped key",
-                cms::KekEnvelope {
+                cms::Envelope {
                     wrapped_cek: flip(&good.wrapped_cek),
                     ..good.clone()
                 },
             ),
             (
                 "recipient identifier",
-                cms::KekEnvelope {
-                    key_identifier: flip(&good.key_identifier),
+                cms::Envelope {
+                    key_identifier: cms::RecipientIdentifier::new(flip(
+                        good.key_identifier.as_bytes(),
+                    )),
                     ..good.clone()
                 },
             ),
         ];
 
         for (region, envelope) in variants {
-            let der = cms::write_kek_enveloped(&envelope).unwrap();
+            let der = cms::write_auth_enveloped(&envelope).unwrap();
             let facts = cms::describe(&der).unwrap();
             // Each variant is still a well-formed CMS wrap the scheme admits,
             // so nothing before the decrypt would notice.
@@ -3875,7 +4032,10 @@ mod tests {
         let kek_public = backend.export_public_key(&kek.key_id).unwrap();
         let expected = openssl::hash::hash(MessageDigest::sha256(), kek_public.as_bytes()).unwrap();
         assert_eq!(
-            facts.recipient_key_identifier.as_deref(),
+            facts
+                .recipient_key_identifier
+                .as_ref()
+                .map(cms::RecipientIdentifier::as_bytes),
             Some(&expected[..])
         );
     }

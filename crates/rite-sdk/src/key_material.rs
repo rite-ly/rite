@@ -23,11 +23,12 @@ use x509_cert::der::oid::db::rfc5912::{
     ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1,
 };
 use x509_cert::der::oid::db::rfc8410::ID_ED_25519;
-use x509_cert::der::{Decode, Encode, Reader, SliceReader};
-use x509_cert::spki::SubjectPublicKeyInfoRef;
+use x509_cert::der::{AnyRef, Decode, Encode, Reader, SliceReader};
+use x509_cert::ext::pkix::SubjectKeyIdentifier;
+use x509_cert::spki::{AlgorithmIdentifierRef, SubjectPublicKeyInfoRef};
 
 use crate::backend::BackendError;
-use crate::types::KeyAlgorithm;
+use crate::types::{KeyAlgorithm, KeyFingerprint, Rfc5280KeyId};
 
 /// A public key in `SubjectPublicKeyInfo` (SPKI) DER form.
 ///
@@ -38,10 +39,18 @@ use crate::types::KeyAlgorithm;
 pub struct PublicKeyDer(Vec<u8>);
 
 impl PublicKeyDer {
-    /// Wrap SPKI DER bytes after checking they parse.
+    /// Wrap SPKI DER bytes after checking they parse, in canonical form.
     ///
     /// Takes ownership because callers hold the bytes a backend or a parser
     /// just produced, and the type keeps them.
+    ///
+    /// DER gives one structure one encoding, but an RSA SPKI has two
+    /// structures: RFC 3279 §2.3.1 gives `rsaEncryption` NULL parameters, and
+    /// readers, OpenSSL among them, also accept the parameters absent. Both are
+    /// one key, and a [`KeyFingerprint`] of each would differ, so absent
+    /// parameters are written as NULL here. The result is the encoding
+    /// OpenSSL exports, which is what a backend holding the private half
+    /// reports.
     ///
     /// # Errors
     ///
@@ -49,9 +58,23 @@ impl PublicKeyDer {
     /// `SubjectPublicKeyInfo`, which is what a certificate or a PEM armouring
     /// arriving here looks like.
     pub fn new(der: Vec<u8>) -> Result<Self, BackendError> {
-        SubjectPublicKeyInfoRef::from_der(&der).map_err(|e| {
+        let spki = SubjectPublicKeyInfoRef::from_der(&der).map_err(|e| {
             BackendError::InvalidKeyFormat(format!("not a SubjectPublicKeyInfo: {e}"))
         })?;
+        if spki.algorithm.oid == RSA_ENCRYPTION && spki.algorithm.parameters.is_none() {
+            let canonical = SubjectPublicKeyInfoRef {
+                algorithm: AlgorithmIdentifierRef {
+                    oid: RSA_ENCRYPTION,
+                    parameters: Some(AnyRef::NULL),
+                },
+                subject_public_key: spki.subject_public_key,
+            }
+            .to_der()
+            .map_err(|e| {
+                BackendError::InvalidKeyFormat(format!("RSA public key cannot be re-encoded: {e}"))
+            })?;
+            return Ok(Self(canonical));
+        }
         Ok(Self(der))
     }
 
@@ -102,6 +125,31 @@ impl PublicKeyDer {
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
+    }
+
+    /// Rite's name for this key.
+    #[must_use]
+    pub fn fingerprint(&self) -> KeyFingerprint {
+        KeyFingerprint::of_spki(&self.0)
+    }
+
+    /// The name X.509 tooling derives for this key, for recognising it in a
+    /// structure someone else wrote.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::InvalidKeyFormat`] if the SPKI cannot be read,
+    /// which every constructor already rules out.
+    pub fn rfc5280_key_identifier(&self) -> Result<Rfc5280KeyId, BackendError> {
+        let spki = SubjectPublicKeyInfoRef::from_der(&self.0)
+            .map_err(|e| BackendError::InvalidKeyFormat(format!("SPKI is unreadable: {e}")))?;
+        let identifier = SubjectKeyIdentifier::try_from(spki).map_err(|e| {
+            BackendError::InvalidKeyFormat(format!("key identifier cannot be derived: {e}"))
+        })?;
+        let bytes = identifier.0.as_bytes().try_into().map_err(|_| {
+            BackendError::InvalidKeyFormat("key identifier is not a SHA-1 digest".to_string())
+        })?;
+        Ok(Rfc5280KeyId::new(bytes))
     }
 
     /// The key algorithm, read from the key's own structure.
@@ -328,6 +376,26 @@ mod tests {
         pub const CERTIFICATE: &[u8] = include_bytes!("../tests/vectors/p256.cert.der");
     }
 
+    /// The identifier OpenSSL wrote into the vector certificate's subject key
+    /// identifier extension, read back with `openssl x509 -ext
+    /// subjectKeyIdentifier`, is the one derived from the key it certifies.
+    #[test]
+    fn derives_the_key_identifier_openssl_writes() {
+        let certificate = CertificateDer::new(vectors::CERTIFICATE.to_vec()).unwrap();
+        let identifier = certificate
+            .public_key()
+            .unwrap()
+            .rfc5280_key_identifier()
+            .unwrap();
+        assert_eq!(
+            identifier.as_bytes(),
+            &[
+                0x6f, 0x60, 0xee, 0x1f, 0xc5, 0x1e, 0x6e, 0xce, 0xad, 0xba, 0x96, 0xa2, 0x3d, 0xa0,
+                0x40, 0xaf, 0x22, 0x0a, 0x09, 0xa6
+            ]
+        );
+    }
+
     #[test]
     fn reads_the_algorithm_out_of_each_key_type() {
         let cases = [
@@ -464,6 +532,47 @@ mod tests {
         let key = armour("PUBLIC KEY", vectors::P256);
         let err = CertificateDer::from_key_material(&key).unwrap_err();
         assert!(err.to_string().contains("PUBLIC KEY"), "{err}");
+    }
+
+    /// The vector with its NULL parameters left out, which OpenSSL also reads.
+    fn rsa_without_parameters() -> Vec<u8> {
+        let spki = SubjectPublicKeyInfoRef::from_der(vectors::RSA_2048).unwrap();
+        SubjectPublicKeyInfoRef {
+            algorithm: AlgorithmIdentifierRef {
+                oid: RSA_ENCRYPTION,
+                parameters: None,
+            },
+            subject_public_key: spki.subject_public_key,
+        }
+        .to_der()
+        .unwrap()
+    }
+
+    #[test]
+    fn an_rsa_key_without_parameters_is_kept_as_openssl_exports_it() {
+        let supplied = rsa_without_parameters();
+        assert_ne!(supplied, vectors::RSA_2048);
+
+        let key = PublicKeyDer::new(supplied).unwrap();
+        assert_eq!(key.as_bytes(), vectors::RSA_2048);
+        assert_eq!(
+            key.fingerprint(),
+            PublicKeyDer::new(vectors::RSA_2048.to_vec())
+                .unwrap()
+                .fingerprint()
+        );
+    }
+
+    #[test]
+    fn a_fingerprint_is_the_sha256_of_the_spki() {
+        use sha2::Digest as _;
+        let key = PublicKeyDer::new(vectors::P256.to_vec()).unwrap();
+        let digest: [u8; 32] = sha2::Sha256::digest(vectors::P256).into();
+        assert_eq!(key.fingerprint().as_bytes(), &digest);
+        assert_eq!(
+            key.fingerprint().to_string(),
+            format!("sha256:{}", base16ct::lower::encode_string(&digest))
+        );
     }
 
     #[test]

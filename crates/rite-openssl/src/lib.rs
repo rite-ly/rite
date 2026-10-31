@@ -35,7 +35,7 @@
 mod backend;
 mod content;
 
-pub use backend::{OpenSslBackend, verify_signature};
+pub use backend::{OpenSslBackend, data_key_for_recipient, verify_signature};
 pub use content::{SealedContent, open_content, seal_content};
 
 /// Whether this build can generate ML-KEM keys and wrap to them.

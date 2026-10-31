@@ -301,12 +301,20 @@ The boot menu cannot edit the entries: their kernel command line, root hash incl
 part of the UKI. With Secure Boot off, a UEFI shell can still start the UKI with another
 command line (see [What Rite Live proves](#what-rite-live-proves)).
 
-The session starts on its own as the `rite` user. Its start screen shows the `rite`
-version, the ceremony definition with its SHA-256, where the outputs go, and the `rite run`
-command for the ceremony. Pressing Enter starts `rite run` with that ceremony, and
-`rite run` asks for any parameter the ceremony leaves open. For other flags, such as
-`--dry-run` or `--role`, the operator types the word `shell` at the prompt and runs the
-command by hand.
+Before the session, the setup screen lets the operator choose a keyboard layout and a
+time zone. US and UTC are the defaults. The layout is loaded and tested before it is
+kept. The layout applies to the text console and both terminals; the time zone applies
+to times shown by the session, including `date`. Transcripts always use UTC. The
+displayed time comes from the machine clock. If it is wrong, power off from the setup
+screen and correct it in the firmware settings. Setup runs once per boot. The session
+start screen shows the selected layout and time zone.
+
+The session then starts as the `rite` user. Its start screen shows the `rite` version,
+the ceremony definition and its SHA-256, where outputs go, and the `rite run` command
+for the ceremony. It also shows the keyboard layout and time zone in use. Pressing
+Enter starts `rite run` with that ceremony, and `rite run` asks for any parameter the
+ceremony leaves open. For other flags, such as `--dry-run` or `--role`, the operator
+types the word `shell` at the prompt and runs the command by hand.
 
 When the outputs partition is missing or does not mount, the start screen says so and
 offers no Enter shortcut: the ceremony's outputs would be lost at power off, so running it
@@ -338,8 +346,6 @@ The system gets a network address by DHCP on any wired link, and loads no radio
 driver. A ceremony that needs an air gap establishes it physically, by leaving out the
 cable, and records it as a witnessed confirmation step, such as `verify_air_gap` in
 `examples/showcase/demo.rite.yaml`.
-
-The keyboard layout is US.
 
 ### Known hardware issues
 
@@ -447,7 +453,8 @@ any interaction with the boot process. Observation does not prove what booted.
 | `img/mkosi/mkosi.extra/` | Files copied into the image, at their paths in it |
 | `.../efi/loader/loader.conf` | Boot menu: timeout, no editing |
 | `.../usr/lib/systemd/system/rite-session.service`, `rite-shell.service`, `.../etc/pam.d/rite-session` | The session on tty1 and the shell on tty2, run as `rite` |
-| `.../usr/lib/rite/rite-kiosk` | Starts the session or the shell in cage and foot, or on the text console |
+| `.../usr/lib/systemd/system/rite-setup.service`, `.../usr/lib/rite/rite-setup`, `setup-values` | The setup screen: keyboard layout and time zone, chosen before the session |
+| `.../usr/lib/rite/rite-kiosk` | Starts the session or the shell in cage and foot, or on the text console, with the layout and zone chosen at setup |
 | `.../usr/lib/rite/rite-session`, `rite-shell` | The operator's start screen, and the second terminal |
 | `.../usr/lib/systemd/system/rite-ceremony-load.service`, `.../usr/lib/rite/load-ceremony` | Copies the ceremony layer into memory and records its hash |
 | `.../usr/lib/rite/mount-outputs`, `boot-partition` | Mounts `RITE-OUT` at `/rite/outputs`; finds a partition on the boot disk |

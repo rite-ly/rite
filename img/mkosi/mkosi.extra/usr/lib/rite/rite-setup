@@ -1,0 +1,198 @@
+#!/bin/bash
+# /usr/lib/rite/rite-setup
+# The keyboard layout and time zone, chosen from menus on tty1 before the
+# sessions start. Nothing typed by the operator becomes a setting. A layout
+# is loaded into the console and tested before it is kept. The settings go to
+# /run/rite-setup/settings, where rite-kiosk reads them for cage (XKB) and
+# the session programs (TZ). If setup fails, the session uses US and UTC.
+# This script always exits 0.
+
+# Ctrl-C, Ctrl-\ and Ctrl-Z do nothing: a stopped script would hold the boot.
+trap '' INT QUIT TSTP
+
+# shellcheck disable=SC1091
+source /usr/lib/rite/setup-values
+
+COUNTRIES=/usr/share/zoneinfo/iso3166.tab
+TITLE="Rite Live"
+
+layout=us
+variant=
+zone=UTC
+
+# whiptail draws on stdout and prints the choice on stderr; the swap returns
+# the choice on stdout and draws on stderr, which is the terminal.
+ask() {
+    whiptail --title "$TITLE" "$@" 3>&1 1>&2 2>&3
+}
+
+message() {
+    ask --msgbox "$1" 10 64
+}
+
+save() {
+    if ! printf 'layout=%s\nvariant=%s\ntimezone=%s\n' "$layout" "$variant" "$zone" \
+        > "$SETTINGS.new" || ! mv -f "$SETTINGS.new" "$SETTINGS"; then
+        rm -f "$SETTINGS.new" "$SETTINGS"
+        layout=us
+        variant=
+        zone=UTC
+        load_keymap us ""
+        message "Could not save the settings. The sessions will use US and UTC."
+    fi
+}
+
+# Loads layout $1, variant $2 into the console keymap, which every terminal
+# shares.
+load_keymap() {
+    local args=(-layout "$1") status
+    [[ -n $2 ]] && args+=(-variant "$2")
+    ask --infobox "Loading the keyboard layout..." 7 50
+    ckbcomp "${args[@]}" 2>/dev/null | loadkeys -q 2>/dev/null
+    status=("${PIPESTATUS[@]}")
+    [[ ${status[0]} -eq 0 && ${status[1]} -eq 0 ]]
+}
+
+# ckbcomp warns and falls back to the base layout for an unknown variant.
+variant_listed() {
+    [[ -z $2 || -n $(xkb_description "$1" "$2") ]]
+}
+
+# Every layout of the XKB rules, then its variants. Prints "layout variant".
+other_layout() {
+    local name rest items=() choice
+    while read -r name rest; do
+        items+=("$name" "$rest")
+    done < <(xkb_section layout)
+    choice=$(ask --notags --menu "Keyboard layout:" 22 72 14 "${items[@]}") || return 1
+
+    # A variant line reads "name  layout: description".
+    items=("-" "No variant")
+    while read -r name rest; do
+        [[ ${rest%%:*} == "$choice" ]] && items+=("$name" "${rest#*: }")
+    done < <(xkb_section variant)
+    if [[ ${#items[@]} -eq 2 ]]; then
+        echo "$choice"
+        return 0
+    fi
+    rest=$(ask --notags --menu "Variant for $(layout_name "$choice" ""):" 22 72 14 \
+        "${items[@]}") || return 1
+    [[ $rest == - ]] && rest=""
+    echo "$choice $rest"
+}
+
+change_keyboard() {
+    local choice new_layout new_variant new_name current_name typed
+    # Widely used layouts, by their names in the XKB rules.
+    choice=$(ask --notags --default-item "$layout${variant:+ $variant}" \
+        --menu "Keyboard layout:" 20 60 11 \
+        "gb" "English (UK)" \
+        "us" "English (US)" \
+        "fr" "French" \
+        "ch fr" "French (Switzerland)" \
+        "de" "German" \
+        "ch" "German (Switzerland)" \
+        "it" "Italian" \
+        "jp" "Japanese" \
+        "br" "Portuguese (Brazil)" \
+        "es" "Spanish" \
+        "other" "Other layouts...") || return 0
+    if [[ $choice == other ]]; then
+        choice=$(other_layout) || return 0
+    fi
+    read -r new_layout new_variant <<< "$choice"
+    new_name=$(layout_name "$new_layout" "$new_variant")
+    current_name=$(layout_name "$layout" "$variant")
+    if ! valid_layout "$new_layout" || ! valid_variant "$new_variant" \
+        || ! variant_listed "$new_layout" "$new_variant"; then
+        message "Layout $new_name is not supported. Keeping $current_name."
+        return 0
+    fi
+
+    if ! load_keymap "$new_layout" "$new_variant"; then
+        if load_keymap "$layout" "$variant"; then
+            message "Could not load $new_name. Keeping $current_name."
+        else
+            message "Could not load $new_name or restore $current_name. The keyboard may not work. Power off and restart."
+        fi
+        return 0
+    fi
+    typed=$(ask --inputbox "Type anything to check the layout, then press Enter." \
+        8 60) || typed=""
+    if ask --yesno "You typed:
+
+    $typed
+
+Keep this layout: $new_name?" 12 60; then
+        layout=$new_layout
+        variant=$new_variant
+        save
+    elif ! load_keymap "$layout" "$variant"; then
+        # The console still has the new layout: keep it, so that the settings
+        # and the start screen say what the keyboard does.
+        layout=$new_layout
+        variant=$new_variant
+        save
+        message "Could not restore $current_name. Keeping $new_name."
+    fi
+}
+
+# UTC or a region, then a zone of that region, each shown with its country.
+change_zone() {
+    local choice items=("UTC" "") code name comment
+    local -A country
+    while IFS= read -r name; do
+        items+=("$name" "")
+    done < <(grep -v '^#' "$ZONE_TAB" | cut -f3 | cut -d/ -f1 | sort -u)
+    choice=$(ask --default-item "${zone%%/*}" --menu "Choose a region:" 20 50 12 \
+        "${items[@]}") || return 0
+
+    if [[ $choice != UTC ]]; then
+        while IFS=$'\t' read -r code name; do
+            country[$code]=$name
+        done < <(grep -v '^#' "$COUNTRIES")
+        items=()
+        while IFS=$'\t' read -r code _ name comment; do
+            [[ $name == "$choice"/* ]] || continue
+            items+=("$name" "${country[$code]:-$code}${comment:+, $comment}")
+        done < <(grep -v '^#' "$ZONE_TAB" | sort -t$'\t' -k3)
+        choice=$(ask --default-item "$zone" --menu "Choose a time zone:" 22 76 14 \
+            "${items[@]}") || return 0
+    fi
+    if ! valid_zone "$choice"; then
+        message "Time zone $choice is not supported. Keeping $zone."
+        return 0
+    fi
+    zone=$choice
+    save
+}
+
+while true; do
+    choice=$(ask --notags --nocancel --default-item start --menu "\
+Keyboard:   $(layout_name "$layout" "$variant")
+Time zone:  $zone
+Time:       $(date -u '+%Y-%m-%d %H:%M UTC'), $(TZ=$zone date '+%H:%M %Z') local
+
+Check the clock against a watch.
+If it is wrong, power off and correct it in the firmware settings." 19 76 5 \
+        "start" "Continue" \
+        "keyboard" "Change the keyboard layout" \
+        "zone" "Change the time zone" \
+        "time" "Refresh the time" \
+        "poweroff" "Power off") || choice=start
+    case $choice in
+        keyboard) change_keyboard ;;
+        zone) change_zone ;;
+        time) ;;
+        poweroff)
+            if ask --defaultno --yesno "Power off the machine?" 8 40; then
+                # polkit lets the rite user power off (10-rite.rules).
+                systemctl poweroff && exit 0
+                message "Could not power off the machine. Try again."
+            fi
+            ;;
+        *) break ;;
+    esac
+done
+clear
+exit 0

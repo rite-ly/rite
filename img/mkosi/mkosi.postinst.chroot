@@ -31,6 +31,11 @@ systemctl mask getty@tty1.service getty@tty2.service
 # for them at the console.
 systemctl mask systemd-firstboot.service
 
+# rite-setup loads the console keymap the operator chooses. Mask
+# console-setup.service so it cannot replace that keymap after setup, and
+# keyboard-setup.service, whose US keymap setup replaces anyway.
+systemctl mask keyboard-setup.service console-setup.service
+
 # systemd would mount the EFI system partition read-write on first access to
 # /boot or /efi. The system needs nothing there after boot, and a mount can
 # change the partition's bytes, which the medium hash of build-img covers.

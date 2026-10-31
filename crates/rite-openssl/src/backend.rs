@@ -1192,8 +1192,9 @@ fn rsa_oaep_decrypt(
 /// holder of the private key opens it with
 /// [`KeyTransportBackend::open_data_key`].
 ///
-/// The caller supplies the key, so its randomness comes from whichever source
-/// the caller answers for rather than from this function.
+/// The caller supplies the key's bytes, so the caller chooses their source.
+/// The padding seed RSA-OAEP needs comes from OpenSSL's generator, as the
+/// content nonce does.
 ///
 /// An RSA-2048 or RSA-4096 recipient takes RSAES-OAEP over SHA-256, which is
 /// what a CMS `KeyTransRecipientInfo` declares for it. Those are the RSA sizes
@@ -1207,7 +1208,7 @@ fn rsa_oaep_decrypt(
 /// parsed.
 pub fn data_key_for_recipient(
     recipient: &PublicKeyDer,
-    plaintext: Zeroizing<Vec<u8>>,
+    cek: Zeroizing<Vec<u8>>,
 ) -> Result<DataKey, BackendError> {
     let recipient = PKey::public_key_from_der(recipient.as_bytes())
         .map_err(|e| ossl_err("Parse recipient public key", &e))?;
@@ -1220,12 +1221,8 @@ pub fn data_key_for_recipient(
         )));
     }
 
-    let wrapped = rsa_oaep_encrypt(&recipient, &plaintext)?;
-    Ok(DataKey::new(
-        plaintext,
-        wrapped,
-        KeyProtection::RsaOaepSha256,
-    ))
+    let wrapped = rsa_oaep_encrypt(&recipient, &cek)?;
+    Ok(DataKey::new(cek, wrapped, KeyProtection::RsaOaepSha256))
 }
 
 /// SHA-256 for both the OAEP digest and MGF1.

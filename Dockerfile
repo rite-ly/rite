@@ -18,7 +18,7 @@ ARG TOOLCHAIN_PLATFORM=linux/amd64
 ARG RITE_BUILD_COMMIT=unknown
 ARG RITE_BUILD_COMMIT_DATE=unknown
 
-FROM --platform=${TOOLCHAIN_PLATFORM} ghcr.io/rust-cross/rust-musl-cross:x86_64-musl@sha256:ce75e9174325d4fbb3de85c309e2d7ca29f7500169bc4b5d2c611ff7e86d549a AS builder-amd64
+FROM --platform=${TOOLCHAIN_PLATFORM} ghcr.io/rust-cross/rust-musl-cross:x86_64-musl@sha256:3f1010eb48311dfde5d51f011163451940af34bd317355c4a8652ce6b4b61051 AS builder-amd64
 WORKDIR /src
 ARG CARGO_BUILD_ARGS="--features openssl-vendored"
 COPY Cargo.toml Cargo.lock ./
@@ -38,7 +38,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-amd64 \
     install -D -m 0755 target/x86_64-unknown-linux-musl/release/rite    /out/rite && \
     install -D -m 0755 target/x86_64-unknown-linux-musl/release/rite-ls /out/rite-ls
 
-FROM --platform=${TOOLCHAIN_PLATFORM} ghcr.io/rust-cross/rust-musl-cross:aarch64-musl@sha256:ecae5dd62d1c938c14f8071d36c16fa699860aace03bfb5284fb1216474d2643 AS builder-arm64
+FROM --platform=${TOOLCHAIN_PLATFORM} ghcr.io/rust-cross/rust-musl-cross:aarch64-musl@sha256:02e790506c5f15a533bc05b3af8719b16a8a2314480f6f0fdc0166432035d9b4 AS builder-arm64
 WORKDIR /src
 ARG CARGO_BUILD_ARGS="--features openssl-vendored"
 COPY Cargo.toml Cargo.lock ./

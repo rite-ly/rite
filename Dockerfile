@@ -67,7 +67,7 @@ COPY --from=builder-arm64 /out/rite-ls /rite-ls
 # builds it for each target arch, natively on matching hosts and under QEMU
 # otherwise. It links glibc and libpcsclite for the piv/yubikey smart-card
 # backends and vendors OpenSSL. Debian bookworm sets the glibc floor at 2.36.
-FROM rust:1.99.1-slim-bookworm@sha256:61e86bac21b4c1aeea7100008e1902d0048f9842fc94c7fb9c5f01baecbcb475 AS builder-glibc
+FROM rust:1.99.1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400 AS builder-glibc
 WORKDIR /src
 # make and perl build the vendored OpenSSL.
 RUN apt-get update && apt-get install -y --no-install-recommends \

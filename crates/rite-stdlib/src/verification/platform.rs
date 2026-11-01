@@ -56,8 +56,8 @@ pub fn detect_platform() -> Platform {
     Platform {
         os: OsIdentity {
             id: Some(sysinfo::System::distribution_id()),
-            version: sysinfo::System::os_version(),
-            name: sysinfo::System::long_os_version(),
+            version: sysinfo::System::os_version().ok(),
+            name: sysinfo::System::long_os_version().ok(),
         },
         virtualization: guest_virtualization(),
         ..Platform::default()

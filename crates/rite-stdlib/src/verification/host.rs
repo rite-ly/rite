@@ -41,8 +41,8 @@ pub enum HostInfoScope {
 pub fn gather_host_info(scope: HostInfoScope) -> HostInfo {
     // These are associated functions in `sysinfo`; no `System` instance or
     // refresh is needed, so the `Basic` scope stays cheap.
-    let os = System::name();
-    let os_version = System::long_os_version();
+    let os = System::name().ok();
+    let os_version = System::long_os_version().ok();
     let hostname = get_hostname();
 
     let mut info = HostInfo {
@@ -57,7 +57,7 @@ pub fn gather_host_info(scope: HostInfoScope) -> HostInfo {
     };
 
     if scope == HostInfoScope::Full {
-        info.kernel_version = System::kernel_version();
+        info.kernel_version = System::kernel_version().ok();
         info.cpu_model = cpu_model();
         info.machine_id = get_machine_id();
         info.hardening = Some(collect_security_features());
@@ -69,10 +69,11 @@ pub fn gather_host_info(scope: HostInfoScope) -> HostInfo {
 /// Gather the live device environment. MVP: block devices.
 #[must_use]
 pub fn gather_environment() -> Environment {
-    let disks = sysinfo::Disks::new_with_refreshed_list();
+    // Failure handled as in `network_snapshot`.
+    let disks = sysinfo::Disks::new_with_refreshed_list().ok();
     let disks = disks
-        .list()
         .iter()
+        .flatten()
         .map(|d| {
             let file_system = osstr_opt(d.file_system());
             let kind = match d.kind() {
@@ -104,6 +105,7 @@ fn osstr_opt(value: &std::ffi::OsStr) -> Option<String> {
 
 fn get_hostname() -> String {
     System::host_name()
+        .ok()
         .or_else(|| std::env::var("HOSTNAME").ok())
         .unwrap_or_else(|| "unknown".to_string())
 }
@@ -112,7 +114,8 @@ fn cpu_model() -> Option<String> {
     // Refresh CPUs only: the brand is all we need, so skip the
     // process/memory scan a full `System::new_all()` would run.
     let sys =
-        System::new_with_specifics(RefreshKind::nothing().with_cpu(CpuRefreshKind::everything()));
+        System::new_with_specifics(RefreshKind::nothing().with_cpu(CpuRefreshKind::everything()))
+            .ok()?;
     sys.cpus()
         .first()
         // AMD brand strings end in padding spaces.

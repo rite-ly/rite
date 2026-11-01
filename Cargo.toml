@@ -59,7 +59,7 @@ base16ct = { version = "1.0.0", features = ["alloc"] }
 base32ct = { version = "0.3.1", features = ["alloc"] }
 base64ct = { version = "1.8.3", features = ["alloc"] }
 rand = "0.10.1"
-openssl = { version = "0.10.78" }
+openssl = { version = "0.10.79" }
 openssl-sys = { version = "0.9.109" }
 cryptoki = "0.12"
 yubikey = "0.8"

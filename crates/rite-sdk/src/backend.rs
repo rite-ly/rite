@@ -30,9 +30,10 @@ use zeroize::Zeroizing;
 
 use crate::key_material::PublicKeyDer;
 use crate::types::{
-    Attestation, CertRef, DataKey, KeyAlgorithm, KeyId, KeyMetadata, KeyPolicy, KeyProtection,
-    KeySecurityAttributes, KeySpec, PcrValue, PivDeviceInfo, PivSlot, PivSlotInfo, Pkcs11Mechanism,
-    Pkcs11TokenInfo, SignAlgorithm, TpmInfo, WrapScheme, WrappedKey, YubikeySlotMetadata,
+    AgreedSecret, Attestation, CertRef, DataKey, KeyAlgorithm, KeyId, KeyMetadata, KeyPolicy,
+    KeyProtection, KeySecurityAttributes, KeySpec, PcrValue, PivDeviceInfo, PivSlot, PivSlotInfo,
+    Pkcs11Mechanism, Pkcs11TokenInfo, SignAlgorithm, TpmInfo, WrapScheme, WrappedKey,
+    YubikeySlotMetadata,
 };
 
 /// Implement the `as_*_mut` upcasting helpers on a backend struct.
@@ -159,6 +160,11 @@ pub trait Backend: Send + Sync {
 
     /// Not supported by this backend, always returns `None`.
     fn as_transport_mut(&mut self) -> Option<&mut dyn KeyTransportBackend> {
+        None
+    }
+
+    /// Not supported by this backend, always returns `None`.
+    fn as_agreement_mut(&mut self) -> Option<&mut dyn KeyAgreementBackend> {
         None
     }
 
@@ -392,7 +398,7 @@ pub trait KeyTransportBackend: Backend {
     ///
     /// The counterpart of [`generate_data_key`](Self::generate_data_key), and
     /// the half of the pair almost every backend implements: protecting a data
-    /// key needs only a public key or a shared secret, while opening one always
+    /// key needs only a public key or a symmetric key, while opening one always
     /// needs the device that holds the other half.
     ///
     /// `protection` says how `wrapped` was protected, taken from the container
@@ -422,6 +428,58 @@ pub trait KeyTransportBackend: Backend {
             "wrap_to_public not supported".to_string(),
         ))
     }
+}
+
+/// Backends implementing this trait run a Diffie-Hellman key agreement with a
+/// private key they hold: ECDH on P-256 and P-384.
+///
+/// The backend returns the agreed secret Z. The caller runs the KDF and uses
+/// the derived key. Returning Z rather than an unwrapped key keeps this trait
+/// independent of the container format. Z crossing the device boundary
+/// exposes nothing the host does not already get: it opens one container,
+/// whose content key the host needs in the clear to decrypt the content.
+///
+/// | Device | Operation | Gated by |
+/// |---|---|---|
+/// | PIV | GENERAL AUTHENTICATE in slot 9d | PIN, touch policy |
+/// | PKCS#11 | `C_DeriveKey` with `CKM_ECDH1_DERIVE` and `CKD_NULL` | `CKA_DERIVE` |
+/// | TPM 2.0 | `TPM2_ECDH_ZGen` | the key's `decrypt` attribute |
+/// | AWS KMS | `DeriveSharedSecret` | the `KEY_AGREEMENT` key usage |
+///
+/// The policy usage is [`KeyUsages::DERIVE`](crate::KeyUsages::DERIVE), the
+/// PKCS#11 name. For PKCS#11, `C_DeriveKey` produces a key object. The token
+/// can return the secret's bytes only if that object is extractable and not
+/// sensitive. A token in FIPS mode may refuse those attributes; such a token
+/// cannot implement this trait.
+///
+/// KEM decapsulation is a separate operation. It takes a ciphertext rather
+/// than a peer public key.
+///
+/// This is a separate trait from [`KeyTransportBackend`] because a device may
+/// support key agreement without supporting key transport.
+pub trait KeyAgreementBackend: Backend {
+    /// Computes the agreed secret for `key_id` and `peer`.
+    ///
+    /// For ECDH, return the x-coordinate of the agreed point at the full
+    /// length of the curve field: 32 bytes for P-256 or 48 for P-384.
+    /// Preserve leading zero bytes. Removing them changes the KDF input and
+    /// produces the wrong result about once in 256 agreements.
+    ///
+    /// The peer is untrusted input. Validate that it is on the same curve as
+    /// the private key before agreeing. A point off the curve can enable an
+    /// invalid-curve attack against the private key.
+    ///
+    /// # Errors
+    ///
+    /// A backend refuses:
+    /// - a key whose policy does not permit
+    ///   [`KeyUsages::DERIVE`](crate::KeyUsages::DERIVE), with
+    ///   [`BackendError::OperationNotPermitted`];
+    /// - a key that does not support Diffie-Hellman agreement, such as an RSA
+    ///   key, with [`BackendError::UnsupportedAlgorithm`];
+    /// - a peer that is invalid or on a different curve from the private key,
+    ///   with [`BackendError::InvalidData`].
+    fn agree(&mut self, key_id: &KeyId, peer: &PublicKeyDer) -> Result<AgreedSecret, BackendError>;
 }
 
 /// PKCS#11 token operations.

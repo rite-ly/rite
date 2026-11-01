@@ -134,9 +134,10 @@ pub enum ActionType {
     ///
     /// Reads `data` and exactly one of `encryption_key` or `recipient`. With
     /// `encryption_key`, the backend generates a content-encryption key and
-    /// protects it with that key. With `recipient`, an RSA-2048 or RSA-4096
-    /// public key held elsewhere, the backend supplies the content-encryption
-    /// key's random bytes, which are protected with RSAES-OAEP over SHA-256.
+    /// protects it with that key. With `recipient`, a public key held
+    /// elsewhere, the backend supplies the content-encryption key's random
+    /// bytes, which are protected with RSAES-OAEP over SHA-256 for an RSA-2048
+    /// or RSA-4096 key, or with ECDH and AES key wrap for a P-256 or P-384 key.
     /// The data itself is not sent to the backend.
     EncryptData,
     /// Decrypt data encrypted by `encrypt_data`, or a CMS file sealed

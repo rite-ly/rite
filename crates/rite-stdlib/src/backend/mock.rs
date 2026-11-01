@@ -31,8 +31,9 @@ use rite_sdk::{
 use rite_openssl::OpenSslBackend;
 #[cfg(feature = "openssl")]
 use rite_sdk::{
-    DataKey, KeyMetadata, KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend, KeyTransportBackend,
-    RandomBackend, SignAlgorithm, SignBackend, VerifyBackend, WrapScheme, WrappedKey,
+    DataKey, KeyAgreementBackend, KeyMetadata, KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend,
+    KeyTransportBackend, RandomBackend, SignAlgorithm, SignBackend, VerifyBackend, WrapScheme,
+    WrappedKey,
 };
 #[cfg(feature = "openssl")]
 use zeroize::Zeroizing;
@@ -205,6 +206,8 @@ impl Backend for MockBackend {
         #[cfg(feature = "openssl")]
         as_transport_mut: KeyTransportBackend,
         #[cfg(feature = "openssl")]
+        as_agreement_mut: KeyAgreementBackend,
+        #[cfg(feature = "openssl")]
         as_random_mut: RandomBackend,
         as_attest_mut: AttestationBackend,
         as_certstore_mut: CertStoreBackend,
@@ -328,6 +331,17 @@ impl KeyTransportBackend for MockBackend {
     ) -> Result<WrappedKey, BackendError> {
         self.crypto
             .wrap_to_public(key_id, recipient_pub_key, scheme)
+    }
+}
+
+#[cfg(feature = "openssl")]
+impl KeyAgreementBackend for MockBackend {
+    fn agree(
+        &mut self,
+        key_id: &KeyId,
+        peer: &PublicKeyDer,
+    ) -> Result<rite_sdk::AgreedSecret, BackendError> {
+        self.crypto.agree(key_id, peer)
     }
 }
 

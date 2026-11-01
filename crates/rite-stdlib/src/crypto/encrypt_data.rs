@@ -7,8 +7,8 @@ use rite_runtime::{
     compute_fingerprint, parse_params, resolve_artifact_bytes, resolve_backend_key,
 };
 use rite_sdk::{
-    Backend, DataKey, EncryptedData, KeyAlgorithm, KeyCheckValue, KeyFingerprint, KeyProtection,
-    PublicKeyDer, RandomBackend, WrapScheme, cms,
+    Backend, DataKey, EncryptedData, KeyAlgorithm, KeyCheckValue, KeyProtection, PublicKeyDer,
+    RandomBackend, WrapScheme, cms,
 };
 use serde_json::json;
 use zeroize::Zeroizing;
@@ -77,7 +77,7 @@ impl Action for EncryptDataAction {
                 key_ref.display_name()
             ),
         )?;
-        let (data_key, addressee) = match path {
+        let (content_key, addressee) = match path {
             Path::Backend => backend_data_key(ctx, key_ref, backend)?,
             Path::Recipient => {
                 // Both refusals come before the recipient is recorded, so a
@@ -96,7 +96,7 @@ impl Action for EncryptDataAction {
                 recipient_data_key(&recipient, random)?
             }
         };
-        let encrypted = seal_into_container(&data_key, &addressee, payload)?;
+        let encrypted = seal_into_container(content_key, payload)?;
 
         let fingerprint = compute_fingerprint(encrypted.data());
         reporter.log(Icon::Checkmark, "Content encrypted")?;
@@ -115,7 +115,7 @@ impl Action for EncryptDataAction {
             // The fingerprint is in its own fact, recorded before the
             // encryption, so the method can be published while the recipient
             // stays withheld.
-            Addressee::PublicKey(_) => json!({
+            Addressee::PublicKey => json!({
                 "scheme": scheme.to_string(),
                 "data": data_ref.display_name(),
                 "content_bytes": payload.len(),
@@ -177,31 +177,21 @@ fn recipient_input(step: &StepInfo) -> Result<(Path, &ArtifactRef), ActionError>
     }
 }
 
-/// What the container names its recipient by.
+/// How the transcript names the recipient.
 enum Addressee {
-    /// A symmetric key, by its check value, in a `KEKRecipientInfo`.
+    /// A symmetric key, by its check value.
     CheckValue(KeyCheckValue),
-    /// A public key, by its fingerprint, in a `KeyTransRecipientInfo`. The
-    /// value the transcript records for the key, so a blob and a record
-    /// compare without holding the key.
-    PublicKey(KeyFingerprint),
+    /// A public key. Its fingerprint is in the recipient fact, recorded before
+    /// the content key was drawn, and the container names it the same way, so
+    /// a blob and a record compare without holding the key.
+    PublicKey,
 }
 
-impl Addressee {
-    /// The key protection this recipient form is written with.
-    fn protection(&self) -> KeyProtection {
-        match self {
-            Self::CheckValue(_) => KeyProtection::AesKeyWrap,
-            Self::PublicKey(_) => KeyProtection::RsaOaepSha256,
-        }
-    }
-
-    fn key_identifier(&self) -> cms::RecipientIdentifier {
-        match self {
-            Self::CheckValue(check_value) => check_value.into(),
-            Self::PublicKey(fingerprint) => (*fingerprint).into(),
-        }
-    }
+/// The content-encryption key, and the recipient it is protected for in the
+/// form the container carries.
+struct ContentKey {
+    cek: Zeroizing<Vec<u8>>,
+    recipient: cms::RecipientInfo,
 }
 
 /// Both halves of the data key from the backend that holds `key_ref`.
@@ -212,7 +202,7 @@ fn backend_data_key(
     ctx: &HandlerContext,
     key_ref: &ArtifactRef,
     backend: Option<&mut dyn Backend>,
-) -> Result<(DataKey, Addressee), ActionError> {
+) -> Result<(ContentKey, Addressee), ActionError> {
     let key = resolve_backend_key(ctx.artifacts, &key_ref.artifact_id()).map_err(|e| {
         ActionError::Failed(format!(
             "encryption_key '{}' must be a key held by this backend: {e}. Read it as \
@@ -224,7 +214,43 @@ fn backend_data_key(
     let (transport, _) =
         crate::crypto::transport_backend(backend, key.backend_name, "protect a data key")?;
     let data_key = transport.generate_data_key(key.key_id, KeyAlgorithm::Aes256)?;
-    Ok((data_key, Addressee::CheckValue(check_value)))
+    let recipient = kek_recipient(&data_key, &check_value)?;
+    Ok((
+        ContentKey {
+            cek: Zeroizing::new(data_key.plaintext().to_vec()),
+            recipient,
+        },
+        Addressee::CheckValue(check_value),
+    ))
+}
+
+/// The `KEKRecipientInfo` a backend's data key goes in.
+fn kek_recipient(
+    data_key: &DataKey,
+    check_value: &KeyCheckValue,
+) -> Result<cms::RecipientInfo, ActionError> {
+    // A symmetric key is named by its check value, which only a
+    // `KEKRecipientInfo` carries, and that form declares `id-aes256-wrap`.
+    // Anything else is refused by name. A data key in the provider's own
+    // envelope, written under `id-aes256-wrap` anyway, would be an artifact
+    // whose structure lies about it, which no CMS reader could open and which
+    // `rite verify` would report as checked.
+    if data_key.protection() != KeyProtection::AesKeyWrap {
+        let reach = if data_key.protection().is_nameable_in_a_container() {
+            "a container addressed to a symmetric key declares AES key wrap"
+        } else {
+            "a CMS container cannot name it, so the artifact could not be opened by anything \
+             but this backend"
+        };
+        return Err(ActionError::Failed(format!(
+            "this backend protects a data key with {}, and {reach}",
+            data_key.protection()
+        )));
+    }
+    Ok(cms::RecipientInfo::Kek {
+        key_identifier: check_value.into(),
+        wrapped_key: data_key.wrapped().to_vec(),
+    })
 }
 
 /// The step's backend, as the source of the content-encryption key's random
@@ -247,74 +273,53 @@ fn random_source(backend: Option<&mut dyn Backend>) -> Result<&mut dyn RandomBac
     })
 }
 
-/// Whether the container can address `recipient`: an RSA key of a size every
-/// other path accepts, which is what a `KeyTransRecipientInfo` under
-/// RSAES-OAEP takes.
+/// Whether the container can address `recipient`: a key of a size or curve
+/// every other path accepts. An RSA-2048 or RSA-4096 key takes a
+/// `KeyTransRecipientInfo` under RSAES-OAEP, and a P-256 or P-384 key a
+/// `KeyAgreeRecipientInfo` under ECDH.
 fn admits_recipient(recipient: &PublicKeyDer) -> Result<(), ActionError> {
     let algorithm = recipient
         .algorithm()
         .map_err(|e| ActionError::Failed(e.to_string()))?;
-    if WrapScheme::RsaOaepSha256.accepts_recipient(algorithm) {
+    if WrapScheme::RsaOaepSha256.accepts_recipient(algorithm)
+        || cms::X963Kdf::for_recipient(algorithm).is_some()
+    {
         Ok(())
     } else {
         Err(ActionError::Failed(format!(
-            "{} encrypts to an RSA-2048 or RSA-4096 public key, and the recipient is {algorithm}",
+            "{} encrypts to an RSA-2048, RSA-4096, P-256 or P-384 public key, and the recipient \
+             is {algorithm}",
             WrapScheme::CmsAes256Gcm
         )))
     }
 }
 
-/// A data key protected for `recipient`, its bytes drawn from `random`.
+/// A content key protected for `recipient`, its bytes drawn from `random`,
+/// as an EC recipient's ephemeral key is.
 ///
 /// Protecting it needs only the public key and happens in software.
 fn recipient_data_key(
     recipient: &PublicKeyDer,
     random: &mut dyn RandomBackend,
-) -> Result<(DataKey, Addressee), ActionError> {
+) -> Result<(ContentKey, Addressee), ActionError> {
     let cek = Zeroizing::new(random.generate_random(content::KEY_BYTES)?);
-    let data_key = content::protect_for(recipient, cek)?;
-    Ok((data_key, Addressee::PublicKey(recipient.fingerprint())))
+    let recipient = content::protect_for(recipient, &cek, random)?;
+    Ok((ContentKey { cek, recipient }, Addressee::PublicKey))
 }
 
-/// Encrypt the content under the data key and assemble the container around
-/// both halves.
+/// Encrypt the content under the content key and assemble the container
+/// around it and its recipient.
 ///
 /// The result is described by reading the bytes back, never by restating what
 /// was just written. A description that disagreed with the artifact is what
 /// this path exists to make impossible.
 fn seal_into_container(
-    data_key: &DataKey,
-    addressee: &Addressee,
+    content_key: ContentKey,
     payload: &[u8],
 ) -> Result<EncryptedData, ActionError> {
-    // The container has to declare the key-encryption algorithm, so a data key
-    // the backend protected in its own envelope cannot go in one. Refused by
-    // name: writing it under `id-aes256-wrap` anyway would produce an artifact
-    // whose structure lies about it, which no CMS reader could open and which
-    // `rite verify` would report as checked.
-    if !data_key.protection().is_nameable_in_a_container() {
-        return Err(ActionError::Failed(format!(
-            "this backend protects a data key with {}, which a CMS container cannot name, so \
-             the artifact could not be opened by anything but this backend",
-            data_key.protection()
-        )));
-    }
-    // The protection decides the recipient form, and each form takes its own
-    // kind of identifier. Any other pairing would put a check value where the
-    // container expects a key identifier, or the reverse.
-    if data_key.protection() != addressee.protection() {
-        return Err(ActionError::Failed(format!(
-            "this data key is protected with {}, and a container addressed to this recipient \
-             takes {}",
-            data_key.protection(),
-            addressee.protection()
-        )));
-    }
-    let sealed = content::seal(data_key.plaintext(), payload)?;
+    let sealed = content::seal(&content_key.cek, payload)?;
     let der = cms::write_auth_enveloped(&cms::Envelope {
-        protection: data_key.protection(),
-        key_identifier: addressee.key_identifier(),
-        wrapped_cek: data_key.wrapped().to_vec(),
+        recipient: content_key.recipient,
         nonce: sealed.nonce,
         ciphertext: sealed.ciphertext,
         tag: sealed.tag,

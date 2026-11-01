@@ -52,15 +52,31 @@ impl PublicKeyDer {
     /// OpenSSL exports, which is what a backend holding the private half
     /// reports.
     ///
+    /// An EC key has two encodings for the same point: uncompressed,
+    /// `04 || x || y`, and compressed, `02` or `03` followed by `x` alone.
+    /// They would have different fingerprints, and conversion requires curve
+    /// arithmetic this crate does not carry. A compressed key is refused rather
+    /// than converted, so the fingerprint an operator computes from their own
+    /// bytes is the one Rite records.
+    ///
     /// # Errors
     ///
     /// Returns [`BackendError::InvalidKeyFormat`] when the bytes are not a
     /// `SubjectPublicKeyInfo`, which is what a certificate or a PEM armouring
-    /// arriving here looks like.
+    /// arriving here looks like, and when an EC key's point is not
+    /// uncompressed.
     pub fn new(der: Vec<u8>) -> Result<Self, BackendError> {
         let spki = SubjectPublicKeyInfoRef::from_der(&der).map_err(|e| {
             BackendError::InvalidKeyFormat(format!("not a SubjectPublicKeyInfo: {e}"))
         })?;
+        if spki.algorithm.oid == ID_EC_PUBLIC_KEY
+            && spki.subject_public_key.as_bytes().and_then(<[u8]>::first) != Some(&0x04)
+        {
+            return Err(BackendError::InvalidKeyFormat(
+                "the EC public key's point is compressed, and Rite accepts EC keys uncompressed"
+                    .to_string(),
+            ));
+        }
         if spki.algorithm.oid == RSA_ENCRYPTION && spki.algorithm.parameters.is_none() {
             let canonical = SubjectPublicKeyInfoRef {
                 algorithm: AlgorithmIdentifierRef {
@@ -107,16 +123,16 @@ impl PublicKeyDer {
             };
         }
 
-        // DER says nothing about itself, so try both shapes.
-        if let Ok(key) = Self::new(bytes.to_vec()) {
-            return Ok(key);
-        }
-        // Neither shape parsed. The certificate attempt carries the more useful
-        // reason, since bytes that reach here and are close to valid are far
-        // more often a certificate than a bare key.
+        // DER says nothing about itself, so try both shapes, and report both
+        // reasons when neither parses.
+        let key_error = match Self::new(bytes.to_vec()) {
+            Ok(key) => return Ok(key),
+            Err(e) => e,
+        };
         certificate_public_key(bytes).map_err(|e| {
             BackendError::InvalidKeyFormat(format!(
-                "not a public key or certificate, in DER or PEM ({e})"
+                "not a public key or certificate, in DER or PEM (as a key: {key_error}; as a \
+                 certificate: {e})"
             ))
         })
     }
@@ -561,6 +577,43 @@ mod tests {
                 .unwrap()
                 .fingerprint()
         );
+    }
+
+    /// The P-256 vector with its point compressed: `02` or `03` by the parity
+    /// of y, then x.
+    fn p256_compressed() -> Vec<u8> {
+        let spki = SubjectPublicKeyInfoRef::from_der(vectors::P256).unwrap();
+        let (_, coordinates) = spki
+            .subject_public_key
+            .as_bytes()
+            .unwrap()
+            .split_first()
+            .unwrap();
+        let (x, y) = coordinates.split_at(32);
+        let prefix = 0x02 | (y.last().unwrap() & 0x01);
+        let compressed = [&[prefix][..], x].concat();
+        SubjectPublicKeyInfoRef {
+            algorithm: spki.algorithm,
+            subject_public_key: x509_cert::der::asn1::BitStringRef::from_bytes(&compressed)
+                .unwrap(),
+        }
+        .to_der()
+        .unwrap()
+    }
+
+    /// A compressed point is the same key under another encoding, so it would
+    /// have another fingerprint. It is refused, naming the conversion.
+    #[test]
+    fn an_ec_key_is_accepted_only_with_its_point_uncompressed() {
+        assert!(PublicKeyDer::new(vectors::P256.to_vec()).is_ok());
+        let error = PublicKeyDer::new(p256_compressed())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("compressed"), "{error}");
+        let error = PublicKeyDer::from_key_material(&p256_compressed())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("point is compressed"), "{error}");
     }
 
     #[test]

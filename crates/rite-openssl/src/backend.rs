@@ -23,10 +23,10 @@ use openssl::symm::Cipher;
 use openssl::x509::{X509Builder, X509Extension, X509NameBuilder};
 use rite_sdk::cms;
 use rite_sdk::{
-    Backend, BackendError, DataKey, KeyAlgorithm, KeyCheckValue, KeyFingerprint, KeyId,
-    KeyMetadata, KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend, KeyTransportBackend,
-    KeyUsages, PublicKeyDer, RandomBackend, SignAlgorithm, SignBackend, VerifyBackend, WrapScheme,
-    WrappedKey,
+    AgreedSecret, Backend, BackendError, DataKey, KeyAgreementBackend, KeyAlgorithm, KeyCheckValue,
+    KeyFingerprint, KeyId, KeyMetadata, KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend,
+    KeyTransportBackend, KeyUsages, PublicKeyDer, RandomBackend, SignAlgorithm, SignBackend,
+    VerifyBackend, WrapScheme, WrappedKey,
 };
 use std::collections::HashMap;
 use zeroize::Zeroizing;
@@ -292,6 +292,9 @@ impl Backend for OpenSslBackend {
         /// encrypting it, so they suit software keys rather than keys held
         /// inside a hardware boundary.
         as_transport_mut: KeyTransportBackend,
+        /// Agrees an ECDH secret under a P-256 or P-384 key, the device half of
+        /// opening content sealed to it.
+        as_agreement_mut: KeyAgreementBackend,
         /// Provides cryptographically secure random bytes via the OpenSSL CSPRNG.
         as_random_mut: RandomBackend,
     );
@@ -908,6 +911,34 @@ impl RandomBackend for OpenSslBackend {
     }
 }
 
+impl KeyAgreementBackend for OpenSslBackend {
+    fn agree(&mut self, key_id: &KeyId, peer: &PublicKeyDer) -> Result<AgreedSecret, BackendError> {
+        let key = self.get_key(key_id)?;
+        let private = key.pkey()?;
+        if private.id() != Id::EC {
+            return Err(BackendError::UnsupportedAlgorithm(format!(
+                "a key agreement runs under an EC key, and '{}' is {}",
+                key.label, key.algorithm
+            )));
+        }
+        key.policy.require(KeyUsages::DERIVE, "open a data key")?;
+        // Parsing the point checks that it is on its curve.
+        let peer = PKey::public_key_from_der(peer.as_bytes()).map_err(|e| {
+            BackendError::InvalidData(format!("the peer is not a public key on its curve: {e}"))
+        })?;
+        // OpenSSL refuses a peer on another curve too, as "different
+        // parameters"; this says which curves.
+        let peer_algorithm = key_algorithm_of(&peer)?;
+        if peer_algorithm != key.algorithm {
+            return Err(BackendError::InvalidData(format!(
+                "the peer key is {peer_algorithm}, and '{}' is {}: an agreement needs one curve",
+                key.label, key.algorithm
+            )));
+        }
+        ecdh(private, &peer)
+    }
+}
+
 /// `id-ce-subjectKeyIdentifier` (RFC 5280 §4.2.1.2).
 const SUBJECT_KEY_IDENTIFIER_OID: &str = "2.5.29.14";
 
@@ -1088,7 +1119,7 @@ fn build_cert(
 ///
 /// **EC recipient, `KeyAgreeRecipientInfo` (RFC 5753 §3.1)**
 /// OpenSSL generates an ephemeral key on the recipient's curve, performs one-pass ECDH
-/// against the recipient's static public key, and feeds the shared secret into the ANSI
+/// against the recipient's static public key, and feeds the agreed secret into the ANSI
 /// X9.63 KDF to derive a key-encryption key that wraps the CEK with AES Key Wrap
 /// (RFC 3394). The KDF digest is SHA-1, `dhSinglePass-stdDH-sha1kdf-scheme`
 /// (OID 1.3.133.16.840.63.0.2): OpenSSL falls back to SHA-1 when no digest is set, and
@@ -1182,45 +1213,234 @@ fn rsa_oaep_decrypt(
     Ok(out)
 }
 
-/// Pair a content-encryption key with a copy of it only `recipient` opens.
+/// Protect a content-encryption key for a public-key recipient.
 ///
-/// The counterpart of [`KeyTransportBackend::generate_data_key`] for a
-/// recipient that is someone else's public key. Protecting a data key needs
-/// only the public half, so no backend key and no device take part, and the
-/// holder of the private key opens it with
-/// [`KeyTransportBackend::open_data_key`].
+/// An RSA-2048 or RSA-4096 recipient uses RSAES-OAEP with SHA-256, opened by
+/// [`KeyTransportBackend::open_data_key`]. A P-256 or P-384 recipient uses
+/// ECDH, the X9.63 KDF, and AES-256 Key Wrap, opened with
+/// [`KeyAgreementBackend::agree`] and [`open_key_agreement`]. Both forms name
+/// the recipient by its fingerprint.
 ///
-/// The caller supplies the key's bytes, so the caller chooses their source.
-/// The padding seed RSA-OAEP needs comes from OpenSSL's generator, as the
-/// content nonce does.
-///
-/// An RSA-2048 or RSA-4096 recipient takes RSAES-OAEP over SHA-256, which is
-/// what a CMS `KeyTransRecipientInfo` declares for it. Those are the RSA sizes
-/// every other path in this backend accepts, so a data key is not sealed to a
-/// key the backend would refuse to wrap to.
+/// For ECDH, the ephemeral private key is drawn from `random`. Whoever knows
+/// it can derive the key-encryption key from the recipient's public key. The
+/// caller supplies the content-encryption key.
 ///
 /// # Errors
 ///
-/// Returns [`BackendError::UnsupportedAlgorithm`] if the recipient is not one
-/// of those keys, and [`BackendError::Other`] if the public key cannot be
-/// parsed.
-pub fn data_key_for_recipient(
+/// Returns [`BackendError::UnsupportedAlgorithm`] if the recipient is not
+/// RSA-2048, RSA-4096, P-256, or P-384. Returns [`BackendError::Other`] if
+/// the public key cannot be parsed or an OpenSSL operation fails. Returns
+/// [`BackendError::InvalidData`] if the content key's length cannot be
+/// carried by AES Key Wrap. Errors from `random` are returned as they are.
+pub fn recipient_info_for(
     recipient: &PublicKeyDer,
-    cek: Zeroizing<Vec<u8>>,
-) -> Result<DataKey, BackendError> {
-    let recipient = PKey::public_key_from_der(recipient.as_bytes())
+    cek: &[u8],
+    random: &mut dyn RandomBackend,
+) -> Result<cms::RecipientInfo, BackendError> {
+    let key_identifier = cms::RecipientIdentifier::from(recipient.fingerprint());
+    let public = PKey::public_key_from_der(recipient.as_bytes())
         .map_err(|e| ossl_err("Parse recipient public key", &e))?;
-    // Refuses an RSA size outside the two by name.
-    let recipient_algorithm = key_algorithm_of(&recipient)?;
-    if !WrapScheme::RsaOaepSha256.accepts_recipient(recipient_algorithm) {
-        return Err(BackendError::UnsupportedAlgorithm(format!(
-            "a data key is sealed to an RSA public key, and this recipient is \
-             {recipient_algorithm}"
-        )));
-    }
+    // Refuses an RSA size or a curve outside the supported ones by name.
+    let algorithm = key_algorithm_of(&public)?;
 
-    let wrapped = rsa_oaep_encrypt(&recipient, &cek)?;
-    Ok(DataKey::new(cek, wrapped, KeyProtection::RsaOaepSha256))
+    if WrapScheme::RsaOaepSha256.accepts_recipient(algorithm) {
+        return Ok(cms::RecipientInfo::KeyTransport {
+            key_identifier,
+            encrypted_key: rsa_oaep_encrypt(&public, cek)?,
+        });
+    }
+    let Some(kdf) = cms::X963Kdf::for_recipient(algorithm) else {
+        return Err(BackendError::UnsupportedAlgorithm(format!(
+            "content is sealed to an RSA-2048, RSA-4096, P-256 or P-384 public key, and this \
+             recipient is {algorithm}"
+        )));
+    };
+
+    let ephemeral = generate_ephemeral(&public, random)?;
+    let secret = ecdh(&ephemeral, &public)?;
+    let mut agreed = cms::KeyAgreeRecipient {
+        key_identifier,
+        ephemeral_point: uncompressed_point(&ephemeral)?,
+        ukm: None,
+        kdf,
+        wrapped_key: Vec::new(),
+    };
+    let kek = agreed_kek(&agreed, &secret)?;
+    agreed.wrapped_key = aes_key_wrap(&kek, cek, KeyWrap::Plain, true)?;
+    Ok(cms::RecipientInfo::KeyAgreement(agreed))
+}
+
+/// Derive the CMS key-encryption key and unwrap the content key.
+///
+/// `secret` is the agreed secret returned by
+/// [`KeyAgreementBackend::agree`].
+///
+/// # Errors
+///
+/// Returns [`BackendError::InvalidData`] if the wrapped key fails its
+/// integrity check.
+pub fn open_key_agreement(
+    agreed: &cms::KeyAgreeRecipient,
+    secret: &AgreedSecret,
+) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+    let kek = agreed_kek(agreed, secret)?;
+    aes_key_wrap(&kek, &agreed.wrapped_key, KeyWrap::Plain, false)
+        .map(Zeroizing::new)
+        .map_err(|e| {
+            BackendError::InvalidData(format!(
+                "the content key does not unwrap under the agreed secret, which is what a \
+                 secret agreed with another key gives: {e}"
+            ))
+        })
+}
+
+/// The key-encryption key RFC 5753 derives from an agreed secret.
+fn agreed_kek(
+    agreed: &cms::KeyAgreeRecipient,
+    secret: &AgreedSecret,
+) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+    let shared_info = agreed
+        .shared_info()
+        .map_err(|e| BackendError::InvalidData(e.to_string()))?;
+    x963_kdf(
+        agreed.kdf,
+        secret.kdf_input(),
+        &shared_info,
+        cms::AGREED_KEK_LEN,
+    )
+}
+
+/// The ANSI X9.63 KDF (SEC 1 §3.6.1): the hash of the secret, a 32-bit
+/// big-endian counter from 1, and the shared info, repeated until `len`
+/// bytes are out.
+///
+/// Written here because the `openssl` crate binds no KDF of this name. It is
+/// one hash call for every length CMS asks of it.
+fn x963_kdf(
+    kdf: cms::X963Kdf,
+    secret: &[u8],
+    shared_info: &[u8],
+    len: usize,
+) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+    let digest = match kdf {
+        cms::X963Kdf::Sha256 => MessageDigest::sha256(),
+        cms::X963Kdf::Sha384 => MessageDigest::sha384(),
+        other => {
+            return Err(BackendError::UnsupportedAlgorithm(format!(
+                "this backend does not derive with {other}"
+            )));
+        }
+    };
+    // Reserved whole up front, so the buffer never reallocates and leaves
+    // derived bytes behind in a freed allocation.
+    let mut out = Zeroizing::new(Vec::with_capacity(len.next_multiple_of(digest.size())));
+    let mut counter: u32 = 1;
+    while out.len() < len {
+        let mut hasher =
+            openssl::hash::Hasher::new(digest).map_err(|e| ossl_err("X9.63 KDF hash", &e))?;
+        for part in [secret, &counter.to_be_bytes(), shared_info] {
+            hasher
+                .update(part)
+                .map_err(|e| ossl_err("X9.63 KDF hash", &e))?;
+        }
+        // The digest is key material, wiped where it lands rather than copied
+        // into a wiping buffer first.
+        let mut block = hasher
+            .finish()
+            .map_err(|e| ossl_err("X9.63 KDF hash", &e))?;
+        out.extend_from_slice(&block);
+        zeroize::Zeroize::zeroize(&mut *block);
+        counter = counter
+            .checked_add(1)
+            .ok_or_else(|| BackendError::InvalidData("X9.63 KDF counter overflow".into()))?;
+    }
+    out.truncate(len);
+    Ok(out)
+}
+
+/// A fresh key pair on the curve of `peer`, with its private scalar drawn
+/// from `random`.
+///
+/// `EcKey::generate` draws the scalar from OpenSSL's own generator, so this
+/// function builds the scalar directly. It draws bytes the length of the
+/// curve order and redraws until the scalar is between 1 and the order minus
+/// one. A redraw occurs with probability about 2^-32 for P-256 and far less
+/// for P-384.
+fn generate_ephemeral(
+    peer: &PKeyRef<impl HasPublic>,
+    random: &mut dyn RandomBackend,
+) -> Result<PKey<Private>, BackendError> {
+    const DRAWS: usize = 16;
+    let fail = |e: openssl::error::ErrorStack| ossl_err("Generate ephemeral key", &e);
+    let peer = peer
+        .ec_key()
+        .map_err(|e| ossl_err("Read recipient EC key", &e))?;
+    let group = peer.group();
+    let mut ctx = openssl::bn::BigNumContext::new_secure().map_err(fail)?;
+    let mut order = BigNum::new().map_err(fail)?;
+    group.order(&mut order, &mut ctx).map_err(fail)?;
+    let one = BigNum::from_u32(1).map_err(fail)?;
+    let len = usize::try_from(order.num_bytes())
+        .map_err(|_| BackendError::Other("EC group order has a negative length".into()))?;
+
+    let mut scalar = SecretNumber(BigNum::new_secure().map_err(fail)?);
+    for _ in 0..DRAWS {
+        let bytes = Zeroizing::new(random.generate_random(len)?);
+        scalar.0.copy_from_slice(&bytes).map_err(fail)?;
+        if scalar.0 >= one && scalar.0 < order {
+            scalar.0.set_const_time();
+            let mut point = openssl::ec::EcPoint::new(group).map_err(fail)?;
+            point
+                .mul_generator2(group, &scalar.0, &mut ctx)
+                .map_err(fail)?;
+            let key = EcKey::from_private_components(group, &scalar.0, &point).map_err(fail)?;
+            key.check_key().map_err(fail)?;
+            return PKey::from_ec_key(key).map_err(fail);
+        }
+    }
+    Err(BackendError::Other(format!(
+        "the random source gave no valid EC private key in {DRAWS} draws"
+    )))
+}
+
+/// A secret number, cleared when dropped. OpenSSL frees a `BigNum` without
+/// clearing it, and this one is an ephemeral private key.
+struct SecretNumber(BigNum);
+
+impl Drop for SecretNumber {
+    fn drop(&mut self) {
+        self.0.clear();
+    }
+}
+
+/// The point of an EC key, uncompressed, as an `originatorKey` carries it.
+fn uncompressed_point(key: &PKeyRef<impl HasPublic>) -> Result<Vec<u8>, BackendError> {
+    let key = key.ec_key().map_err(|e| ossl_err("Read EC key", &e))?;
+    let mut ctx = openssl::bn::BigNumContext::new().map_err(|e| ossl_err("EC point", &e))?;
+    key.public_key()
+        .to_bytes(
+            key.group(),
+            openssl::ec::PointConversionForm::UNCOMPRESSED,
+            &mut ctx,
+        )
+        .map_err(|e| ossl_err("Encode EC point", &e))
+}
+
+/// ECDH between a private key and a peer's public key: the x-coordinate of
+/// the shared point.
+fn ecdh(
+    private: &PKeyRef<Private>,
+    peer: &PKeyRef<impl HasPublic>,
+) -> Result<AgreedSecret, BackendError> {
+    let mut deriver =
+        openssl::derive::Deriver::new(private).map_err(|e| ossl_err("ECDH context", &e))?;
+    deriver
+        .set_peer(peer)
+        .map_err(|e| ossl_err("ECDH peer key", &e))?;
+    // OpenSSL writes the x-coordinate at the field's full length.
+    let mut secret = Zeroizing::new(Vec::new());
+    *secret = deriver.derive_to_vec().map_err(|e| ossl_err("ECDH", &e))?;
+    Ok(AgreedSecret::new(secret))
 }
 
 /// SHA-256 for both the OAEP digest and MGF1.
@@ -1408,9 +1628,10 @@ fn cms_seal_to_kek(
 
     let sealed = crate::content::seal_content(&cek, payload)?;
     let envelope = cms::Envelope {
-        protection: KeyProtection::AesKeyWrap,
-        key_identifier: check_value.into(),
-        wrapped_cek: aes_key_wrap(secret, &cek, KeyWrap::Plain, true)?,
+        recipient: cms::RecipientInfo::Kek {
+            key_identifier: check_value.into(),
+            wrapped_key: aes_key_wrap(secret, &cek, KeyWrap::Plain, true)?,
+        },
         nonce: sealed.nonce,
         ciphertext: sealed.ciphertext,
         tag: sealed.tag,
@@ -1456,34 +1677,32 @@ fn cms_open_from_kek(
     }
     let envelope =
         cms::read_auth_enveloped(der).map_err(|e| BackendError::InvalidData(e.to_string()))?;
-    // The reader also admits a key transport recipient, whose content key an
-    // AES key wrap must not be run over.
-    if envelope.protection != KeyProtection::AesKeyWrap {
+    // The reader also admits the public-key recipients, whose content key an
+    // AES key wrap under this secret must not be run over.
+    let cms::RecipientInfo::Kek {
+        key_identifier,
+        wrapped_key,
+    } = &envelope.recipient
+    else {
         return Err(BackendError::InvalidData(format!(
-            "this container protects its content key with {}, and the key held here is a \
+            "this container is addressed to a public key, in a {}, and the key held here is a \
              symmetric one",
-            envelope.protection
+            envelope.recipient.kind()
         )));
-    }
+    };
 
     // Not covered by the content tag, which authenticates the content and
     // nothing around it, so this comparison is what refuses a blob addressed
     // elsewhere. The identifier is shown as the bytes it is: read as a check
     // value, any identifier would look like one.
-    if !envelope.key_identifier.is_check_value(check_value) {
+    if !key_identifier.is_check_value(check_value) {
         return Err(BackendError::InvalidData(format!(
-            "this blob is addressed to the key identified by {}, and the key held here has \
-             check value {check_value}",
-            envelope.key_identifier
+            "this blob is addressed to the key identified by {key_identifier}, and the key held \
+             here has check value {check_value}"
         )));
     }
 
-    let cek = Zeroizing::new(aes_key_wrap(
-        secret,
-        &envelope.wrapped_cek,
-        KeyWrap::Plain,
-        false,
-    )?);
+    let cek = Zeroizing::new(aes_key_wrap(secret, wrapped_key, KeyWrap::Plain, false)?);
     crate::content::open_content(
         &cek,
         &crate::content::SealedContent {
@@ -1686,7 +1905,8 @@ impl KeyTransportBackend for OpenSslBackend {
         // form; wipe it on drop rather than leaving it in freed heap memory.
         let key_material = {
             let kek = self.get_key(unwrapping_key_id)?;
-            kek.policy.require(KeyUsages::UNWRAP, "unwrap a key")?;
+            kek.policy
+                .require(KeyUsages::to_open(kek.algorithm), "unwrap a key")?;
             match wrapped.scheme() {
                 WrapScheme::CmsAes256Gcm if kek.algorithm.is_symmetric() => {
                     cms_decrypt_kek(kek, wrapped)?
@@ -1865,6 +2085,35 @@ mod tests {
     use super::*;
     use rite_sdk::{KeyPolicy, KeySpec, RecipientInfoKind};
 
+    /// The host's generator, as the random source of a seal that does not
+    /// care which source it has.
+    fn host_random() -> OpenSslBackend {
+        OpenSslBackend::try_new("random").unwrap()
+    }
+
+    /// A random source that hands out the draws it was given, in order.
+    struct Draws(Vec<Vec<u8>>);
+
+    impl Backend for Draws {
+        fn name(&self) -> &'static str {
+            "draws"
+        }
+        fn provider(&self) -> &'static str {
+            "test"
+        }
+        fn fingerprint(&self) -> String {
+            String::new()
+        }
+    }
+
+    impl RandomBackend for Draws {
+        fn generate_random(&mut self, len: usize) -> Result<Vec<u8>, BackendError> {
+            let draw = self.0.remove(0);
+            assert_eq!(draw.len(), len);
+            Ok(draw)
+        }
+    }
+
     fn spec(algorithm: KeyAlgorithm, label: &str) -> KeySpec {
         KeySpec {
             algorithm,
@@ -1898,55 +2147,211 @@ mod tests {
     fn kek(algorithm: KeyAlgorithm, label: &str) -> KeySpec {
         KeySpec {
             policy: KeyPolicy {
-                usages: KeyUsages::WRAP | KeyUsages::UNWRAP,
+                usages: KeyUsages::WRAP | KeyUsages::to_open(algorithm),
                 ..KeyPolicy::default()
             },
             ..spec(algorithm, label)
         }
     }
 
-    /// A data key sealed to a public key needs no backend key on the way in,
-    /// and the private key the backend holds opens it on the way out.
+    /// The content key `recipient_info_for` put in a key transport recipient.
+    fn transported(info: cms::RecipientInfo) -> Vec<u8> {
+        match info {
+            cms::RecipientInfo::KeyTransport { encrypted_key, .. } => encrypted_key,
+            other => panic!("expected key transport, got {other:?}"),
+        }
+    }
+
+    /// A content key sealed to a public key needs no backend key on the way
+    /// in, and the private key the backend holds opens it on the way out.
     #[test]
-    fn a_data_key_sealed_to_a_public_key_opens_under_its_private_half() {
+    fn a_content_key_sealed_to_an_rsa_key_opens_under_its_private_half() {
         let mut backend = OpenSslBackend::try_new("software").unwrap();
         let recipient = backend
             .generate_key(kek(KeyAlgorithm::Rsa2048, "recipient"))
             .unwrap();
         let public = backend.export_public_key(&recipient.key_id).unwrap();
 
-        let data_key = data_key_for_recipient(&public, random_bytes(32).unwrap()).unwrap();
-        assert_eq!(data_key.protection(), KeyProtection::RsaOaepSha256);
-        assert_eq!(data_key.plaintext().len(), 32);
-        assert_eq!(data_key.wrapped().len(), 256, "one RSA-2048 block");
+        let cek = random_bytes(32).unwrap();
+        let info = recipient_info_for(&public, &cek, &mut host_random()).unwrap();
+        assert!(info.key_identifier().is_fingerprint(&public.fingerprint()));
+        let encrypted = transported(info);
+        assert_eq!(encrypted.len(), 256, "one RSA-2048 block");
 
         let opened = backend
-            .open_data_key(
-                &recipient.key_id,
-                data_key.wrapped(),
-                KeyProtection::RsaOaepSha256,
-            )
+            .open_data_key(&recipient.key_id, &encrypted, KeyProtection::RsaOaepSha256)
             .unwrap();
-        assert_eq!(opened.as_slice(), data_key.plaintext());
+        assert_eq!(opened, cek);
+    }
+
+    /// An EC recipient takes a key agreement: the backend holding the private
+    /// key agrees the secret with the ephemeral key, and the host unwraps.
+    #[test]
+    fn a_content_key_sealed_to_an_ec_key_opens_by_agreement() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        for (algorithm, kdf, field_len) in [
+            (KeyAlgorithm::EcdsaP256, cms::X963Kdf::Sha256, 32),
+            (KeyAlgorithm::EcdsaP384, cms::X963Kdf::Sha384, 48),
+        ] {
+            let recipient = backend.generate_key(kek(algorithm, "recipient")).unwrap();
+            let public = backend.export_public_key(&recipient.key_id).unwrap();
+
+            let cek = random_bytes(32).unwrap();
+            let cms::RecipientInfo::KeyAgreement(agreed) =
+                recipient_info_for(&public, &cek, &mut host_random()).unwrap()
+            else {
+                panic!("{algorithm} is a key agreement recipient");
+            };
+            assert_eq!(agreed.kdf, kdf, "the hash RFC 5753 pairs with {algorithm}");
+            assert!(agreed.key_identifier.is_fingerprint(&public.fingerprint()));
+            assert_eq!(agreed.ukm, None);
+            assert_eq!(agreed.wrapped_key.len(), 40, "AES-KW of 32 bytes");
+
+            let ephemeral = agreed.ephemeral_key(&public).unwrap();
+            let secret = backend.agree(&recipient.key_id, &ephemeral).unwrap();
+            assert_eq!(
+                secret.kdf_input().len(),
+                field_len,
+                "Z at the field's length"
+            );
+            assert_eq!(open_key_agreement(&agreed, &secret).unwrap(), cek);
+
+            // Each container draws its own ephemeral key.
+            let cms::RecipientInfo::KeyAgreement(again) =
+                recipient_info_for(&public, &cek, &mut host_random()).unwrap()
+            else {
+                unreachable!()
+            };
+            assert_ne!(again.ephemeral_point, agreed.ephemeral_point);
+        }
+    }
+
+    /// The ephemeral private key is drawn from the source the caller names,
+    /// a draw outside 1 to the curve's order less one is drawn again, and the
+    /// key is the one the draw makes.
+    #[test]
+    fn the_ephemeral_key_is_drawn_from_the_named_source() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let recipient = backend
+            .generate_key(kek(KeyAlgorithm::EcdsaP256, "recipient"))
+            .unwrap();
+        let public = backend.export_public_key(&recipient.key_id).unwrap();
+        let cek = random_bytes(32).unwrap();
+        let point = |draws: Vec<Vec<u8>>| {
+            let mut source = Draws(draws);
+            let cms::RecipientInfo::KeyAgreement(agreed) =
+                recipient_info_for(&public, &cek, &mut source).unwrap()
+            else {
+                panic!("P-256 is a key agreement recipient");
+            };
+            assert!(source.0.is_empty(), "every draw is used");
+            agreed.ephemeral_point
+        };
+
+        // 1·G is the generator, so a scalar of one gives its point, which
+        // SEC 2 §2.4.2 publishes.
+        let mut one = vec![0u8; 32];
+        if let Some(last) = one.last_mut() {
+            *last = 1;
+        }
+        let generator = vec![
+            0x04, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63,
+            0xa4, 0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39,
+            0x45, 0xd8, 0x98, 0xc2, 0x96, 0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e,
+            0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e,
+            0xce, 0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5,
+        ];
+        assert_eq!(point(vec![vec![0; 32], vec![0xff; 32], one]), generator);
+        assert_eq!(point(vec![vec![0x42; 32]]), point(vec![vec![0x42; 32]]));
+    }
+
+    /// The agreement runs only under an EC key on the peer's curve whose
+    /// policy permits opening, and a secret agreed by any other key does not
+    /// unwrap the content key.
+    #[test]
+    fn a_key_agreement_opens_only_under_its_recipient() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let recipient = backend
+            .generate_key(kek(KeyAlgorithm::EcdsaP256, "recipient"))
+            .unwrap();
+        let public = backend.export_public_key(&recipient.key_id).unwrap();
+        let cms::RecipientInfo::KeyAgreement(agreed) =
+            recipient_info_for(&public, &random_bytes(32).unwrap(), &mut host_random()).unwrap()
+        else {
+            unreachable!()
+        };
+        let ephemeral = agreed.ephemeral_key(&public).unwrap();
+
+        let other = backend
+            .generate_key(kek(KeyAlgorithm::EcdsaP256, "other"))
+            .unwrap();
+        let secret = backend.agree(&other.key_id, &ephemeral).unwrap();
+        assert!(
+            matches!(
+                open_key_agreement(&agreed, &secret),
+                Err(BackendError::InvalidData(_))
+            ),
+            "another key's secret fails the unwrap's integrity check"
+        );
+
+        let p384 = backend
+            .generate_key(kek(KeyAlgorithm::EcdsaP384, "p384"))
+            .unwrap();
+        let rsa = backend
+            .generate_key(kek(KeyAlgorithm::Rsa2048, "rsa"))
+            .unwrap();
+        let signing_only = backend
+            .generate_key(spec(KeyAlgorithm::EcdsaP256, "signer"))
+            .unwrap();
+        // ECDH is a derivation, so `unwrap` alone does not permit it.
+        let unwrap_only = backend
+            .generate_key(KeySpec {
+                policy: KeyPolicy {
+                    usages: KeyUsages::UNWRAP,
+                    ..KeyPolicy::default()
+                },
+                ..spec(KeyAlgorithm::EcdsaP256, "unwrap only")
+            })
+            .unwrap();
+        for (key, named) in [
+            (&p384.key_id, "one curve"),
+            (&rsa.key_id, "runs under an ec key"),
+            (&signing_only.key_id, "may not open a data key"),
+            (&unwrap_only.key_id, "needs derive"),
+        ] {
+            let error = backend.agree(key, &ephemeral).unwrap_err().to_string();
+            assert!(error.to_lowercase().contains(named), "{error}");
+        }
+
+        // A point off the curve, as a crafted container would carry it.
+        let mut off_curve = ephemeral.as_bytes().to_vec();
+        if let Some(last) = off_curve.last_mut() {
+            *last ^= 1;
+        }
+        let off_curve = PublicKeyDer::new(off_curve).unwrap();
+        assert!(matches!(
+            backend.agree(&recipient.key_id, &off_curve),
+            Err(BackendError::InvalidData(_))
+        ));
     }
 
     #[test]
-    fn a_data_key_is_sealed_only_to_an_rsa_public_key() {
+    fn content_is_sealed_only_to_a_key_a_container_addresses() {
         let mut backend = OpenSslBackend::try_new("software").unwrap();
-        let ec = backend
-            .generate_key(kek(KeyAlgorithm::EcdsaP256, "ec"))
+        let ed25519 = backend
+            .generate_key(spec(KeyAlgorithm::Ed25519, "ed"))
             .unwrap();
-        let public = backend.export_public_key(&ec.key_id).unwrap();
-        let message = data_key_for_recipient(&public, random_bytes(32).unwrap())
+        let public = backend.export_public_key(&ed25519.key_id).unwrap();
+        let message = recipient_info_for(&public, &random_bytes(32).unwrap(), &mut host_random())
             .unwrap_err()
             .to_string();
-        assert!(message.contains("ECDSA-P256"), "{message}");
+        assert!(message.contains("Ed25519"), "{message}");
 
         // An RSA size the rest of the backend refuses is refused here too,
         // though a 32-byte key would fit under its OAEP ceiling.
         let weak = PKey::from_rsa(Rsa::generate(1024).unwrap()).unwrap();
         let weak = PublicKeyDer::new(weak.public_key_to_der().unwrap()).unwrap();
-        let message = data_key_for_recipient(&weak, random_bytes(32).unwrap())
+        let message = recipient_info_for(&weak, &random_bytes(32).unwrap(), &mut host_random())
             .unwrap_err()
             .to_string();
         assert!(message.contains("1024"), "{message}");
@@ -1961,7 +2366,9 @@ mod tests {
             .generate_key(kek(KeyAlgorithm::Rsa2048, "recipient"))
             .unwrap();
         let public = backend.export_public_key(&recipient.key_id).unwrap();
-        let data_key = data_key_for_recipient(&public, random_bytes(32).unwrap()).unwrap();
+        let encrypted = transported(
+            recipient_info_for(&public, &random_bytes(32).unwrap(), &mut host_random()).unwrap(),
+        );
 
         let ec = backend
             .generate_key(kek(KeyAlgorithm::EcdsaP256, "ec"))
@@ -1979,7 +2386,7 @@ mod tests {
         ] {
             assert!(
                 backend
-                    .open_data_key(key, data_key.wrapped(), KeyProtection::RsaOaepSha256)
+                    .open_data_key(key, &encrypted, KeyProtection::RsaOaepSha256)
                     .is_err(),
                 "{case} must not open it"
             );
@@ -1988,11 +2395,7 @@ mod tests {
         // The right key under the wrong protection is refused too.
         assert!(
             backend
-                .open_data_key(
-                    &recipient.key_id,
-                    data_key.wrapped(),
-                    KeyProtection::AesKeyWrap
-                )
+                .open_data_key(&recipient.key_id, &encrypted, KeyProtection::AesKeyWrap)
                 .is_err()
         );
     }
@@ -2891,6 +3294,30 @@ mod tests {
         assert_eq!(unwrapped.algorithm, KeyAlgorithm::EcdsaP256);
         let unwrapped_pub = backend.export_public_key(&unwrapped.key_id).unwrap();
         assert_eq!(original_pub, unwrapped_pub);
+
+        // An EC key opens by key agreement, which `unwrap` alone does not
+        // permit.
+        let unwrap_only = backend
+            .generate_key(KeySpec {
+                policy: KeyPolicy {
+                    usages: KeyUsages::WRAP | KeyUsages::UNWRAP,
+                    ..KeyPolicy::default()
+                },
+                ..spec(KeyAlgorithm::EcdsaP256, "unwrap only")
+            })
+            .unwrap();
+        let wrapped = backend
+            .wrap_to_public(
+                &target.key_id,
+                &backend.export_public_key(&unwrap_only.key_id).unwrap(),
+                WrapScheme::CmsAes256Gcm,
+            )
+            .unwrap();
+        let error = backend
+            .unwrap(&wrapped, &unwrap_only.key_id, "unwrapped", restored(), None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("needs derive"), "{error}");
     }
 
     #[test]
@@ -3443,6 +3870,13 @@ mod tests {
             .wrap(&target.key_id, &kek.key_id, WrapScheme::CmsAes256Gcm)
             .unwrap();
         let good = cms::read_auth_enveloped(wrapped.data()).unwrap();
+        let cms::RecipientInfo::Kek {
+            key_identifier,
+            wrapped_key,
+        } = &good.recipient
+        else {
+            panic!("a symmetric KEK is a kekri recipient");
+        };
 
         let flip = |bytes: &[u8]| {
             let mut bytes = bytes.to_vec();
@@ -3476,16 +3910,22 @@ mod tests {
             (
                 "wrapped key",
                 cms::Envelope {
-                    wrapped_cek: flip(&good.wrapped_cek),
+                    recipient: cms::RecipientInfo::Kek {
+                        key_identifier: key_identifier.clone(),
+                        wrapped_key: flip(wrapped_key),
+                    },
                     ..good.clone()
                 },
             ),
             (
                 "recipient identifier",
                 cms::Envelope {
-                    key_identifier: cms::RecipientIdentifier::new(flip(
-                        good.key_identifier.as_bytes(),
-                    )),
+                    recipient: cms::RecipientInfo::Kek {
+                        key_identifier: cms::RecipientIdentifier::new(flip(
+                            key_identifier.as_bytes(),
+                        )),
+                        wrapped_key: wrapped_key.clone(),
+                    },
                     ..good.clone()
                 },
             ),

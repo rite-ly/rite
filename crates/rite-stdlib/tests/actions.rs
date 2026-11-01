@@ -21,7 +21,6 @@ use rite_stdlib::{
     OralReadbackAction, RevealAction, SplitSecretAction, UnwrapKeyAction, WrapKeyAction,
 };
 use secrecy::{ExposeSecret, SecretBox, SecretString};
-use zeroize::Zeroizing;
 
 fn make_state() -> ExecutionState {
     ExecutionState::new(HashMap::new(), HashMap::new(), HashMap::new(), false)
@@ -1385,7 +1384,7 @@ fn encrypt_data_produces_a_container_addressed_to_the_key() {
     // whether the blob is theirs without decrypting anything.
     let envelope =
         rite_sdk::cms::read_auth_enveloped(encrypted.data()).expect("the container reads back");
-    assert!(envelope.key_identifier.is_check_value(expected));
+    assert!(envelope.recipient.key_identifier().is_check_value(expected));
     assert_eq!(encrypted.scheme(), rite_sdk::WrapScheme::CmsAes256Gcm);
 
     // The ciphertext is not the plaintext, which is the one thing a round trip
@@ -1546,18 +1545,42 @@ fn sealed_der(
     identifier: fn(&rite_sdk::PublicKeyDer) -> Vec<u8>,
 ) -> Vec<u8> {
     let public_key = public_half(recipient);
-    let data_key =
-        rite_openssl::data_key_for_recipient(public_key, Zeroizing::new(vec![0x5a; 32])).unwrap();
-    let sealed = rite_openssl::seal_content(data_key.plaintext(), payload).unwrap();
+    let cek = [0x5a; 32];
+    let sealed = rite_openssl::seal_content(&cek, payload).unwrap();
     rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
-        protection: data_key.protection(),
-        key_identifier: rite_sdk::cms::RecipientIdentifier::new(identifier(public_key)),
-        wrapped_cek: data_key.wrapped().to_vec(),
+        recipient: renamed(
+            rite_openssl::recipient_info_for(
+                public_key,
+                &cek,
+                &mut rite_openssl::OpenSslBackend::try_new("random").unwrap(),
+            )
+            .unwrap(),
+            rite_sdk::cms::RecipientIdentifier::new(identifier(public_key)),
+        ),
         nonce: sealed.nonce,
         ciphertext: sealed.ciphertext,
         tag: sealed.tag,
     })
     .unwrap()
+}
+
+/// `recipient`, naming its key by `identifier` instead.
+fn renamed(
+    recipient: rite_sdk::cms::RecipientInfo,
+    identifier: rite_sdk::cms::RecipientIdentifier,
+) -> rite_sdk::cms::RecipientInfo {
+    use rite_sdk::cms::{KeyAgreeRecipient, RecipientInfo};
+    match recipient {
+        RecipientInfo::KeyTransport { encrypted_key, .. } => RecipientInfo::KeyTransport {
+            key_identifier: identifier,
+            encrypted_key,
+        },
+        RecipientInfo::KeyAgreement(agreed) => RecipientInfo::KeyAgreement(KeyAgreeRecipient {
+            key_identifier: identifier,
+            ..agreed
+        }),
+        other => panic!("a public-key recipient, not {other:?}"),
+    }
 }
 
 /// Run `decrypt_data` on `sealed` with `key`, returning the result and the
@@ -1695,12 +1718,13 @@ fn decrypt_data_refuses_a_content_key_of_the_wrong_length() {
     let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
     let recipient = rsa_recipient(&mut backend, "custodian_key");
     let public_key = public_half(&recipient.1);
-    let short =
-        rite_openssl::data_key_for_recipient(public_key, Zeroizing::new(vec![0x5a; 16])).unwrap();
     let der = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
-        protection: short.protection(),
-        key_identifier: rite_sdk::cms::RecipientIdentifier::new(spki_digest(public_key)),
-        wrapped_cek: short.wrapped().to_vec(),
+        recipient: rite_openssl::recipient_info_for(
+            public_key,
+            &[0x5a; 16],
+            &mut rite_openssl::OpenSslBackend::try_new("random").unwrap(),
+        )
+        .unwrap(),
         nonce: vec![0; 12],
         ciphertext: vec![0; 16],
         tag: vec![0; 16],
@@ -1832,9 +1856,9 @@ fn encrypt_data_seals_content_to_a_public_key_its_holder_opens() {
     };
     let envelope =
         rite_sdk::cms::read_auth_enveloped(encrypted.data()).expect("the container reads back");
-    assert_eq!(envelope.protection, rite_sdk::KeyProtection::RsaOaepSha256);
+    assert_eq!(envelope.recipient.kind(), rite_sdk::RecipientInfoKind::Ktri);
     assert_eq!(
-        envelope.key_identifier.as_bytes(),
+        envelope.recipient.key_identifier().as_bytes(),
         spki_digest(&public_key).as_slice()
     );
 
@@ -1988,20 +2012,20 @@ fn encrypt_data_records_a_declared_recipient_as_declared() {
 
 /// A public key the container cannot address is refused by name.
 #[test]
-fn encrypt_data_refuses_a_recipient_that_is_not_an_rsa_key() {
+fn encrypt_data_refuses_a_recipient_the_container_cannot_address() {
     let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
-    let (_, ec) = backend_key(&mut backend, "signing_key", KeyAlgorithm::EcdsaP256);
+    let (_, ed25519) = backend_key(&mut backend, "signing_key", KeyAlgorithm::Ed25519);
 
     let (result, facts) = encrypt_to_recipient(
         &mut backend,
         b"the recovery phrase",
-        ec,
+        ed25519,
         &serde_json::json!({}),
     );
     let message = result
-        .expect_err("an EC recipient has no key transport here")
+        .expect_err("an Ed25519 key signs and receives nothing")
         .to_string();
-    assert!(message.contains("ECDSA-P256"), "{message}");
+    assert!(message.contains("Ed25519"), "{message}");
     // Refused before the recipient is recorded, so the transcript does not
     // say the key received content it never did.
     assert!(
@@ -2027,6 +2051,106 @@ fn decrypt_data_names_a_key_of_the_wrong_kind_for_a_public_key_recipient() {
         .to_string();
     assert!(
         message.contains("ECDSA-P256") && message.contains("RSA-2048 or RSA-4096"),
+        "{message}"
+    );
+}
+
+/// An EC key the backend holds, allowed to open what is sealed to it.
+fn ec_recipient(
+    backend: &mut MockBackend,
+    id: &str,
+    algorithm: KeyAlgorithm,
+) -> (ArtifactId, ArtifactValue) {
+    backend_key_with(
+        backend,
+        id,
+        algorithm,
+        KeyPolicy {
+            usages: rite_sdk::KeyUsages::DERIVE,
+            ..KeyPolicy::default()
+        },
+    )
+}
+
+/// Content encrypted to an EC public key is addressed through a key
+/// agreement, under the same recipient fact an RSA key gets, and the holder of
+/// the private half opens it: the backend agrees the secret, and the host
+/// unwraps the content key.
+#[test]
+fn encrypt_data_seals_content_to_an_ec_key_its_holder_opens() {
+    for algorithm in [KeyAlgorithm::EcdsaP256, KeyAlgorithm::EcdsaP384] {
+        let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+        let custodian = ec_recipient(&mut backend, "custodian_key", algorithm);
+        let public_key = public_half(&custodian.1).clone();
+        let fingerprint = public_key.fingerprint();
+
+        let (result, facts) = encrypt_to_recipient(
+            &mut backend,
+            b"the recovery phrase",
+            ArtifactValue::Bytes(public_key.as_bytes().to_vec()),
+            &serde_json::json!({ "expect_recipient": fingerprint.to_string() }),
+        );
+        let mut result = result.expect("encrypt_data completes");
+        let sealed = result.artifacts.pop().expect("one artifact").1;
+        let ArtifactValue::EncryptedData(encrypted) = &sealed else {
+            panic!("encrypt_data must produce EncryptedData, got {sealed:?}")
+        };
+        let envelope = rite_sdk::cms::read_auth_enveloped(encrypted.data()).unwrap();
+        assert_eq!(envelope.recipient.kind(), rite_sdk::RecipientInfoKind::Kari);
+        assert!(
+            envelope
+                .recipient
+                .key_identifier()
+                .is_fingerprint(&fingerprint)
+        );
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            StepFact::WrapRecipientRecorded { fingerprint: recorded, declared: true, .. }
+                if *recorded == fingerprint
+        )));
+
+        let (opened, facts) = decrypt_with(&mut backend, sealed, custodian);
+        match produced(
+            &opened.expect("decrypt_data completes").artifacts,
+            "recovered",
+        ) {
+            ArtifactValue::Secret(bytes) => {
+                assert_eq!(bytes.expose_secret().as_slice(), b"the recovery phrase");
+            }
+            other => panic!("decrypt_data must produce Secret, got {other:?}"),
+        }
+        let recorded = facts.iter().find_map(|fact| match fact {
+            StepFact::BackendOperation { kind, inputs, .. } if kind == "decrypt_data" => {
+                inputs.get("decryption_key_fingerprint").cloned()
+            }
+            _ => None,
+        });
+        assert_eq!(recorded, Some(serde_json::json!(fingerprint.to_string())));
+    }
+}
+
+/// A key agreement is refused before any agreement when the key is another
+/// EC key, or not an EC key at all, each by what is wrong with it.
+#[test]
+fn decrypt_data_refuses_a_key_agreement_under_any_other_key() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let intended = ec_recipient(&mut backend, "intended", KeyAlgorithm::EcdsaP256);
+    let sealed = || sealed_to_public_key(&intended.1, b"the recovery phrase");
+
+    let other = ec_recipient(&mut backend, "other", KeyAlgorithm::EcdsaP256);
+    let (result, _) = decrypt_with(&mut backend, sealed(), other);
+    let message = result.expect_err("addressed elsewhere").to_string();
+    let named = base16ct::lower::encode_string(public_half(&intended.1).fingerprint().as_bytes());
+    assert!(
+        message.contains(&format!("addressed to the key identified by {named},")),
+        "{message}"
+    );
+
+    let rsa = rsa_recipient(&mut backend, "rsa");
+    let (result, _) = decrypt_with(&mut backend, sealed(), rsa);
+    let message = result.expect_err("an RSA key agrees nothing").to_string();
+    assert!(
+        message.contains("RSA-2048") && message.contains("P-256 or P-384"),
         "{message}"
     );
 }

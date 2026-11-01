@@ -34,16 +34,18 @@ mod types;
 pub use key_material::{CertificateDer, PublicKeyDer};
 
 pub use backend::{
-    AttestationBackend, Backend, BackendError, CertStoreBackend, KeyStoreBackend,
-    KeyTransportBackend, PivBackend, Pkcs11AdminBackend, Pkcs11Backend, RandomBackend,
-    Retriability, SignBackend, TpmBackend, VerifyBackend, YubikeyBackend, lock_device,
+    AttestationBackend, Backend, BackendError, CertStoreBackend, KeyAgreementBackend,
+    KeyStoreBackend, KeyTransportBackend, PivBackend, Pkcs11AdminBackend, Pkcs11Backend,
+    RandomBackend, Retriability, SignBackend, TpmBackend, VerifyBackend, YubikeyBackend,
+    lock_device,
 };
 
 pub use types::{
-    Attestation, AttestationKind, BackendConfig, CertRef, DataKey, DeviceInfo, EncryptedData,
-    IncoherentContainer, KeyAlgorithm, KeyCheckValue, KeyFingerprint, KeyId, KeyMetadata,
-    KeyPolicy, KeyProtection, KeySecurityAttributes, KeySpec, KeyUsages, Oid, ParseError, PcrValue,
-    PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy,
-    Pkcs11Mechanism, Pkcs11TokenFlags, Pkcs11TokenInfo, RecipientInfoKind, Rfc5280KeyId,
-    SignAlgorithm, TpmInfo, WrapDescription, WrapScheme, WrappedKey, YubikeySlotMetadata, oid,
+    AgreedSecret, Attestation, AttestationKind, BackendConfig, CertRef, DataKey, DeviceInfo,
+    EncryptedData, IncoherentContainer, KeyAlgorithm, KeyCheckValue, KeyFingerprint, KeyId,
+    KeyMetadata, KeyPolicy, KeyProtection, KeySecurityAttributes, KeySpec, KeyUsages, Oid,
+    ParseError, PcrValue, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo,
+    PivTouchPolicy, Pkcs11Mechanism, Pkcs11TokenFlags, Pkcs11TokenInfo, RecipientInfoKind,
+    Rfc5280KeyId, SignAlgorithm, TpmInfo, WrapDescription, WrapScheme, WrappedKey,
+    YubikeySlotMetadata, oid,
 };

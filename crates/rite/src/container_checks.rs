@@ -676,9 +676,10 @@ mod tests {
             .unwrap();
         let content = rite_openssl::seal_content(data_key.plaintext(), b"an archive").unwrap();
         let blob = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
-            protection: data_key.protection(),
-            key_identifier: check_value.into(),
-            wrapped_cek: data_key.wrapped().to_vec(),
+            recipient: rite_sdk::cms::RecipientInfo::Kek {
+                key_identifier: check_value.into(),
+                wrapped_key: data_key.wrapped().to_vec(),
+            },
             nonce: content.nonce,
             ciphertext: content.ciphertext,
             tag: content.tag,
@@ -753,14 +754,21 @@ mod tests {
     /// Content sealed to a public key names it by the SHA-256 of its SPKI,
     /// which is the fingerprint the recipient fact records, so the two compare
     /// as a wrap's do: a match is the declared recipient, any other key is a
-    /// mismatch.
+    /// mismatch. The same for an RSA key under key transport and an EC key
+    /// under key agreement.
     #[test]
     fn an_encrypt_to_a_public_key_is_checked_against_its_recipient_fact() {
+        for algorithm in [KeyAlgorithm::Rsa2048, KeyAlgorithm::EcdsaP256] {
+            encrypt_to_a_public_key_is_checked(algorithm);
+        }
+    }
+
+    fn encrypt_to_a_public_key_is_checked(algorithm: KeyAlgorithm) {
         let tmp = tempfile::tempdir().unwrap();
         let mut backend = rite_openssl::OpenSslBackend::try_new("test").unwrap();
         let recipient = backend
             .generate_key(KeySpec {
-                algorithm: KeyAlgorithm::Rsa2048,
+                algorithm,
                 label: "custodian".to_string(),
                 policy: KeyPolicy::default(),
                 location_hint: None,
@@ -768,14 +776,15 @@ mod tests {
             .unwrap();
         let public = backend.export_public_key(&recipient.key_id).unwrap();
         let fingerprint = public.fingerprint();
-        let data_key =
-            rite_openssl::data_key_for_recipient(&public, zeroize::Zeroizing::new(vec![0x5a; 32]))
-                .unwrap();
-        let content = rite_openssl::seal_content(data_key.plaintext(), b"an archive").unwrap();
+        let cek = [0x5a; 32];
+        let content = rite_openssl::seal_content(&cek, b"an archive").unwrap();
         let blob = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
-            protection: data_key.protection(),
-            key_identifier: fingerprint.into(),
-            wrapped_cek: data_key.wrapped().to_vec(),
+            recipient: rite_openssl::recipient_info_for(
+                &public,
+                &cek,
+                &mut rite_openssl::OpenSslBackend::try_new("random").unwrap(),
+            )
+            .unwrap(),
             nonce: content.nonce,
             ciphertext: content.ciphertext,
             tag: content.tag,
@@ -827,7 +836,7 @@ mod tests {
                 recipient: RecipientEvidence::Declared,
                 origin: OriginEvidence::None,
             },
-            "{}",
+            "{algorithm}: {}",
             check.describe()
         );
 
@@ -835,7 +844,7 @@ mod tests {
         let checks = check_containers(Some(tmp.path()), &borrow(&another));
         assert!(
             checks.iter().all(ContainerCheck::failed),
-            "a record naming another recipient is a mismatch: {checks:?}"
+            "{algorithm}: a record naming another recipient is a mismatch: {checks:?}"
         );
     }
 

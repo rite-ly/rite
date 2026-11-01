@@ -78,11 +78,21 @@ seal_the_runbook_for_the_custodian:
   creates: sealed_runbook
 ```
 
-The recipient is an RSA-2048 or RSA-4096 key, in any shape `wrap_key` accepts
-for a recipient: a key or certificate an earlier step produced, or DER or PEM
-bytes carried in as a material. The step's backend supplies the random bytes of
-the content-encryption key, and the public key protects it with RSAES-OAEP over
-SHA-256. No key of the backend's is involved.
+The recipient is an RSA-2048, RSA-4096, P-256 or P-384 key, in any shape
+`wrap_key` accepts for a recipient: a key or certificate an earlier step
+produced, or DER or PEM bytes carried in as a material. An EC key's point must
+be uncompressed. The step's backend supplies the random bytes for the
+content-encryption key and, for an EC recipient, the ephemeral private key. No
+key held by the backend is involved.
+
+- An RSA key protects the content-encryption key with RSAES-OAEP over SHA-256.
+- An EC key protects it with ECDH, the X9.63 KDF, and AES key wrap. The step
+  creates a fresh ephemeral key pair on the recipient's curve for this
+  container. The KDF derives a 256-bit wrapping key from the agreed secret, and
+  the content-encryption key is wrapped under it with AES key wrap.
+
+If the ceremony holds the recipient's private key and opens the container, an
+EC key needs the `derive` usage and an RSA key needs `unwrap`.
 
 `expect_recipient` is the recipient's `sha256:` fingerprint, written into the
 definition before the ceremony. The step compares the key it receives against
@@ -106,12 +116,17 @@ AES-256-GCM and one recipient:
 - for `encryption_key`, a `KEKRecipientInfo` (RFC 5652 §6.2.3), the
   content-encryption key under `id-aes256-wrap`. `openssl cms -decrypt
   -secretkey <hex> -secretkeyid <kcv>` opens it.
-- for `recipient`, a `KeyTransRecipientInfo` (RFC 5652 §6.2.1), the
+- for an RSA `recipient`, a `KeyTransRecipientInfo` (RFC 5652 §6.2.1), the
   content-encryption key under RSAES-OAEP with SHA-256 for the digest and for
   MGF1. `openssl cms -decrypt -inkey <key>` opens it.
+- for an EC `recipient`, a `KeyAgreeRecipientInfo` (RFC 5652 §6.2.2) under
+  `dhSinglePass-stdDH-sha256kdf-scheme` for P-256 or
+  `dhSinglePass-stdDH-sha384kdf-scheme` for P-384 (RFC 5753), with
+  `id-aes256-wrap` and the ephemeral public key in the container. `openssl cms
+  -decrypt -inkey <key>` opens it.
 
-Either is what makes the archive readable in a decade with no Rite binary
-present.
+Each is a standard structure, which is what makes the archive readable in a
+decade with no Rite binary present.
 
 The recipient identifier names the key, so the blob says which key opens it
 without anyone holding a key. A symmetric key is named by its check value, a
@@ -153,30 +168,45 @@ open_the_sealed_document:
 ```
 
 The file has to be an `AuthEnvelopedData` with AES-256-GCM content and one
-recipient, in one of two forms:
+recipient, in one of three forms:
 
 - a `KEKRecipientInfo` under `id-aes256-wrap`, for a 256-bit key the backend
   holds, named by its check value;
 - a `KeyTransRecipientInfo` under RSAES-OAEP with SHA-256 for the digest and for
   MGF1, for an RSA-2048 or RSA-4096 key the backend holds with the `unwrap`
-  usage. The recipient is named by subject key identifier: either the SHA-256 of
-  the key's SPKI, which is how Rite names a key, or the SHA-1 of RFC 5280
-  method 1, which is what a certificate's subject key identifier usually holds.
+  usage;
+- a `KeyAgreeRecipientInfo` under ECDH with the X9.63 KDF and
+  `id-aes256-wrap`, for a P-256 or P-384 key the backend holds with the
+  `derive` usage. Of Rite's backends, `openssl` opens this form; a key on a
+  hardware device does not.
 
-The `openssl` command line writes the second form for a certificate when told to
-use OAEP and to name the recipient by key identifier:
+A public-key recipient is named by subject key identifier: either the SHA-256
+of the key's SPKI, which is how Rite names a key, or the SHA-1 of RFC 5280
+method 1, which is what a certificate's subject key identifier usually holds.
+
+The `openssl` command line writes the second form for an RSA certificate when
+told to use OAEP and to name the recipient by key identifier, and the third for
+an EC certificate when told which hash the KDF takes:
 
 ```sh
 openssl cms -encrypt -binary -aes-256-gcm -keyid -outform DER \
   -recip custodian.crt \
   -keyopt rsa_padding_mode:oaep -keyopt rsa_oaep_md:sha256 -keyopt rsa_mgf1_md:sha256 \
   -in document.pdf -out document.p7m
+
+openssl cms -encrypt -binary -aes-256-gcm -keyid -outform DER \
+  -recip custodian-p256.crt -keyopt ecdh_kdf_md:sha256 \
+  -in document.pdf -out document.p7m
 ```
+
+Use `ecdh_kdf_md:sha384` for a P-384 certificate.
 
 Without those options it writes forms `decrypt_data` refuses, by name:
 
 - RSA key transport under PKCS#1 v1.5, the default without `-keyopt`. Its
   padding check is what Bleichenbacher's attack queries, so it is not opened.
+- An EC key agreement whose KDF hashes with SHA-1, the default without
+  `-keyopt ecdh_kdf_md`.
 - A recipient named by issuer and serial number, the default without `-keyid`.
   That names a certificate, and the ceremony holds a key.
 - `EnvelopedData` with CBC content, the default without `-aes-256-gcm`. Its
@@ -217,7 +247,7 @@ container sealed elsewhere.
 ## What the transcript records
 
 The scheme, the artifact both steps name, the key (its check value for a
-symmetric key, the `sha256:` fingerprint of its public key for an RSA one), the
+symmetric key, the `sha256:` fingerprint of its public key otherwise), the
 size of the content, and, read back out of the DER, every algorithm identifier
 the container names.
 

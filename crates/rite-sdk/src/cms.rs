@@ -16,7 +16,7 @@ use std::fmt;
 use crate::der;
 use crate::key_material::PublicKeyDer;
 use crate::types::{
-    KeyCheckValue, KeyFingerprint, KeyProtection, Oid, RecipientInfoKind, WrapDescription, oid,
+    KeyAlgorithm, KeyCheckValue, KeyFingerprint, Oid, RecipientInfoKind, WrapDescription, oid,
 };
 
 /// `id-envelopedData` (RFC 5652 §6).
@@ -44,7 +44,8 @@ pub struct CmsFacts {
 
 /// The bytes a CMS container names its recipient by: `kekid.keyIdentifier` in
 /// a `KEKRecipientInfo`, the `subjectKeyIdentifier` rid in a
-/// `KeyTransRecipientInfo`.
+/// `KeyTransRecipientInfo`, the `rKeyId` subject key identifier in a
+/// `KeyAgreeRecipientInfo`.
 ///
 /// Opaque. A container Rite writes carries a [`KeyCheckValue`] or a
 /// [`KeyFingerprint`] here, and one written elsewhere carries whatever its
@@ -183,12 +184,12 @@ pub fn describe(der: &[u8]) -> Result<CmsFacts, CmsReadError> {
 }
 
 /// What one `RecipientInfo` contributes to the description.
-struct Recipient {
+struct RecipientFacts {
     description: WrapDescription,
     key_identifier: Option<RecipientIdentifier>,
 }
 
-fn read_recipient(info: &Tlv<'_>) -> Result<Recipient, CmsReadError> {
+fn read_recipient(info: &Tlv<'_>) -> Result<RecipientFacts, CmsReadError> {
     match info.tag {
         TAG_SEQUENCE => {
             let ktri = read_ktri(info.value)?;
@@ -200,7 +201,7 @@ fn read_recipient(info: &Tlv<'_>) -> Result<Recipient, CmsReadError> {
             if algorithm.as_str() == oid::RSAES_OAEP {
                 require_rsaes_oaep_sha256(&ktri.algorithm)?;
             }
-            Ok(Recipient {
+            Ok(RecipientFacts {
                 description: WrapDescription::new(RecipientInfoKind::Ktri, algorithm),
                 key_identifier: ktri
                     .key_identifier
@@ -210,7 +211,7 @@ fn read_recipient(info: &Tlv<'_>) -> Result<Recipient, CmsReadError> {
         TAG_CONTEXT_1_CONSTRUCTED => read_kari(info.value),
         TAG_CONTEXT_2_CONSTRUCTED => {
             let kekri = read_kekri(info.value)?;
-            Ok(Recipient {
+            Ok(RecipientFacts {
                 description: WrapDescription::new(RecipientInfoKind::Kekri, kekri.algorithm),
                 key_identifier: Some(RecipientIdentifier(kekri.key_identifier.to_vec())),
             })
@@ -389,7 +390,7 @@ fn read_kekri(body: &[u8]) -> Result<Kekri<'_>, CmsReadError> {
 
     let (key_identifier, after_identifier) =
         read_tlv(kekid.expect_tag(TAG_SEQUENCE, "KEKIdentifier")?)?;
-    kek_identifier_options(after_identifier)?;
+    key_identifier_options(after_identifier, "KEKIdentifier")?;
     Ok(Kekri {
         key_identifier: key_identifier.expect_tag(TAG_OCTET_STRING, "kekid.keyIdentifier")?,
         algorithm: algorithm_oid(&algorithm, "keyEncryptionAlgorithm")?,
@@ -397,12 +398,13 @@ fn read_kekri(body: &[u8]) -> Result<Kekri<'_>, CmsReadError> {
     })
 }
 
-/// What may follow `kekid.keyIdentifier`: a `date` (`GeneralizedTime`), then an
-/// `other` (`OtherKeyAttribute`, a SEQUENCE), each optional, and nothing else.
+/// What may follow the key identifier in a `KEKIdentifier` or an `rKeyId`
+/// (`field` names which): a `date` (`GeneralizedTime`), then an `other`
+/// (`OtherKeyAttribute`, a SEQUENCE), each optional, and nothing else.
 ///
 /// Both are legitimate in a container sealed elsewhere and neither changes
 /// which key opens it, so they are admitted and not read.
-fn kek_identifier_options(mut rest: &[u8]) -> Result<(), CmsReadError> {
+fn key_identifier_options(mut rest: &[u8], field: &str) -> Result<(), CmsReadError> {
     for tag in [TAG_GENERALIZED_TIME, TAG_SEQUENCE] {
         if let Some(&next) = rest.first()
             && next == tag
@@ -413,7 +415,9 @@ fn kek_identifier_options(mut rest: &[u8]) -> Result<(), CmsReadError> {
     if rest.is_empty() {
         Ok(())
     } else {
-        Err(err("KEKIdentifier carries bytes after its optional fields"))
+        Err(err(format!(
+            "{field} carries bytes after its optional fields"
+        )))
     }
 }
 
@@ -423,56 +427,197 @@ fn kek_identifier_options(mut rest: &[u8]) -> Result<(), CmsReadError> {
 /// RFC 5753 folds the KDF into the key-encryption OID itself, so the KDF is
 /// named there rather than in a field of its own. The algorithm's parameter
 /// is the identifier of the wrap applied to the CEK under the derived KEK.
-fn read_kari(body: &[u8]) -> Result<Recipient, CmsReadError> {
-    let (_version, after_version) = read_tlv(body)?;
-    let (originator, after_originator) = read_tlv(after_version)?;
-    if originator.tag != TAG_CONTEXT_0_CONSTRUCTED {
-        return Err(err("KeyAgreeRecipientInfo without an originator"));
-    }
-    let (next, after_next) = read_tlv(after_originator)?;
-    let (algorithm, after_algorithm) = if next.tag == TAG_CONTEXT_1_CONSTRUCTED {
-        read_tlv(after_next)?
-    } else {
-        (next, after_next)
-    };
-
-    let (scheme, parameters) = algorithm_parts(&algorithm, "keyEncryptionAlgorithm")?;
+fn read_kari(body: &[u8]) -> Result<RecipientFacts, CmsReadError> {
+    let kari = read_kari_fields(body)?;
+    let (scheme, parameters) = algorithm_parts(&kari.algorithm, "keyEncryptionAlgorithm")?;
     let mut description = WrapDescription::new(RecipientInfoKind::Kari, scheme);
     if let Some(parameters) = parameters {
         description = description.with_kek_wrap(algorithm_oid(&parameters, "keyWrapAlgorithm")?);
     }
-
-    let (recipient_keys, _) = read_tlv(after_algorithm)?;
-    Ok(Recipient {
+    Ok(RecipientFacts {
         description,
-        key_identifier: agreed_key_identifier(recipient_keys.value)?,
+        key_identifier: kari
+            .key_identifier
+            .map(|bytes| RecipientIdentifier(bytes.to_vec())),
     })
 }
 
-/// `RecipientEncryptedKeys`: a SEQUENCE OF `RecipientEncryptedKey`, whose rid
-/// is either an `IssuerAndSerialNumber` or `[0] RecipientKeyIdentifier`.
-fn agreed_key_identifier(body: &[u8]) -> Result<Option<RecipientIdentifier>, CmsReadError> {
-    let (first, _) = read_tlv(body)?;
-    let (rid, _) = read_tlv(first.expect_tag(TAG_SEQUENCE, "RecipientEncryptedKey")?)?;
-    if rid.tag != TAG_CONTEXT_0_CONSTRUCTED {
-        return Ok(None);
+/// The fields of a `KeyAgreeRecipientInfo` (RFC 5652 §6.2.2), with the first
+/// key it addresses.
+struct Kari<'a> {
+    /// The `OriginatorIdentifierOrKey` CHOICE element.
+    originator: Tlv<'a>,
+    /// The `ukm`'s octets, when present.
+    ukm: Option<&'a [u8]>,
+    algorithm: Tlv<'a>,
+    /// The first recipient key's subject key identifier, or `None` when it is
+    /// named by issuer and serial.
+    key_identifier: Option<&'a [u8]>,
+    /// The first recipient key's encrypted key.
+    encrypted_key: &'a [u8],
+    /// Whether `recipientEncryptedKeys` addresses further keys after the
+    /// first.
+    more_keys: bool,
+}
+
+/// Read the fields of a `KeyAgreeRecipientInfo`.
+///
+/// Requires version 3 and reads the structure to its end. When
+/// `recipientEncryptedKeys` contains several entries, returns the first.
+/// Opening refuses a `KeyAgreeRecipientInfo` that addresses more than one key.
+fn read_kari_fields(body: &[u8]) -> Result<Kari<'_>, CmsReadError> {
+    let (version, after_version) = read_tlv(body)?;
+    if version.expect_tag(TAG_INTEGER, "KeyAgreeRecipientInfo.version")? != [3] {
+        return Err(err("a KeyAgreeRecipientInfo must be version 3"));
     }
-    let (key_id, _) = read_tlv(rid.value)?;
-    Ok(Some(RecipientIdentifier(
-        key_id
-            .expect_tag(TAG_OCTET_STRING, "subjectKeyIdentifier")?
-            .to_vec(),
-    )))
+    let (originator, after_originator) = read_tlv(after_version)?;
+    let originator = sole_element(
+        originator.expect_tag(
+            TAG_CONTEXT_0_CONSTRUCTED,
+            "KeyAgreeRecipientInfo.originator",
+        )?,
+        "KeyAgreeRecipientInfo.originator",
+    )?;
+
+    let (next, after_next) = read_tlv(after_originator)?;
+    let (ukm, (algorithm, after_algorithm)) = if next.tag == TAG_CONTEXT_1_CONSTRUCTED {
+        let ukm = sole_element(next.value, "ukm")?.expect_tag(TAG_OCTET_STRING, "ukm")?;
+        (Some(ukm), read_tlv(after_next)?)
+    } else {
+        (None, (next, after_next))
+    };
+
+    let (recipient_keys, after_keys) = read_tlv(after_algorithm)?;
+    if !after_keys.is_empty() {
+        return Err(err(
+            "KeyAgreeRecipientInfo carries bytes after recipientEncryptedKeys",
+        ));
+    }
+    let recipient_keys = recipient_keys.expect_tag(TAG_SEQUENCE, "recipientEncryptedKeys")?;
+    let (recipient_key, more) = read_tlv(recipient_keys)?;
+    let (rid, after_rid) =
+        read_tlv(recipient_key.expect_tag(TAG_SEQUENCE, "RecipientEncryptedKey")?)?;
+    let encrypted_key = sole_element(after_rid, "RecipientEncryptedKey")?
+        .expect_tag(TAG_OCTET_STRING, "encryptedKey")?;
+
+    // rid is an IssuerAndSerialNumber or the implicit [0]
+    // RecipientKeyIdentifier, whose optional date and other follow the
+    // identifier exactly as they do in a KEKIdentifier.
+    let key_identifier = if rid.tag == TAG_CONTEXT_0_CONSTRUCTED {
+        let (identifier, after_identifier) = read_tlv(rid.value)?;
+        key_identifier_options(after_identifier, "rKeyId")?;
+        Some(identifier.expect_tag(TAG_OCTET_STRING, "rKeyId.subjectKeyIdentifier")?)
+    } else {
+        rid.expect_tag(TAG_SEQUENCE, "rid.issuerAndSerialNumber")?;
+        None
+    };
+
+    // Every further entry is read as a RecipientEncryptedKey, so trailing
+    // bytes are malformed DER rather than a second key.
+    let mut rest = more;
+    while !rest.is_empty() {
+        let (further, after) = read_tlv(rest)?;
+        further.expect_tag(TAG_SEQUENCE, "RecipientEncryptedKey")?;
+        rest = after;
+    }
+
+    Ok(Kari {
+        originator,
+        ukm,
+        algorithm,
+        key_identifier,
+        encrypted_key,
+        more_keys: !more.is_empty(),
+    })
+}
+
+/// Read an uncompressed EC point from an `originatorKey`.
+///
+/// Accepts only `id-ecPublicKey` with absent or NULL parameters. A named
+/// curve is refused because this reader takes the curve from the recipient's
+/// key.
+fn originator_point<'a>(originator: &Tlv<'a>) -> Result<&'a [u8], CmsReadError> {
+    let body = match originator.tag {
+        TAG_CONTEXT_1_CONSTRUCTED => originator.value,
+        _ => {
+            return Err(err(
+                "the originator is named rather than given as a key, and an ephemeral key is \
+                 what the agreement needs",
+            ));
+        }
+    };
+    let (algorithm, after_algorithm) = read_tlv(body)?;
+    let (identifier, parameters) = exact_algorithm_parts(&algorithm, "originatorKey.algorithm")?;
+    if identifier.as_str() != oid::ID_EC_PUBLIC_KEY {
+        return Err(err(format!(
+            "the originator key is {identifier}, and this reader agrees over id-ecPublicKey"
+        )));
+    }
+    match parameters {
+        None
+        | Some(Tlv {
+            tag: TAG_NULL,
+            value: [],
+        }) => {}
+        Some(_) => {
+            return Err(err(
+                "the originator key names its curve, which this reader does not open",
+            ));
+        }
+    }
+    let key = sole_element(after_algorithm, "originatorKey")?
+        .expect_tag(TAG_BIT_STRING, "originatorKey.publicKey")?;
+    match key.split_first() {
+        Some((0, point @ [0x04, ..])) => Ok(point),
+        Some((0, [_, ..])) => Err(err(
+            "the originator key's point is compressed, and Rite accepts EC points uncompressed",
+        )),
+        _ => Err(err(
+            "originatorKey.publicKey is not a whole number of bytes",
+        )),
+    }
+}
+
+/// The KDF a `keyEncryptionAlgorithm` names, admitting only AES-256 key wrap
+/// under it, which is the wrap this crate writes and opens.
+///
+/// RFC 5753 folds the KDF into the scheme's identifier and makes the wrap its
+/// parameter. The wrap identifier takes no parameters (RFC 3565 §2.3.2).
+fn agreement_kdf(algorithm: &Tlv<'_>) -> Result<X963Kdf, CmsReadError> {
+    let (scheme, parameters) = exact_algorithm_parts(algorithm, "keyEncryptionAlgorithm")?;
+    let kdf = match scheme.as_str() {
+        oid::DH_SINGLE_PASS_STDDH_SHA256KDF => X963Kdf::Sha256,
+        oid::DH_SINGLE_PASS_STDDH_SHA384KDF => X963Kdf::Sha384,
+        oid::DH_SINGLE_PASS_STDDH_SHA1KDF => {
+            return Err(err(
+                "the key agreement derives its key with SHA-1, which this reader does not open",
+            ));
+        }
+        other => {
+            return Err(err(format!(
+                "key agreement scheme {other} is not ECDH with the X9.63 KDF over SHA-256 or \
+                 SHA-384"
+            )));
+        }
+    };
+    let wrap = parameters.ok_or_else(|| err("the key agreement names no key wrap"))?;
+    let (wrap, wrap_parameters) = exact_algorithm_parts(&wrap, "keyWrapAlgorithm")?;
+    if wrap.as_str() != oid::AES_256_WRAP || wrap_parameters.is_some() {
+        return Err(err(format!(
+            "key wrap algorithm {wrap} is not id-aes256-wrap without parameters"
+        )));
+    }
+    Ok(kdf)
 }
 
 /// `OtherRecipientInfo`: an `oriType` OID and a value read according to it.
-fn read_ori(body: &[u8]) -> Result<Recipient, CmsReadError> {
+fn read_ori(body: &[u8]) -> Result<RecipientFacts, CmsReadError> {
     let (oid, after_oid) = read_tlv(body)?;
     let oid = oid_of(&oid, "OtherRecipientInfo.oriType")?;
     if oid.as_str() != ORI_KEM {
         // A form this build does not know: name it and read no further,
         // rather than guess at a structure whose shape is defined elsewhere.
-        return Ok(Recipient {
+        return Ok(RecipientFacts {
             description: WrapDescription::new(RecipientInfoKind::Ori, oid),
             key_identifier: None,
         });
@@ -486,7 +631,7 @@ fn read_ori(body: &[u8]) -> Result<Recipient, CmsReadError> {
 ///
 /// Unlike the key-agreement form, a KEM names its KDF in a field of its own,
 /// which is what the `kdf_oid` on a description is for.
-fn read_kemri(body: &[u8]) -> Result<Recipient, CmsReadError> {
+fn read_kemri(body: &[u8]) -> Result<RecipientFacts, CmsReadError> {
     let (_version, after_version) = read_tlv(body)?;
     let (rid, after_rid) = read_tlv(after_version)?;
     let (kem, after_kem) = read_tlv(after_rid)?;
@@ -508,7 +653,7 @@ fn read_kemri(body: &[u8]) -> Result<Recipient, CmsReadError> {
     .with_kdf(algorithm_oid(&kdf, "KEMRecipientInfo.kdf")?)
     .with_kek_wrap(algorithm_oid(&wrap, "KEMRecipientInfo.wrap")?);
 
-    Ok(Recipient {
+    Ok(RecipientFacts {
         description,
         key_identifier: (rid.tag == TAG_CONTEXT_0_PRIMITIVE)
             .then(|| RecipientIdentifier(rid.value.to_vec())),
@@ -570,6 +715,7 @@ fn algorithm_parts<'a>(
 }
 
 const TAG_INTEGER: u8 = 0x02;
+const TAG_BIT_STRING: u8 = 0x03;
 const TAG_OCTET_STRING: u8 = 0x04;
 const TAG_NULL: u8 = 0x05;
 const TAG_OID: u8 = 0x06;
@@ -697,13 +843,207 @@ const GCM_ICV_LENGTHS: std::ops::RangeInclusive<usize> = 12..=16;
 /// blob of ours and a blob of theirs differ in no field.
 pub const GCM_ICV_LEN: usize = 16;
 
+/// The one recipient an [`Envelope`] is addressed to, in the `RecipientInfo`
+/// form its key takes, with the protected content-encryption key that form
+/// carries.
+///
+/// Each form carries its own fields, so a reader can determine how to open it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RecipientInfo {
+    /// A `KEKRecipientInfo` under `id-aes256-wrap`, for a symmetric key both
+    /// sides hold. Rite names the key by its [`KeyCheckValue`].
+    Kek {
+        /// `kekid.keyIdentifier`.
+        key_identifier: RecipientIdentifier,
+        /// The CEK under RFC 3394 AES Key Wrap.
+        wrapped_key: Vec<u8>,
+    },
+    /// A version 2 `KeyTransRecipientInfo` under RSAES-OAEP over SHA-256, for
+    /// an RSA public key. Rite names the key by its [`KeyFingerprint`].
+    KeyTransport {
+        /// The `subjectKeyIdentifier` rid.
+        key_identifier: RecipientIdentifier,
+        /// The CEK under RSAES-OAEP.
+        encrypted_key: Vec<u8>,
+    },
+    /// A `KeyAgreeRecipientInfo` under one-pass ECDH, for an EC public key.
+    KeyAgreement(KeyAgreeRecipient),
+}
+
+impl RecipientInfo {
+    /// What names the recipient key.
+    #[must_use]
+    pub fn key_identifier(&self) -> &RecipientIdentifier {
+        match self {
+            Self::Kek { key_identifier, .. } | Self::KeyTransport { key_identifier, .. } => {
+                key_identifier
+            }
+            Self::KeyAgreement(agreed) => &agreed.key_identifier,
+        }
+    }
+
+    /// The `RecipientInfo` CHOICE this is.
+    #[must_use]
+    pub fn kind(&self) -> RecipientInfoKind {
+        match self {
+            Self::Kek { .. } => RecipientInfoKind::Kekri,
+            Self::KeyTransport { .. } => RecipientInfoKind::Ktri,
+            Self::KeyAgreement(_) => RecipientInfoKind::Kari,
+        }
+    }
+}
+
+/// A content-encryption key protected with ECDH in a CMS
+/// `KeyAgreeRecipientInfo` (RFC 5753).
+///
+/// The sender creates an ephemeral key pair on the recipient's curve and
+/// computes ECDH with the recipient's public key. The X9.63 KDF uses the
+/// agreed secret and [`shared_info`](Self::shared_info) to derive a
+/// 256-bit key-encryption key. AES Key Wrap protects the content-encryption
+/// key with that key.
+///
+/// To open the container, the recipient computes ECDH with its private key
+/// and the ephemeral public key. The ephemeral point is carried in the
+/// container; [`ephemeral_key`](Self::ephemeral_key) builds an SPKI for it
+/// using the recipient's curve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyAgreeRecipient {
+    /// The `subjectKeyIdentifier` in the `rKeyId` rid.
+    pub key_identifier: RecipientIdentifier,
+    /// The ephemeral public key's point, in the SEC 1 encoding the
+    /// `originatorKey` carries.
+    pub ephemeral_point: Vec<u8>,
+    /// The user keying material, when the sender supplied some. Rite writes
+    /// none; the agreement is fresh because the ephemeral key is.
+    pub ukm: Option<Vec<u8>>,
+    /// The KDF the scheme names.
+    pub kdf: X963Kdf,
+    /// The CEK under AES-256 Key Wrap.
+    pub wrapped_key: Vec<u8>,
+}
+
+/// The length of the key-encryption key the agreement derives, in bytes:
+/// AES-256 key wrap, the one wrap this module writes under it.
+pub const AGREED_KEK_LEN: usize = 32;
+
+impl KeyAgreeRecipient {
+    /// The `ECC-CMS-SharedInfo` the KDF takes (RFC 5753 §7.2): the wrap
+    /// algorithm, the `ukm` when present, and the length of the derived key
+    /// in bits.
+    ///
+    /// Binding the wrap algorithm and length into the derivation means a key
+    /// derived for one wrap cannot be reused for another.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CmsReadError`] if this module's wrap identifier fails to
+    /// encode, which is unreachable.
+    pub fn shared_info(&self) -> Result<Vec<u8>, CmsReadError> {
+        let bits = u32::try_from(AGREED_KEK_LEN * 8).unwrap_or(u32::MAX);
+        let mut fields = vec![der::sequence(&[encoded_oid(oid::AES_256_WRAP)?])];
+        if let Some(ukm) = &self.ukm {
+            fields.push(der::tlv(TAG_CONTEXT_0_CONSTRUCTED, &der::octet_string(ukm)));
+        }
+        fields.push(der::tlv(
+            TAG_CONTEXT_2_CONSTRUCTED,
+            &der::octet_string(&bits.to_be_bytes()),
+        ));
+        Ok(der::sequence(&fields))
+    }
+
+    /// The ephemeral public key, on the curve of `recipient`, the key it was
+    /// agreed with.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CmsReadError`] if `recipient` is not an EC key, or if the
+    /// point does not form a public key on its curve.
+    pub fn ephemeral_key(&self, recipient: &PublicKeyDer) -> Result<PublicKeyDer, CmsReadError> {
+        let algorithm = recipient.algorithm().map_err(|e| err(e.to_string()))?;
+        let (curve, _) = agreement_curve(algorithm).ok_or_else(|| {
+            err(format!(
+                "a key agreement is addressed to a P-256 or P-384 key, and the recipient is \
+                 {algorithm}"
+            ))
+        })?;
+        let spki = der::sequence(&[
+            der::sequence(&[encoded_oid(oid::ID_EC_PUBLIC_KEY)?, encoded_oid(curve)?]),
+            der::tlv(
+                TAG_BIT_STRING,
+                &[&[0u8][..], &self.ephemeral_point].concat(),
+            ),
+        ]);
+        PublicKeyDer::new(spki).map_err(|e| err(format!("the ephemeral key: {e}")))
+    }
+}
+
+/// The curve identifier and the KDF of a key agreement with a key of
+/// `algorithm`, if it is one this module writes for.
+///
+/// The one table of agreement curves, matched exhaustively, so a key
+/// algorithm added to this crate is placed here or refused here at compile
+/// time, for sealing and opening alike.
+fn agreement_curve(algorithm: KeyAlgorithm) -> Option<(&'static str, X963Kdf)> {
+    match algorithm {
+        KeyAlgorithm::EcdsaP256 => Some((oid::SECP256R1, X963Kdf::Sha256)),
+        KeyAlgorithm::EcdsaP384 => Some((oid::SECP384R1, X963Kdf::Sha384)),
+        KeyAlgorithm::Rsa2048
+        | KeyAlgorithm::Rsa4096
+        | KeyAlgorithm::Ed25519
+        | KeyAlgorithm::MlDsa44
+        | KeyAlgorithm::MlDsa65
+        | KeyAlgorithm::MlDsa87
+        | KeyAlgorithm::MlKem512
+        | KeyAlgorithm::MlKem768
+        | KeyAlgorithm::MlKem1024
+        | KeyAlgorithm::Aes128
+        | KeyAlgorithm::Aes256 => None,
+    }
+}
+
+/// The X9.63 KDF used to derive a key-encryption key for a CMS key agreement.
+///
+/// RFC 5753 §7.1.4 pairs SHA-256 with P-256 and SHA-384 with P-384.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum X963Kdf {
+    /// `dhSinglePass-stdDH-sha256kdf-scheme`.
+    Sha256,
+    /// `dhSinglePass-stdDH-sha384kdf-scheme`.
+    Sha384,
+}
+
+impl X963Kdf {
+    /// The KDF RFC 5753 pairs with the curve of `recipient`, if it is an EC
+    /// key on a curve this module writes for.
+    #[must_use]
+    pub fn for_recipient(recipient: KeyAlgorithm) -> Option<Self> {
+        agreement_curve(recipient).map(|(_, kdf)| kdf)
+    }
+
+    /// The scheme identifier a `keyEncryptionAlgorithm` names for it.
+    fn scheme(self) -> &'static str {
+        match self {
+            Self::Sha256 => oid::DH_SINGLE_PASS_STDDH_SHA256KDF,
+            Self::Sha384 => oid::DH_SINGLE_PASS_STDDH_SHA384KDF,
+        }
+    }
+}
+
+impl fmt::Display for X963Kdf {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sha256 => f.write_str("the X9.63 KDF over SHA-256"),
+            Self::Sha384 => f.write_str("the X9.63 KDF over SHA-384"),
+        }
+    }
+}
+
 /// The parts of an `AuthEnvelopedData` addressed to one recipient.
 ///
-/// How the content-encryption key was protected decides the `RecipientInfo`
-/// form: [`KeyProtection::AesKeyWrap`] writes a `KEKRecipientInfo` for a key
-/// both sides hold, and [`KeyProtection::RsaOaepSha256`] a
-/// `KeyTransRecipientInfo` for an RSA public key. The content is the same
-/// either way.
+/// The [`RecipientInfo`] carries the protected content-encryption key in the
+/// form its recipient takes. The content is the same whichever it is.
 ///
 /// Carried as a struct rather than assembled in place because the same fields
 /// are written on the way out and read on the way back, and a field the two
@@ -713,16 +1053,17 @@ pub const GCM_ICV_LEN: usize = 16;
 /// them out again, and never holds a key.
 ///
 /// ```
-/// use rite_sdk::cms::{self, Envelope};
-/// use rite_sdk::{KeyCheckValue, KeyProtection};
+/// use rite_sdk::KeyCheckValue;
+/// use rite_sdk::cms::{self, Envelope, RecipientInfo};
 ///
 /// // Values a backend produces: the KEK's check value, the CEK wrapped under
 /// // the KEK, and the content under that CEK.
 /// let check_value: KeyCheckValue = "cmac-aes:763cbc".parse()?;
 /// let envelope = Envelope {
-///     protection: KeyProtection::AesKeyWrap,
-///     key_identifier: (&check_value).into(),
-///     wrapped_cek: vec![0x11; 40],
+///     recipient: RecipientInfo::Kek {
+///         key_identifier: (&check_value).into(),
+///         wrapped_key: vec![0x11; 40],
+///     },
 ///     nonce: vec![0x22; 12],
 ///     ciphertext: vec![0x33; 64],
 ///     tag: vec![0x44; cms::GCM_ICV_LEN],
@@ -742,16 +1083,10 @@ pub const GCM_ICV_LEN: usize = 16;
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Envelope {
-    /// How `wrapped_cek` was protected, which is also which recipient form
-    /// carries it.
-    pub protection: KeyProtection,
-    /// What names the recipient key. Rite writes a symmetric key's check value,
-    /// in `kekid.keyIdentifier`, and a public key's fingerprint, as the
-    /// `subjectKeyIdentifier` rid. A container read back carries what its
-    /// writer put there.
-    pub key_identifier: RecipientIdentifier,
-    /// The content-encryption key, as `protection` left it.
-    pub wrapped_cek: Vec<u8>,
+    /// The recipient and the content-encryption key protected for it. Rite
+    /// names a symmetric key by its check value and a public key by its
+    /// fingerprint; a container read back carries what its writer put there.
+    pub recipient: RecipientInfo,
     /// The 12-byte AES-GCM nonce.
     pub nonce: Vec<u8>,
     /// The content under AES-256-GCM.
@@ -768,9 +1103,9 @@ pub struct Envelope {
 ///
 /// # Errors
 ///
-/// Returns [`CmsReadError`] if the tag is not a length RFC 5084 admits, if the
-/// protection is one a `RecipientInfo` cannot name, or if one of this module's
-/// own object identifiers fails to encode, which is unreachable.
+/// Returns [`CmsReadError`] if the tag is not a length RFC 5084 admits, if a
+/// key agreement carries no ephemeral point, or if one of this module's own
+/// object identifiers fails to encode, which is unreachable.
 pub fn write_auth_enveloped(envelope: &Envelope) -> Result<Vec<u8>, CmsReadError> {
     if !GCM_ICV_LENGTHS.contains(&envelope.tag.len()) {
         return Err(err(format!(
@@ -817,37 +1152,81 @@ fn assemble_auth_enveloped(
     ]))
 }
 
-/// The one `RecipientInfo` an envelope carries, in the form its protection
-/// takes.
+/// The one `RecipientInfo` an envelope carries.
 fn recipient_info(envelope: &Envelope) -> Result<Vec<u8>, CmsReadError> {
-    match envelope.protection {
+    match &envelope.recipient {
         // KEKRecipientInfo, tagged [2] in the RecipientInfo CHOICE. Version is
         // always 4 (RFC 5652 §6.2.3). The algorithm is `id-aes256-wrap`,
         // matching the 256-bit KEK Rite writes.
-        KeyProtection::AesKeyWrap => Ok(der::tlv(
+        RecipientInfo::Kek {
+            key_identifier,
+            wrapped_key,
+        } => Ok(der::tlv(
             TAG_CONTEXT_2_CONSTRUCTED,
             &[
                 der::small_integer(4),
-                der::sequence(&[der::octet_string(envelope.key_identifier.as_bytes())]),
+                der::sequence(&[der::octet_string(key_identifier.as_bytes())]),
                 der::sequence(&[encoded_oid(oid::AES_256_WRAP)?]),
-                der::octet_string(&envelope.wrapped_cek),
+                der::octet_string(wrapped_key),
             ]
             .concat(),
         )),
         // KeyTransRecipientInfo, the untagged SEQUENCE in the CHOICE. Version
         // 2 because the rid is a subjectKeyIdentifier (RFC 5652 §6.2.1), which
         // names the key itself, so no certificate is needed to address it.
-        KeyProtection::RsaOaepSha256 => Ok(der::sequence(&[
+        RecipientInfo::KeyTransport {
+            key_identifier,
+            encrypted_key,
+        } => Ok(der::sequence(&[
             der::small_integer(2),
-            der::tlv(TAG_CONTEXT_0_PRIMITIVE, envelope.key_identifier.as_bytes()),
+            der::tlv(TAG_CONTEXT_0_PRIMITIVE, key_identifier.as_bytes()),
             rsaes_oaep_sha256()?,
-            der::octet_string(&envelope.wrapped_cek),
+            der::octet_string(encrypted_key),
         ])),
-        KeyProtection::ProviderDefined => Err(err(
-            "a data key in its provider's own envelope names no algorithm a RecipientInfo \
-             can declare",
-        )),
+        RecipientInfo::KeyAgreement(agreed) => key_agree_recipient_info(agreed),
     }
+}
+
+/// A `KeyAgreeRecipientInfo`, tagged [1] in the `RecipientInfo` CHOICE, as
+/// OpenSSL writes one: version 3 (RFC 5652 §6.2.2), the ephemeral key as an
+/// `originatorKey` under `id-ecPublicKey` with the parameters absent, and the
+/// wrap identifier without parameters. The recipient is named by `rKeyId`,
+/// whose subject key identifier names the key itself, as a `ktri`'s does.
+fn key_agree_recipient_info(agreed: &KeyAgreeRecipient) -> Result<Vec<u8>, CmsReadError> {
+    // The reader refuses a public key with no point, so the writer does too.
+    if agreed.ephemeral_point.is_empty() {
+        return Err(err("a key agreement needs the ephemeral key's point"));
+    }
+    let originator_key = der::tlv(
+        TAG_CONTEXT_1_CONSTRUCTED,
+        &[
+            der::sequence(&[encoded_oid(oid::ID_EC_PUBLIC_KEY)?]),
+            der::tlv(
+                TAG_BIT_STRING,
+                &[&[0u8][..], &agreed.ephemeral_point].concat(),
+            ),
+        ]
+        .concat(),
+    );
+    let mut fields = vec![
+        der::small_integer(3),
+        der::tlv(TAG_CONTEXT_0_CONSTRUCTED, &originator_key),
+    ];
+    if let Some(ukm) = &agreed.ukm {
+        fields.push(der::tlv(TAG_CONTEXT_1_CONSTRUCTED, &der::octet_string(ukm)));
+    }
+    fields.push(der::sequence(&[
+        encoded_oid(agreed.kdf.scheme())?,
+        der::sequence(&[encoded_oid(oid::AES_256_WRAP)?]),
+    ]));
+    fields.push(der::sequence(&[der::sequence(&[
+        der::tlv(
+            TAG_CONTEXT_0_CONSTRUCTED,
+            &der::octet_string(agreed.key_identifier.as_bytes()),
+        ),
+        der::octet_string(&agreed.wrapped_key),
+    ])]));
+    Ok(der::tlv(TAG_CONTEXT_1_CONSTRUCTED, &fields.concat()))
 }
 
 /// `id-RSAES-OAEP` with SHA-256 for the digest and for MGF1, and the empty
@@ -876,10 +1255,9 @@ fn encoded_oid(dotted: &str) -> Result<Vec<u8>, CmsReadError> {
 /// Read back what [`write_auth_enveloped`] wrote.
 ///
 /// Accepts an `AuthEnvelopedData` with AES-256-GCM content, no `authAttrs`,
-/// and a single recipient that is either a `KEKRecipientInfo` under
-/// `id-aes256-wrap` or a `KeyTransRecipientInfo` under RSAES-OAEP over SHA-256
-/// that names its key by subject key identifier. That is what the OpenSSL CLI
-/// writes for the same inputs.
+/// and a single recipient, in one of the [`RecipientInfo`] forms, naming its
+/// key by subject key identifier. That is what the OpenSSL CLI writes for the
+/// same inputs.
 ///
 /// `authAttrs` is refused rather than skipped. RFC 5083 makes it the AEAD's
 /// additional authenticated data, so a blob carrying it authenticates bytes
@@ -926,7 +1304,7 @@ pub fn read_auth_enveloped(der_bytes: &[u8]) -> Result<Envelope, CmsReadError> {
         // silently taking the first is how a blob opens with the wrong one.
         return Err(err("more than one recipient"));
     }
-    let (protection, key_identifier, wrapped_cek) = openable_recipient(&recipient)?;
+    let recipient = openable_recipient(&recipient)?;
 
     let (content_info, after_content) = read_tlv(after_recipients)?;
     let (nonce, icv_len, ciphertext) =
@@ -956,26 +1334,21 @@ pub fn read_auth_enveloped(der_bytes: &[u8]) -> Result<Envelope, CmsReadError> {
     }
 
     Ok(Envelope {
-        protection,
-        key_identifier: RecipientIdentifier(key_identifier.to_vec()),
-        wrapped_cek: wrapped_cek.to_vec(),
+        recipient,
         nonce,
         ciphertext,
         tag: tag.to_vec(),
     })
 }
 
-/// How a recipient's CEK is protected, what names the recipient, and the
-/// protected CEK, for a recipient this crate can open.
+/// A recipient this crate can open, with what names it and its protected CEK.
 ///
 /// The algorithms are checked here rather than in the walkers, because
 /// describing a foreign blob should report the algorithm it names, and only
 /// opening one has to insist on the algorithm this crate can run. The
 /// exception is RSAES-OAEP, whose parameters [`describe`] checks too, since
 /// the description has no field for them.
-fn openable_recipient<'a>(
-    recipient: &Tlv<'a>,
-) -> Result<(KeyProtection, &'a [u8], &'a [u8]), CmsReadError> {
+fn openable_recipient(recipient: &Tlv<'_>) -> Result<RecipientInfo, CmsReadError> {
     match recipient.tag {
         TAG_CONTEXT_2_CONSTRUCTED => {
             let kekri = read_kekri(recipient.value)?;
@@ -985,11 +1358,10 @@ fn openable_recipient<'a>(
                     kekri.algorithm
                 )));
             }
-            Ok((
-                KeyProtection::AesKeyWrap,
-                kekri.key_identifier,
-                kekri.encrypted_key,
-            ))
+            Ok(RecipientInfo::Kek {
+                key_identifier: RecipientIdentifier(kekri.key_identifier.to_vec()),
+                wrapped_key: kekri.encrypted_key.to_vec(),
+            })
         }
         TAG_SEQUENCE => {
             let ktri = read_ktri(recipient.value)?;
@@ -1002,15 +1374,38 @@ fn openable_recipient<'a>(
                      certificate rather than a key",
                 )
             })?;
-            Ok((
-                KeyProtection::RsaOaepSha256,
-                key_identifier,
-                ktri.encrypted_key,
-            ))
+            Ok(RecipientInfo::KeyTransport {
+                key_identifier: RecipientIdentifier(key_identifier.to_vec()),
+                encrypted_key: ktri.encrypted_key.to_vec(),
+            })
         }
-        TAG_CONTEXT_1_CONSTRUCTED => Err(err(
-            "the recipient is a KeyAgreeRecipientInfo, which this reader does not open",
-        )),
+        TAG_CONTEXT_1_CONSTRUCTED => {
+            let kari = read_kari_fields(recipient.value)?;
+            if kari.more_keys {
+                // As for several recipients: choosing which key to try is how
+                // a blob opens with the wrong one.
+                return Err(err(
+                    "this KeyAgreeRecipientInfo addresses more than one key",
+                ));
+            }
+            let kdf = agreement_kdf(&kari.algorithm)?;
+            let ephemeral_point = originator_point(&kari.originator)?;
+            // As for a key transport recipient: no certificate is here to
+            // match an issuer and serial against.
+            let key_identifier = kari.key_identifier.ok_or_else(|| {
+                err(
+                    "the recipient is named by issuer and serial number, which identifies a \
+                     certificate rather than a key",
+                )
+            })?;
+            Ok(RecipientInfo::KeyAgreement(KeyAgreeRecipient {
+                key_identifier: RecipientIdentifier(key_identifier.to_vec()),
+                ephemeral_point: ephemeral_point.to_vec(),
+                ukm: kari.ukm.map(<[u8]>::to_vec),
+                kdf,
+                wrapped_key: kari.encrypted_key.to_vec(),
+            }))
+        }
         TAG_CONTEXT_4_CONSTRUCTED => Err(err(
             "the recipient is an OtherRecipientInfo, which this reader does not open",
         )),
@@ -1132,9 +1527,10 @@ mod tests {
 
     fn sample_envelope() -> Envelope {
         Envelope {
-            protection: KeyProtection::AesKeyWrap,
-            key_identifier: RecipientIdentifier(vec![0x76, 0x3c, 0xbc]),
-            wrapped_cek: vec![0x11; 40],
+            recipient: RecipientInfo::Kek {
+                key_identifier: RecipientIdentifier(vec![0x76, 0x3c, 0xbc]),
+                wrapped_key: vec![0x11; 40],
+            },
             nonce: vec![0x22; 12],
             ciphertext: vec![0x33; 64],
             tag: vec![0x44; 16],
@@ -1238,11 +1634,109 @@ mod tests {
     /// of its SPKI.
     fn key_transport_envelope() -> Envelope {
         Envelope {
-            protection: KeyProtection::RsaOaepSha256,
-            key_identifier: RecipientIdentifier(vec![0x89; 32]),
-            wrapped_cek: vec![0x11; 256],
+            recipient: RecipientInfo::KeyTransport {
+                key_identifier: RecipientIdentifier(vec![0x89; 32]),
+                encrypted_key: vec![0x11; 256],
+            },
             ..sample_envelope()
         }
+    }
+
+    /// An envelope whose CEK is wrapped under a key agreed with a P-256 key.
+    fn key_agreement_envelope() -> Envelope {
+        Envelope {
+            recipient: RecipientInfo::KeyAgreement(KeyAgreeRecipient {
+                key_identifier: RecipientIdentifier(vec![0x89; 32]),
+                ephemeral_point: [&[0x04][..], &[0x5c; 64]].concat(),
+                ukm: None,
+                kdf: X963Kdf::Sha256,
+                wrapped_key: vec![0x11; 40],
+            }),
+            ..sample_envelope()
+        }
+    }
+
+    #[test]
+    fn a_key_agreement_envelope_round_trips() {
+        let envelope = key_agreement_envelope();
+        let der = write_auth_enveloped(&envelope).unwrap();
+        assert_eq!(read_auth_enveloped(&der).unwrap(), envelope);
+
+        // With user keying material and the other KDF.
+        let RecipientInfo::KeyAgreement(agreed) = envelope.recipient else {
+            unreachable!()
+        };
+        let envelope = Envelope {
+            recipient: RecipientInfo::KeyAgreement(KeyAgreeRecipient {
+                ukm: Some(vec![0x7e; 64]),
+                kdf: X963Kdf::Sha384,
+                ..agreed.clone()
+            }),
+            ..sample_envelope()
+        };
+        let der = write_auth_enveloped(&envelope).unwrap();
+        assert_eq!(read_auth_enveloped(&der).unwrap(), envelope);
+
+        // What the reader would refuse, the writer refuses.
+        let pointless = Envelope {
+            recipient: RecipientInfo::KeyAgreement(KeyAgreeRecipient {
+                ephemeral_point: Vec::new(),
+                ..agreed
+            }),
+            ..sample_envelope()
+        };
+        assert!(write_auth_enveloped(&pointless).is_err());
+    }
+
+    #[test]
+    fn a_key_agreement_envelope_describes_itself() {
+        let der = write_auth_enveloped(&key_agreement_envelope()).unwrap();
+        let facts = describe(&der).unwrap();
+
+        assert_eq!(
+            facts.description.recipient_info,
+            Some(RecipientInfoKind::Kari)
+        );
+        assert_eq!(
+            facts.description.key_encryption_oid.as_str(),
+            oid::DH_SINGLE_PASS_STDDH_SHA256KDF
+        );
+        assert_eq!(
+            facts.description.kek_wrap_oid.as_ref().map(Oid::as_str),
+            Some(oid::AES_256_WRAP)
+        );
+        assert_eq!(
+            facts.recipient_key_identifier,
+            Some(RecipientIdentifier(vec![0x89; 32]))
+        );
+        assert!(crate::types::WrapScheme::CmsAes256Gcm.permits(&facts.description));
+    }
+
+    /// The `ECC-CMS-SharedInfo` OpenSSL feeds its KDF for a 256-bit wrap key
+    /// and no ukm: the wrap identifier, then `[2]` holding the length in bits.
+    #[test]
+    fn the_shared_info_binds_the_wrap_and_its_length() {
+        let RecipientInfo::KeyAgreement(agreed) = key_agreement_envelope().recipient else {
+            unreachable!()
+        };
+        assert_eq!(
+            agreed.shared_info().unwrap(),
+            [
+                0x30, 0x15, 0x30, 0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01,
+                0x2d, 0xa2, 0x06, 0x04, 0x04, 0x00, 0x00, 0x01, 0x00,
+            ]
+        );
+
+        let with_ukm = KeyAgreeRecipient {
+            ukm: Some(vec![0xab, 0xcd]),
+            ..agreed
+        };
+        let encoded = with_ukm.shared_info().unwrap();
+        assert_eq!(
+            encoded.get(15..21),
+            Some(&[0xa0, 0x04, 0x04, 0x02, 0xab, 0xcd][..]),
+            "the ukm is entityUInfo, [0], between the wrap and the length"
+        );
     }
 
     #[test]
@@ -1301,11 +1795,18 @@ mod tests {
     /// well-formed.
     fn with_key_transport_algorithm(algorithm: Vec<u8>) -> Vec<u8> {
         let envelope = key_transport_envelope();
+        let RecipientInfo::KeyTransport {
+            key_identifier,
+            encrypted_key,
+        } = &envelope.recipient
+        else {
+            unreachable!()
+        };
         let ktri = der::sequence(&[
             der::small_integer(2),
-            der::tlv(TAG_CONTEXT_0_PRIMITIVE, envelope.key_identifier.as_bytes()),
+            der::tlv(TAG_CONTEXT_0_PRIMITIVE, key_identifier.as_bytes()),
             algorithm,
-            der::octet_string(&envelope.wrapped_cek),
+            der::octet_string(encrypted_key),
         ]);
         assemble_auth_enveloped(&envelope, ktri).unwrap()
     }
@@ -1334,8 +1835,9 @@ mod tests {
         assert_eq!(
             read_auth_enveloped(&with_key_transport_algorithm(accepted))
                 .unwrap()
-                .protection,
-            KeyProtection::RsaOaepSha256
+                .recipient
+                .kind(),
+            RecipientInfoKind::Ktri
         );
 
         let refused = [
@@ -1437,13 +1939,15 @@ mod tests {
     fn a_kek_recipient_is_read_exactly() {
         let envelope = sample_envelope();
         let kekri = |version: u8, kekid_extra: &[Vec<u8>], trailing: &[u8]| {
-            let mut kekid = vec![der::octet_string(envelope.key_identifier.as_bytes())];
+            let mut kekid = vec![der::octet_string(
+                envelope.recipient.key_identifier().as_bytes(),
+            )];
             kekid.extend_from_slice(kekid_extra);
             let mut body = [
                 der::small_integer(version),
                 der::sequence(&kekid),
                 der::sequence(&[der::object_identifier(super::oid::AES_256_WRAP).unwrap()]),
-                der::octet_string(&envelope.wrapped_cek),
+                der::octet_string(&[0x11; 40]),
             ]
             .concat();
             body.extend_from_slice(trailing);
@@ -1481,9 +1985,12 @@ mod tests {
         let ktri = |version: u8, algorithm: Vec<u8>, trailing: &[u8]| {
             let mut body = [
                 der::small_integer(version),
-                der::tlv(TAG_CONTEXT_0_PRIMITIVE, envelope.key_identifier.as_bytes()),
+                der::tlv(
+                    TAG_CONTEXT_0_PRIMITIVE,
+                    envelope.recipient.key_identifier().as_bytes(),
+                ),
                 algorithm,
-                der::octet_string(&envelope.wrapped_cek),
+                der::octet_string(&[0x11; 256]),
             ]
             .concat();
             body.extend_from_slice(trailing);
@@ -1529,15 +2036,254 @@ mod tests {
         assert!(error.contains("hashFunc"), "{error}");
     }
 
-    /// A data key in its provider's own envelope names no algorithm, so no
-    /// `RecipientInfo` can carry it.
+    /// The fields of a `KeyAgreeRecipientInfo`, each encoded, to build one
+    /// that differs from what the writer produces in one field.
+    struct KariFields {
+        version: u8,
+        originator: Vec<u8>,
+        algorithm: Vec<u8>,
+        keys: Vec<u8>,
+    }
+
+    fn oid(dotted: &str) -> Vec<u8> {
+        der::object_identifier(dotted).unwrap()
+    }
+
+    /// An `originatorKey` under `id-ecPublicKey` with `parameters`.
+    fn originator_key(parameters: &[Vec<u8>]) -> Vec<u8> {
+        let mut algorithm = vec![oid(super::oid::ID_EC_PUBLIC_KEY)];
+        algorithm.extend_from_slice(parameters);
+        let point = der::tlv(TAG_BIT_STRING, &[&[0u8, 0x04][..], &[0x5c; 64]].concat());
+        der::tlv(
+            TAG_CONTEXT_1_CONSTRUCTED,
+            &[der::sequence(&algorithm), point].concat(),
+        )
+    }
+
+    fn agreement_scheme(kdf: &str, wrap: &str) -> Vec<u8> {
+        der::sequence(&[oid(kdf), der::sequence(&[oid(wrap)])])
+    }
+
+    fn recipient_keys(rids: &[Vec<u8>]) -> Vec<u8> {
+        let keys: Vec<_> = rids
+            .iter()
+            .map(|rid| der::sequence(&[rid.clone(), der::octet_string(&[0x11; 40])]))
+            .collect();
+        der::sequence(&keys)
+    }
+
+    fn rkeyid() -> Vec<u8> {
+        der::tlv(TAG_CONTEXT_0_CONSTRUCTED, &der::octet_string(&[0x89; 32]))
+    }
+
+    impl KariFields {
+        /// What the writer produces for [`key_agreement_envelope`].
+        fn written() -> Self {
+            Self {
+                version: 3,
+                originator: originator_key(&[]),
+                algorithm: agreement_scheme(
+                    super::oid::DH_SINGLE_PASS_STDDH_SHA256KDF,
+                    super::oid::AES_256_WRAP,
+                ),
+                keys: recipient_keys(&[rkeyid()]),
+            }
+        }
+
+        fn container(self) -> Vec<u8> {
+            let body = [
+                der::small_integer(self.version),
+                der::tlv(TAG_CONTEXT_0_CONSTRUCTED, &self.originator),
+                self.algorithm,
+                self.keys,
+            ]
+            .concat();
+            assemble_auth_enveloped(
+                &key_agreement_envelope(),
+                der::tlv(TAG_CONTEXT_1_CONSTRUCTED, &body),
+            )
+            .unwrap()
+        }
+    }
+
+    /// The key agreement recipient is read as exactly as the others, by the
+    /// walker describing and opening share.
     #[test]
-    fn writing_refuses_a_provider_defined_protection() {
-        let envelope = Envelope {
-            protection: KeyProtection::ProviderDefined,
-            ..sample_envelope()
+    fn a_key_agreement_recipient_is_read_exactly() {
+        assert_eq!(
+            read_auth_enveloped(&KariFields::written().container()).unwrap(),
+            key_agreement_envelope()
+        );
+        // RFC 5753 admits a NULL for the originator key's parameters too.
+        let with_null = KariFields {
+            originator: originator_key(&[vec![TAG_NULL, 0x00]]),
+            ..KariFields::written()
         };
-        assert!(write_auth_enveloped(&envelope).is_err());
+        assert!(read_auth_enveloped(&with_null.container()).is_ok());
+
+        let trailing_rkeyid = der::tlv(
+            TAG_CONTEXT_0_CONSTRUCTED,
+            &[der::octet_string(&[0x89; 32]), vec![TAG_NULL, 0x00]].concat(),
+        );
+        for (fields, named) in [
+            (
+                KariFields {
+                    version: 2,
+                    ..KariFields::written()
+                },
+                "version 3",
+            ),
+            (
+                KariFields {
+                    keys: recipient_keys(&[trailing_rkeyid]),
+                    ..KariFields::written()
+                },
+                "rKeyId carries bytes",
+            ),
+            (
+                KariFields {
+                    keys: der::sequence(&[
+                        der::sequence(&[rkeyid(), der::octet_string(&[0x11; 40])]),
+                        vec![TAG_NULL, 0x00],
+                    ]),
+                    ..KariFields::written()
+                },
+                "RecipientEncryptedKey",
+            ),
+        ] {
+            let der = fields.container();
+            let error = read_auth_enveloped(&der).unwrap_err().to_string();
+            assert!(error.contains(named), "{error}");
+            let error = describe(&der)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(error.contains(named), "describe gave {error:?}");
+        }
+    }
+
+    /// Only the scheme this crate runs opens: ECDH with the X9.63 KDF over
+    /// SHA-256 or SHA-384, under AES-256 key wrap, from an ephemeral key whose
+    /// curve is the recipient's, to a key named by its identifier. A foreign
+    /// container naming anything else is still described.
+    #[test]
+    fn opening_admits_only_the_agreement_this_crate_runs() {
+        let issuer_and_serial = der::sequence(&[der::sequence(&[]), der::small_integer(1)]);
+        for (fields, named) in [
+            (
+                KariFields {
+                    algorithm: agreement_scheme(
+                        super::oid::DH_SINGLE_PASS_STDDH_SHA1KDF,
+                        super::oid::AES_256_WRAP,
+                    ),
+                    ..KariFields::written()
+                },
+                "SHA-1",
+            ),
+            (
+                KariFields {
+                    algorithm: agreement_scheme(
+                        super::oid::DH_SINGLE_PASS_STDDH_SHA256KDF,
+                        super::oid::AES_128_WRAP,
+                    ),
+                    ..KariFields::written()
+                },
+                "id-aes256-wrap",
+            ),
+            (
+                KariFields {
+                    originator: originator_key(&[oid(super::oid::SECP256R1)]),
+                    ..KariFields::written()
+                },
+                "names its curve",
+            ),
+            (
+                KariFields {
+                    originator: der::tlv(
+                        TAG_CONTEXT_1_CONSTRUCTED,
+                        &[
+                            der::sequence(&[oid(super::oid::ID_EC_PUBLIC_KEY)]),
+                            der::tlv(TAG_BIT_STRING, &[&[0u8, 0x02][..], &[0x5c; 32]].concat()),
+                        ]
+                        .concat(),
+                    ),
+                    ..KariFields::written()
+                },
+                "point is compressed",
+            ),
+            (
+                KariFields {
+                    originator: der::tlv(TAG_CONTEXT_0_PRIMITIVE, &[0x89; 20]),
+                    ..KariFields::written()
+                },
+                "named rather than given",
+            ),
+            (
+                KariFields {
+                    keys: recipient_keys(&[issuer_and_serial]),
+                    ..KariFields::written()
+                },
+                "issuer and serial",
+            ),
+            (
+                KariFields {
+                    keys: recipient_keys(&[rkeyid(), rkeyid()]),
+                    ..KariFields::written()
+                },
+                "more than one key",
+            ),
+        ] {
+            let der = fields.container();
+            assert!(describe(&der).is_ok());
+            let error = read_auth_enveloped(&der).unwrap_err().to_string();
+            assert!(error.contains(named), "{error}");
+        }
+    }
+
+    /// The ephemeral key takes the recipient's curve, and only an EC recipient
+    /// has one.
+    #[test]
+    fn the_ephemeral_key_is_on_the_recipients_curve() {
+        // A P-256 public key: the generator point, which is on the curve.
+        let generator = [
+            0x04, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63,
+            0xa4, 0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39,
+            0x45, 0xd8, 0x98, 0xc2, 0x96, 0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e,
+            0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e,
+            0xce, 0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5,
+        ];
+        let agreed = KeyAgreeRecipient {
+            ephemeral_point: generator.to_vec(),
+            ..match key_agreement_envelope().recipient {
+                RecipientInfo::KeyAgreement(agreed) => agreed,
+                RecipientInfo::Kek { .. } | RecipientInfo::KeyTransport { .. } => unreachable!(),
+            }
+        };
+        let recipient = agreed.ephemeral_key(&p256_public_key(&generator)).unwrap();
+        assert_eq!(recipient.algorithm().unwrap(), KeyAlgorithm::EcdsaP256);
+        assert_eq!(recipient, p256_public_key(&generator));
+
+        let ed25519 = PublicKeyDer::new(der::sequence(&[
+            der::sequence(&[der::object_identifier("1.3.101.112").unwrap()]),
+            der::tlv(TAG_BIT_STRING, &[0u8; 33]),
+        ]))
+        .unwrap();
+        let error = agreed.ephemeral_key(&ed25519).unwrap_err().to_string();
+        assert!(
+            error.contains("addressed to a P-256 or P-384 key"),
+            "{error}"
+        );
+    }
+
+    fn p256_public_key(point: &[u8]) -> PublicKeyDer {
+        PublicKeyDer::new(der::sequence(&[
+            der::sequence(&[
+                der::object_identifier(super::oid::ID_EC_PUBLIC_KEY).unwrap(),
+                der::object_identifier(super::oid::SECP256R1).unwrap(),
+            ]),
+            der::tlv(TAG_BIT_STRING, &[&[0u8][..], point].concat()),
+        ]))
+        .unwrap()
     }
 
     /// Reading is the half that takes untrusted bytes, so it refuses what it

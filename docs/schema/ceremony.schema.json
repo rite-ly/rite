@@ -211,7 +211,7 @@
           "const": "unwrap_key"
         },
         {
-          "description": "Encrypt data for a key held by a backend or for a public key.\n\nReads `data` and exactly one of `encryption_key` or `recipient`. With `encryption_key`, the backend generates a content-encryption key and protects it with that key. With `recipient`, an RSA-2048 or RSA-4096 public key held elsewhere, the backend supplies the content-encryption key's random bytes, which are protected with RSAES-OAEP over SHA-256. The data itself is not sent to the backend.",
+          "description": "Encrypt data for a key held by a backend or for a public key.\n\nReads `data` and exactly one of `encryption_key` or `recipient`. With `encryption_key`, the backend generates a content-encryption key and protects it with that key. With `recipient`, a public key held elsewhere, the backend supplies the content-encryption key's random bytes, which are protected with RSAES-OAEP over SHA-256 for an RSA-2048 or RSA-4096 key, or with ECDH and AES key wrap for a P-256 or P-384 key. The data itself is not sent to the backend.",
           "type": "string",
           "const": "encrypt_data"
         },

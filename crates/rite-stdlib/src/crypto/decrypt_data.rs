@@ -6,10 +6,12 @@ use rite_runtime::{
     StepResult, compute_fingerprint, resolve_backend_key,
 };
 use rite_sdk::{
-    Backend, EncryptedData, KeyCheckValue, KeyProtection, PublicKeyDer, WrapScheme, cms,
+    Backend, EncryptedData, KeyCheckValue, KeyProtection, PublicKeyDer, RecipientInfoKind,
+    WrapScheme, cms,
 };
 use secrecy::SecretBox;
 use serde_json::{Value, json};
+use zeroize::Zeroizing;
 
 use crate::crypto::content::{self, SealedContent};
 
@@ -83,15 +85,16 @@ impl Action for DecryptDataAction {
 
         let envelope = cms::read_auth_enveloped(encrypted.data())
             .map_err(|e| ActionError::Failed(format!("Cannot read the container: {e}")))?;
-        let own = KeyName::of(&key, envelope.protection, &key_ref.display_name())?;
+        let own = KeyName::of(&key, envelope.recipient.kind(), &key_ref.display_name())?;
 
         // Checked before any decrypt, because the content tag authenticates the
         // content and nothing around it. A blob addressed elsewhere would
         // otherwise fail as an unauthenticated tag, which says nothing about
         // why.
-        if !own.answers_to(&envelope.key_identifier) {
+        let identifier = envelope.recipient.key_identifier();
+        if !own.answers_to(identifier) {
             return Err(ActionError::Failed(
-                own.refusal(&envelope.key_identifier, &key_ref.display_name()),
+                own.refusal(identifier, &key_ref.display_name()),
             ));
         }
 
@@ -100,20 +103,18 @@ impl Action for DecryptDataAction {
             format!("Decrypting '{}' under {scheme}...", data_ref.display_name()),
         )?;
 
-        let (transport, _) =
-            crate::crypto::transport_backend(backend, &key_backend, "open a data key")?;
-
-        // Taken from the container rather than assumed, so a backend that does
-        // not implement the protection the container names refuses it rather
-        // than decrypting under the wrong mechanism.
-        //
         // A failure here and a failure of the content tag below are reported
         // differently, which tells whoever reads the message whether the
         // padding of the protected key was valid. Using that as a padding
         // oracle takes many adaptive attempts, and a ceremony step runs once,
         // in front of its witnesses.
-        let data_key =
-            transport.open_data_key(&backend_key_id, &envelope.wrapped_cek, envelope.protection)?;
+        let data_key = open_content_key(
+            &envelope.recipient,
+            &own,
+            backend,
+            &key_backend,
+            &backend_key_id,
+        )?;
         if data_key.len() != content::KEY_BYTES {
             return Err(ActionError::Failed(format!(
                 "The content key in this container is {} bytes, and AES-256-GCM takes {}",
@@ -182,6 +183,54 @@ fn produced(content_bytes: usize) -> Value {
     })
 }
 
+/// Recover the content key `recipient` carries, under the backend key `own`
+/// names.
+///
+/// The opening follows the recipient form rather than an assumption, so a
+/// backend that does not implement it refuses rather than decrypting under the
+/// wrong mechanism.
+fn open_content_key(
+    recipient: &cms::RecipientInfo,
+    own: &KeyName<'_>,
+    backend: Option<&mut dyn Backend>,
+    key_backend: &str,
+    key_id: &rite_sdk::KeyId,
+) -> Result<Zeroizing<Vec<u8>>, ActionError> {
+    let (protected, protection) = match (recipient, own) {
+        (cms::RecipientInfo::Kek { wrapped_key, .. }, _) => {
+            (wrapped_key, KeyProtection::AesKeyWrap)
+        }
+        (cms::RecipientInfo::KeyTransport { encrypted_key, .. }, _) => {
+            (encrypted_key, KeyProtection::RsaOaepSha256)
+        }
+        // The backend agrees the secret, and the host derives the wrap key from
+        // it and unwraps, so a device that only does ECDH opens this.
+        (cms::RecipientInfo::KeyAgreement(agreed), KeyName::PublicKey(public_key)) => {
+            let ephemeral = agreed
+                .ephemeral_key(public_key)
+                .map_err(|e| ActionError::Failed(format!("Cannot read the container: {e}")))?;
+            let agreement = crate::crypto::agreement_backend(
+                backend,
+                key_backend,
+                "agree a key to open a data key",
+            )?;
+            let secret = agreement.agree(key_id, &ephemeral)?;
+            return Ok(content::open_key_agreement(agreed, &secret)?);
+        }
+        // `KeyName::of` takes its form from the recipient, so a key agreement
+        // always has a public key to agree under. The remaining forms are the
+        // ones this crate does not open.
+        (other, _) => {
+            return Err(ActionError::Failed(format!(
+                "This container's recipient is a {}, which decrypt_data does not open",
+                other.kind()
+            )));
+        }
+    };
+    let (transport, _) = crate::crypto::transport_backend(backend, key_backend, "open a data key")?;
+    Ok(transport.open_data_key(key_id, protected, protection)?)
+}
+
 /// Describe a material's bytes as a container this step opens.
 fn container_from_material(
     data_id: &impl std::fmt::Display,
@@ -215,15 +264,17 @@ enum KeyName<'a> {
 }
 
 impl<'a> KeyName<'a> {
-    /// The names `key` answers to, for a container whose content key is
-    /// protected with `protection`.
+    /// The names `key` answers to, for a container whose recipient takes the
+    /// `form`.
     fn of(
         key: &BackendKeyMeta<'a>,
-        protection: KeyProtection,
+        form: RecipientInfoKind,
         display_name: &str,
     ) -> Result<Self, ActionError> {
-        match protection {
-            KeyProtection::AesKeyWrap => {
+        // A key of another kind is the wrong kind of key, not a different key
+        // of the right kind, and the refusal says so.
+        let (accepted, addressed_to) = match form {
+            RecipientInfoKind::Kekri => {
                 let check_value = key.check_value.ok_or_else(|| {
                     ActionError::Failed(format!(
                         "'{display_name}' is a {} key, and this container is addressed to a \
@@ -231,32 +282,36 @@ impl<'a> KeyName<'a> {
                         key.algorithm
                     ))
                 })?;
-                Ok(Self::CheckValue(check_value.clone()))
+                return Ok(Self::CheckValue(check_value.clone()));
             }
-            KeyProtection::RsaOaepSha256 => {
-                // A key of another kind is the wrong kind of key, not a
-                // different key of the right kind, and the refusal says so.
-                if !WrapScheme::RsaOaepSha256.accepts_recipient(key.algorithm) {
-                    return Err(ActionError::Failed(format!(
-                        "'{display_name}' is {}, and this container is addressed to an \
-                         RSA-2048 or RSA-4096 key",
-                        key.algorithm
-                    )));
-                }
-                let public_key = key.public_key.ok_or_else(|| {
-                    ActionError::Failed(format!(
-                        "'{display_name}' is a {} key with no public half, and this container is \
-                         addressed to an RSA public key",
-                        key.algorithm
-                    ))
-                })?;
-                Ok(Self::PublicKey(public_key))
+            RecipientInfoKind::Ktri => (
+                WrapScheme::RsaOaepSha256.accepts_recipient(key.algorithm),
+                "an RSA-2048 or RSA-4096 key",
+            ),
+            RecipientInfoKind::Kari => (
+                cms::X963Kdf::for_recipient(key.algorithm).is_some(),
+                "a P-256 or P-384 key",
+            ),
+            other => {
+                return Err(ActionError::Failed(format!(
+                    "This container's recipient is a {other}, which decrypt_data does not open"
+                )));
             }
-            other => Err(ActionError::Failed(format!(
-                "This container protects its content key with {other}, which decrypt_data does \
-                 not open"
-            ))),
+        };
+        if !accepted {
+            return Err(ActionError::Failed(format!(
+                "'{display_name}' is {}, and this container is addressed to {addressed_to}",
+                key.algorithm
+            )));
         }
+        let public_key = key.public_key.ok_or_else(|| {
+            ActionError::Failed(format!(
+                "'{display_name}' is a {} key with no public half, and this container is \
+                 addressed to {addressed_to}",
+                key.algorithm
+            ))
+        })?;
+        Ok(Self::PublicKey(public_key))
     }
 
     /// Whether the container's recipient identifier names this key.

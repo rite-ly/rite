@@ -323,7 +323,9 @@ Which fields are enforced depends on who holds the key. A token enforces the who
 policy itself, because each field is an attribute the key is created with. The
 software backend has no token, so it enforces the two that describe operations
 it performs: `extractable` gates both wrap paths, and `usages` gates signing,
-wrapping, and unwrapping. `persistent`, `sensitive`, and `wrap_with_trusted_only`
+wrapping, unwrapping, and key agreement. An EC recipient key needs
+`usages: [derive]` to open what `wrap_key` sealed to it; an RSA recipient key
+needs `usages: [unwrap]`. `persistent`, `sensitive`, and `wrap_with_trusted_only`
 describe a token that is not there, so in software they are recorded in the
 transcript and nothing more.
 

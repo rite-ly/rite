@@ -211,9 +211,11 @@ impl TryFrom<String> for KeyCheckValue {
 ///
 /// What it does not do:
 ///
-/// - It names an encoding of a key. `PublicKeyDer` settles the one choice an
-///   RSA SPKI leaves open, but an EC point may be compressed or not, and the
-///   two encodings of one EC key have two fingerprints.
+/// - It names an encoding of a key. `PublicKeyDer` keeps one encoding per
+///   key, writing an RSA key's absent parameters as NULL and refusing an EC
+///   point that is not uncompressed, so within Rite a key has one
+///   fingerprint. Another tool hashing an encoding Rite would not keep gets
+///   another value.
 /// - It is not the name X.509 tooling uses for a key; that is
 ///   [`Rfc5280KeyId`].
 /// - 32 bytes in a container written elsewhere are not a fingerprint until
@@ -562,6 +564,29 @@ impl KeyUsages {
             .collect()
     }
 
+    /// The usage a key of `algorithm` needs to open a protected key.
+    ///
+    /// P-256 and P-384 keys need [`DERIVE`](Self::DERIVE) for key agreement.
+    /// Every other algorithm maps to [`UNWRAP`](Self::UNWRAP); whether a key of
+    /// that algorithm can open a protected key is for the operation to refuse.
+    #[must_use]
+    pub fn to_open(algorithm: KeyAlgorithm) -> Self {
+        match algorithm {
+            KeyAlgorithm::EcdsaP256 | KeyAlgorithm::EcdsaP384 => Self::DERIVE,
+            KeyAlgorithm::Rsa2048
+            | KeyAlgorithm::Rsa4096
+            | KeyAlgorithm::Ed25519
+            | KeyAlgorithm::MlDsa44
+            | KeyAlgorithm::MlDsa65
+            | KeyAlgorithm::MlDsa87
+            | KeyAlgorithm::MlKem512
+            | KeyAlgorithm::MlKem768
+            | KeyAlgorithm::MlKem1024
+            | KeyAlgorithm::Aes128
+            | KeyAlgorithm::Aes256 => Self::UNWRAP,
+        }
+    }
+
     /// Every usage name a ceremony may write, for a message listing what is
     /// available.
     #[must_use]
@@ -620,8 +645,9 @@ impl KeyPolicy {
             return Ok(());
         }
         Err(BackendError::OperationNotPermitted(format!(
-            "this key may not {operation}: its policy allows {}. \
+            "this key may not {operation}: that needs {} and its policy allows {}. \
              Declare the usage under `policy:` on the step that generates it.",
+            usage.describe(),
             self.usages.describe()
         )))
     }
@@ -870,6 +896,18 @@ pub mod oid {
     /// `dhSinglePass-stdDH-sha1kdf-scheme`, one-pass ECDH with the X9.63 KDF
     /// over SHA-1 (RFC 5753).
     pub const DH_SINGLE_PASS_STDDH_SHA1KDF: &str = "1.3.133.16.840.63.0.2";
+    /// `dhSinglePass-stdDH-sha256kdf-scheme`, one-pass ECDH with the X9.63 KDF
+    /// over SHA-256 (RFC 5753).
+    pub const DH_SINGLE_PASS_STDDH_SHA256KDF: &str = "1.3.132.1.11.1";
+    /// `dhSinglePass-stdDH-sha384kdf-scheme`, one-pass ECDH with the X9.63 KDF
+    /// over SHA-384 (RFC 5753).
+    pub const DH_SINGLE_PASS_STDDH_SHA384KDF: &str = "1.3.132.1.11.2";
+    /// `id-ecPublicKey`, an elliptic-curve public key (RFC 5480).
+    pub const ID_EC_PUBLIC_KEY: &str = "1.2.840.10045.2.1";
+    /// `secp256r1`, the NIST P-256 curve (RFC 5480).
+    pub const SECP256R1: &str = "1.2.840.10045.3.1.7";
+    /// `secp384r1`, the NIST P-384 curve (RFC 5480).
+    pub const SECP384R1: &str = "1.3.132.0.34";
     /// `id-aes256-GCM` (RFC 5084).
     pub const AES_256_GCM: &str = "2.16.840.1.101.3.4.1.46";
     /// `id-aes256-CBC` (RFC 3565).
@@ -895,7 +933,7 @@ pub enum RecipientInfoKind {
     /// `KeyTransRecipientInfo`: the CEK is encrypted under the recipient's
     /// public key.
     Ktri,
-    /// `KeyAgreeRecipientInfo`: a shared secret is agreed with the recipient's
+    /// `KeyAgreeRecipientInfo`: a secret is agreed with the recipient's
     /// key, run through a KDF, and used to wrap the CEK.
     Kari,
     /// `KEKRecipientInfo`: the CEK is wrapped under a previously shared
@@ -1524,6 +1562,36 @@ impl DataKey {
     }
 }
 
+/// The secret a key agreement produces: Z in NIST SP 800-56A, input to a
+/// key-derivation function and never a key on its own.
+///
+/// The bytes are available only through [`kdf_input`](Self::kdf_input), for
+/// use as input to the KDF specified by the protocol.
+///
+/// The secret is wiped when dropped, cannot be cloned, and its `Debug` output
+/// shows only its length.
+pub struct AgreedSecret(zeroize::Zeroizing<Vec<u8>>);
+
+impl AgreedSecret {
+    /// Take the bytes a key agreement produced.
+    #[must_use]
+    pub fn new(bytes: zeroize::Zeroizing<Vec<u8>>) -> Self {
+        Self(bytes)
+    }
+
+    /// The bytes, for the KDF the container format names.
+    #[must_use]
+    pub fn kdf_input(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for AgreedSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "AgreedSecret({} bytes)", self.0.len())
+    }
+}
+
 /// The kind of attestation evidence a backend can produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1846,6 +1914,14 @@ pub struct BackendConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An agreed secret's bytes stay out of debug output and logs.
+    #[test]
+    fn an_agreed_secret_debugs_as_its_length_alone() {
+        let secret = AgreedSecret::new(zeroize::Zeroizing::new(vec![0x5a; 32]));
+        assert_eq!(format!("{secret:?}"), "AgreedSecret(32 bytes)");
+        assert_eq!(secret.kdf_input(), [0x5a; 32]);
+    }
 
     #[test]
     fn key_algorithm_serde_roundtrip() {

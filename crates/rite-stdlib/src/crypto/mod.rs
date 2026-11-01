@@ -23,7 +23,7 @@ pub use wrap_key::WrapKeyAction;
 
 use rite_model::{ArtifactRef, StepFact};
 use rite_runtime::{ActionError, HandlerContext, Reporter, StepInfo};
-use rite_sdk::{Backend, KeyFingerprint, KeyTransportBackend, PublicKeyDer};
+use rite_sdk::{Backend, KeyAgreementBackend, KeyFingerprint, KeyTransportBackend, PublicKeyDer};
 
 /// The backend a step names, as the capability the step needs, once it is known
 /// to be the backend that holds the key.
@@ -45,6 +45,35 @@ pub(crate) fn transport_backend<'a>(
     key_backend: &str,
     operation: &str,
 ) -> Result<(&'a mut dyn KeyTransportBackend, String), ActionError> {
+    let (backend, name) = holding_backend(backend, key_backend, operation)?;
+    let transport = backend
+        .as_transport_mut()
+        .ok_or_else(|| ActionError::Failed(format!("Backend '{name}' cannot {operation}")))?;
+    Ok((transport, name))
+}
+
+/// [`transport_backend`] for a step that needs the backend to agree a key.
+///
+/// # Errors
+///
+/// As [`transport_backend`], with "does not agree keys" for the last.
+pub(crate) fn agreement_backend<'a>(
+    backend: Option<&'a mut dyn Backend>,
+    key_backend: &str,
+    operation: &str,
+) -> Result<&'a mut dyn KeyAgreementBackend, ActionError> {
+    let (backend, name) = holding_backend(backend, key_backend, operation)?;
+    backend
+        .as_agreement_mut()
+        .ok_or_else(|| ActionError::Failed(format!("Backend '{name}' cannot {operation}")))
+}
+
+/// The two questions every key operation asks first, and the backend's name.
+fn holding_backend<'a>(
+    backend: Option<&'a mut dyn Backend>,
+    key_backend: &str,
+    operation: &str,
+) -> Result<(&'a mut dyn Backend, String), ActionError> {
     let backend =
         backend.ok_or_else(|| ActionError::Failed(format!("Backend required to {operation}")))?;
     let name = backend.name().to_string();
@@ -53,10 +82,7 @@ pub(crate) fn transport_backend<'a>(
             "Key owned by backend '{key_backend}', but current backend is '{name}'"
         )));
     }
-    let transport = backend
-        .as_transport_mut()
-        .ok_or_else(|| ActionError::Failed(format!("Backend '{name}' cannot {operation}")))?;
-    Ok((transport, name))
+    Ok((backend, name))
 }
 
 /// The fingerprint an `expect_recipient` parameter declares.

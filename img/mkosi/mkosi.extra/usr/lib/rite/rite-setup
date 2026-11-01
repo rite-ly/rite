@@ -1,8 +1,9 @@
 #!/bin/bash
 # /usr/lib/rite/rite-setup
 # The keyboard layout and time zone, chosen from menus on tty1 before the
-# sessions start. Nothing typed by the operator becomes a setting. A layout
-# is loaded into the console and tested before it is kept. The settings go to
+# sessions start, and the time. Nothing typed by the operator becomes a
+# setting; a typed time is checked and confirmed before it sets the clock. A
+# layout is loaded into the console and tested before it is kept. The settings go to
 # /run/rite-setup/settings, where rite-kiosk reads them for cage (XKB) and
 # the session programs (TZ). If setup fails, the session uses US and UTC.
 # This script always exits 0.
@@ -167,22 +168,44 @@ change_zone() {
     save
 }
 
+# Sets the system clock from a time typed in the chosen zone. The firmware
+# clock keeps its value.
+set_time() {
+    local typed epoch
+    typed=$(ask --inputbox "Current time in $zone, as YYYY-MM-DD HH:MM:" 8 60 \
+        "$(TZ=$zone date '+%Y-%m-%d %H:%M')") || return 0
+    if ! valid_time "$typed" || ! epoch=$(TZ=$zone date -d "$typed" +%s 2>/dev/null); then
+        message "$typed is not a date and time as YYYY-MM-DD HH:MM. The clock is unchanged."
+        return 0
+    fi
+    ask --defaultno --yesno "Set the clock to:
+
+    $(date -u -d "@$epoch" '+%Y-%m-%d %H:%M UTC'), $(TZ=$zone date -d "@$epoch" '+%H:%M %Z') local?" \
+        10 60 || return 0
+    # CAP_SYS_TIME (rite-setup.service).
+    if ! date -u -s "@$epoch" >/dev/null 2>&1; then
+        message "Could not set the clock. It is unchanged."
+    fi
+}
+
 while true; do
     choice=$(ask --notags --nocancel --default-item start --menu "\
 Keyboard:   $(layout_name "$layout" "$variant")
 Time zone:  $zone
 Time:       $(date -u '+%Y-%m-%d %H:%M UTC'), $(TZ=$zone date '+%H:%M %Z') local
 
-Check the clock against a watch.
-If it is wrong, power off and correct it in the firmware settings." 19 76 5 \
+Check the clock against a watch. Transcripts record this time.
+If it is wrong, choose the time zone, then set the time." 20 76 6 \
         "start" "Continue" \
         "keyboard" "Change the keyboard layout" \
         "zone" "Change the time zone" \
+        "settime" "Set the time" \
         "time" "Refresh the time" \
         "poweroff" "Power off") || choice=start
     case $choice in
         keyboard) change_keyboard ;;
         zone) change_zone ;;
+        settime) set_time ;;
         time) ;;
         poweroff)
             if ask --defaultno --yesno "Power off the machine?" 8 40; then

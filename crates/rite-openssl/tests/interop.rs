@@ -22,15 +22,15 @@ use rite_sdk::{
 use std::io::Write as _;
 use std::process::Command;
 
-/// A fresh RSA-2048 recipient, a fresh extractable payload key, and that
-/// payload wrapped to that recipient under `scheme`.
+/// A fresh extractable payload key, wrapped to `recipient_pkey` under
+/// `scheme`, and the payload's public key.
 ///
 /// The recipient is built outside the backend on purpose: every test here is
 /// about what a third party holding only the private key can do with the blob.
-fn wrap_to_fresh_recipient(
+fn wrap_to(
+    recipient_pkey: &PKeyRef<Private>,
     scheme: WrapScheme,
-) -> (PKey<Private>, PublicKeyDer, rite_sdk::WrappedKey) {
-    let recipient_pkey = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+) -> (PublicKeyDer, rite_sdk::WrappedKey) {
     let recipient_pub_der = PublicKeyDer::new(recipient_pkey.public_key_to_der().unwrap()).unwrap();
 
     let mut backend = OpenSslBackend::try_new("interop-test").unwrap();
@@ -51,7 +51,7 @@ fn wrap_to_fresh_recipient(
         .wrap_to_public(&payload.key_id, &recipient_pub_der, scheme)
         .unwrap();
 
-    (recipient_pkey, payload_pub, wrapped)
+    (payload_pub, wrapped)
 }
 
 /// Returns `true` if the `openssl` binary is available on `$PATH`.
@@ -62,8 +62,8 @@ fn openssl_binary_available() -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
-/// Build a self-signed X.509 cert that mirrors what `cert_for_public_key()`
-/// inside the backend produces.
+/// Build a self-signed X.509 cert for the recipient key, for the command line
+/// to find the recipient by.
 ///
 /// The blob names its recipient by subject key identifier, so what has to
 /// match is that identifier: the SHA-256 of the subject public key's SPKI DER.
@@ -109,17 +109,12 @@ fn build_recipient_cert(pkey: &PKeyRef<Private>) -> openssl::x509::X509 {
     builder.build()
 }
 
-fn run_interop_test(scheme: WrapScheme) {
-    if !openssl_binary_available() {
-        eprintln!("SKIP: openssl binary not found in $PATH");
-        return;
-    }
+fn run_interop_test(name: &str, recipient_pkey: &PKeyRef<Private>, scheme: WrapScheme) {
+    // ── Payload key, and the wrap ───────────────────────────────────────────
+    let (payload_pub, wrapped) = wrap_to(recipient_pkey, scheme);
 
-    // ── Recipient keypair, payload key, and the wrap ────────────────────────
-    let (recipient_pkey, payload_pub, wrapped) = wrap_to_fresh_recipient(scheme);
-
-    // Self-signed cert with same issuer/serial that cert_for_public_key uses.
-    let cert = build_recipient_cert(&recipient_pkey);
+    // The command line finds the recipient by the certificate's key identifier.
+    let cert = build_recipient_cert(recipient_pkey);
     let pkey_pem = recipient_pkey.private_key_to_pem_pkcs8().unwrap();
     let cert_pem = cert.to_pem().unwrap();
     let cms_der = wrapped.data().to_vec();
@@ -160,7 +155,7 @@ fn run_interop_test(scheme: WrapScheme) {
 
     assert!(
         output.status.success(),
-        "openssl cms -decrypt failed:\nstdout: {}\nstderr: {}",
+        "openssl cms -decrypt failed for {name}:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
@@ -175,7 +170,7 @@ fn run_interop_test(scheme: WrapScheme) {
     assert_eq!(
         payload_pub.as_bytes(),
         recovered.public_key_to_der().unwrap(),
-        "Decrypted key public component does not match the original payload key"
+        "Decrypted key public component does not match the original payload key for {name}"
     );
 }
 
@@ -195,8 +190,8 @@ fn openssl_cli_reassembles_an_rsa_aes_key_wrap() {
         return;
     }
 
-    let (recipient_pkey, payload_pub, wrapped) =
-        wrap_to_fresh_recipient(WrapScheme::RsaAesKeyWrapSha256);
+    let recipient_pkey = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+    let (payload_pub, wrapped) = wrap_to(&recipient_pkey, WrapScheme::RsaAesKeyWrapSha256);
 
     // Split by the modulus size, which is the only rule the format gives a
     // recipient. No length prefix, no header.
@@ -280,7 +275,13 @@ fn openssl_cli_reassembles_an_rsa_aes_key_wrap() {
 
 #[test]
 fn openssl_cli_decrypts_a_wrap_to_an_external_recipient() {
-    run_interop_test(WrapScheme::CmsAes256Gcm);
+    if !openssl_binary_available() {
+        eprintln!("SKIP: openssl binary not found in $PATH");
+        return;
+    }
+    for (name, recipient) in public_key_recipients() {
+        run_interop_test(name, &recipient, WrapScheme::CmsAes256Gcm);
+    }
 }
 
 /// The blob Rite writes for a symmetric KEK is one the `openssl` CLI opens.

@@ -987,14 +987,19 @@ fn cert_for_public_key(
         return Err(unsupported_ml_kem(algorithm));
     }
     if !algorithm.can_receive_wrap() {
-        return Err(BackendError::UnsupportedAlgorithm(format!(
-            "{algorithm} cannot receive a wrap: it signs but does not encapsulate. \
-             Wrap to an RSA, EC or ML-KEM key instead."
-        )));
+        return Err(cannot_receive_wrap(algorithm));
     }
 
     let signing_key = throwaway_signer()?;
     build_cert(&signing_key, recipient_public_key)
+}
+
+/// The refusal for a recipient key that signs and does not encapsulate.
+fn cannot_receive_wrap(algorithm: KeyAlgorithm) -> BackendError {
+    BackendError::UnsupportedAlgorithm(format!(
+        "{algorithm} cannot receive a wrap: it signs but does not encapsulate. \
+         Wrap to an RSA, EC or ML-KEM key instead."
+    ))
 }
 
 /// A signing key for a certificate nobody verifies.
@@ -1097,34 +1102,19 @@ fn build_cert(
     Ok(builder.build())
 }
 
-/// CMS-encrypt `key_material` to a recipient certificate, and read back what
-/// the encryption did.
+/// CMS-encrypt `key_material` to an ML-KEM recipient certificate, and read
+/// back what the encryption did.
 ///
-/// Shared by `wrap` (recipient cert built from the KEK) and `wrap_to_public`
-/// (recipient cert built from an external public key); both come from
-/// [`cert_for_public_key`]. `CMS_encrypt` selects the key-encapsulation path
-/// from the recipient certificate's public key type, so the scheme does not
-/// determine it: the same scheme takes the key-agreement path below for an EC
-/// recipient.
+/// OpenSSL writes the RFC 9629 `KEMRecipientInfo`, which Rite has no writer
+/// for. `CMS_encrypt` takes a certificate rather than a bare public key, which
+/// [`cert_for_public_key`] builds. An RSA or EC recipient is sealed by
+/// [`cms_seal_to_public`] instead, because `CMS_encrypt` writes those as
+/// PKCS#1 v1.5 and the X9.63 KDF over SHA-1, and rust-openssl has no binding
+/// to change either.
 ///
 /// The content cipher is AES-256-GCM, which produces `AuthEnvelopedData`
 /// (RFC 5083). `CMS_USE_KEYID` names the recipient by the certificate's
 /// subject key identifier rather than by issuer and serial.
-///
-/// **RSA recipient, `KeyTransRecipientInfo` (RFC 5652 §6.2)**
-/// The content-encryption key (CEK) is encrypted directly under the recipient's RSA public
-/// key using RSAES-PKCS1-v1.5. OAEP requires setting a padding mode on the recipient's
-/// `EVP_PKEY_CTX`, which needs the `CMS_KEY_PARAM` partial-envelope path that rust-openssl
-/// does not expose.
-///
-/// **EC recipient, `KeyAgreeRecipientInfo` (RFC 5753 §3.1)**
-/// OpenSSL generates an ephemeral key on the recipient's curve, performs one-pass ECDH
-/// against the recipient's static public key, and feeds the agreed secret into the ANSI
-/// X9.63 KDF to derive a key-encryption key that wraps the CEK with AES Key Wrap
-/// (RFC 3394). The KDF digest is SHA-1, `dhSinglePass-stdDH-sha1kdf-scheme`
-/// (OID 1.3.133.16.840.63.0.2): OpenSSL falls back to SHA-1 when no digest is set, and
-/// setting one needs the same `CMS_KEY_PARAM` path. The KEK size follows the content
-/// cipher, so AES-256-GCM gives `id-aes256-wrap`.
 fn cms_encrypt(cert: openssl::x509::X509, key_material: &[u8]) -> Result<WrappedKey, BackendError> {
     let mut certs = openssl::stack::Stack::new().map_err(|e| ossl_err("Create cert stack", &e))?;
     certs
@@ -1144,6 +1134,131 @@ fn cms_encrypt(cert: openssl::x509::X509, key_material: &[u8]) -> Result<Wrapped
         rite_sdk::cms::describe(&data).map_err(|e| BackendError::InvalidData(e.to_string()))?;
     WrappedKey::new(WrapScheme::CmsAes256Gcm, facts.description, data)
         .map_err(|e| BackendError::InvalidData(e.to_string()))
+}
+
+/// Seal `payload` into a CMS `AuthEnvelopedData` addressed to an RSA or EC
+/// public key, and read back what was written.
+///
+/// The recipient info is the one `encrypt_data` writes, from
+/// [`recipient_info_for`]: RSAES-OAEP with SHA-256 for RSA, ECDH with the
+/// X9.63 KDF over SHA-256 or SHA-384 for P-256 and P-384. The content key and
+/// the ephemeral key are drawn from `random`.
+fn cms_seal_to_public(
+    recipient: &PublicKeyDer,
+    payload: &[u8],
+    random: &mut dyn RandomBackend,
+) -> Result<WrappedKey, BackendError> {
+    let cek = Zeroizing::new(random.generate_random(32)?);
+    let data = seal_envelope(recipient_info_for(recipient, &cek, random)?, &cek, payload)?;
+    let facts = cms::describe(&data).map_err(|e| BackendError::InvalidData(e.to_string()))?;
+    WrappedKey::new(WrapScheme::CmsAes256Gcm, facts.description, data)
+        .map_err(|e| BackendError::InvalidData(e.to_string()))
+}
+
+/// Undo [`cms_seal_to_public`] under the keypair `kek` holds.
+///
+/// The opening runs the operations `decrypt_data` asks of a backend:
+/// RSA-OAEP for a key transport recipient, ECDH and the X9.63 KDF for a key
+/// agreement. A container the CMS reader does not read goes to OpenSSL's CMS
+/// decrypt instead: an ML-KEM recipient, or a recipient under PKCS#1 v1.5 key
+/// transport or the SHA-1 KDF, which `CMS_encrypt` chooses when nothing else
+/// is set. OpenSSL finds the recipient through a certificate built from the
+/// key, so only a container naming it by the SHA-256 key identifier Rite
+/// writes opens this way.
+///
+/// If OpenSSL fails too, the error carries both answers, since the reader's is
+/// usually the one that says what is wrong with a container Rite wrote. An
+/// ML-KEM container gets OpenSSL's alone: the reader never opens one, so its
+/// refusal says nothing about why this one failed.
+fn cms_open_under_keypair(kek: &StoredKey, der: &[u8]) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+    let private = kek.pkey()?;
+    let envelope = match cms::read_auth_enveloped(der) {
+        Ok(envelope) => envelope,
+        Err(read) => {
+            let kem = cms::describe(der).is_ok_and(|facts| {
+                facts.description.recipient_info == Some(rite_sdk::RecipientInfoKind::Kemri)
+            });
+            return openssl_cms_decrypt(private, der).map_err(|decrypt| {
+                if kem {
+                    return decrypt;
+                }
+                BackendError::InvalidData(format!(
+                    "this container does not open under '{}': as Rite reads CMS, {read}; \
+                     through OpenSSL, {decrypt}",
+                    kek.label
+                ))
+            });
+        }
+    };
+
+    // Checked before any decrypt, as for a symmetric key: the content tag
+    // authenticates the content and nothing around it.
+    let public = kek.public_der()?;
+    let identifier = envelope.recipient.key_identifier();
+    if !identifier.names_key(public) {
+        return Err(BackendError::InvalidData(format!(
+            "this blob is addressed to the key identified by {identifier}, and '{}' has \
+             fingerprint {}",
+            kek.label,
+            public.fingerprint()
+        )));
+    }
+
+    let cek = match &envelope.recipient {
+        cms::RecipientInfo::KeyTransport { encrypted_key, .. } => {
+            if private.id() != Id::RSA {
+                return Err(BackendError::UnsupportedAlgorithm(format!(
+                    "this container's recipient is a {}, which opens under an RSA key, and \
+                     '{}' is {}",
+                    envelope.recipient.kind(),
+                    kek.label,
+                    kek.algorithm
+                )));
+            }
+            rsa_oaep_decrypt(private, encrypted_key)?
+        }
+        cms::RecipientInfo::KeyAgreement(agreed) => {
+            let ephemeral = agreed
+                .ephemeral_key(public)
+                .map_err(|e| BackendError::InvalidData(e.to_string()))?;
+            let peer = PKey::public_key_from_der(ephemeral.as_bytes()).map_err(|e| {
+                BackendError::InvalidData(format!(
+                    "the ephemeral key is not a public key on its curve: {e}"
+                ))
+            })?;
+            open_key_agreement(agreed, &ecdh(private, &peer)?)?
+        }
+        other => {
+            return Err(BackendError::InvalidData(format!(
+                "this container's recipient is a {}, which '{}' does not open",
+                other.kind(),
+                kek.label
+            )));
+        }
+    };
+    crate::content::open_content(
+        &cek,
+        &crate::content::SealedContent {
+            nonce: envelope.nonce,
+            ciphertext: envelope.ciphertext,
+            tag: envelope.tag,
+        },
+    )
+}
+
+/// Open a CMS container with OpenSSL, under the keypair it is addressed to.
+fn openssl_cms_decrypt(
+    private: &PKeyRef<Private>,
+    der: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+    // CMS decrypt finds the matching recipient by the certificate's subject
+    // key identifier, which the certificate built from the same key carries.
+    // Its signature is never checked.
+    let cert = cert_for_public_key(private)?;
+    let cms = CmsContentInfo::from_der(der).map_err(|e| ossl_err("Parse CMS DER", &e))?;
+    cms.decrypt(private, &cert)
+        .map(Zeroizing::new)
+        .map_err(|e| ossl_err("CMS decrypt", &e))
 }
 
 /// The target key in the encoding a recipient expects.
@@ -1625,13 +1740,23 @@ fn cms_seal_to_kek(
     // A fresh content-encryption key per message, as RFC 5652 requires: the
     // KEK encrypts this, and this encrypts the content.
     let cek = random_bytes(32)?;
+    let recipient = cms::RecipientInfo::Kek {
+        key_identifier: check_value.into(),
+        wrapped_key: aes_key_wrap(secret, &cek, KeyWrap::Plain, true)?,
+    };
+    seal_envelope(recipient, &cek, payload)
+}
 
-    let sealed = crate::content::seal_content(&cek, payload)?;
+/// Encrypt `payload` under `cek` and write the `AuthEnvelopedData` that
+/// carries it with `recipient`, which protects `cek`.
+fn seal_envelope(
+    recipient: cms::RecipientInfo,
+    cek: &[u8],
+    payload: &[u8],
+) -> Result<Vec<u8>, BackendError> {
+    let sealed = crate::content::seal_content(cek, payload)?;
     let envelope = cms::Envelope {
-        recipient: cms::RecipientInfo::Kek {
-            key_identifier: check_value.into(),
-            wrapped_key: aes_key_wrap(secret, &cek, KeyWrap::Plain, true)?,
-        },
+        recipient,
         nonce: sealed.nonce,
         ciphertext: sealed.ciphertext,
         tag: sealed.tag,
@@ -1812,14 +1937,25 @@ fn raw_wrap(
 /// [`WrapScheme`] is `#[non_exhaustive]` and defined elsewhere, so a scheme
 /// this backend gains reaches the wildcard arm and is refused by name.
 fn wrap_under(
-    recipient: &PKeyRef<impl openssl::pkey::HasPublic>,
+    recipient: &PublicKeyDer,
     material: &[u8],
     scheme: WrapScheme,
+    random: &mut dyn RandomBackend,
 ) -> Result<WrappedKey, BackendError> {
+    let public = PKey::public_key_from_der(recipient.as_bytes())
+        .map_err(|e| ossl_err("Parse recipient public key", &e))?;
     match scheme {
-        WrapScheme::CmsAes256Gcm => cms_encrypt(cert_for_public_key(recipient)?, material),
+        WrapScheme::CmsAes256Gcm => match key_algorithm_of(&public)? {
+            KeyAlgorithm::MlKem512 | KeyAlgorithm::MlKem768 | KeyAlgorithm::MlKem1024 => {
+                cms_encrypt(cert_for_public_key(&public)?, material)
+            }
+            algorithm if algorithm.can_receive_wrap() => {
+                cms_seal_to_public(recipient, material, random)
+            }
+            algorithm => Err(cannot_receive_wrap(algorithm)),
+        },
         WrapScheme::RsaOaepSha256 | WrapScheme::RsaAesKeyWrapSha256 => {
-            raw_wrap(recipient, material, scheme)
+            raw_wrap(&public, material, scheme)
         }
         other => Err(BackendError::UnsupportedAlgorithm(format!(
             "this backend does not wrap with {other}"
@@ -1867,29 +2003,33 @@ impl KeyTransportBackend for OpenSslBackend {
         wrapping_key_id: &KeyId,
         scheme: WrapScheme,
     ) -> Result<WrappedKey, BackendError> {
-        let kek = self.get_key(wrapping_key_id)?;
-        let target = self.get_key(key_id)?;
-        kek.policy.require(KeyUsages::WRAP, "wrap another key")?;
-        permits_export(target)?;
+        // Scoped so the borrows of both keys end before `self` is the random
+        // source below.
+        let (key_material, recipient) = {
+            let kek = self.get_key(wrapping_key_id)?;
+            let target = self.get_key(key_id)?;
+            kek.policy.require(KeyUsages::WRAP, "wrap another key")?;
+            permits_export(target)?;
 
-        let key_material = wrappable_key_material(target)?;
+            let key_material = wrappable_key_material(target)?;
 
-        if scheme.required_kek().is_some() {
-            return symmetric_wrap(kek, &key_material, scheme);
-        }
-        // A symmetric KEK takes the same container by a different recipient,
-        // selected here by what the key is rather than by what the scheme
-        // names, because the scheme names a container and both paths produce
-        // it.
-        if kek.algorithm.is_symmetric() && scheme == WrapScheme::CmsAes256Gcm {
-            return cms_encrypt_kek(kek, &key_material);
-        }
+            if scheme.required_kek().is_some() {
+                return symmetric_wrap(kek, &key_material, scheme);
+            }
+            // A symmetric KEK takes the same container by a different
+            // recipient, selected here by what the key is rather than by what
+            // the scheme names, because the scheme names a container and both
+            // paths produce it.
+            if kek.algorithm.is_symmetric() && scheme == WrapScheme::CmsAes256Gcm {
+                return cms_encrypt_kek(kek, &key_material);
+            }
+            // `pkey` first, for its refusal: a public-key scheme under a
+            // symmetric key needs a keypair, which is the thing to say.
+            kek.pkey()?;
+            (key_material, kek.public_der()?.clone())
+        };
 
-        // Under CMS the certificate carrying the KEK's public half is what
-        // lets OpenSSL select the encapsulation from the key type: RSA takes
-        // RSAES-PKCS1-v1.5, EC P-256 takes RFC 5753 ECDH, ML-KEM takes RFC
-        // 9629 KEMRecipientInfo.
-        wrap_under(kek.pkey()?, &key_material, scheme)
+        wrap_under(&recipient, &key_material, scheme, self)
     }
 
     fn unwrap(
@@ -1911,20 +2051,7 @@ impl KeyTransportBackend for OpenSslBackend {
                 WrapScheme::CmsAes256Gcm if kek.algorithm.is_symmetric() => {
                     cms_decrypt_kek(kek, wrapped)?
                 }
-                WrapScheme::CmsAes256Gcm => {
-                    // Re-create the ephemeral cert from the same key; CMS
-                    // decrypt needs it to find the matching recipient, which it
-                    // does by the subject key identifier rather than by any
-                    // signature.
-                    let kek_pkey = kek.pkey()?;
-                    let cert = cert_for_public_key(kek_pkey)?;
-                    let cms = CmsContentInfo::from_der(wrapped.data())
-                        .map_err(|e| ossl_err("Parse CMS DER", &e))?;
-                    Zeroizing::new(
-                        cms.decrypt(kek_pkey, &cert)
-                            .map_err(|e| ossl_err("CMS decrypt", &e))?,
-                    )
-                }
+                WrapScheme::CmsAes256Gcm => cms_open_under_keypair(kek, wrapped.data())?,
                 scheme if scheme.required_kek().is_some() => {
                     // `aes_key_wrap` picks its cipher from the secret's length,
                     // so without this an AES-256-KWP blob opened under a
@@ -2068,14 +2195,13 @@ impl KeyTransportBackend for OpenSslBackend {
         recipient_pub_key: &PublicKeyDer,
         scheme: WrapScheme,
     ) -> Result<WrappedKey, BackendError> {
-        let target = self.get_key(key_id)?;
-        permits_export(target)?;
+        let key_material = {
+            let target = self.get_key(key_id)?;
+            permits_export(target)?;
+            wrappable_key_material(target)?
+        };
 
-        let recipient_pub = PKey::public_key_from_der(recipient_pub_key.as_bytes())
-            .map_err(|e| ossl_err("Parse recipient public key", &e))?;
-        let key_material = wrappable_key_material(target)?;
-
-        wrap_under(&recipient_pub, &key_material, scheme)
+        wrap_under(recipient_pub_key, &key_material, scheme, self)
     }
 }
 
@@ -2913,13 +3039,12 @@ mod tests {
         assert_eq!(description.recipient_info, Some(RecipientInfoKind::Ktri));
         assert_eq!(
             description.key_encryption_oid.as_str(),
-            rite_sdk::oid::RSA_ENCRYPTION
+            rite_sdk::oid::RSAES_OAEP
         );
         assert_eq!(description.kek_wrap_oid, None);
         assert!(description.content_is_authenticated());
 
-        // An EC recipient takes key agreement, and the KEK wrap follows the
-        // 256-bit content cipher.
+        // An EC recipient takes key agreement under AES-256 key wrap.
         let ec_kek = backend
             .generate_key(kek(KeyAlgorithm::EcdsaP256, "ec-kek"))
             .unwrap();
@@ -2930,13 +3055,95 @@ mod tests {
         assert_eq!(description.recipient_info, Some(RecipientInfoKind::Kari));
         assert_eq!(
             description.key_encryption_oid.as_str(),
-            rite_sdk::oid::DH_SINGLE_PASS_STDDH_SHA1KDF,
-            "OpenSSL falls back to the SHA-1 KDF, which the record must not hide"
+            rite_sdk::oid::DH_SINGLE_PASS_STDDH_SHA256KDF
         );
         assert_eq!(
             description.kek_wrap_oid.as_ref().map(rite_sdk::Oid::as_str),
             Some(rite_sdk::oid::AES_256_WRAP)
         );
+    }
+
+    #[test]
+    fn a_container_in_the_openssl_defaults_still_unwraps() {
+        // OpenSSL's CMS_encrypt writes PKCS#1 v1.5 for RSA and the SHA-1 KDF
+        // for EC. The CMS reader opens neither, so these go to OpenSSL's
+        // decrypt.
+        for (algorithm, legacy_oid) in [
+            (KeyAlgorithm::Rsa2048, rite_sdk::oid::RSA_ENCRYPTION),
+            (
+                KeyAlgorithm::EcdsaP256,
+                rite_sdk::oid::DH_SINGLE_PASS_STDDH_SHA1KDF,
+            ),
+            (
+                KeyAlgorithm::EcdsaP384,
+                rite_sdk::oid::DH_SINGLE_PASS_STDDH_SHA1KDF,
+            ),
+        ] {
+            let mut backend = OpenSslBackend::try_new("test").unwrap();
+            let kek = backend.generate_key(kek(algorithm, "kek")).unwrap();
+            let target = backend
+                .generate_key(extractable(KeyAlgorithm::EcdsaP256, "target"))
+                .unwrap();
+            let target_public = backend.export_public_key(&target.key_id).unwrap();
+
+            let legacy = {
+                let stored = backend.get_key(&kek.key_id).unwrap();
+                let material =
+                    wrappable_key_material(backend.get_key(&target.key_id).unwrap()).unwrap();
+                cms_encrypt(
+                    cert_for_public_key(stored.pkey().unwrap()).unwrap(),
+                    &material,
+                )
+                .unwrap()
+            };
+            assert_eq!(
+                legacy.description().key_encryption_oid.as_str(),
+                legacy_oid,
+                "{algorithm}"
+            );
+
+            let restored = backend
+                .unwrap(
+                    &legacy,
+                    &kek.key_id,
+                    "restored",
+                    KeyPolicy::default_for(KeyAlgorithm::EcdsaP256),
+                    None,
+                )
+                .unwrap();
+            assert_eq!(restored.public_key, Some(target_public), "{algorithm}");
+        }
+    }
+
+    #[test]
+    fn a_container_for_another_key_is_refused_by_its_recipient() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let target = backend
+            .generate_key(extractable(KeyAlgorithm::EcdsaP256, "target"))
+            .unwrap();
+        for algorithm in [KeyAlgorithm::Rsa2048, KeyAlgorithm::EcdsaP256] {
+            let sealed_to = backend.generate_key(kek(algorithm, "sealed-to")).unwrap();
+            let other = backend.generate_key(kek(algorithm, "other")).unwrap();
+            let wrapped = backend
+                .wrap(&target.key_id, &sealed_to.key_id, WrapScheme::CmsAes256Gcm)
+                .unwrap();
+
+            let error = backend
+                .unwrap(
+                    &wrapped,
+                    &other.key_id,
+                    "restored",
+                    KeyPolicy::default_for(KeyAlgorithm::EcdsaP256),
+                    None,
+                )
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("addressed to the key identified by"),
+                "{algorithm}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -3193,13 +3400,13 @@ mod tests {
     //
     // All three combinations of (content key type, KEK type) are exercised:
     //   RSA content + EC KEK  → RFC 5753 ECDH encapsulation
-    //   EC content  + RSA KEK → RSAES-PKCS1-v1.5 encapsulation, SEC1 payload
+    //   EC content  + RSA KEK → RSAES-OAEP key transport, SEC1 payload
     //   EC content  + EC KEK  → RFC 5753 ECDH encapsulation, SEC1 payload
 
     #[test]
     fn wraps_an_rsa_key_to_an_ec_kek() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
-        // EC P-256 KEK → OpenSSL uses RFC 5753 ECDH key encapsulation.
+        // EC P-256 KEK → RFC 5753 ECDH key agreement.
         let kek = backend
             .generate_key(kek(KeyAlgorithm::EcdsaP256, "ec-kek"))
             .unwrap();
@@ -3223,7 +3430,7 @@ mod tests {
     #[test]
     fn wraps_an_ec_key_to_an_rsa_kek() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
-        // RSA KEK → RSAES-PKCS1-v1.5 encapsulation; the payload is an EC private key
+        // RSA KEK → RSAES-OAEP key transport; the payload is an EC private key
         // serialised in SEC1 (traditional EC DER), recovered via the EcKey fallback parser.
         let kek = backend
             .generate_key(kek(KeyAlgorithm::Rsa2048, "rsa-kek"))

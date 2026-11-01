@@ -222,12 +222,16 @@ an attestation is what covers it.
 ## What the transcript records
 
 For a CMS wrap, the ceremony does not select the algorithms. Which
-encapsulation the scheme takes follows the recipient key: an RSA recipient
-takes key transport, an EC recipient takes the RFC 5753 key-agreement path, an
-ML-KEM recipient takes the RFC 9629 `KEMRecipientInfo` path. So the wrap fact
-records what the produced artifact says was done, read back out of its DER: the
-`RecipientInfo` variant and every algorithm identifier the structure names,
-under `wrap`.
+encapsulation the scheme takes follows the recipient key:
+
+- an RSA recipient takes key transport under RSAES-OAEP with SHA-256;
+- a P-256 or P-384 recipient takes the RFC 5753 key agreement, with the X9.63
+  KDF over SHA-256 or SHA-384 and `id-aes256-wrap`;
+- an ML-KEM recipient takes the RFC 9629 `KEMRecipientInfo` path.
+
+These are the forms `encrypt_data` writes. So the wrap fact records what the
+produced artifact says was done, read back out of its DER: the `RecipientInfo`
+variant and every algorithm identifier the structure names, under `wrap`.
 
 A raw mechanism has nothing to read back. Its output is bare ciphertext with no
 algorithm identifiers in it, so the recorded algorithms are what the backend

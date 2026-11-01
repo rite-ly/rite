@@ -6,6 +6,7 @@
 //! and connects it, which only queries the routing table. The sysfs probes
 //! read under a root given as a parameter (see `probe_fixtures`).
 
+use std::ffi::OsStr;
 use std::io::ErrorKind;
 #[cfg(any(target_os = "linux", test))]
 use std::path::Path;
@@ -37,16 +38,24 @@ const ARPHRD_RAWIP: u16 = 519;
 /// Take a snapshot of the network state.
 #[must_use]
 pub fn network_snapshot() -> NetworkSnapshot {
-    let networks = sysinfo::Networks::new_with_refreshed_list();
-    let mut interfaces: Vec<NetworkInterface> = networks
-        .list()
+    // `sysinfo` fails only on systems it does not support, none of them a
+    // Rite target.
+    let networks = sysinfo::Networks::new_with_refreshed_list().ok();
+    let mut listed: Vec<_> = networks
         .iter()
+        .flatten()
         .filter(|(name, data)| is_interface(name) && !is_loopback(name, data.ip_networks()))
+        .collect();
+    // Sorted on the OS name, so the order holds even if two names that are
+    // not UTF-8 read the same once converted.
+    listed.sort_by_key(|(name, _)| *name);
+    let interfaces: Vec<NetworkInterface> = listed
+        .into_iter()
         .map(|(name, data)| {
             let (kind, carrier) = link(name);
             let mac = data.mac_address();
             NetworkInterface {
-                name: name.clone(),
+                name: name.to_string_lossy().into_owned(),
                 kind,
                 state: data.operational_state().to_string(),
                 carrier,
@@ -61,7 +70,6 @@ pub fn network_snapshot() -> NetworkSnapshot {
             }
         })
         .collect();
-    interfaces.sort_by(|a, b| a.name.cmp(&b.name));
     #[cfg(target_os = "linux")]
     let radios = radios(
         Path::new("/sys/class/rfkill"),
@@ -79,8 +87,9 @@ pub fn network_snapshot() -> NetworkSnapshot {
 
 /// Whether an interface is loopback: named so, or with only loopback
 /// addresses.
-fn is_loopback(name: &str, addresses: &[sysinfo::IpNetwork]) -> bool {
-    matches!(name, "lo" | "lo0")
+fn is_loopback(name: &OsStr, addresses: &[sysinfo::IpNetwork]) -> bool {
+    name == "lo"
+        || name == "lo0"
         || (!addresses.is_empty() && addresses.iter().all(|net| net.addr.is_loopback()))
 }
 
@@ -111,22 +120,22 @@ fn has_route(bind: &str, target: &str) -> Option<bool> {
 /// `/sys/class/net`, and the bonding driver keeps a file there
 /// (`bonding_masters`); interfaces are directories.
 #[cfg(target_os = "linux")]
-fn is_interface(name: &str) -> bool {
+fn is_interface(name: &OsStr) -> bool {
     Path::new("/sys/class/net").join(name).is_dir()
 }
 
 #[cfg(not(target_os = "linux"))]
-fn is_interface(_name: &str) -> bool {
+fn is_interface(_name: &OsStr) -> bool {
     true
 }
 
 #[cfg(target_os = "linux")]
-fn link(name: &str) -> (InterfaceKind, Option<bool>) {
+fn link(name: &OsStr) -> (InterfaceKind, Option<bool>) {
     sysfs_link(&Path::new("/sys/class/net").join(name))
 }
 
 #[cfg(not(target_os = "linux"))]
-fn link(_name: &str) -> (InterfaceKind, Option<bool>) {
+fn link(_name: &OsStr) -> (InterfaceKind, Option<bool>) {
     (InterfaceKind::Unknown, None)
 }
 
@@ -311,11 +320,17 @@ mod tests {
             addr: addr.parse().expect("an address"),
             prefix: 8,
         };
-        assert!(is_loopback("lo", &[]));
-        assert!(is_loopback("lo0", &[net("127.0.0.1")]));
-        assert!(is_loopback("other", &[net("127.0.0.1"), net("::1")]));
-        assert!(!is_loopback("en0", &[]));
-        assert!(!is_loopback("en0", &[net("127.0.0.1"), net("192.168.1.2")]));
+        assert!(is_loopback(OsStr::new("lo"), &[]));
+        assert!(is_loopback(OsStr::new("lo0"), &[net("127.0.0.1")]));
+        assert!(is_loopback(
+            OsStr::new("other"),
+            &[net("127.0.0.1"), net("::1")]
+        ));
+        assert!(!is_loopback(OsStr::new("en0"), &[]));
+        assert!(!is_loopback(
+            OsStr::new("en0"),
+            &[net("127.0.0.1"), net("192.168.1.2")]
+        ));
     }
 
     #[test]

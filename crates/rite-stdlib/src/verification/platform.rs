@@ -54,13 +54,16 @@ pub fn detect_platform() -> Platform {
 #[must_use]
 pub fn detect_platform() -> Platform {
     Platform {
+        arch: std::env::consts::ARCH.to_string(),
         os: OsIdentity {
             id: Some(sysinfo::System::distribution_id()),
             version: sysinfo::System::os_version().ok(),
             name: sysinfo::System::long_os_version().ok(),
         },
+        rite_live: None,
+        container: None,
         virtualization: guest_virtualization(),
-        ..Platform::default()
+        secure_boot: super::host::collect_security_features().secure_boot,
     }
 }
 
@@ -94,6 +97,7 @@ pub(super) fn detect_linux(root: &Path) -> Platform {
     let layer_digest =
         read(CEREMONY_LAYER_DIGEST).filter(|_| root.join(CEREMONY_LAYER_MERGED).exists());
     Platform {
+        arch: std::env::consts::ARCH.to_string(),
         os: OsIdentity {
             id: key_value(&os_release, "ID"),
             version: key_value(&os_release, "VERSION_ID"),
@@ -106,6 +110,7 @@ pub(super) fn detect_linux(root: &Path) -> Platform {
         ),
         container: container(root),
         virtualization: virtualization(root),
+        secure_boot: super::host::secure_boot(root),
     }
 }
 

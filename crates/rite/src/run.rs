@@ -171,6 +171,7 @@ pub fn run(args: Args) {
         output_config,
         args.dry_run,
         startup,
+        crate::system_info::run_host(),
     );
     let exec_handle = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
 

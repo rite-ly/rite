@@ -85,6 +85,12 @@ pub fn fact_summary(fact: &StepFact) -> Option<(Icon, String)> {
             ErrorClass::Abort => Some((Icon::Info, error.message.clone())),
             _ => Some((Icon::Cross, format!("Ceremony failed: {}", error.message))),
         },
+        StepFact::PlatformRecorded { platform } => {
+            Some((Icon::Info, format!("Platform: {platform}")))
+        }
+        StepFact::NetworkStateRecorded { moment, network } => {
+            Some((Icon::Info, format!("Network at {moment}: {network}")))
+        }
         StepFact::EntropySeeded { source, .. } => {
             Some((Icon::Info, format!("Entropy source seeded ({source})")))
         }

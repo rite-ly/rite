@@ -18,6 +18,8 @@ use zeroize::Zeroizing;
 
 use crate::Sha256Digest;
 use crate::ir::{ActId, MaterialId, ParamId, RoleId, StepId};
+use crate::network::{NetworkMoment, NetworkState};
+use crate::platform::Platform;
 
 /// Transcript format version this crate writes and reads: the line envelope
 /// and the chain rule.
@@ -983,6 +985,38 @@ pub enum StepFact {
         )]
         template: Sha256Digest,
     },
+    /// Where the run happens, as the running system reports it. Recorded
+    /// once, by the runner, right after [`StepFact::CeremonyStarted`].
+    #[cfg_attr(
+        test,
+        schemars(
+            description = "Where the run happened, as the running system reports it. Recorded \
+            once, right after ceremony_started."
+        )
+    )]
+    PlatformRecorded {
+        /// The platform.
+        #[cfg_attr(test, schemars(description = "The platform."))]
+        platform: Platform,
+    },
+    /// The network state, measured by the runner at the opening and the
+    /// closing of the run. The counters of two measurements bracket the
+    /// traffic between them.
+    #[cfg_attr(
+        test,
+        schemars(
+            description = "The network state, measured at the opening and the closing of the \
+            run. The counters of two measurements bracket the traffic between them."
+        )
+    )]
+    NetworkStateRecorded {
+        /// When the measurement was taken.
+        #[cfg_attr(test, schemars(description = "When the measurement was taken."))]
+        moment: NetworkMoment,
+        /// What was measured.
+        #[cfg_attr(test, schemars(description = "What was measured."))]
+        network: NetworkState,
+    },
     /// A role the ceremony defines, with its display name.
     ///
     /// Recorded once per role at ceremony start, whether or not anyone is
@@ -1565,6 +1599,8 @@ pub enum StepFact {
 /// skips, from a known fact that does not parse, which is an error.
 pub const FACT_TYPES: &[&str] = &[
     "ceremony_started",
+    "platform_recorded",
+    "network_state_recorded",
     "role_declared",
     "role_assigned",
     "parameter_bound",
@@ -1595,7 +1631,8 @@ impl StepFact {
     /// Method facts (what was done, in what order, with what result) are
     /// public, and so are attestations, whose statement is authored in the
     /// ceremony. Free text, answers typed at prompts, the error message of a
-    /// failed attempt, and identities of devices and inputs are restricted.
+    /// failed attempt, identities of devices and inputs, and the platform
+    /// and network state of the run are restricted.
     /// Persons, material digests and the host snapshot are confidential.
     ///
     /// A failed ceremony stays public despite its error message: a public
@@ -1623,7 +1660,11 @@ impl StepFact {
             | StepFact::PromptAnswered { .. }
             | StepFact::WrapRecipientRecorded { .. }
             | StepFact::StepAttemptFailed { .. }
-            | StepFact::DeviationRecorded { .. } => Level::RESTRICTED,
+            | StepFact::DeviationRecorded { .. }
+            // The machine and network a run used describe the organisation's
+            // setup.
+            | StepFact::PlatformRecorded { .. }
+            | StepFact::NetworkStateRecorded { .. } => Level::RESTRICTED,
             StepFact::RoleAssigned { .. }
             | StepFact::MaterialDigest { .. }
             | StepFact::MachineInfoRecorded { .. } => Level::CONFIDENTIAL,
@@ -1656,6 +1697,8 @@ impl StepFact {
             | StepFact::BackendBound { .. }
             // Records the host, not work performed on it.
             | StepFact::MachineInfoRecorded { .. }
+            | StepFact::PlatformRecorded { .. }
+            | StepFact::NetworkStateRecorded { .. }
             | StepFact::ActStarted { .. }
             | StepFact::StepStarted { .. }
             | StepFact::PromptAnswered { .. }
@@ -1984,6 +2027,115 @@ mod schema_snapshot_tests {
                 "type": "machine_info_recorded",
                 "step": "capture",
                 "info": { "arch": "x86_64", "hostname": null },
+            }),
+        );
+    }
+
+    #[test]
+    fn platform_recorded() {
+        use crate::platform::{
+            Container, FeatureCheck, FeatureStatus, OsIdentity, Platform, RiteLive,
+        };
+        assert_json(
+            &StepFact::PlatformRecorded {
+                platform: Platform {
+                    arch: "x86_64".to_string(),
+                    os: OsIdentity {
+                        id: Some("debian".to_string()),
+                        version: Some("13".to_string()),
+                        name: Some("Debian GNU/Linux 13 (trixie)".to_string()),
+                    },
+                    rite_live: Some(RiteLive {
+                        version: Some("0.8.0".to_string()),
+                        root_hash: "9cd8".to_string(),
+                        ceremony_layer: None,
+                    }),
+                    container: Some(Container {
+                        kind: "podman".to_string(),
+                        image: None,
+                    }),
+                    virtualization: None,
+                    secure_boot: FeatureCheck::with_detail(
+                        FeatureStatus::NotApplicable,
+                        "not booted through UEFI",
+                    ),
+                },
+            },
+            &json!({
+                "type": "platform_recorded",
+                "platform": {
+                    "arch": "x86_64",
+                    "os": {
+                        "id": "debian",
+                        "version": "13",
+                        "name": "Debian GNU/Linux 13 (trixie)",
+                    },
+                    "rite_live": { "version": "0.8.0", "root_hash": "9cd8", "ceremony_layer": null },
+                    "container": { "kind": "podman", "image": null },
+                    "virtualization": null,
+                    "secure_boot": { "status": "not_applicable", "detail": "not booted through UEFI" },
+                },
+            }),
+        );
+    }
+
+    #[test]
+    fn network_state_recorded() {
+        use crate::network::{
+            Counters, DefaultRoute, InterfaceKind, InterfaceState, NetworkMoment, NetworkState,
+            Radio,
+        };
+        assert_json(
+            &StepFact::NetworkStateRecorded {
+                moment: NetworkMoment::Opening,
+                network: NetworkState {
+                    interfaces: Some(vec![InterfaceState {
+                        name: "enp3s0".to_string(),
+                        kind: InterfaceKind::Ethernet,
+                        state: "up".to_string(),
+                        carrier: Some(true),
+                        address: false,
+                        counters: Counters {
+                            rx_bytes: 81_234,
+                            tx_bytes: 5_120,
+                            rx_packets: 402,
+                            tx_packets: 37,
+                        },
+                    }]),
+                    default_route: DefaultRoute {
+                        v4: Some(false),
+                        v6: None,
+                    },
+                    radios: Some(vec![Radio {
+                        kind: "wlan".to_string(),
+                        name: "phy0".to_string(),
+                        soft_blocked: true,
+                        hard_blocked: false,
+                    }]),
+                },
+            },
+            &json!({
+                "type": "network_state_recorded",
+                "moment": "opening",
+                "network": {
+                    "interfaces": [{
+                        "name": "enp3s0",
+                        "kind": "ethernet",
+                        "state": "up",
+                        "carrier": true,
+                        "address": false,
+                        "counters": {
+                            "rx_bytes": "81234",
+                            "tx_bytes": "5120",
+                            "rx_packets": "402",
+                            "tx_packets": "37",
+                        },
+                    }],
+                    "default_route": { "v4": false, "v6": null },
+                    "radios": [
+                        { "kind": "wlan", "name": "phy0", "soft_blocked": true, "hard_blocked": false },
+                    ],
+                },
             }),
         );
     }

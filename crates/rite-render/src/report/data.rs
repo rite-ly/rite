@@ -4,6 +4,8 @@
 //! HTML renderer and, in the future, by template engines.
 
 use chrono::{DateTime, Duration, Utc};
+use rite_model::network::{NetworkMoment, NetworkState};
+use rite_model::platform::Platform;
 use rite_model::{ErrorClass, StepFact, StepOutcome};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -37,6 +39,22 @@ pub struct ReportData {
     pub deviations: Vec<ReportDeviation>,
     /// Set when the transcript is a disclosure: what it withholds.
     pub withheld: Option<ReportWithheld>,
+    /// Where the run happened. `None` when the transcript does not hold it,
+    /// as in a disclosure below its level.
+    pub platform: Option<Platform>,
+    /// The network measurements, in the order they were recorded.
+    pub network: Vec<ReportMeasurement>,
+}
+
+/// A network measurement, from `NetworkStateRecorded`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportMeasurement {
+    /// When the measurement was taken in the run.
+    pub moment: NetworkMoment,
+    /// UTC timestamp of the measurement.
+    pub recorded_at: DateTime<Utc>,
+    /// What was measured.
+    pub state: NetworkState,
 }
 
 /// What a disclosed transcript withholds, stated on the report's face.
@@ -164,6 +182,8 @@ struct Builder {
     role_names: HashMap<String, String>,
     artifacts: Vec<ReportArtifact>,
     deviations: Vec<ReportDeviation>,
+    platform: Option<Platform>,
+    network: Vec<ReportMeasurement>,
 }
 
 impl Builder {
@@ -180,14 +200,31 @@ impl Builder {
             role_names: HashMap::new(),
             artifacts: Vec::new(),
             deviations: Vec::new(),
+            platform: None,
+            network: Vec::new(),
         }
     }
 
+    // One arm per fact type the report reads.
+    #[allow(clippy::too_many_lines)]
     fn ingest(&mut self, at: DateTime<Utc>, fact: &StepFact) {
         match fact {
             StepFact::CeremonyStarted { name, .. } => {
                 self.ceremony_name.clone_from(name);
                 self.started_at = Some(at);
+            }
+            // The runner records one; the first, as `rite verify` shows.
+            StepFact::PlatformRecorded { platform } => {
+                if self.platform.is_none() {
+                    self.platform = Some(platform.clone());
+                }
+            }
+            StepFact::NetworkStateRecorded { moment, network } => {
+                self.network.push(ReportMeasurement {
+                    moment: *moment,
+                    recorded_at: at,
+                    state: network.clone(),
+                });
             }
             StepFact::RoleDeclared { role, name } => {
                 self.role_names
@@ -304,6 +341,8 @@ impl Builder {
             artifacts: self.artifacts,
             deviations: self.deviations,
             withheld: None,
+            platform: self.platform,
+            network: self.network,
         }
     }
 }

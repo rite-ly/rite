@@ -9,9 +9,13 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
 
 use rite_model::Prompt;
+use rite_model::network::{InterfaceKind, InterfaceState, Radio};
 use rite_runtime::{Icon, MaterialOverview, MaterialOverviewKind};
 
-use crate::model::{LogLine, Model, PendingPrompt, RevealPhase, RowNotice, Screen, StepTab};
+use crate::model::{
+    LogLine, Model, PendingPrompt, RecordedNetwork, RecordedPlatform, RevealPhase, RowNotice,
+    Screen, StepTab,
+};
 
 /// Shared color palette. Three muted tones plus the terminal-default
 /// text color: titles, borders, and the footer all step back so the
@@ -75,12 +79,21 @@ fn icon_glyph(icon: Icon) -> &'static str {
     }
 }
 
+/// The scroll offsets a render used, each clamped to the content it drew.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppliedScroll {
+    /// The Ceremony tab's log, in lines up from the tail.
+    pub log: usize,
+    /// The System tab, in lines down from the top.
+    pub system: usize,
+}
+
 /// Render the current model into the given frame. Returns the clamped
-/// `log_scroll` value the render actually used so the runtime loop can
-/// cap `model.log_scroll` to the real max (the user's Up key keeps
-/// growing the counter past the visible top otherwise, then takes that
-/// many Down presses before the view moves again).
-pub fn view(model: &Model, frame: &mut Frame<'_>) -> usize {
+/// scroll offsets the render actually used so the runtime loop can cap
+/// the model's to the real max (the user's Up key keeps growing the
+/// counter past the visible top otherwise, then takes that many Down
+/// presses before the view moves again).
+pub fn view(model: &Model, frame: &mut Frame<'_>) -> AppliedScroll {
     let area = frame.area();
     let [header_area, body_area, footer_area] = Layout::default()
         .direction(Direction::Vertical)
@@ -126,33 +139,43 @@ fn render_header(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     );
 }
 
-fn render_body(model: &Model, frame: &mut Frame<'_>, area: Rect) -> usize {
+fn render_body(model: &Model, frame: &mut Frame<'_>, area: Rect) -> AppliedScroll {
+    let unchanged = AppliedScroll {
+        log: model.log_scroll,
+        system: model.system_scroll,
+    };
     match &model.screen {
-        Screen::Step { tab } => render_step_screen(model, *tab, frame, area),
+        Screen::Step { tab } => render_step_screen(model, *tab, frame, area, unchanged),
         Screen::DeviationModal { input } => {
             render_deviation_modal(input, frame, area);
-            model.log_scroll
+            unchanged
         }
         Screen::AbortConfirm => {
             render_abort_confirm(frame, area);
-            model.log_scroll
+            unchanged
         }
         Screen::Completed { fingerprint, .. } => {
             render_completed(fingerprint.as_deref(), frame, area);
-            model.log_scroll
+            unchanged
         }
         Screen::Failed { reason } => {
             render_failed(reason, frame, area);
-            model.log_scroll
+            unchanged
         }
         Screen::Aborted => {
             render_aborted(frame, area);
-            model.log_scroll
+            unchanged
         }
     }
 }
 
-fn render_step_screen(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: Rect) -> usize {
+fn render_step_screen(
+    model: &Model,
+    tab: StepTab,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    unchanged: AppliedScroll,
+) -> AppliedScroll {
     let [tabs_area, content_area] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
@@ -163,17 +186,20 @@ fn render_step_screen(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: 
     match tab {
         StepTab::Overview => {
             render_overview(model, frame, content_area);
-            model.log_scroll
+            unchanged
         }
-        StepTab::Ceremony => render_ceremony(model, frame, content_area),
+        StepTab::Ceremony => AppliedScroll {
+            log: render_ceremony(model, frame, content_area),
+            ..unchanged
+        },
         StepTab::Deviations => {
             render_deviations(model, frame, content_area);
-            model.log_scroll
+            unchanged
         }
-        StepTab::System => {
-            render_system(model, frame, content_area);
-            model.log_scroll
-        }
+        StepTab::System => AppliedScroll {
+            system: render_system(model, frame, content_area),
+            ..unchanged
+        },
     }
 }
 
@@ -834,55 +860,40 @@ fn render_overview(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     );
 }
 
-/// System tab: a static build/host identity header, then the live device
-/// environment. Situational awareness for the operator during the run; none
-/// of this is recorded to the transcript (the `machine_info` action covers
-/// machine identity as evidence).
-fn render_system(model: &Model, frame: &mut Frame<'_>, area: Rect) {
-    let mut lines: Vec<Line<'_>> = Vec::new();
-
-    if let Some(info) = &model.system_info {
-        lines.push(section_heading("Build"));
-        lines.push(kv_line("rite", &info.build.version));
-        lines.push(kv_line("commit", &info.build.commit));
-        lines.push(kv_line("built", &info.build.build_date));
-        lines.push(kv_line("target", &info.build.target));
-        lines.push(kv_line("profile", &info.build.profile));
-        if !info.build.features.is_empty() {
-            lines.push(kv_line("features", &info.build.features));
-        }
-        lines.push(Line::from(""));
-
-        lines.push(section_heading("Host"));
-        let os = match (&info.host.os, &info.host.os_version) {
-            (Some(os), Some(v)) => format!("{os} ({v})"),
-            (Some(os), None) => os.clone(),
-            (None, _) => "unknown".to_string(),
-        };
-        lines.push(kv_line("os", &os));
-        lines.push(kv_line("arch", &info.host.arch));
-        if let Some(hostname) = &info.host.hostname {
-            lines.push(kv_line("hostname", hostname));
-        }
-        lines.push(Line::from(""));
-
-        lines.push(section_heading("Backends"));
-        if info.backends.is_empty() {
-            lines.push(dim_line("(none linked)"));
-        } else {
-            for backend in &info.backends {
-                let value = match &backend.source {
-                    Some(source) => format!("{} ({source})", backend.version),
-                    None => backend.version.clone(),
-                };
-                lines.push(kv_line(&backend.provider, &value));
-            }
-        }
-        lines.push(Line::from(""));
-    } else {
-        lines.push(dim_line("(system information unavailable)"));
-        lines.push(Line::from(""));
+/// System tab, one panel scrolled from the top. First the platform and the
+/// latest network measurement as the transcript records them, then what the
+/// TUI reads itself and does not record: disks, backends and the build.
+/// Returns the scroll offset the render used, clamped to the content.
+fn render_system(model: &Model, frame: &mut Frame<'_>, area: Rect) -> usize {
+    let inner_width = area.width.saturating_sub(2);
+    let visible_height = usize::from(area.height.saturating_sub(2));
+    let paragraph = Paragraph::new(system_lines(model)).wrap(Wrap { trim: false });
+    let max_scroll = paragraph
+        .line_count(inner_width)
+        .saturating_sub(visible_height);
+    let scroll = model.system_scroll.min(max_scroll);
+    let mut block = plain_block();
+    if scroll < max_scroll {
+        block = block.title_bottom(Line::from(Span::styled(" ↓ more ", theme::title())).centered());
     }
+    let scroll_y = u16::try_from(scroll).unwrap_or(u16::MAX);
+    frame.render_widget(paragraph.scroll((scroll_y, 0)).block(block), area);
+    scroll
+}
+
+fn system_lines(model: &Model) -> Vec<Line<'static>> {
+    let mut lines = match &model.platform {
+        Some(recorded) => platform_lines(recorded),
+        None => vec![section_heading("Platform"), dim_line("(not yet recorded)")],
+    };
+    lines.push(Line::from(""));
+    if let Some(recorded) = &model.network {
+        lines.extend(network_lines(recorded));
+    } else {
+        lines.push(section_heading("Network"));
+        lines.push(dim_line("(not yet recorded)"));
+    }
+    lines.push(Line::from(""));
 
     lines.push(section_heading("Disks"));
     match model.environment.as_ref().map(|e| &e.disks) {
@@ -896,18 +907,208 @@ fn render_system(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     }
     lines.push(Line::from(""));
 
-    lines.push(section_heading("Peripherals"));
-    lines.push(dim_line("(not yet collected)"));
+    let Some(info) = &model.system_info else {
+        lines.push(dim_line("(build and backends unavailable)"));
+        return lines;
+    };
+    lines.push(section_heading("Backends"));
+    if info.backends.is_empty() {
+        lines.push(dim_line("(none linked)"));
+    } else {
+        for backend in &info.backends {
+            let value = match &backend.source {
+                Some(source) => format!("{} ({source})", backend.version),
+                None => backend.version.clone(),
+            };
+            lines.push(kv_line(&backend.provider, &value));
+        }
+    }
     lines.push(Line::from(""));
-    lines.push(section_heading("Network"));
-    lines.push(dim_line("(not yet collected)"));
 
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(plain_block()),
-        area,
-    );
+    lines.push(section_heading("Build"));
+    lines.push(kv_line("rite", &info.build.version));
+    lines.push(kv_line("commit", &info.build.commit));
+    lines.push(kv_line("built", &info.build.build_date));
+    lines.push(kv_line("target", &info.build.target));
+    lines.push(kv_line("profile", &info.build.profile));
+    if !info.build.features.is_empty() {
+        lines.push(kv_line("features", &info.build.features));
+    }
+    lines
+}
+
+fn platform_lines(recorded: &RecordedPlatform) -> Vec<Line<'static>> {
+    let platform = &recorded.platform;
+    let mut lines = vec![
+        section_heading("Platform"),
+        kv_line("recorded", &recorded.at.format("%H:%M:%S").to_string()),
+    ];
+    let os_text = platform
+        .os
+        .display_name()
+        .unwrap_or_else(|| "unknown".to_string());
+    lines.push(kv_line("os", &os_text));
+    lines.push(kv_line("arch", &platform.arch));
+    if let Some(live) = &platform.rite_live {
+        lines.push(kv_line(
+            "rite live",
+            live.version.as_deref().unwrap_or("unknown version"),
+        ));
+        lines.push(kv_line("root hash", &live.root_hash));
+        if let Some(layer) = &live.ceremony_layer {
+            lines.push(kv_line("layer", layer));
+        }
+    }
+    let container = match &platform.container {
+        Some(container) => with_details(&container.kind, [container.image.as_deref()]),
+        None => "none detected".to_string(),
+    };
+    lines.push(kv_line("container", &container));
+    let vm = match &platform.virtualization {
+        Some(vm) => with_details(&vm.kind, [vm.vendor.as_deref(), vm.product.as_deref()]),
+        None => "none detected".to_string(),
+    };
+    lines.push(kv_line("vm", &vm));
+    lines.push(kv_line(
+        "secure boot",
+        &with_details(
+            platform.secure_boot.status.as_str(),
+            [platform.secure_boot.detail.as_deref()],
+        ),
+    ));
+    lines
+}
+
+/// `value (detail, detail)`, leaving out the details that are absent.
+fn with_details<const N: usize>(value: &str, details: [Option<&str>; N]) -> String {
+    let details: Vec<&str> = details.into_iter().flatten().collect();
+    if details.is_empty() {
+        value.to_string()
+    } else {
+        format!("{value} ({})", details.join(", "))
+    }
+}
+
+fn network_lines(recorded: &RecordedNetwork) -> Vec<Line<'static>> {
+    let state = &recorded.state;
+    let mut lines = vec![
+        section_heading("Network"),
+        kv_line(
+            "recorded",
+            &format!("at {}, {}", recorded.moment, recorded.at.format("%H:%M:%S")),
+        ),
+    ];
+    let route = |route: Option<bool>| match route {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "unknown",
+    };
+    lines.push(kv_line(
+        "route",
+        &format!(
+            "IPv4 {} · IPv6 {}",
+            route(state.default_route.v4),
+            route(state.default_route.v6)
+        ),
+    ));
+    match &state.radios {
+        None => lines.push(kv_line("radios", "unknown")),
+        Some(radios) if radios.is_empty() => lines.push(kv_line("radios", "none")),
+        Some(radios) => {
+            lines.push(kv_line("radios", ""));
+            lines.extend(radios.iter().map(radio_line));
+        }
+    }
+    match &state.interfaces {
+        None => lines.push(kv_line("interfaces", "unknown")),
+        Some(interfaces) if interfaces.is_empty() => lines.push(kv_line("interfaces", "none")),
+        Some(interfaces) => {
+            lines.push(kv_line("interfaces", ""));
+            lines.extend(interface_table(interfaces));
+        }
+    }
+    lines
+}
+
+fn radio_line(radio: &Radio) -> Line<'static> {
+    let blocked = match (radio.soft_blocked, radio.hard_blocked) {
+        (_, true) => "blocked by a switch",
+        (true, false) => "blocked in software",
+        (false, false) => "not blocked",
+    };
+    Line::from(vec![
+        Span::raw("• "),
+        Span::styled(
+            radio.name.clone(),
+            theme::text().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("  {} · {blocked}", radio.kind), theme::footer()),
+    ])
+}
+
+/// The interfaces as a table, one row each under a header row. What can
+/// carry traffic comes first: the interfaces with an address, then the
+/// devices, then the virtual ones; by name within each. A virtual
+/// interface's name is dimmed, so the devices stand out.
+fn interface_table(interfaces: &[InterfaceState]) -> Vec<Line<'static>> {
+    const HEADER: [&str; 5] = ["name", "kind", "state", "carrier", "address"];
+    let mut ordered: Vec<&InterfaceState> = interfaces.iter().collect();
+    ordered.sort_by_key(|i| (!i.address, i.kind == InterfaceKind::Virtual, &i.name));
+    let rows: Vec<(bool, [String; 5])> = ordered
+        .into_iter()
+        .map(|i| {
+            let carrier = match i.carrier {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "unknown",
+            };
+            let address = if i.address { "yes" } else { "no" };
+            let cells = [
+                i.name.clone(),
+                i.kind.to_string(),
+                i.state.clone(),
+                carrier.to_string(),
+                address.to_string(),
+            ];
+            (i.kind == InterfaceKind::Virtual, cells)
+        })
+        .collect();
+    let mut widths = HEADER.map(str::len);
+    for (_, cells) in &rows {
+        for (width, cell) in widths.iter_mut().zip(cells) {
+            *width = (*width).max(cell.chars().count());
+        }
+    }
+    // Each cell padded to its column, two spaces before it.
+    let pad = |cell: &str, width: usize| format!("  {cell:<width$}");
+
+    let header: String = HEADER
+        .iter()
+        .zip(widths)
+        .map(|(cell, width)| pad(cell, width))
+        .collect();
+    let mut lines = vec![Line::from(Span::styled(
+        header.trim_end().to_string(),
+        theme::footer(),
+    ))];
+    for (is_virtual, cells) in rows {
+        let [name, rest @ ..] = cells;
+        let name_style = if is_virtual {
+            theme::footer()
+        } else {
+            theme::text().add_modifier(Modifier::BOLD)
+        };
+        let rest: String = rest
+            .iter()
+            .zip(widths.iter().skip(1))
+            .map(|(cell, width)| pad(cell, *width))
+            .collect();
+        lines.push(Line::from(vec![
+            Span::styled(pad(&name, widths[0]), name_style),
+            Span::styled(rest.trim_end().to_string(), theme::text()),
+        ]));
+    }
+    lines
 }
 
 /// A bold section heading line, styled like the Overview tab's headings.
@@ -927,7 +1128,7 @@ fn dim_line(text: &str) -> Line<'static> {
 /// body text.
 fn kv_line(label: &str, value: &str) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!("{label:<11}"), theme::footer()),
+        Span::styled(format!("{label:<12}"), theme::footer()),
         Span::styled(value.to_string(), theme::text()),
     ])
 }
@@ -1225,8 +1426,10 @@ fn render_footer(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         // The submit hint moved into the prompt box title, so the Ceremony
         // footer no longer changes width as prompts come and go.
         Screen::Step { tab } => match tab {
-            StepTab::Overview | StepTab::System => "Tab: next tab  ·  Esc: abort",
-            StepTab::Ceremony => "↑/↓ · PgUp/PgDn: scroll  ·  Tab: next tab  ·  Esc: abort",
+            StepTab::Overview => "Tab: next tab  ·  Esc: abort",
+            StepTab::Ceremony | StepTab::System => {
+                "↑/↓ · PgUp/PgDn: scroll  ·  Tab: next tab  ·  Esc: abort"
+            }
             StepTab::Deviations => "d: log deviation  ·  Tab: next tab  ·  Esc: abort",
         },
     };
@@ -1254,10 +1457,119 @@ fn plain_block() -> Block<'static> {
 
 #[cfg(test)]
 mod tests {
+    use rite_model::network::{Counters, DefaultRoute, NetworkMoment, NetworkState};
+    use rite_model::platform::{Container, FeatureCheck, FeatureStatus, OsIdentity, Platform};
+
     use super::*;
 
     fn text(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn texts(lines: &[Line<'_>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| text(line).trim_end().to_string())
+            .collect()
+    }
+
+    fn noon() -> DateTime<Local> {
+        Local::now()
+            .with_hour(12)
+            .and_then(|t| t.with_minute(0))
+            .and_then(|t| t.with_second(0))
+            .expect("noon exists")
+    }
+
+    #[test]
+    fn the_recorded_platform_says_what_was_not_detected() {
+        let recorded = RecordedPlatform {
+            at: noon(),
+            platform: Platform {
+                arch: "aarch64".to_string(),
+                os: OsIdentity {
+                    id: Some("debian".to_string()),
+                    version: Some("13".to_string()),
+                    name: None,
+                },
+                rite_live: None,
+                container: Some(Container {
+                    kind: "podman".to_string(),
+                    image: Some("debian:trixie".to_string()),
+                }),
+                virtualization: None,
+                secure_boot: FeatureCheck::with_detail(
+                    FeatureStatus::Unavailable,
+                    "no SecureBoot variable",
+                ),
+            },
+        };
+        assert_eq!(
+            texts(&platform_lines(&recorded)),
+            [
+                "Platform",
+                "recorded    12:00:00",
+                "os          debian 13",
+                "arch        aarch64",
+                "container   podman (debian:trixie)",
+                "vm          none detected",
+                "secure boot unavailable (no SecureBoot variable)",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unknown_network_value_reads_as_unknown() {
+        let recorded = RecordedNetwork {
+            at: noon(),
+            moment: NetworkMoment::Closing,
+            state: NetworkState {
+                interfaces: None,
+                default_route: DefaultRoute {
+                    v4: Some(true),
+                    v6: None,
+                },
+                radios: None,
+            },
+        };
+        assert_eq!(
+            texts(&network_lines(&recorded)),
+            [
+                "Network",
+                "recorded    at closing, 12:00:00",
+                "route       IPv4 yes · IPv6 unknown",
+                "radios      unknown",
+                "interfaces  unknown",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_interfaces_are_a_table_with_the_addressed_first_and_the_virtual_last() {
+        let interface = |name: &str, kind, carrier, address| InterfaceState {
+            name: name.to_string(),
+            kind,
+            state: "up".to_string(),
+            carrier,
+            address,
+            counters: Counters::default(),
+        };
+        let table = interface_table(&[
+            interface("docker0", InterfaceKind::Virtual, Some(false), false),
+            interface("eth0", InterfaceKind::Ethernet, Some(true), false),
+            interface("tun0", InterfaceKind::Virtual, None, true),
+            interface("wlan0", InterfaceKind::Wireless, Some(false), false),
+        ]);
+        assert_eq!(
+            texts(&table),
+            [
+                "  name     kind      state  carrier  address",
+                "  tun0     virtual   up     unknown  yes",
+                "  eth0     ethernet  up     yes      no",
+                "  wlan0    wireless  up     no       no",
+                "  docker0  virtual   up     no       no",
+            ]
+        );
     }
 
     #[test]

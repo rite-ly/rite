@@ -5,7 +5,11 @@
 //! The System tab (via UI signals), `rite version --verbose` and `rite system`
 //! consume what this module gathers.
 
-use rite_runtime::{BuildInfo, Environment, HostInfo, SystemInfo};
+use std::sync::Arc;
+
+use rite_runtime::{BuildInfo, Environment, HostInfo, RunHost, SystemInfo};
+#[cfg(not(feature = "verification"))]
+use rite_runtime::{FeatureCheck, FeatureStatus, OsIdentity, Platform};
 
 /// Assemble static build and host identity.
 #[must_use]
@@ -27,6 +31,40 @@ pub fn gather_environment() -> Environment {
     #[cfg(not(feature = "verification"))]
     {
         Environment::default()
+    }
+}
+
+/// The platform and the network probe a run records.
+#[must_use]
+pub fn run_host() -> RunHost {
+    #[cfg(feature = "verification")]
+    {
+        RunHost {
+            platform: rite_stdlib::detect_platform(),
+            network: Arc::new(rite_stdlib::network_snapshot),
+        }
+    }
+    // A build without the probes records every value as unknown.
+    #[cfg(not(feature = "verification"))]
+    {
+        RunHost {
+            platform: Platform {
+                arch: std::env::consts::ARCH.to_string(),
+                os: OsIdentity {
+                    id: Some(std::env::consts::OS.to_string()),
+                    version: None,
+                    name: None,
+                },
+                rite_live: None,
+                container: None,
+                virtualization: None,
+                secure_boot: FeatureCheck::with_detail(
+                    FeatureStatus::Unknown,
+                    "this build has no probes",
+                ),
+            },
+            network: Arc::new(rite_runtime::NetworkSnapshot::default),
+        }
     }
 }
 

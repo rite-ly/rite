@@ -102,7 +102,7 @@ fact type has a default level:
 | Level | Facts |
 |---|---|
 | public | `ceremony_started`, `role_declared`, `act_started`, `step_started`, `backend_operation`, `attestation_recorded`, `step_completed`, `ceremony_completed`, `ceremony_failed`, and the entropy facts, which `rite verify` needs to re-derive the entropy |
-| restricted | `parameter_bound`, `material_loaded`, `backend_bound`, `prompt_answered`, `wrap_recipient_recorded`, `step_attempt_failed`, `deviation_recorded` |
+| restricted | `parameter_bound`, `material_loaded`, `backend_bound`, `prompt_answered`, `wrap_recipient_recorded`, `step_attempt_failed`, `deviation_recorded`, `platform_recorded`, `network_state_recorded` |
 | confidential | `role_assigned`, `material_digest`, `machine_info_recorded` |
 
 `artifact_written` takes its level from the artifact: certificates, public keys, CSRs and
@@ -119,6 +119,16 @@ as a material's name and the digest of its content, they are separate facts. The
 
 - `ceremony_started` (with the digest of the ceremony definition), `ceremony_completed`,
   `ceremony_failed`
+- `platform_recorded`: where the run happened, as the running system reports it (OS,
+  architecture, a Rite Live system, a container or a virtual machine when one is detected,
+  Secure Boot). Recorded once, right after `ceremony_started`. A `null` container or virtual
+  machine means no marker was found, which does not prove there is none.
+- `network_state_recorded`: each network interface's kind, state, carrier, whether it has an
+  address and its traffic counters, the default routes and the radios. Recorded at the
+  opening, once the ceremony is started, and at the closing, before `ceremony_completed` or
+  `ceremony_failed`. The counters of the two bracket the traffic of the run; a run that ends
+  before the opening measurement records neither. Counters are decimal strings, since they
+  can exceed the integer range above; hardware and network addresses are not recorded.
 - `role_declared`: each role's id and name
 - `role_assigned`, `parameter_bound`, `material_loaded`, `material_digest`: the run's inputs,
   one fact each

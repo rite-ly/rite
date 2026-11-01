@@ -13,7 +13,7 @@ use std::path::Path;
 
 #[cfg(any(target_os = "linux", test))]
 use rite_runtime::Radio;
-use rite_runtime::{Counters, InterfaceKind, NetworkInterface, NetworkSnapshot};
+use rite_runtime::{Counters, DefaultRoute, InterfaceKind, NetworkInterface, NetworkSnapshot};
 
 #[cfg(any(target_os = "linux", test))]
 use super::probe_files::{has_entry, read_trimmed};
@@ -41,15 +41,36 @@ pub fn network_snapshot() -> NetworkSnapshot {
     // `sysinfo` fails only on systems it does not support, none of them a
     // Rite target.
     let networks = sysinfo::Networks::new_with_refreshed_list().ok();
+    let interfaces = networks.as_ref().map(interfaces);
+    #[cfg(target_os = "linux")]
+    let radios = radios(
+        Path::new("/sys/class/rfkill"),
+        interfaces
+            .as_ref()
+            .map(|interfaces| interfaces.iter().map(|interface| interface.kind)),
+    );
+    #[cfg(not(target_os = "linux"))]
+    let radios = None;
+    NetworkSnapshot {
+        interfaces,
+        default_route: DefaultRoute {
+            v4: has_route("0.0.0.0:0", IPV4_OUTSIDE),
+            v6: has_route("[::]:0", IPV6_OUTSIDE),
+        },
+        radios,
+    }
+}
+
+/// The interfaces `sysinfo` lists, but loopback, sorted by name.
+fn interfaces(networks: &sysinfo::Networks) -> Vec<NetworkInterface> {
     let mut listed: Vec<_> = networks
         .iter()
-        .flatten()
         .filter(|(name, data)| is_interface(name) && !is_loopback(name, data.ip_networks()))
         .collect();
     // Sorted on the OS name, so the order holds even if two names that are
     // not UTF-8 read the same once converted.
     listed.sort_by_key(|(name, _)| *name);
-    let interfaces: Vec<NetworkInterface> = listed
+    listed
         .into_iter()
         .map(|(name, data)| {
             let (kind, carrier) = link(name);
@@ -69,20 +90,7 @@ pub fn network_snapshot() -> NetworkSnapshot {
                 },
             }
         })
-        .collect();
-    #[cfg(target_os = "linux")]
-    let radios = radios(
-        Path::new("/sys/class/rfkill"),
-        interfaces.iter().map(|interface| interface.kind),
-    );
-    #[cfg(not(target_os = "linux"))]
-    let radios = None;
-    NetworkSnapshot {
-        interfaces,
-        default_route_v4: has_route("0.0.0.0:0", IPV4_OUTSIDE),
-        default_route_v6: has_route("[::]:0", IPV6_OUTSIDE),
-        radios,
-    }
+        .collect()
 }
 
 /// Whether an interface is loopback: named so, or with only loopback
@@ -194,17 +202,20 @@ fn interface_kind(
 /// The radios under `rfkill` (`/sys/class/rfkill`), sorted by name.
 ///
 /// The directory exists only once a driver registered a radio. Without it,
-/// "no radios" holds only when no interface is a radio link either;
-/// otherwise rfkill is hidden or absent from the kernel, and the radios are
-/// unknown.
+/// "no radios" holds only when its parent (`/sys/class`) is visible and the
+/// interfaces are known, none of them a radio link; otherwise rfkill is
+/// hidden or absent from the kernel, and the radios are unknown.
 #[cfg(any(target_os = "linux", test))]
 pub(super) fn radios(
     rfkill: &Path,
-    interface_kinds: impl IntoIterator<Item = InterfaceKind>,
+    interface_kinds: Option<impl IntoIterator<Item = InterfaceKind>>,
 ) -> Option<Vec<Radio>> {
     if !has_entry(rfkill, |_| true) {
-        let radio_link = interface_kinds.into_iter().any(InterfaceKind::is_radio);
-        return (!radio_link).then(Vec::new);
+        let class_visible = rfkill
+            .parent()
+            .is_some_and(|class| has_entry(class, |_| true));
+        let radio_link = interface_kinds?.into_iter().any(InterfaceKind::is_radio);
+        return (class_visible && !radio_link).then(Vec::new);
     }
     let entries = std::fs::read_dir(rfkill).ok()?;
     let mut radios: Vec<Radio> = entries
@@ -283,7 +294,7 @@ mod tests {
             ("rfkill0/hard", "1\n"),
             ("rfkill2/name", "no type\n"),
         ]);
-        let radios = radios(rfkill.path(), []).expect("radios");
+        let radios = radios(rfkill.path(), Some([])).expect("radios");
         let summary: Vec<_> = radios
             .iter()
             .map(|r| {
@@ -306,12 +317,21 @@ mod tests {
 
     #[test]
     fn without_rfkill_radios_are_none_only_when_no_link_is_a_radio() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let rfkill = root.path().join("rfkill");
+        let class = fake_tree(&[("net/", "")]);
+        let rfkill = class.path().join("rfkill");
         let wired = [InterfaceKind::Ethernet, InterfaceKind::Virtual];
-        assert_eq!(radios(&rfkill, wired).map(|r| r.len()), Some(0));
+        assert_eq!(radios(&rfkill, Some(wired)).map(|r| r.len()), Some(0));
         let with_wifi = [InterfaceKind::Ethernet, InterfaceKind::Wireless];
-        assert!(radios(&rfkill, with_wifi).is_none());
+        assert!(radios(&rfkill, Some(with_wifi)).is_none());
+        assert!(radios(&rfkill, None::<[InterfaceKind; 0]>).is_none());
+    }
+
+    #[test]
+    fn a_hidden_sys_class_leaves_the_radios_unknown() {
+        // A sandbox without `/sys`: no rfkill, and no interface listed.
+        let class = tempfile::tempdir().expect("temp dir");
+        let rfkill = class.path().join("rfkill");
+        assert!(radios(&rfkill, Some([])).is_none());
     }
 
     #[test]
@@ -337,10 +357,10 @@ mod tests {
     fn snapshot_of_the_running_machine() {
         // The network of a CI runner is whatever it is: check the shape only.
         let snapshot = network_snapshot();
-        assert!(snapshot.interfaces.is_sorted_by(|a, b| a.name < b.name));
+        let interfaces = snapshot.interfaces.expect("interfaces listed");
+        assert!(interfaces.is_sorted_by(|a, b| a.name < b.name));
         assert!(
-            snapshot
-                .interfaces
+            interfaces
                 .iter()
                 .all(|i| !matches!(i.name.as_str(), "lo" | "lo0"))
         );

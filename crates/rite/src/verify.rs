@@ -248,6 +248,13 @@ fn print_counts(loaded: &rite_runtime::LoadedTranscript, entropy: &rite_runtime:
     if let Some(source) = &entropy.source {
         println!("  Seed source: {source}");
     }
+    // Information, not a check: what the running system reported.
+    if let Some(platform) = loaded.facts.iter().find_map(|timed| match &timed.fact {
+        StepFact::PlatformRecorded { platform } => Some(platform),
+        _ => None,
+    }) {
+        println!("  Platform:    {platform} (as reported, not checked)");
+    }
 }
 
 /// What checking a bundle's index and definition found.

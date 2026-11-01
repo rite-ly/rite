@@ -708,6 +708,13 @@ pub struct ReportView {
     pub transcript_fingerprint: String,
     /// What a disclosed transcript withholds, when it is one.
     pub withheld: Option<String>,
+    /// Where the run happened, in one line, when the transcript holds it.
+    pub platform: Option<String>,
+    /// The network measurements, in the order they were recorded.
+    pub network: Vec<MeasurementView>,
+    /// What each interface that is not virtual did between the opening and
+    /// the closing measurement.
+    pub traffic: Vec<TrafficView>,
     /// Failure summary, when the ceremony failed.
     pub failure: Option<FailureView>,
     /// Failed step attempts (retries), across all steps.
@@ -732,6 +739,120 @@ fn withheld_notice(withheld: &crate::report::ReportWithheld) -> String {
         withheld.facts,
         withheld.levels.join(", ")
     )
+}
+
+/// A network measurement in a report.
+#[derive(Debug, Clone, Serialize)]
+pub struct MeasurementView {
+    /// `opening` or `closing`.
+    pub moment: String,
+    /// Formatted timestamp.
+    pub recorded: String,
+    /// The measurement in one line.
+    pub summary: String,
+}
+
+impl From<&crate::report::ReportMeasurement> for MeasurementView {
+    fn from(measurement: &crate::report::ReportMeasurement) -> Self {
+        Self {
+            moment: measurement.moment.to_string(),
+            recorded: format_datetime(&measurement.recorded_at),
+            summary: measurement.state.to_string(),
+        }
+    }
+}
+
+/// An interface between the opening and the closing measurement.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrafficView {
+    /// Interface name.
+    pub name: String,
+    /// Interface kind.
+    pub kind: String,
+    /// Its state at the opening, or `absent`.
+    pub opening: String,
+    /// Its state at the closing, or `absent`.
+    pub closing: String,
+    /// The traffic between the two, or why it cannot be computed.
+    pub moved: String,
+}
+
+/// The traffic of each interface that is not virtual between the first
+/// opening and the last closing measurement. Empty unless both exist and
+/// list their interfaces.
+fn traffic(network: &[crate::report::ReportMeasurement]) -> Vec<TrafficView> {
+    use rite_model::network::{InterfaceKind, InterfaceState, NetworkMoment};
+    let listed = |moment: NetworkMoment| {
+        network
+            .iter()
+            .filter(|m| m.moment == moment)
+            .find_map(|m| m.state.interfaces.as_ref())
+    };
+    let (Some(opening), Some(closing)) = (
+        listed(NetworkMoment::Opening),
+        network
+            .iter()
+            .rev()
+            .filter(|m| m.moment == NetworkMoment::Closing)
+            .find_map(|m| m.state.interfaces.as_ref()),
+    ) else {
+        return Vec::new();
+    };
+    let state = |interface: Option<&InterfaceState>| match interface {
+        Some(i) => match i.carrier {
+            Some(true) => format!("{}, carrier", i.state),
+            Some(false) => format!("{}, no carrier", i.state),
+            None => i.state.clone(),
+        },
+        None => "absent".to_string(),
+    };
+    let mut names: Vec<&str> = opening
+        .iter()
+        .chain(closing)
+        .filter(|i| i.kind != InterfaceKind::Virtual)
+        .map(|i| i.name.as_str())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|name| {
+            let before = opening.iter().find(|i| i.name == name);
+            let after = closing.iter().find(|i| i.name == name);
+            let moved = match (before, after) {
+                (Some(before), Some(after)) => {
+                    let received = after
+                        .counters
+                        .rx_bytes
+                        .checked_sub(before.counters.rx_bytes);
+                    let sent = after
+                        .counters
+                        .tx_bytes
+                        .checked_sub(before.counters.tx_bytes);
+                    match (received, sent) {
+                        (Some(received), Some(sent)) => {
+                            format!("{received} B received, {sent} B sent")
+                        }
+                        _ => "a counter went down (the interface was reset)".to_string(),
+                    }
+                }
+                (None, Some(_)) => "appeared during the run".to_string(),
+                (Some(_), None) => "gone at the closing".to_string(),
+                (None, None) => String::new(),
+            };
+            let kind = before
+                .or(after)
+                .map(|i| i.kind.to_string())
+                .unwrap_or_default();
+            TrafficView {
+                name: name.to_string(),
+                kind,
+                opening: state(before),
+                closing: state(after),
+                moved,
+            }
+        })
+        .collect()
 }
 
 /// A failure summary in a report.
@@ -907,6 +1028,9 @@ impl ReportView {
                 .map(|secs| crate::report::data::format_duration(Duration::seconds(secs))),
             transcript_fingerprint: data.transcript_fingerprint.clone(),
             withheld: data.withheld.as_ref().map(withheld_notice),
+            platform: data.platform.as_ref().map(ToString::to_string),
+            network: data.network.iter().map(MeasurementView::from).collect(),
+            traffic: traffic(&data.network),
             failure: data.failure.as_ref().map(|f| FailureView {
                 class: error_class_label(f.class).to_string(),
                 kind: f.kind.clone(),
@@ -950,7 +1074,67 @@ fn format_datetime(dt: &DateTime<Utc>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{abbrev_of, render_prose_html};
+    use super::{abbrev_of, render_prose_html, traffic};
+
+    #[test]
+    fn traffic_between_opening_and_closing_skips_virtual_links() {
+        use crate::report::ReportMeasurement;
+        use rite_model::network::{
+            Counters, DefaultRoute, InterfaceKind, InterfaceState, NetworkMoment, NetworkState,
+        };
+        let interface = |name: &str, kind, rx_bytes, tx_bytes| InterfaceState {
+            name: name.to_string(),
+            kind,
+            state: "up".to_string(),
+            carrier: Some(true),
+            address: false,
+            counters: Counters {
+                rx_bytes,
+                tx_bytes,
+                ..Counters::default()
+            },
+        };
+        let measurement = |moment, interfaces| ReportMeasurement {
+            moment,
+            recorded_at: chrono::Utc::now(),
+            state: NetworkState {
+                interfaces: Some(interfaces),
+                default_route: DefaultRoute::default(),
+                radios: None,
+            },
+        };
+        let network = [
+            measurement(
+                NetworkMoment::Opening,
+                vec![
+                    interface("docker0", InterfaceKind::Virtual, 0, 0),
+                    interface("eth0", InterfaceKind::Ethernet, 100, 10),
+                    interface("eth1", InterfaceKind::Ethernet, 500, 0),
+                ],
+            ),
+            measurement(
+                NetworkMoment::Closing,
+                vec![
+                    interface("docker0", InterfaceKind::Virtual, 9, 9),
+                    interface("eth0", InterfaceKind::Ethernet, 150, 10),
+                    interface("eth1", InterfaceKind::Ethernet, 20, 0),
+                    interface("usb0", InterfaceKind::Ethernet, 0, 0),
+                ],
+            ),
+        ];
+        let rows: Vec<(String, String)> = traffic(&network)
+            .into_iter()
+            .map(|row| (row.name, row.moved))
+            .collect();
+        let expected = [
+            ("eth0", "50 B received, 0 B sent"),
+            ("eth1", "a counter went down (the interface was reset)"),
+            ("usb0", "appeared during the run"),
+        ]
+        .map(|(name, moved)| (name.to_string(), moved.to_string()));
+        assert_eq!(rows, expected);
+        assert!(traffic(&network[..1]).is_empty(), "no closing, no traffic");
+    }
 
     #[test]
     fn prose_single_line_is_one_paragraph() {

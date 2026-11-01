@@ -116,10 +116,12 @@ pub struct OsIdentity {
     /// Version (os-release `VERSION_ID`, e.g. `"13"`).
     #[cfg_attr(test, schemars(description = "The version (os-release VERSION_ID)."))]
     pub version: Option<String>,
-    /// Name for display (os-release `PRETTY_NAME`).
+    /// Name for display (os-release `NAME` and `VERSION`, else `PRETTY_NAME`).
     #[cfg_attr(
         test,
-        schemars(description = "The name for display (os-release PRETTY_NAME).")
+        schemars(
+            description = "The name for display (os-release NAME and VERSION, else PRETTY_NAME)."
+        )
     )]
     pub name: Option<String>,
 }

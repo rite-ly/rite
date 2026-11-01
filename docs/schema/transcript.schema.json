@@ -416,7 +416,7 @@
           "type": "string"
         },
         "state": {
-          "description": "The operational state as the system reports it, such as up or down.",
+          "description": "The operational state as the system reports it, such as up or down; on macOS, up only means the driver runs, and carrier says whether there is a link.",
           "type": "string"
         }
       },
@@ -490,7 +490,7 @@
           }
         },
         "radios": {
-          "description": "Radios registered with rfkill (Wi-Fi, Bluetooth, cellular); null when unknown: outside Linux, when rfkill cannot be read, or when rfkill is absent and /sys/class or the interface list is unavailable or a radio interface is present.",
+          "description": "Radios (Wi-Fi, Bluetooth, cellular): rfkill on Linux, the Wi-Fi devices and Bluetooth controllers on macOS; null when unknown: on other platforms, when a probe fails, or on Linux when rfkill is absent and /sys/class or the interface list is unavailable or a radio interface is present.",
           "type": [
             "array",
             "null"
@@ -790,11 +790,11 @@
       "type": "object",
       "properties": {
         "hard_blocked": {
-          "description": "Blocked by a hardware switch.",
+          "description": "Blocked by a hardware switch; a Mac has none.",
           "type": "boolean"
         },
         "kind": {
-          "description": "The radio type as the kernel names it, such as wlan or bluetooth.",
+          "description": "The radio type in rfkill's vocabulary, such as wlan or bluetooth.",
           "type": "string"
         },
         "name": {

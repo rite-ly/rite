@@ -217,9 +217,10 @@ pub struct NetworkSnapshot {
     /// Whether the system has a route to an address outside its local
     /// networks, per address family.
     pub default_route: DefaultRoute,
-    /// Radios registered with rfkill (Wi-Fi, Bluetooth, cellular). `None`
-    /// when unknown: outside Linux, when rfkill cannot be read, or when
-    /// rfkill is absent and `/sys/class` or the interface list is
+    /// Radios (Wi-Fi, Bluetooth, cellular): those registered with rfkill on
+    /// Linux, the Wi-Fi devices and Bluetooth controllers on macOS. `None`
+    /// when unknown: on other platforms, when a probe fails, or on Linux
+    /// when rfkill is absent and `/sys/class` or the interface list is
     /// unavailable or a radio interface is present.
     pub radios: Option<Vec<Radio>>,
 }
@@ -318,6 +319,8 @@ pub struct NetworkInterface {
     /// What kind of link the interface is.
     pub kind: InterfaceKind,
     /// Operational state as the system reports it (e.g. `"up"`, `"down"`).
+    /// macOS reports an interface up as soon as its driver runs: `carrier`
+    /// says whether it has a link.
     pub state: String,
     /// Whether a link is detected (a cable plugged in, an associated access
     /// point), when the system reports it.

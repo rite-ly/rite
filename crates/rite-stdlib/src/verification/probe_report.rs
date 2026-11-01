@@ -132,7 +132,7 @@ mod tests {
             "container:",
             "virtualization:",
             "default route:",
-            "radios",
+            "radio",
         ] {
             assert!(report.contains(heading), "no {heading} line in:\n{report}");
         }

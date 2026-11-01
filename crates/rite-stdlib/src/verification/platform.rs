@@ -71,11 +71,9 @@ pub fn detect_platform() -> Platform {
 /// does not name the hypervisor.
 #[cfg(target_os = "macos")]
 fn guest_virtualization() -> Option<Virtualization> {
-    let output = std::process::Command::new("/usr/sbin/sysctl")
-        .args(["-n", "kern.hv_vmm_present"])
-        .output()
-        .ok()?;
-    (output.status.success() && output.stdout.trim_ascii() == b"1").then(|| Virtualization {
+    let output =
+        super::probe_command::run_probe("/usr/sbin/sysctl", &["-n", "kern.hv_vmm_present"])?;
+    (output.trim() == "1").then(|| Virtualization {
         kind: "vm-other".to_string(),
         vendor: None,
         product: None,

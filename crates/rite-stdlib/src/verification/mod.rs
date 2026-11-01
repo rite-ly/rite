@@ -8,6 +8,8 @@ mod machine_info;
 mod network;
 mod oral_readback;
 mod platform;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod probe_command;
 mod probe_files;
 mod probe_fixtures;
 mod probe_report;

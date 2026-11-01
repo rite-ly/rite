@@ -40,6 +40,26 @@
 {%- endif %}
   </div>
 
+{%- if report.platform or report.network %}
+  <h2>Where It Ran</h2>
+{%- if report.platform %}
+  <p><strong>Platform:</strong> {{ report.platform }}</p>
+{%- endif %}
+{%- for m in report.network %}
+  <p><strong>Network at {{ m.moment }}</strong> ({{ m.recorded }}): {{ m.summary }}</p>
+{%- endfor %}
+{%- if report.traffic %}
+  <table class="traffic">
+    <thead><tr><th>Interface</th><th>Kind</th><th>At opening</th><th>At closing</th><th>Between the two</th></tr></thead>
+    <tbody>
+{%- for t in report.traffic %}
+      <tr><td><code>{{ t.name }}</code></td><td>{{ t.kind }}</td><td>{{ t.opening }}</td><td>{{ t.closing }}</td><td>{{ t.moved }}</td></tr>
+{%- endfor %}
+    </tbody>
+  </table>
+{%- endif %}
+{%- endif %}
+
 {%- if report.attempts %}
   <h2>Failed Attempts</h2>
   <table class="attempts">

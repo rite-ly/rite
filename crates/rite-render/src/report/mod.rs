@@ -9,6 +9,6 @@
 pub mod data;
 
 pub use data::{
-    ReportArtifact, ReportData, ReportDeviation, ReportStatus, ReportStep, ReportWithheld,
-    build_report_data,
+    ReportArtifact, ReportData, ReportDeviation, ReportMeasurement, ReportStatus, ReportStep,
+    ReportWithheld, build_report_data,
 };

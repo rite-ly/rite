@@ -70,7 +70,10 @@ pub fn probe_report() -> String {
     }
 
     let network = network_snapshot();
-    for interface in &network.interfaces {
+    if network.interfaces.is_none() {
+        lines.push("interfaces: unknown".to_string());
+    }
+    for interface in network.interfaces.iter().flatten() {
         let carrier = match interface.carrier {
             Some(true) => "carrier",
             Some(false) => "no carrier",
@@ -93,8 +96,8 @@ pub fn probe_report() -> String {
     };
     lines.push(format!(
         "default route: IPv4 {}, IPv6 {}",
-        route(network.default_route_v4),
-        route(network.default_route_v6)
+        route(network.default_route.v4),
+        route(network.default_route.v6)
     ));
     let blocked = |blocked: bool| if blocked { "blocked" } else { "unblocked" };
     match &network.radios {
@@ -134,7 +137,7 @@ mod tests {
             assert!(report.contains(heading), "no {heading} line in:\n{report}");
         }
         // Counted, never printed.
-        for interface in network_snapshot().interfaces {
+        for interface in network_snapshot().interfaces.into_iter().flatten() {
             for address in &interface.addresses {
                 let ip = address.split('/').next().unwrap_or_default();
                 assert!(!report.contains(ip), "{ip} printed in:\n{report}");

@@ -134,7 +134,7 @@ fn describe(root: &Path) -> String {
         };
         line(format!("interface {}: {kind:?}, {carrier}", name(dir)));
     }
-    line(match radios(&root.join("sys/class/rfkill"), kinds) {
+    line(match radios(&root.join("sys/class/rfkill"), Some(kinds)) {
         None => "radios: unknown".to_string(),
         Some(radios) if radios.is_empty() => "radios: none".to_string(),
         Some(radios) => {

@@ -168,6 +168,10 @@ fn cannot_answer(kind: &str, label: &str) -> io::Error {
 fn render_fact<W: Write>(out: &mut W, fact: &StepFact) -> io::Result<()> {
     match fact {
         StepFact::CeremonyStarted { name, .. } => writeln!(out, "[ceremony] {name}"),
+        StepFact::PlatformRecorded { platform } => writeln!(out, "[platform] {platform}"),
+        StepFact::NetworkStateRecorded { moment, network } => {
+            writeln!(out, "[network] {moment}: {network}")
+        }
         StepFact::StepStarted { id, label, .. } => writeln!(out, "[step] {label} ({id})"),
         StepFact::StepCompleted { id, .. } => writeln!(out, "[step-done] {id}"),
         StepFact::CeremonyCompleted { .. } => writeln!(out, "[done]"),

@@ -15,19 +15,21 @@
 //! Both travel as UI-only signals ([`crate::UiSignal`]); neither is ever
 //! written to the transcript. Recording machine identity as evidence is the
 //! `machine_info` action's job, not the frontend's.
+//!
+//! [`RunHost`] is what the runner records in every run: the [`Platform`]
+//! once, and a [`NetworkSnapshot`]'s [`NetworkState`] at the opening and the
+//! closing.
 
-use std::fmt;
+use std::net::IpAddr;
+use std::sync::Arc;
 
+pub use rite_model::network::{
+    Counters, DefaultRoute, InterfaceKind, InterfaceState, NetworkState, Radio,
+};
+pub use rite_model::platform::{
+    Container, FeatureCheck, FeatureStatus, OsIdentity, Platform, RiteLive, Virtualization,
+};
 use serde::{Deserialize, Serialize};
-
-/// Failure to parse one of this module's string-backed enums.
-///
-/// Shared across the enums defined here, mirroring the pattern in
-/// `rite-sdk` (`rite_sdk::ParseError`), which is not constructible outside
-/// its own crate.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unknown value: {0:?}")]
-pub struct ParseError(String);
 
 /// Static build and host identity for the System tab and
 /// `rite version --verbose`.
@@ -118,99 +120,6 @@ pub struct Hardening {
     pub secure_boot: FeatureCheck,
 }
 
-/// A single security-feature determination: a machine-comparable status plus
-/// optional human context.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeatureCheck {
-    /// Whether the feature is active.
-    pub status: FeatureStatus,
-    /// Human-readable context (e.g. `"AMD SME"`, `"enable TME in BIOS"`).
-    pub detail: Option<String>,
-}
-
-impl FeatureCheck {
-    /// Construct a check with no detail.
-    #[must_use]
-    pub fn new(status: FeatureStatus) -> Self {
-        Self {
-            status,
-            detail: None,
-        }
-    }
-
-    /// Construct a check carrying human context.
-    #[must_use]
-    pub fn with_detail(status: FeatureStatus, detail: impl Into<String>) -> Self {
-        Self {
-            status,
-            detail: Some(detail.into()),
-        }
-    }
-}
-
-/// Status of a platform security feature.
-///
-/// Serialized via its [`Display`](fmt::Display) form so the transcript carries
-/// a stable, comparable token rather than a sentence. Follows the
-/// Display/serde alignment convention used by `rite-sdk` enums.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(into = "String", try_from = "String")]
-#[non_exhaustive]
-pub enum FeatureStatus {
-    /// Present and active.
-    Active,
-    /// Supported by the platform but currently off.
-    Inactive,
-    /// Not available on this hardware or platform.
-    Unavailable,
-    /// Not a meaningful concept on this platform.
-    NotApplicable,
-    /// Could not be determined.
-    Unknown,
-}
-
-impl fmt::Display for FeatureStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            FeatureStatus::Active => "active",
-            FeatureStatus::Inactive => "inactive",
-            FeatureStatus::Unavailable => "unavailable",
-            FeatureStatus::NotApplicable => "not_applicable",
-            FeatureStatus::Unknown => "unknown",
-        };
-        f.write_str(s)
-    }
-}
-
-impl std::str::FromStr for FeatureStatus {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "active" => Ok(Self::Active),
-            "inactive" => Ok(Self::Inactive),
-            "unavailable" => Ok(Self::Unavailable),
-            "not_applicable" => Ok(Self::NotApplicable),
-            "unknown" => Ok(Self::Unknown),
-            _ => Err(ParseError(s.to_owned())),
-        }
-    }
-}
-
-impl From<FeatureStatus> for String {
-    fn from(s: FeatureStatus) -> String {
-        s.to_string()
-    }
-}
-
-impl TryFrom<String> for FeatureStatus {
-    type Error = ParseError;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        s.parse()
-    }
-}
-
 /// Live inventory of the machine's attached devices.
 ///
 /// UI-only and never serialized. Shaped to be **re-emitted**: a frontend
@@ -294,96 +203,110 @@ pub struct Disk {
     pub kind: Option<String>,
 }
 
-/// Where Rite runs, as the running system reports it.
-///
-/// Every value is read by software on the machine, so it is an observation,
-/// not proof: a custom build can copy any of them. Whether a run used a
-/// published Rite Live system is judged after the run, by comparing
-/// [`RiteLive::root_hash`] with the published root hashes.
-#[derive(Debug, Clone, Default)]
-pub struct Platform {
-    /// The operating system.
-    pub os: OsIdentity,
-    /// The Rite Live system the machine booted, when it is one.
-    pub rite_live: Option<RiteLive>,
-    /// The container Rite runs in. `None` when no container marker was
-    /// found, which does not prove there is no container.
-    pub container: Option<Container>,
-    /// The virtual machine Rite runs in. `None` when no hypervisor marker
-    /// was found, which does not prove there is no virtual machine: Docker
-    /// Desktop's VM, for one, is not visible from its containers.
-    pub virtualization: Option<Virtualization>,
-}
-
-/// The operating system, from os-release on Linux and from the system's own
-/// version query elsewhere.
-#[derive(Debug, Clone, Default)]
-pub struct OsIdentity {
-    /// Short identifier (os-release `ID`, e.g. `"debian"`, `"macos"`).
-    pub id: Option<String>,
-    /// Version (os-release `VERSION_ID`, e.g. `"13"`).
-    pub version: Option<String>,
-    /// Name for display (os-release `PRETTY_NAME`).
-    pub name: Option<String>,
-}
-
-/// What identifies a Rite Live system, as the booted system reports it.
-#[derive(Debug, Clone)]
-pub struct RiteLive {
-    /// The `rite` version the system was built with (`IMAGE_VERSION` in
-    /// os-release).
-    pub version: Option<String>,
-    /// dm-verity root hash of the root file system, from the kernel command
-    /// line. The kernel checks every block it reads from the root against it.
-    pub root_hash: String,
-    /// SHA-256 of the ceremony layer, as recorded when the layer was loaded
-    /// at boot, as `sha256:<hex>`. Absent when no ceremony layer was loaded.
-    pub ceremony_layer: Option<String>,
-}
-
-/// A container Rite runs in.
-#[derive(Debug, Clone)]
-pub struct Container {
-    /// The container manager, with the identifiers `systemd-detect-virt`
-    /// prints (e.g. `"docker"`, `"podman"`, `"lxc"`, `"wsl"`).
-    pub kind: String,
-    /// The image the container runs, when the manager names it (Podman
-    /// does).
-    pub image: Option<String>,
-}
-
-/// A virtual machine Rite runs in.
-#[derive(Debug, Clone)]
-pub struct Virtualization {
-    /// The hypervisor, with the identifiers `systemd-detect-virt` prints
-    /// (e.g. `"kvm"`, `"vmware"`, `"oracle"`, `"microsoft"`, `"apple"`), or
-    /// `"vm-other"` when the hypervisor is not recognised.
-    pub kind: String,
-    /// Firmware vendor (DMI `sys_vendor`), when readable.
-    pub vendor: Option<String>,
-    /// Firmware product name (DMI `product_name`), when readable.
-    pub product: Option<String>,
-}
-
-/// The network state of the machine at one point in time.
+/// The network state of the machine at one point in time, as the probe reads
+/// it.
 ///
 /// Gathered on demand, as often as needed: the counters of two snapshots
-/// bracket what crossed each interface between them.
+/// bracket what crossed each interface between them. The transcript records
+/// its [`NetworkState`], which leaves out hardware and network addresses.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkSnapshot {
-    /// Every network interface except loopback, sorted by name.
-    pub interfaces: Vec<NetworkInterface>,
-    /// Whether the system has a route to an IPv4 address outside its local
-    /// networks. `None` when the check failed for another reason than a
-    /// missing route (a sandbox that forbids sockets, for one).
-    pub default_route_v4: Option<bool>,
-    /// The same for IPv6.
-    pub default_route_v6: Option<bool>,
-    /// Radios the kernel registers with rfkill (Wi-Fi, Bluetooth, cellular).
-    /// `None` when radios are unknown: on every platform but Linux, and on
-    /// Linux when a wireless, Bluetooth or cellular interface exists but
-    /// rfkill shows nothing.
+    /// Every network interface except loopback, sorted by name. `None` when
+    /// the interfaces could not be listed.
+    pub interfaces: Option<Vec<NetworkInterface>>,
+    /// Whether the system has a route to an address outside its local
+    /// networks, per address family.
+    pub default_route: DefaultRoute,
+    /// Radios registered with rfkill (Wi-Fi, Bluetooth, cellular). `None`
+    /// when unknown: outside Linux, when rfkill cannot be read, or when
+    /// rfkill is absent and `/sys/class` or the interface list is
+    /// unavailable or a radio interface is present.
     pub radios: Option<Vec<Radio>>,
+}
+
+impl NetworkSnapshot {
+    /// What the transcript records of this snapshot: each interface's state,
+    /// whether it has an address instead of the addresses, and no hardware
+    /// address.
+    #[must_use]
+    pub fn recorded(&self) -> NetworkState {
+        NetworkState {
+            interfaces: self.interfaces.as_ref().map(|interfaces| {
+                interfaces
+                    .iter()
+                    .map(|interface| InterfaceState {
+                        name: interface.name.clone(),
+                        kind: interface.kind,
+                        state: interface.state.clone(),
+                        carrier: interface.carrier,
+                        address: interface.addresses.iter().any(|a| is_routable(a)),
+                        counters: interface.counters,
+                    })
+                    .collect()
+            }),
+            default_route: self.default_route,
+            radios: self.radios.clone(),
+        }
+    }
+}
+
+/// Whether an address (`"192.168.1.20/24"`) is neither loopback nor
+/// link-local. Every IPv6 interface that is up has a link-local address, so
+/// one says nothing about a network. An address that does not parse counts.
+fn is_routable(address: &str) -> bool {
+    let ip = address.split('/').next().unwrap_or(address);
+    match ip.parse::<IpAddr>() {
+        Ok(IpAddr::V4(ip)) => !ip.is_loopback() && !ip.is_link_local(),
+        Ok(IpAddr::V6(ip)) => !ip.is_loopback() && !ip.is_unicast_link_local(),
+        Err(_) => true,
+    }
+}
+
+/// Reads the network state on demand. The runner takes a measurement at the
+/// opening and the closing of a run; the CLI provides the probe, and tests a
+/// scripted one.
+pub trait NetworkProbe: Send + Sync {
+    /// Measure the network now.
+    fn snapshot(&self) -> NetworkSnapshot;
+}
+
+impl<F: Fn() -> NetworkSnapshot + Send + Sync> NetworkProbe for F {
+    fn snapshot(&self) -> NetworkSnapshot {
+        self()
+    }
+}
+
+/// What the runner records about the machine a run happens on: the
+/// platform, once, and the network, at the opening and the closing.
+///
+/// Assembled by the CLI, which holds the probes; `rite-runtime` reads no
+/// system state itself.
+#[derive(Clone)]
+pub struct RunHost {
+    /// The platform, detected before the run.
+    pub platform: Platform,
+    /// The network probe, called at each measurement.
+    pub network: Arc<dyn NetworkProbe>,
+}
+
+impl RunHost {
+    /// A test host with only the architecture known and a network probe that
+    /// returns a default snapshot, every value of which is unknown. Used by
+    /// runtime tests.
+    #[cfg(test)]
+    pub(crate) fn placeholder() -> Self {
+        Self {
+            platform: Platform {
+                arch: std::env::consts::ARCH.to_string(),
+                os: OsIdentity::default(),
+                rite_live: None,
+                container: None,
+                virtualization: None,
+                secure_boot: FeatureCheck::new(FeatureStatus::Unknown),
+            },
+            network: Arc::new(NetworkSnapshot::default),
+        }
+    }
 }
 
 /// A network interface and its state.
@@ -407,88 +330,43 @@ pub struct NetworkInterface {
     pub counters: Counters,
 }
 
-/// What kind of link a network interface is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum InterfaceKind {
-    /// Wired Ethernet, including USB Ethernet adapters.
-    Ethernet,
-    /// Wi-Fi.
-    Wireless,
-    /// A cellular modem.
-    Cellular,
-    /// A Bluetooth network link (PAN, `bnep*`).
-    Bluetooth,
-    /// An interface with no device behind it: a bridge, a tunnel, a VPN, a
-    /// container's virtual link.
-    Virtual,
-    /// Not determined (every platform but Linux).
-    Unknown,
-}
-
-impl InterfaceKind {
-    /// Whether the link is a radio: Wi-Fi, cellular or Bluetooth.
-    #[must_use]
-    pub fn is_radio(self) -> bool {
-        match self {
-            InterfaceKind::Wireless | InterfaceKind::Cellular | InterfaceKind::Bluetooth => true,
-            InterfaceKind::Ethernet | InterfaceKind::Virtual | InterfaceKind::Unknown => false,
-        }
-    }
-}
-
-/// Traffic counters of an interface. They only grow while the interface
-/// exists.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Counters {
-    /// Bytes received.
-    pub rx_bytes: u64,
-    /// Bytes sent.
-    pub tx_bytes: u64,
-    /// Packets received.
-    pub rx_packets: u64,
-    /// Packets sent.
-    pub tx_packets: u64,
-}
-
-/// A radio and whether it is blocked.
-#[derive(Debug, Clone)]
-pub struct Radio {
-    /// The radio type as the kernel names it (`"wlan"`, `"bluetooth"`,
-    /// `"wwan"`, `"gps"`, `"nfc"`, ...).
-    pub kind: String,
-    /// The name the driver gives the radio (e.g. `"phy0"`, `"hci0"`).
-    pub name: String,
-    /// Blocked in software (`rfkill block`, a desktop toggle).
-    pub soft_blocked: bool,
-    /// Blocked by a hardware switch.
-    pub hard_blocked: bool,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn feature_status_round_trips_through_display_and_serde() {
-        for status in [
-            FeatureStatus::Active,
-            FeatureStatus::Inactive,
-            FeatureStatus::Unavailable,
-            FeatureStatus::NotApplicable,
-            FeatureStatus::Unknown,
-        ] {
-            let text = status.to_string();
-            assert_eq!(text.parse::<FeatureStatus>().expect("parses"), status);
-            let json = serde_json::to_string(&status).expect("serializes");
-            assert_eq!(json, format!("\"{text}\""));
-            let back: FeatureStatus = serde_json::from_str(&json).expect("deserializes");
-            assert_eq!(back, status);
-        }
-    }
-
-    #[test]
-    fn unknown_feature_status_string_is_rejected() {
-        assert!("bogus".parse::<FeatureStatus>().is_err());
+    fn a_recorded_interface_says_whether_it_has_an_address_not_which() {
+        let interface = |addresses: &[&str]| NetworkInterface {
+            name: "en0".to_string(),
+            kind: InterfaceKind::Ethernet,
+            state: "up".to_string(),
+            carrier: Some(true),
+            mac: Some("aa:bb:cc:dd:ee:ff".to_string()),
+            addresses: addresses.iter().map(ToString::to_string).collect(),
+            counters: Counters::default(),
+        };
+        let snapshot = NetworkSnapshot {
+            interfaces: Some(vec![
+                interface(&["fe80::1/64", "169.254.3.4/16"]),
+                interface(&["fe80::1/64", "192.168.1.20/24"]),
+                interface(&["2001:db8::5/64"]),
+                interface(&[]),
+            ]),
+            ..NetworkSnapshot::default()
+        };
+        let recorded = snapshot.recorded();
+        let flags: Vec<bool> = recorded
+            .interfaces
+            .iter()
+            .flatten()
+            .map(|i| i.address)
+            .collect();
+        assert_eq!(flags, [false, true, true, false]);
+        let json = serde_json::to_string(&recorded).expect("serializes");
+        assert!(
+            !json.contains("aa:bb") && !json.contains("192.168"),
+            "{json}"
+        );
+        assert!(NetworkSnapshot::default().recorded().interfaces.is_none());
     }
 }

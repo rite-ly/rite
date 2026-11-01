@@ -56,8 +56,9 @@ Four rules keep this stable as the protocol grows:
 
 1. **Transcript = facts = actions.** Anything auditable is a `StepFact`
    produced by an action in the plan. The only exception is the runner's own
-   lifecycle facts (`CeremonyStarted` / `CeremonyCompleted` / `CeremonyFailed`
-   and the step/act boundaries): the small core run-metadata set.
+   lifecycle facts (`CeremonyStarted` / `CeremonyCompleted` / `CeremonyFailed`,
+   the step/act boundaries, `PlatformRecorded` and the opening and closing
+   `NetworkStateRecorded`): the small core run-metadata set.
 2. **Signals are ephemeral and droppable.** A frontend that ignores every
    `UiSignal` still produces a correct transcript and outcome (this is why
    `console` and `headless` ignore most of them). Never make correctness

@@ -43,14 +43,15 @@ pub fn gather_host_info(scope: HostInfoScope) -> HostInfo {
     // refresh is needed, so the `Basic` scope stays cheap.
     let os = System::name().ok();
     let os_version = System::long_os_version().ok();
-    let hostname = get_hostname();
 
     let mut info = HostInfo {
         arch: std::env::consts::ARCH.to_string(),
         os,
         os_version,
         kernel_version: None,
-        hostname: Some(hostname),
+        // `None` when the OS query fails: an environment variable would
+        // record a value the caller chose.
+        hostname: System::host_name().ok(),
         machine_id: None,
         cpu_model: None,
         hardening: None,
@@ -103,13 +104,6 @@ fn osstr_opt(value: &std::ffi::OsStr) -> Option<String> {
     }
 }
 
-fn get_hostname() -> String {
-    System::host_name()
-        .ok()
-        .or_else(|| std::env::var("HOSTNAME").ok())
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
 fn cpu_model() -> Option<String> {
     // Refresh CPUs only: the brand is all we need, so skip the
     // process/memory scan a full `System::new_all()` would run.
@@ -160,7 +154,7 @@ fn read_dmesg() -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn collect_security_features() -> Hardening {
+pub(super) fn collect_security_features() -> Hardening {
     let root = Path::new("/");
     let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
     let kernel_release = read_trimmed(&root.join("proc/sys/kernel/osrelease")).unwrap_or_default();
@@ -311,7 +305,7 @@ pub(super) fn secure_boot(root: &Path) -> FeatureCheck {
 // Apple Silicon has always-on hardware memory encryption via the Secure
 // Enclave. DART (per-device IOMMU) is also always active on Apple Silicon.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-fn collect_security_features() -> Hardening {
+pub(super) fn collect_security_features() -> Hardening {
     Hardening {
         ram_encryption: FeatureCheck::with_detail(
             FeatureStatus::Active,
@@ -329,17 +323,19 @@ fn collect_security_features() -> Hardening {
     }
 }
 
-// Windows, Intel Macs and other platforms report everything as unavailable.
+// Windows, Intel Macs and other platforms report the hardening features as
+// unavailable, and Secure Boot as unknown.
 // TODO(windows): probe real posture (BitLocker, VBS/HVCI, Kernel DMA
 // Protection). Low priority: the Windows binary is meant for authoring
 // ceremonies, not running them, where this posture matters.
 #[cfg(not(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64"))))]
-fn collect_security_features() -> Hardening {
+pub(super) fn collect_security_features() -> Hardening {
     Hardening {
         ram_encryption: FeatureCheck::new(FeatureStatus::Unavailable),
         dma_protection: FeatureCheck::new(FeatureStatus::Unavailable),
         freed_page_zeroing: FeatureCheck::new(FeatureStatus::Unavailable),
-        secure_boot: FeatureCheck::new(FeatureStatus::Unavailable),
+        // Not probed here; the platform record must not read it as absent.
+        secure_boot: FeatureCheck::new(FeatureStatus::Unknown),
     }
 }
 

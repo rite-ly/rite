@@ -55,8 +55,9 @@ use crate::protocol::{ExecEvent, MaterialOverview, Response, UiCommand, UiSignal
 use crate::reporter::{Reporter, ReporterError};
 use crate::state::{ExecutionState, HandlerContext, StepResult};
 use crate::step_info::StepInfo;
-use crate::system_info::StartupSnapshot;
+use crate::system_info::{RunHost, StartupSnapshot};
 use crate::transcript_sink::{TranscriptFingerprint, TranscriptSink};
+use rite_model::network::NetworkMoment;
 use rite_model::validate::Values;
 use rite_model::{ErrorClass, ErrorRecord, Prompt, RetryPolicy, StepFact, StepOutcome};
 
@@ -340,6 +341,7 @@ pub struct Executor {
     output_config: OutputConfig,
     dry_run: bool,
     startup: StartupSnapshot,
+    host: RunHost,
     clock: Arc<dyn Clock>,
 }
 
@@ -349,6 +351,8 @@ impl Executor {
     /// `startup` carries the system identity and device environment the CLI
     /// gathered at launch; the executor echoes them to the frontend as UI
     /// signals at ceremony start and does not otherwise inspect them.
+    /// `host` is what the run records about the machine: the platform once,
+    /// the network at the opening and the closing.
     #[must_use]
     pub fn new(
         ceremony: Ceremony,
@@ -357,6 +361,7 @@ impl Executor {
         output_config: OutputConfig,
         dry_run: bool,
         startup: StartupSnapshot,
+        host: RunHost,
     ) -> Self {
         Self {
             ceremony,
@@ -365,6 +370,7 @@ impl Executor {
             output_config,
             dry_run,
             startup,
+            host,
             clock: Arc::new(SystemClock),
         }
     }
@@ -428,6 +434,7 @@ impl Executor {
         // Keep a clock handle for the terminal facts below: `execute_inner`
         // consumes `self`, so the reporter and the runner share this clone.
         let clock = Arc::clone(&self.clock);
+        let network = Arc::clone(&self.host.network);
         let mut reporter = Reporter::new(
             event_tx,
             cmd_rx,
@@ -435,7 +442,30 @@ impl Executor {
             Arc::clone(&clock),
         );
 
-        let outcome = self.execute_inner(&mut reporter, resolved_params, roles, materials_map);
+        let mut opened = false;
+        let outcome = self.execute_inner(
+            &mut reporter,
+            &mut opened,
+            resolved_params,
+            roles,
+            materials_map,
+        );
+
+        // Record the closing measurement before the terminal fact, even on
+        // failure or abort. Runs that end before the opening measurement have
+        // no closing measurement.
+        let mut closing_recorded = Ok(());
+        if opened {
+            let at = clock.now();
+            let closing = StepFact::NetworkStateRecorded {
+                moment: NetworkMoment::Closing,
+                network: network.snapshot().recorded(),
+            };
+            closing_recorded = transcript_sink.record(at, closing.default_level(), &closing);
+            if closing_recorded.is_ok() {
+                let _ = event_tx.send(ExecEvent::Fact { at, fact: closing });
+            }
+        }
 
         // Record the terminal fact first so it ends up on disk. Then
         // finalize the sink (which only returns the chain head, no
@@ -443,6 +473,7 @@ impl Executor {
         // fingerprint to the UI.
         match outcome {
             Ok(counts) => {
+                closing_recorded.map_err(|e| ExecutionError::TranscriptError(e.to_string()))?;
                 let at = clock.now();
                 let completed = StepFact::CeremonyCompleted {};
                 transcript_sink
@@ -481,9 +512,13 @@ impl Executor {
     }
 
     #[allow(clippy::too_many_lines)]
+    /// Run the ceremony up to its terminal fact, which [`Self::run`] records.
+    /// Sets `opened` once the opening network measurement is recorded, so the
+    /// caller knows whether a closing one belongs in the transcript.
     fn execute_inner(
         mut self,
         reporter: &mut Reporter<'_>,
+        opened: &mut bool,
         resolved_params: HashMap<ParamId, serde_json::Value>,
         roles: HashMap<RoleId, String>,
         materials_map: HashMap<MaterialId, String>,
@@ -493,6 +528,11 @@ impl Executor {
         reporter.fact(StepFact::CeremonyStarted {
             name: self.ceremony.metadata.name.clone(),
             template: self.ceremony.source_digest.clone(),
+        })?;
+        // Record the platform before entropy setup or ceremony steps, so an
+        // early failure still records where the run happened.
+        reporter.fact(StepFact::PlatformRecorded {
+            platform: self.host.platform.clone(),
         })?;
 
         // Establish the ceremony entropy source before any step can draw from
@@ -562,6 +602,14 @@ impl Executor {
                 hint: Some("Press Enter to start the ceremony".to_string()),
             })?;
         }
+
+        // The opening measurement, once the operator started the ceremony:
+        // a cable may be unplugged while the overview is on screen.
+        reporter.fact(StepFact::NetworkStateRecorded {
+            moment: NetworkMoment::Opening,
+            network: self.host.network.snapshot().recorded(),
+        })?;
+        *opened = true;
 
         let mut state = ExecutionState::new(resolved_params, roles, materials_map, dry_run);
 
@@ -1230,6 +1278,7 @@ sections:
             dry_run_output_config(),
             true,
             StartupSnapshot::placeholder(),
+            RunHost::placeholder(),
         );
 
         let join = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
@@ -1250,11 +1299,14 @@ sections:
             kinds,
             vec![
                 "ceremony_started",
+                "platform_recorded",
                 "entropy_seeded",
                 "role_declared",
                 "role_assigned",
+                "network_state_recorded",
                 "step_started",
                 "step_completed",
+                "network_state_recorded",
                 "ceremony_completed",
             ],
         );
@@ -1337,6 +1389,7 @@ sections:
             output_config,
             false,
             StartupSnapshot::placeholder(),
+            RunHost::placeholder(),
         );
 
         let frontend = std::thread::spawn({
@@ -1409,6 +1462,7 @@ sections:
             dry_run_output_config(),
             true,
             StartupSnapshot::placeholder(),
+            RunHost::placeholder(),
         )
         .with_clock(Arc::new(FixedClock(fixed)));
 
@@ -1482,6 +1536,7 @@ sections:
             dry_run_output_config(),
             false, // dry_run=false so prompts actually fire
             StartupSnapshot::placeholder(),
+            RunHost::placeholder(),
         );
 
         // Drive the frontend on a worker so the executor's prompt waits
@@ -1623,17 +1678,19 @@ sections:
             dry_run_output_config(),
             true,
             StartupSnapshot::placeholder(),
+            RunHost::placeholder(),
         );
 
         let join = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
 
         let mut got_failed = false;
+        let mut kinds = Vec::new();
         while let Ok(ev) = event_rx.recv() {
-            if let ExecEvent::Fact {
-                fact: StepFact::CeremonyFailed { error, .. },
-                ..
-            } = ev
-            {
+            let ExecEvent::Fact { fact, .. } = ev else {
+                continue;
+            };
+            kinds.push(fact_kind(&fact));
+            if let StepFact::CeremonyFailed { error, .. } = fact {
                 assert_eq!(error.kind, "aborted");
                 // An abort is classified distinctly from a failure, and its
                 // message is ceremony-level (no empty step-id quotes).
@@ -1643,9 +1700,109 @@ sections:
             }
         }
         assert!(got_failed, "expected CeremonyFailed event");
+        // An aborted run still records its closing measurement, before the
+        // terminal fact.
+        assert!(
+            kinds.ends_with(&["network_state_recorded", "ceremony_failed"]),
+            "{kinds:?}"
+        );
 
         let result = join.join().expect("executor join");
         assert!(matches!(result, Err(ExecutionError::Aborted)));
+    }
+
+    #[test]
+    fn an_abort_at_the_start_gate_records_no_network_measurement() {
+        let (cmd_tx, cmd_rx) = unbounded::<UiCommand>();
+        let (event_tx, event_rx) = unbounded::<ExecEvent>();
+        let sink: Box<dyn TranscriptSink> = Box::new(InMemorySink::new());
+        // Not a dry run, so the "Press Enter to start" gate prompts, and the
+        // operator aborts there.
+        cmd_tx.send(UiCommand::Abort).expect("send");
+
+        let executor = Executor::new(
+            minimal_ceremony(),
+            ActionRegistry::new(),
+            BackendRegistry::new(),
+            dry_run_output_config(),
+            false,
+            StartupSnapshot::placeholder(),
+            RunHost::placeholder(),
+        );
+        let join = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
+
+        let mut kinds = Vec::new();
+        while let Ok(ev) = event_rx.recv() {
+            if let ExecEvent::Fact { fact, .. } = ev {
+                kinds.push(fact_kind(&fact));
+            }
+        }
+        assert!(!kinds.contains(&"network_state_recorded"), "{kinds:?}");
+        assert_eq!(kinds.last(), Some(&"ceremony_failed"));
+        let result = join.join().expect("executor join");
+        assert!(matches!(result, Err(ExecutionError::Aborted)));
+    }
+
+    #[test]
+    fn the_opening_and_closing_measurements_are_taken_when_they_are_recorded() {
+        // A probe whose counter grows on every call, as a kernel's would.
+        let calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let probe_calls = Arc::clone(&calls);
+        let probe = move || {
+            let call = probe_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            crate::NetworkSnapshot {
+                interfaces: Some(vec![crate::NetworkInterface {
+                    name: "eth0".to_string(),
+                    kind: crate::InterfaceKind::Ethernet,
+                    state: "up".to_string(),
+                    carrier: Some(true),
+                    mac: None,
+                    addresses: Vec::new(),
+                    counters: crate::Counters {
+                        tx_bytes: call,
+                        ..crate::Counters::default()
+                    },
+                }]),
+                ..crate::NetworkSnapshot::default()
+            }
+        };
+        let host = RunHost {
+            network: Arc::new(probe),
+            ..RunHost::placeholder()
+        };
+        let mut registry = ActionRegistry::new();
+        registry.register(Arc::new(PingAction));
+        let (_cmd_tx, cmd_rx) = unbounded::<UiCommand>();
+        let (event_tx, event_rx) = unbounded::<ExecEvent>();
+        let executor = Executor::new(
+            minimal_ceremony(),
+            registry,
+            BackendRegistry::new(),
+            dry_run_output_config(),
+            true,
+            StartupSnapshot::placeholder(),
+            host,
+        );
+        let join = std::thread::spawn(move || {
+            executor.run(&cmd_rx, &event_tx, Box::new(InMemorySink::new()))
+        });
+        let mut measured = Vec::new();
+        while let Ok(ev) = event_rx.recv() {
+            if let ExecEvent::Fact {
+                fact: StepFact::NetworkStateRecorded { moment, network },
+                ..
+            } = ev
+            {
+                let interfaces = network.interfaces.expect("listed");
+                let sent = interfaces.first().expect("one interface").counters.tx_bytes;
+                measured.push((moment, sent));
+            }
+        }
+        join.join().expect("executor join").expect("run ok");
+        assert_eq!(
+            measured,
+            [(NetworkMoment::Opening, 1), (NetworkMoment::Closing, 2)]
+        );
     }
 
     // ---- Retry loop tests ----
@@ -1818,6 +1975,7 @@ sections:
             dry_run_output_config(),
             dry_run,
             StartupSnapshot::placeholder(),
+            RunHost::placeholder(),
         );
         let join = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
 
@@ -2376,6 +2534,8 @@ sections:
             StepFact::MaterialDigest { .. } => "material_digest",
             StepFact::BackendBound { .. } => "backend_bound",
             StepFact::MachineInfoRecorded { .. } => "machine_info_recorded",
+            StepFact::PlatformRecorded { .. } => "platform_recorded",
+            StepFact::NetworkStateRecorded { .. } => "network_state_recorded",
             _ => "unknown",
         }
     }

@@ -62,6 +62,78 @@
         "fact"
       ]
     },
+    "Container": {
+      "description": "A container rite runs in.",
+      "type": "object",
+      "properties": {
+        "image": {
+          "description": "The image the container runs, when the manager names it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "The container manager, as systemd-detect-virt names it (docker, podman, lxc, wsl).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "Counters": {
+      "description": "Traffic since the interface appeared, each count a decimal string.",
+      "type": "object",
+      "properties": {
+        "rx_bytes": {
+          "description": "Bytes received.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "rx_packets": {
+          "description": "Packets received.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "tx_bytes": {
+          "description": "Bytes sent.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "tx_packets": {
+          "description": "Packets sent.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        }
+      },
+      "required": [
+        "rx_bytes",
+        "tx_bytes",
+        "rx_packets",
+        "tx_packets"
+      ]
+    },
+    "DefaultRoute": {
+      "description": "Whether a default route exists, per address family; null when unknown.",
+      "type": "object",
+      "properties": {
+        "v4": {
+          "description": "IPv4.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "v6": {
+          "description": "IPv6.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
     "ErrorClass": {
       "description": "What kind of bad outcome this was.",
       "oneOf": [
@@ -108,6 +180,56 @@
         "class",
         "kind",
         "message"
+      ]
+    },
+    "FeatureCheck": {
+      "description": "A security feature and whether it is active.",
+      "type": "object",
+      "properties": {
+        "detail": {
+          "description": "Context for people, such as why it is unknown.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Whether the feature is active.",
+          "$ref": "#/$defs/FeatureStatus"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "FeatureStatus": {
+      "description": "Whether a security feature is active.",
+      "oneOf": [
+        {
+          "description": "Present and active.",
+          "type": "string",
+          "const": "active"
+        },
+        {
+          "description": "Supported, but off.",
+          "type": "string",
+          "const": "inactive"
+        },
+        {
+          "description": "Not available on this hardware or platform.",
+          "type": "string",
+          "const": "unavailable"
+        },
+        {
+          "description": "Not a meaningful concept on this platform.",
+          "type": "string",
+          "const": "not_applicable"
+        },
+        {
+          "description": "Could not be determined.",
+          "type": "string",
+          "const": "unknown"
+        }
       ]
     },
     "Format": {
@@ -176,6 +298,81 @@
         "chain"
       ]
     },
+    "InterfaceKind": {
+      "description": "What kind of link an interface is.",
+      "oneOf": [
+        {
+          "description": "Wired Ethernet, including USB adapters.",
+          "type": "string",
+          "const": "ethernet"
+        },
+        {
+          "description": "Wi-Fi.",
+          "type": "string",
+          "const": "wireless"
+        },
+        {
+          "description": "A cellular modem.",
+          "type": "string",
+          "const": "cellular"
+        },
+        {
+          "description": "A Bluetooth network link.",
+          "type": "string",
+          "const": "bluetooth"
+        },
+        {
+          "description": "No device behind it: a bridge, a tunnel, a VPN, a container's link.",
+          "type": "string",
+          "const": "virtual"
+        },
+        {
+          "description": "Not determined.",
+          "type": "string",
+          "const": "unknown"
+        }
+      ]
+    },
+    "InterfaceState": {
+      "description": "A network interface and its state.",
+      "type": "object",
+      "properties": {
+        "address": {
+          "description": "Whether the interface has an address that is neither loopback nor link-local.",
+          "type": "boolean"
+        },
+        "carrier": {
+          "description": "Whether a link is detected; null when the system does not say.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "counters": {
+          "description": "Traffic since the interface appeared.",
+          "$ref": "#/$defs/Counters"
+        },
+        "kind": {
+          "description": "What kind of link the interface is.",
+          "$ref": "#/$defs/InterfaceKind"
+        },
+        "name": {
+          "description": "The interface name as the system gives it; the key across measurements.",
+          "type": "string"
+        },
+        "state": {
+          "description": "The operational state as the system reports it, such as up or down.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "state",
+        "address",
+        "counters"
+      ]
+    },
     "Level": {
       "description": "The confidentiality level of a line: who may see its fact. Levels are integers ordered from the widest audience to the narrowest, so a disclosure up to a level withholds every line above it. Three levels are built in at fixed values: public (10, anyone), restricted (20, auditors under agreement) and confidential (30, the ceremony's own organisation). Every level a transcript uses is declared in its header.",
       "type": "integer",
@@ -186,9 +383,140 @@
       "description": "A material's identifier, as written in the ceremony.",
       "type": "string"
     },
+    "NetworkMoment": {
+      "description": "When the measurement was taken.",
+      "oneOf": [
+        {
+          "description": "Once the ceremony started, before any material was loaded.",
+          "type": "string",
+          "const": "opening"
+        },
+        {
+          "description": "Before the terminal fact, whether the ceremony completed or failed.",
+          "type": "string",
+          "const": "closing"
+        }
+      ]
+    },
+    "NetworkState": {
+      "description": "The network state at one point in time.",
+      "type": "object",
+      "properties": {
+        "default_route": {
+          "description": "Whether a default route exists.",
+          "$ref": "#/$defs/DefaultRoute"
+        },
+        "interfaces": {
+          "description": "Every network interface except loopback, sorted by name; null when the interfaces could not be listed.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/InterfaceState"
+          }
+        },
+        "radios": {
+          "description": "Radios registered with rfkill (Wi-Fi, Bluetooth, cellular); null when unknown: outside Linux, when rfkill cannot be read, or when rfkill is absent and /sys/class or the interface list is unavailable or a radio interface is present.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Radio"
+          }
+        }
+      },
+      "required": [
+        "default_route"
+      ]
+    },
+    "OsIdentity": {
+      "description": "The operating system.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "A short identifier, such as debian or macos (os-release ID).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The name for display (os-release PRETTY_NAME).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "The version (os-release VERSION_ID).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "ParamId": {
       "description": "A parameter's identifier, as written in the ceremony.",
       "type": "string"
+    },
+    "Platform": {
+      "description": "Where the run happened, as the running system reports it. Every value is read by software on the machine: an observation, not proof.",
+      "type": "object",
+      "properties": {
+        "arch": {
+          "description": "The architecture rite runs as.",
+          "type": "string"
+        },
+        "container": {
+          "description": "The container rite runs in; null when no container marker was found, which does not prove there is none.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Container"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "os": {
+          "description": "The operating system.",
+          "$ref": "#/$defs/OsIdentity"
+        },
+        "rite_live": {
+          "description": "The Rite Live system the machine booted; null when no Rite Live marker was found.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RiteLive"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secure_boot": {
+          "description": "UEFI Secure Boot.",
+          "$ref": "#/$defs/FeatureCheck"
+        },
+        "virtualization": {
+          "description": "The virtual machine rite runs in; null when no hypervisor marker was found, which does not prove there is none (Docker Desktop's VM is not visible from its containers).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Virtualization"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "arch",
+        "os",
+        "secure_boot"
+      ]
     },
     "Prompt": {
       "description": "A prompt as it was shown.",
@@ -384,6 +712,34 @@
         }
       ]
     },
+    "Radio": {
+      "description": "A radio and whether it is blocked.",
+      "type": "object",
+      "properties": {
+        "hard_blocked": {
+          "description": "Blocked by a hardware switch.",
+          "type": "boolean"
+        },
+        "kind": {
+          "description": "The radio type as the kernel names it, such as wlan or bluetooth.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name the driver gives the radio.",
+          "type": "string"
+        },
+        "soft_blocked": {
+          "description": "Blocked in software.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "soft_blocked",
+        "hard_blocked"
+      ]
+    },
     "ResponseRecord": {
       "description": "The answer to a prompt, as recorded. A secret answer is never recorded, not even as a digest.",
       "oneOf": [
@@ -471,6 +827,33 @@
         }
       ]
     },
+    "RiteLive": {
+      "description": "What identifies a Rite Live system.",
+      "type": "object",
+      "properties": {
+        "ceremony_layer": {
+          "description": "The SHA-256 of the ceremony layer loaded at boot; null when none was loaded.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_hash": {
+          "description": "The dm-verity root hash of the root file system, from the kernel command line.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The rite version the system was built with (IMAGE_VERSION).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "root_hash"
+      ]
+    },
     "RoleId": {
       "description": "A role's identifier, as written in the ceremony.",
       "type": "string"
@@ -504,6 +887,47 @@
             "type",
             "name",
             "template"
+          ]
+        },
+        {
+          "description": "Where the run happened, as the running system reports it. Recorded once, right after ceremony_started.",
+          "type": "object",
+          "properties": {
+            "platform": {
+              "description": "The platform.",
+              "$ref": "#/$defs/Platform"
+            },
+            "type": {
+              "type": "string",
+              "const": "platform_recorded"
+            }
+          },
+          "required": [
+            "type",
+            "platform"
+          ]
+        },
+        {
+          "description": "The network state, measured at the opening and the closing of the run. The counters of two measurements bracket the traffic between them.",
+          "type": "object",
+          "properties": {
+            "moment": {
+              "description": "When the measurement was taken.",
+              "$ref": "#/$defs/NetworkMoment"
+            },
+            "network": {
+              "description": "What was measured.",
+              "$ref": "#/$defs/NetworkState"
+            },
+            "type": {
+              "type": "string",
+              "const": "network_state_recorded"
+            }
+          },
+          "required": [
+            "type",
+            "moment",
+            "network"
           ]
         },
         {
@@ -1276,6 +1700,33 @@
             "value"
           ]
         }
+      ]
+    },
+    "Virtualization": {
+      "description": "A virtual machine rite runs in.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "The hypervisor, as systemd-detect-virt names it (kvm, vmware, oracle, microsoft, apple), or vm-other.",
+          "type": "string"
+        },
+        "product": {
+          "description": "The firmware product name (DMI product_name).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vendor": {
+          "description": "The firmware vendor (DMI sys_vendor).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
       ]
     },
     "WithheldLine": {

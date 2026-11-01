@@ -26,10 +26,12 @@ mod digest;
 pub mod display;
 pub mod expression;
 pub mod ir;
+pub mod network;
 
 mod material;
 pub mod paper32;
 pub mod params;
+pub mod platform;
 pub mod safe_path;
 #[cfg(test)]
 mod schema;

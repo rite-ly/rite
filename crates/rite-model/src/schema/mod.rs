@@ -33,7 +33,8 @@ use crate::transcript::{
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(untagged)]
-#[allow(dead_code)]
+// Only read for its schema, never built.
+#[allow(dead_code, clippy::large_enum_variant)]
 #[schemars(
     description = "One line of a transcript.jsonl file. The first line is the header; every other \
     line records one fact, either complete or withheld. Each line is a JSON object on its own \

@@ -114,6 +114,8 @@ pub struct Hardening {
     pub dma_protection: FeatureCheck,
     /// Zeroing of freed pages.
     pub freed_page_zeroing: FeatureCheck,
+    /// UEFI Secure Boot.
+    pub secure_boot: FeatureCheck,
 }
 
 /// A single security-feature determination: a machine-comparable status plus
@@ -290,6 +292,177 @@ pub struct Disk {
     pub removable: bool,
     /// Device kind (e.g. `"SSD"`, `"HDD"`), when known.
     pub kind: Option<String>,
+}
+
+/// Where Rite runs, as the running system reports it.
+///
+/// Every value is read by software on the machine, so it is an observation,
+/// not proof: a custom build can copy any of them. Whether a run used a
+/// published Rite Live system is judged after the run, by comparing
+/// [`RiteLive::root_hash`] with the published root hashes.
+#[derive(Debug, Clone, Default)]
+pub struct Platform {
+    /// The operating system.
+    pub os: OsIdentity,
+    /// The Rite Live system the machine booted, when it is one.
+    pub rite_live: Option<RiteLive>,
+    /// The container Rite runs in. `None` when no container marker was
+    /// found, which does not prove there is no container.
+    pub container: Option<Container>,
+    /// The virtual machine Rite runs in. `None` when no hypervisor marker
+    /// was found, which does not prove there is no virtual machine: Docker
+    /// Desktop's VM, for one, is not visible from its containers.
+    pub virtualization: Option<Virtualization>,
+}
+
+/// The operating system, from os-release on Linux and from the system's own
+/// version query elsewhere.
+#[derive(Debug, Clone, Default)]
+pub struct OsIdentity {
+    /// Short identifier (os-release `ID`, e.g. `"debian"`, `"macos"`).
+    pub id: Option<String>,
+    /// Version (os-release `VERSION_ID`, e.g. `"13"`).
+    pub version: Option<String>,
+    /// Name for display (os-release `PRETTY_NAME`).
+    pub name: Option<String>,
+}
+
+/// What identifies a Rite Live system, as the booted system reports it.
+#[derive(Debug, Clone)]
+pub struct RiteLive {
+    /// The `rite` version the system was built with (`IMAGE_VERSION` in
+    /// os-release).
+    pub version: Option<String>,
+    /// dm-verity root hash of the root file system, from the kernel command
+    /// line. The kernel checks every block it reads from the root against it.
+    pub root_hash: String,
+    /// SHA-256 of the ceremony layer, as recorded when the layer was loaded
+    /// at boot, as `sha256:<hex>`. Absent when no ceremony layer was loaded.
+    pub ceremony_layer: Option<String>,
+}
+
+/// A container Rite runs in.
+#[derive(Debug, Clone)]
+pub struct Container {
+    /// The container manager, with the identifiers `systemd-detect-virt`
+    /// prints (e.g. `"docker"`, `"podman"`, `"lxc"`, `"wsl"`).
+    pub kind: String,
+    /// The image the container runs, when the manager names it (Podman
+    /// does).
+    pub image: Option<String>,
+}
+
+/// A virtual machine Rite runs in.
+#[derive(Debug, Clone)]
+pub struct Virtualization {
+    /// The hypervisor, with the identifiers `systemd-detect-virt` prints
+    /// (e.g. `"kvm"`, `"vmware"`, `"oracle"`, `"microsoft"`, `"apple"`), or
+    /// `"vm-other"` when the hypervisor is not recognised.
+    pub kind: String,
+    /// Firmware vendor (DMI `sys_vendor`), when readable.
+    pub vendor: Option<String>,
+    /// Firmware product name (DMI `product_name`), when readable.
+    pub product: Option<String>,
+}
+
+/// The network state of the machine at one point in time.
+///
+/// Gathered on demand, as often as needed: the counters of two snapshots
+/// bracket what crossed each interface between them.
+#[derive(Debug, Clone, Default)]
+pub struct NetworkSnapshot {
+    /// Every network interface except loopback, sorted by name.
+    pub interfaces: Vec<NetworkInterface>,
+    /// Whether the system has a route to an IPv4 address outside its local
+    /// networks. `None` when the check failed for another reason than a
+    /// missing route (a sandbox that forbids sockets, for one).
+    pub default_route_v4: Option<bool>,
+    /// The same for IPv6.
+    pub default_route_v6: Option<bool>,
+    /// Radios the kernel registers with rfkill (Wi-Fi, Bluetooth, cellular).
+    /// `None` when radios are unknown: on every platform but Linux, and on
+    /// Linux when a wireless, Bluetooth or cellular interface exists but
+    /// rfkill shows nothing.
+    pub radios: Option<Vec<Radio>>,
+}
+
+/// A network interface and its state.
+#[derive(Debug, Clone)]
+pub struct NetworkInterface {
+    /// Interface name (e.g. `"eth0"`, `"en0"`); the stable key across
+    /// snapshots.
+    pub name: String,
+    /// What kind of link the interface is.
+    pub kind: InterfaceKind,
+    /// Operational state as the system reports it (e.g. `"up"`, `"down"`).
+    pub state: String,
+    /// Whether a link is detected (a cable plugged in, an associated access
+    /// point), when the system reports it.
+    pub carrier: Option<bool>,
+    /// Hardware address, when the interface has one.
+    pub mac: Option<String>,
+    /// Addresses with their prefix length (e.g. `"192.168.1.20/24"`).
+    pub addresses: Vec<String>,
+    /// Traffic since the interface appeared.
+    pub counters: Counters,
+}
+
+/// What kind of link a network interface is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InterfaceKind {
+    /// Wired Ethernet, including USB Ethernet adapters.
+    Ethernet,
+    /// Wi-Fi.
+    Wireless,
+    /// A cellular modem.
+    Cellular,
+    /// A Bluetooth network link (PAN, `bnep*`).
+    Bluetooth,
+    /// An interface with no device behind it: a bridge, a tunnel, a VPN, a
+    /// container's virtual link.
+    Virtual,
+    /// Not determined (every platform but Linux).
+    Unknown,
+}
+
+impl InterfaceKind {
+    /// Whether the link is a radio: Wi-Fi, cellular or Bluetooth.
+    #[must_use]
+    pub fn is_radio(self) -> bool {
+        match self {
+            InterfaceKind::Wireless | InterfaceKind::Cellular | InterfaceKind::Bluetooth => true,
+            InterfaceKind::Ethernet | InterfaceKind::Virtual | InterfaceKind::Unknown => false,
+        }
+    }
+}
+
+/// Traffic counters of an interface. They only grow while the interface
+/// exists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Counters {
+    /// Bytes received.
+    pub rx_bytes: u64,
+    /// Bytes sent.
+    pub tx_bytes: u64,
+    /// Packets received.
+    pub rx_packets: u64,
+    /// Packets sent.
+    pub tx_packets: u64,
+}
+
+/// A radio and whether it is blocked.
+#[derive(Debug, Clone)]
+pub struct Radio {
+    /// The radio type as the kernel names it (`"wlan"`, `"bluetooth"`,
+    /// `"wwan"`, `"gps"`, `"nfc"`, ...).
+    pub kind: String,
+    /// The name the driver gives the radio (e.g. `"phy0"`, `"hci0"`).
+    pub name: String,
+    /// Blocked in software (`rfkill block`, a desktop toggle).
+    pub soft_blocked: bool,
+    /// Blocked by a hardware switch.
+    pub hard_blocked: bool,
 }
 
 #[cfg(test)]

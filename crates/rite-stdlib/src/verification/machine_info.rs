@@ -118,6 +118,10 @@ fn log_host_info(info: &HostInfo, reporter: &mut Reporter<'_>) -> Result<(), Act
             Icon::Info,
             format!("Page Zeroing:    {}", format_feature(&h.freed_page_zeroing)),
         )?;
+        reporter.log(
+            Icon::Info,
+            format!("Secure Boot:     {}", format_feature(&h.secure_boot)),
+        )?;
     }
     Ok(())
 }

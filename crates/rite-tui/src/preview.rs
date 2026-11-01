@@ -12,6 +12,10 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 
+use rite_model::network::{
+    Counters, DefaultRoute, InterfaceKind, InterfaceState, NetworkMoment, NetworkState, Radio,
+};
+use rite_model::platform::{FeatureCheck, FeatureStatus, OsIdentity, Platform, RiteLive};
 use rite_model::{MaterialId, Prompt, StepId, ValidatorSpec};
 use rite_runtime::{
     BackendVersion, BuildInfo, Disk, Environment, HostInfo, Icon, MaterialOverview,
@@ -19,8 +23,8 @@ use rite_runtime::{
 };
 
 use crate::model::{
-    EnteredRow, LogLine, Model, PendingPrompt, RevealPhase, RowEntry, RowNotice, Screen, StepTab,
-    StepView,
+    EnteredRow, LogLine, Model, PendingPrompt, RecordedNetwork, RecordedPlatform, RevealPhase,
+    RowEntry, RowNotice, Screen, StepTab, StepView,
 };
 use crate::view::view;
 
@@ -162,7 +166,8 @@ fn sample_with_prompt() -> Model {
 }
 
 /// System tab: build/host identity header plus a small disk inventory,
-/// as populated by the `SystemInfo` and `Environment` signals.
+/// as populated by the `SystemInfo` and `Environment` signals, next to the
+/// recorded platform and opening network measurement of a Rite Live run.
 fn sample_system() -> Model {
     let mut m = sample_running();
     m.system_info = Some(SystemInfo {
@@ -214,10 +219,68 @@ fn sample_system() -> Model {
             },
         ],
     });
+    m.platform = Some(RecordedPlatform {
+        at: at(14, 30, 2),
+        platform: Platform {
+            arch: "x86_64".to_string(),
+            os: OsIdentity {
+                id: Some("rite".to_string()),
+                version: None,
+                name: Some("Rite Live 0.8.0".to_string()),
+            },
+            rite_live: Some(RiteLive {
+                version: Some("0.8.0".to_string()),
+                root_hash: "9cd8a1f04b6e".to_string(),
+                ceremony_layer: None,
+            }),
+            container: None,
+            virtualization: None,
+            secure_boot: FeatureCheck::new(FeatureStatus::Inactive),
+        },
+    });
+    m.network = Some(sample_opening_network());
     m.screen = Screen::Step {
         tab: StepTab::System,
     };
     m
+}
+
+/// The opening measurement of a machine with its radios off and no cable.
+fn sample_opening_network() -> RecordedNetwork {
+    let interface = |name: &str, kind, state: &str, carrier, address| InterfaceState {
+        name: name.to_string(),
+        kind,
+        state: state.to_string(),
+        carrier,
+        address,
+        counters: Counters::default(),
+    };
+    RecordedNetwork {
+        at: at(14, 30, 9),
+        moment: NetworkMoment::Opening,
+        state: NetworkState {
+            interfaces: Some(vec![
+                interface(
+                    "enp3s0",
+                    InterfaceKind::Ethernet,
+                    "down",
+                    Some(false),
+                    false,
+                ),
+                interface("wlp2s0", InterfaceKind::Wireless, "down", None, false),
+            ]),
+            default_route: DefaultRoute {
+                v4: Some(false),
+                v6: Some(false),
+            },
+            radios: Some(vec![Radio {
+                kind: "wlan".to_string(),
+                name: "phy0".to_string(),
+                soft_blocked: true,
+                hard_blocked: false,
+            }]),
+        },
+    }
 }
 
 /// Render `model` into a width×height buffer and return its plain-text

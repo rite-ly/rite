@@ -14,8 +14,8 @@ use rite_runtime::{
 };
 
 use crate::model::{
-    DEVIATION_INPUT_MAX, DeviationView, EnteredRow, LogLine, Model, PendingPrompt, RevealPhase,
-    RowEntry, RowNotice, RunningState, Screen, StepTab, StepView,
+    DEVIATION_INPUT_MAX, DeviationView, EnteredRow, LogLine, Model, PendingPrompt, RecordedNetwork,
+    RecordedPlatform, RevealPhase, RowEntry, RowNotice, RunningState, Screen, StepTab, StepView,
 };
 use crate::msg::{Cmd, Msg};
 
@@ -121,6 +121,15 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
     {
         return Vec::new();
     }
+    if matches!(
+        &model.screen,
+        Screen::Step {
+            tab: StepTab::System
+        }
+    ) && handle_system_scroll(model, key.code)
+    {
+        return Vec::new();
+    }
 
     // Prompt routing only fires on the Ceremony tab. The pending prompt
     // is rendered there; the Overview tab deliberately omits it so the
@@ -158,6 +167,21 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Cmd> {
         }
         _ => Vec::new(),
     }
+}
+
+/// Handle System-tab scroll keys, from the top. The view clamps the offset
+/// to the content. Returns `true` if the key was consumed.
+fn handle_system_scroll(model: &mut Model, code: KeyCode) -> bool {
+    model.system_scroll = match code {
+        KeyCode::Up => model.system_scroll.saturating_sub(1),
+        KeyCode::Down => model.system_scroll.saturating_add(1),
+        KeyCode::PageUp => model.system_scroll.saturating_sub(LOG_PAGE_STEP),
+        KeyCode::PageDown => model.system_scroll.saturating_add(LOG_PAGE_STEP),
+        KeyCode::Home => 0,
+        KeyCode::End => usize::MAX,
+        _ => return false,
+    };
+    true
 }
 
 /// Coarse page step for `PgUp` / `PgDn` on the Log tab. The view's actual
@@ -518,6 +542,19 @@ fn handle_fact(model: &mut Model, at: DateTime<Utc>, fact: &StepFact) -> Vec<Cmd
         StepFact::RoleDeclared { role, name } => {
             model.role_names.insert(role.clone(), name.clone());
         }
+        StepFact::PlatformRecorded { platform } => {
+            model.platform = Some(RecordedPlatform {
+                at: at_local,
+                platform: platform.clone(),
+            });
+        }
+        StepFact::NetworkStateRecorded { moment, network } => {
+            model.network = Some(RecordedNetwork {
+                at: at_local,
+                moment: *moment,
+                state: network.clone(),
+            });
+        }
         StepFact::StepStarted { id, label, role } => {
             let role_name = model
                 .role_names
@@ -631,6 +668,44 @@ mod tests {
     fn apply_exec(model: &mut Model, event: ExecEvent) -> Vec<Cmd> {
         let _ = update(model, Msg::Exec(Box::new(event)));
         update(model, Msg::Tick)
+    }
+
+    #[test]
+    fn the_latest_network_measurement_replaces_the_previous_one() {
+        use rite_model::network::{DefaultRoute, NetworkMoment, NetworkState};
+
+        let mut model = Model::new();
+        for moment in [NetworkMoment::Opening, NetworkMoment::Closing] {
+            let fact = StepFact::NetworkStateRecorded {
+                moment,
+                network: NetworkState {
+                    interfaces: Some(Vec::new()),
+                    default_route: DefaultRoute::default(),
+                    radios: None,
+                },
+            };
+            let _ = handle_fact(&mut model, Utc::now(), &fact);
+        }
+        assert_eq!(
+            model.network.map(|recorded| recorded.moment),
+            Some(NetworkMoment::Closing)
+        );
+    }
+
+    #[test]
+    fn the_system_tab_scrolls_from_the_top_without_moving_the_log() {
+        let mut model = Model::new();
+        model.screen = Screen::Step {
+            tab: StepTab::System,
+        };
+        let _ = update(&mut model, Msg::Key(key(KeyCode::Down)));
+        let _ = update(&mut model, Msg::Key(key(KeyCode::PageDown)));
+        assert_eq!(model.system_scroll, 1 + LOG_PAGE_STEP);
+        assert_eq!(model.log_scroll, 0);
+        let _ = update(&mut model, Msg::Key(key(KeyCode::Home)));
+        assert_eq!(model.system_scroll, 0);
+        let _ = update(&mut model, Msg::Key(key(KeyCode::Up)));
+        assert_eq!(model.system_scroll, 0);
     }
 
     #[test]

@@ -3,6 +3,8 @@
 use std::collections::{HashMap, VecDeque};
 
 use chrono::{DateTime, Local, Timelike};
+use rite_model::network::{NetworkMoment, NetworkState};
+use rite_model::platform::Platform;
 use rite_model::{Prompt, RoleId, StepId};
 use rite_runtime::{Environment, ExecEvent, Icon, MaterialOverview, PromptId, SystemInfo};
 
@@ -34,6 +36,11 @@ pub struct Model {
     /// Live device environment for the System tab. Populated from
     /// `UiSignal::Environment`; replaced wholesale on each re-emission.
     pub environment: Option<Environment>,
+    /// The platform as the transcript holds it, from `PlatformRecorded`.
+    pub platform: Option<RecordedPlatform>,
+    /// The latest network measurement the transcript holds, from
+    /// `NetworkStateRecorded`.
+    pub network: Option<RecordedNetwork>,
     /// Current screen.
     pub screen: Screen,
     /// Screen to restore when a modal is dismissed. `None` when the
@@ -59,6 +66,9 @@ pub struct Model {
     /// `0` = following the tail; positive = scrolled into history.
     /// Clamped to `log.len()` whenever the feed is pushed or evicted.
     pub log_scroll: usize,
+    /// System-tab scroll offset, counted in lines down from the top.
+    /// Clamped to the content after every render.
+    pub system_scroll: usize,
     /// FIFO of executor events waiting to be applied. `Msg::Exec` pushes
     /// here; `Msg::Tick` pops at most one per `LOG_DRIP_TICKS` ticks so
     /// a burst of facts from a single step types out one line at a time
@@ -76,6 +86,8 @@ impl Default for Model {
             role_names: HashMap::new(),
             system_info: None,
             environment: None,
+            platform: None,
+            network: None,
             screen: Screen::Step {
                 tab: StepTab::Overview,
             },
@@ -88,6 +100,7 @@ impl Default for Model {
             tick: 0,
             now: Local::now(),
             log_scroll: 0,
+            system_scroll: 0,
             pending_events: VecDeque::new(),
         }
     }
@@ -245,9 +258,9 @@ pub enum StepTab {
     /// Deviations side panel. Reserved for non-log content (operator
     /// notes, attestation summary, etc.) once those land.
     Deviations,
-    /// Environment dashboard: build/host identity header plus the live
-    /// device inventory (disks today; peripherals and network later).
-    /// Situational awareness during the run, not part of the transcript.
+    /// Environment dashboard: the build, host and devices as the TUI reads
+    /// them, next to the platform and network state as the transcript
+    /// records them.
     System,
 }
 
@@ -316,6 +329,26 @@ pub struct DeviationView {
     /// Wall-clock instant from the fact's timestamp, rendered as
     /// `HH:MM:SS` in the Deviations tab.
     pub at: DateTime<Local>,
+}
+
+/// The platform from the transcript's `PlatformRecorded` fact.
+#[derive(Debug, Clone)]
+pub struct RecordedPlatform {
+    /// When the fact was recorded.
+    pub at: DateTime<Local>,
+    /// The recorded platform.
+    pub platform: Platform,
+}
+
+/// A measurement from the transcript's `NetworkStateRecorded` fact.
+#[derive(Debug, Clone)]
+pub struct RecordedNetwork {
+    /// When the fact was recorded.
+    pub at: DateTime<Local>,
+    /// Which measurement it is.
+    pub moment: NetworkMoment,
+    /// The recorded state.
+    pub state: NetworkState,
 }
 
 /// In-flight prompt the UI is awaiting an answer to.

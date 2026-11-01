@@ -24,7 +24,7 @@ use rite_runtime::{ExecEvent, UiCommand};
 use crate::model::Model;
 use crate::msg::{Cmd, Msg};
 use crate::update::update;
-use crate::view::view;
+use crate::view::{AppliedScroll, view};
 
 /// Tick interval driving spinner animation.
 const TICK_INTERVAL: Duration = Duration::from_millis(100);
@@ -59,11 +59,11 @@ pub fn run(cmd_tx: &Sender<UiCommand>, event_rx: Receiver<ExecEvent>) -> io::Res
     spawn_exec_forwarder(event_rx, msg_tx);
 
     let mut model = Model::new();
-    let mut applied_scroll = 0usize;
+    let mut applied = None;
     terminal.draw(|frame| {
-        applied_scroll = view(&model, frame);
+        applied = Some(view(&model, frame));
     })?;
-    model.log_scroll = applied_scroll;
+    apply_scroll(&mut model, applied);
     // Tracks the most recently rendered header-clock signature so Tick
     // messages can skip redraws that wouldn't change a single cell —
     // the colon blink and the minute roll-over are the only sub-frame
@@ -102,12 +102,9 @@ pub fn run(cmd_tx: &Sender<UiCommand>, event_rx: Receiver<ExecEvent>) -> io::Res
         if needs_redraw {
             last_clock_key = Some(model.clock_display_key());
             terminal.draw(|frame| {
-                applied_scroll = view(&model, frame);
+                applied = Some(view(&model, frame));
             })?;
-            // Cap log_scroll at what the view actually rendered, so the
-            // operator never accumulates "phantom scroll" past the top
-            // that has to be undone before the view starts moving back.
-            model.log_scroll = applied_scroll;
+            apply_scroll(&mut model, applied);
         }
     }
 
@@ -183,5 +180,15 @@ impl Drop for RawTerminalGuard {
     fn drop(&mut self) {
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
         let _ = disable_raw_mode();
+    }
+}
+
+/// Cap the model's scroll offsets at what the view actually rendered, so the
+/// operator never accumulates "phantom scroll" past the end that has to be
+/// undone before the view starts moving back.
+fn apply_scroll(model: &mut Model, applied: Option<AppliedScroll>) {
+    if let Some(applied) = applied {
+        model.log_scroll = applied.log;
+        model.system_scroll = applied.system;
     }
 }

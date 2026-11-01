@@ -1,7 +1,8 @@
 version: "0.3"
 name: "Sealing a Runbook and Proving It Opens"
 description: |
-  Encrypt a sample runbook, decrypt it, and compare the result. This example
+  Encrypt a sample runbook, decrypt it, and compare the result, once under a
+  symmetric archive key and once to a custodian's public key. This example
   contrasts content encryption (`encrypt_data`) with key wrapping (`wrap_key`).
 
 backends:
@@ -24,6 +25,9 @@ output:
   sealed_runbook:
     type: encrypted_data
     description: "The runbook, encrypted to the archive key."
+  runbook_for_the_custodian:
+    type: encrypted_data
+    description: "The runbook, encrypted to the custodian's public key."
 
 sections:
   seal:
@@ -81,3 +85,56 @@ sections:
         description: |
           Compare the SHA-256 digests of the source and recovered runbook.
           The recovered bytes stay in memory and are wiped when the run ends.
+
+  custodian:
+    name: "Seal to a Public Key"
+    role: ${role.archivist}
+    steps:
+      generate_the_custodian_key:
+        action: generate_key
+        backend: openssl
+        with:
+          algorithm: ECDSA-P256
+          policy:
+            usages: [derive]
+        creates: custodian_key
+        # In a real ceremony the custodian holds this key elsewhere and only
+        # the public key arrives, as a material, the way the escrow key does
+        # in wrap_and_unwrap.rite.yaml.
+        description: |
+          Generate the custodian's P-256 key. An EC key opens content sealed
+          to it by key agreement, so its policy grants `derive`.
+
+      seal_the_runbook_for_the_custodian:
+        action: encrypt_data
+        backend: openssl
+        reads:
+          data: ${artifact.runbook}
+          recipient: ${artifact.custodian_key}
+        creates: runbook_for_the_custodian
+        # `openssl cms -decrypt -inkey` opens the container with the
+        # custodian's private key and no Rite binary.
+        description: |
+          Encrypt the runbook to the custodian's public key. The container
+          carries a fresh ephemeral key, and only the holder of the private
+          key can agree the secret that opens it.
+
+      open_as_the_custodian:
+        action: decrypt_data
+        backend: openssl
+        reads:
+          encrypted_data: ${artifact.runbook_for_the_custodian}
+          decryption_key: ${artifact.custodian_key}
+        creates: custodian_runbook
+        description: |
+          Open the container with the custodian's private key, after checking
+          that it is addressed to that key.
+
+      confirm_the_custodian_copy:
+        action: check_value
+        with:
+          message: "The custodian's copy is the document that went in."
+          actual: ${artifact.custodian_runbook | sha256 | hex}
+          expected: ${artifact.runbook | sha256 | hex}
+        description: |
+          Compare the SHA-256 digests of the source and the custodian's copy.

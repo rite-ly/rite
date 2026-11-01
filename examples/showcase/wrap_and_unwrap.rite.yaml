@@ -73,8 +73,9 @@ sections:
           algorithm: RSA-2048
           policy:
             usages: [wrap, unwrap]
-        # An EC or ML-KEM key works the same way: the recipient's key type
-        # selects the encapsulation.
+        # An EC or ML-KEM key works too, and the recipient's key type selects
+        # the encapsulation. An EC key opens by key agreement, so it needs
+        # `usages: [wrap, derive]` instead.
         creates: transport_keypair
         description: |
           Generate an RSA transport key with wrap and unwrap usages. The

@@ -71,7 +71,9 @@ and compared against the transcript. See [key wrapping](../../docs/key-wrapping.
 ### `encrypt_and_decrypt.rite.yaml`
 
 Encrypts a sample runbook with `encrypt_data`, decrypts it with
-`decrypt_data`, and compares the result. These are separate from `wrap_key`
+`decrypt_data`, and compares the result, first under a symmetric archive key,
+then to a custodian's P-256 public key, whose private key opens it under the
+`derive` usage. These are separate from `wrap_key`
 and `unwrap_key` because the claim differs: a wrap says a key left a backend
 under protection, while encrypted content says only that the bytes are
 unreadable without the key. `rite verify` lists the container under

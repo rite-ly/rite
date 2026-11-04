@@ -1159,12 +1159,21 @@ fn cms_seal_to_public(
 ///
 /// The opening runs the operations `decrypt_data` asks of a backend:
 /// RSA-OAEP for a key transport recipient, ECDH and the X9.63 KDF for a key
-/// agreement. A container the CMS reader does not read goes to OpenSSL's CMS
-/// decrypt instead: an ML-KEM recipient, or a recipient under PKCS#1 v1.5 key
-/// transport or the SHA-1 KDF, which `CMS_encrypt` chooses when nothing else
-/// is set. OpenSSL finds the recipient through a certificate built from the
-/// key, so only a container naming it by the SHA-256 key identifier Rite
-/// writes opens this way.
+/// agreement.
+///
+/// A container the CMS reader does not read goes to OpenSSL's CMS decrypt
+/// instead, whatever the reader's reason, so this opens more than
+/// `decrypt_data` does: an ML-KEM recipient, which the reader has no opening
+/// for, and forms it refuses by name, such as PKCS#1 v1.5 key transport and the
+/// SHA-1 KDF, which `CMS_encrypt` chooses when nothing else is set. Input is
+/// accepted in old forms, and refusing them belongs to a ceremony-wide policy
+/// level Rite does not have yet, so the padding check Bleichenbacher's attack
+/// queries does run here. A ceremony reaches this only with an ML-KEM wrap:
+/// `unwrap_key` reads what `wrap_key` wrote, and that writes no other such form.
+///
+/// OpenSSL finds the recipient through a certificate built from the key, so
+/// only a container naming it by the SHA-256 key identifier Rite writes opens
+/// this way.
 ///
 /// If OpenSSL fails too, the error carries both answers, since the reader's is
 /// usually the one that says what is wrong with a container Rite wrote. An

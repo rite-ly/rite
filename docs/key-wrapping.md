@@ -229,9 +229,11 @@ encapsulation the scheme takes follows the recipient key:
   KDF over SHA-256 or SHA-384 and `id-aes256-wrap`;
 - an ML-KEM recipient takes the RFC 9629 `KEMRecipientInfo` path.
 
-These are the forms `encrypt_data` writes. So the wrap fact records what the
-produced artifact says was done, read back out of its DER: the `RecipientInfo`
-variant and every algorithm identifier the structure names, under `wrap`.
+The RSA and EC forms are the ones `encrypt_data` writes; it takes no ML-KEM
+recipient. Since the ceremony does not choose among them, the wrap fact records
+what the produced artifact says was done, read back out of its DER: the
+`RecipientInfo` variant and every algorithm identifier the structure names,
+under `wrap`.
 
 A raw mechanism has nothing to read back. Its output is bare ciphertext with no
 algorithm identifiers in it, so the recorded algorithms are what the backend

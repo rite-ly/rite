@@ -77,7 +77,7 @@ fn describe(root: &Path) -> String {
     ));
     line(match &platform.rite_live {
         Some(system) => format!(
-            "rite live: {} root hash {} ceremony layer {}",
+            "rite live: {} dm-verity root hash {} ceremony layer {}",
             or_dash(system.version.as_deref()),
             system.root_hash,
             or_dash(system.ceremony_layer.as_deref())

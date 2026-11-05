@@ -443,7 +443,7 @@
           ]
         },
         "name": {
-          "description": "The name for display (os-release PRETTY_NAME).",
+          "description": "The name for display (os-release NAME and VERSION, else PRETTY_NAME).",
           "type": [
             "string",
             "null"

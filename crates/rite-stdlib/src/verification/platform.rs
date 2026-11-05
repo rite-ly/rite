@@ -101,7 +101,7 @@ pub(super) fn detect_linux(root: &Path) -> Platform {
         os: OsIdentity {
             id: key_value(&os_release, "ID"),
             version: key_value(&os_release, "VERSION_ID"),
-            name: key_value(&os_release, "PRETTY_NAME"),
+            name: os_name(&os_release),
         },
         rite_live: rite_live(
             &os_release,
@@ -111,6 +111,21 @@ pub(super) fn detect_linux(root: &Path) -> Platform {
         container: container(root),
         virtualization: virtualization(root),
         secure_boot: super::host::secure_boot(root),
+    }
+}
+
+/// The name of the operating system, from `NAME` and `VERSION`, else
+/// `PRETTY_NAME`. An image can rename itself in `PRETTY_NAME`, as Rite Live
+/// does.
+#[cfg(any(target_os = "linux", test))]
+fn os_name(os_release: &str) -> Option<String> {
+    match (
+        key_value(os_release, "NAME"),
+        key_value(os_release, "VERSION"),
+    ) {
+        (Some(name), Some(version)) => Some(format!("{name} {version}")),
+        (Some(name), None) => Some(name),
+        (None, _) => key_value(os_release, "PRETTY_NAME"),
     }
 }
 
@@ -244,6 +259,24 @@ mod tests {
         assert_eq!(live.version.as_deref(), Some("0.8.0"));
         assert_eq!(live.root_hash, ROOT_HASH);
         assert_eq!(live.ceremony_layer.as_deref(), Some("sha256:40d44793"));
+    }
+
+    #[test]
+    fn the_os_name_is_the_distribution_not_the_image() {
+        let live = format!("{LIVE_OS_RELEASE}VERSION=\"13 (trixie)\"\n");
+        assert_eq!(
+            os_name(&live).as_deref(),
+            Some("Debian GNU/Linux 13 (trixie)")
+        );
+        assert_eq!(
+            os_name(LIVE_OS_RELEASE).as_deref(),
+            Some("Debian GNU/Linux")
+        );
+        assert_eq!(
+            os_name("PRETTY_NAME=\"Some OS\"\n").as_deref(),
+            Some("Some OS")
+        );
+        assert_eq!(os_name(""), None);
     }
 
     #[test]

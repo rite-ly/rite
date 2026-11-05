@@ -290,9 +290,9 @@ Secure Boot off cannot run Rite Live.
 
 The boot menu has three entries:
 
-- **Rite Ceremony**: the ceremony session in a fullscreen terminal (cage and foot), with
+- **Rite Live**: the ceremony session in a fullscreen terminal (cage and foot), with
   strict IOMMU DMA protection.
-- **Rite Ceremony (safe mode)**: the same session on the text console, with boot progress
+- **Rite Live (safe mode)**: the same session on the text console, with boot progress
   shown, without IOMMU protection and without a graphics driver, for machines where the
   main entry does not boot or does not display.
 - **Power Off The System**.
@@ -305,8 +305,11 @@ Before the session, the setup screen lets the operator choose a keyboard layout 
 time zone. US and UTC are the defaults. The layout is loaded and tested before it is
 kept. The layout applies to the text console and both terminals; the time zone applies
 to times shown by the session, including `date`. Transcripts always use UTC. The
-displayed time comes from the machine clock. If it is wrong, power off from the setup
-screen and correct it in the firmware settings. Setup runs once per boot. The session
+displayed time comes from the machine clock, and the system does not set it from the
+network. If it is wrong, the operator sets it on the setup screen, as local time in the
+chosen zone. This sets the system clock only. The firmware clock keeps its value: a
+machine that also runs Windows usually keeps it in local time, which Rite Live reads as
+UTC. Setup runs once per boot. The session
 start screen shows the selected layout and time zone.
 
 The session then starts as the `rite` user. Its start screen shows the `rite` version,
@@ -453,7 +456,7 @@ any interaction with the boot process. Observation does not prove what booted.
 | `img/mkosi/mkosi.extra/` | Files copied into the image, at their paths in it |
 | `.../efi/loader/loader.conf` | Boot menu: timeout, no editing |
 | `.../usr/lib/systemd/system/rite-session.service`, `rite-shell.service`, `.../etc/pam.d/rite-session` | The session on tty1 and the shell on tty2, run as `rite` |
-| `.../usr/lib/systemd/system/rite-setup.service`, `.../usr/lib/rite/rite-setup`, `setup-values` | The setup screen: keyboard layout and time zone, chosen before the session |
+| `.../usr/lib/systemd/system/rite-setup.service`, `.../usr/lib/rite/rite-setup`, `setup-values` | The setup screen: keyboard layout, time zone and time, chosen before the session |
 | `.../usr/lib/rite/rite-kiosk` | Starts the session or the shell in cage and foot, or on the text console, with the layout and zone chosen at setup |
 | `.../usr/lib/rite/rite-session`, `rite-shell` | The operator's start screen, and the second terminal |
 | `.../usr/lib/systemd/system/rite-ceremony-load.service`, `.../usr/lib/rite/load-ceremony` | Copies the ceremony layer into memory and records its hash |

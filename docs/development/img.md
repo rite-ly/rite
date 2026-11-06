@@ -468,5 +468,5 @@ any interaction with the boot process. Observation does not prove what booted.
 | `.../etc/polkit-1/rules.d/10-rite.rules` | polkit rule: the `rite` user may use smart cards, switch terminals, power off and reboot, nothing else |
 | `img/build-img.sh`, `img/ceremony.repart.d/` | Ceremony layer and outputs partition |
 | `img/extract-outputs.sh` | Outputs from an image file |
-| `.github/workflows/ci.yml` | The `Image` jobs build a Live system and an image for each architecture, and check that `build-img` is reproducible, on every push to main and on pull requests that change the image's inputs |
+| `.github/workflows/rite-live.yml` | The `Live system` jobs build a Live system and an image for each architecture, and check that `build-img` is reproducible, on every push to main and on pull requests that change the image's inputs |
 | `.github/workflows/release.yml` | Publishes `rite-img` and the Live systems with each release |

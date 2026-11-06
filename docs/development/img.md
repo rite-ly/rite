@@ -450,6 +450,7 @@ any interaction with the boot process. Observation does not prove what booted.
 | `img/Dockerfile`, `img/entrypoint.sh` | Docker tooling image, with mkosi pinned by commit, and its subcommand dispatch |
 | `img/build-system.sh` | Live system build with mkosi |
 | `img/mkosi/mkosi.conf`, `img/mkosi/mkosi.conf.d/` | Live system: distribution and snapshot date, packages, kernel command line |
+| `img/mkosi/mkosi.sandbox/` | apt settings for the build, for snapshot.debian.org outages; not part of the image |
 | `img/mkosi/mkosi.uki-profiles/safe.conf` | The safe mode boot entry |
 | `img/mkosi/mkosi.repart/` | Partitions of the Live system: EFI system partition, root, root verity |
 | `img/mkosi/mkosi.postinst.chroot`, `img/mkosi/mkosi.finalize` | Build-time setup inside the image: the `rite` user, completion, masked units; the boot menu title |
@@ -467,5 +468,5 @@ any interaction with the boot process. Observation does not prove what booted.
 | `.../etc/polkit-1/rules.d/10-rite.rules` | polkit rule: the `rite` user may use smart cards, switch terminals, power off and reboot, nothing else |
 | `img/build-img.sh`, `img/ceremony.repart.d/` | Ceremony layer and outputs partition |
 | `img/extract-outputs.sh` | Outputs from an image file |
-| `.github/workflows/ci.yml` | The `Image` jobs build a Live system and an image for each architecture, and check that `build-img` is reproducible, on every pull request to main and push to main |
+| `.github/workflows/ci.yml` | The `Image` jobs build a Live system and an image for each architecture, and check that `build-img` is reproducible, on every push to main and on pull requests that change the image's inputs |
 | `.github/workflows/release.yml` | Publishes `rite-img` and the Live systems with each release |

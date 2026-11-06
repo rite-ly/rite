@@ -159,12 +159,43 @@ jobs:
             file "$f" | tee /dev/stderr | grep -qE 'static(ally|-pie) linked'
           done
 
+  # Whether the image jobs run: always on main, and on a pull request only if it
+  # changes what they build. They download the Debian packages from
+  # snapshot.debian.org, whose outages would otherwise fail unrelated pull
+  # requests. A change that breaks the image in another way shows on main.
+  image-paths:
+    name: Image paths
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      build: ${{ steps.paths.outputs.build }}
+    steps:
+      - id: paths
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          build=true
+          if [[ "$EVENT" == pull_request ]]; then
+            files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+            if ! grep -qE '^(img/|Dockerfile$|docker-bake\.hcl$|examples/showcase/demo\.rite\.yaml$|\.github/workflows/ci\.yml$)' <<<"$files"; then
+              build=false
+            fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
   # Runs the commands of docs/development/img.md for both architectures, so a
   # broken Rite Live build shows before a release tag. The release jobs that
   # publish rite-img and the Live systems (release.yml) run only on a tag. The
   # caches are written on main and only read by pull requests.
   image:
     name: Image (${{ matrix.arch }})
+    needs: image-paths
+    if: needs.image-paths.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -231,3 +262,10 @@ jobs:
           docker run --rm -v "$PWD:/work" rite-img extract \
             --image out/demo.img \
             --output out/outputs
+
+      # apt has been killed by SIGKILL during snapshot.debian.org outages, and
+      # mkosi only reports the signal. The container shares the runner's kernel,
+      # so this shows whether the kernel ran out of memory.
+      - name: Show kernel out-of-memory events
+        if: failure()
+        run: sudo dmesg -T | grep -iE 'out of memory|oom-kill|killed process' || echo "No out-of-memory events."

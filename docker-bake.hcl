@@ -13,7 +13,7 @@
 #
 # The release workflow bakes the `binaries` group for the musl tarballs and
 # builds the `image` per-arch on native runners (not via bake); the `binaries`
-# group also backs the CI smoke build, and `binary-glibc-*` the CI image jobs.
+# group also backs the CI smoke build, and `binary-glibc-*` the CI Live system jobs.
 # The `image` target and `default` group are for local multi-arch builds.
 #
 # Usage:

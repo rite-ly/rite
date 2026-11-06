@@ -48,6 +48,13 @@
       groupName: "rust-musl-cross base images"
     },
     {
+      description: "Group rust-openssl crates, missing from the monorepo presets",
+      matchSourceUrls: [
+        "https://github.com/rust-openssl/rust-openssl"
+      ],
+      groupName: "rust-openssl monorepo"
+    },
+    {
       description: "Delay cargo updates",
       matchManagers: [
         "cargo"

@@ -96,7 +96,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry,id=cargo-registry-glibc-${TA
 # resolves its required symbols (Rust links with BIND_NOW), so `rite --version`
 # fails if it needs a newer glibc or libpcsclite. Every shipped copy comes from
 # this stage.
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS glibc-floor
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS glibc-floor
 RUN apt-get update && apt-get install -y --no-install-recommends libpcsclite1 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder-glibc /out/rite /usr/local/bin/rite

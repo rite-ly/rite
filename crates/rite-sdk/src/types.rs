@@ -1065,8 +1065,9 @@ pub enum WrapScheme {
     /// CMS `AuthEnvelopedData` (RFC 5083) with AES-256-GCM content
     /// encryption. Output: CMS `ContentInfo` DER.
     ///
-    /// The encapsulation follows the recipient key: RSA takes key transport,
-    /// EC takes the RFC 5753 key-agreement path, and a KEM recipient takes the
+    /// The encapsulation follows the recipient key: RSA takes key transport
+    /// under RSAES-OAEP with SHA-256, EC takes the RFC 5753 key agreement with
+    /// the X9.63 KDF over SHA-256 or SHA-384, and a KEM recipient takes the
     /// RFC 9629 key-encapsulation path.
     ///
     /// `CMS-RSA-CBC`, the `EnvelopedData` variant with AES-256-CBC, was

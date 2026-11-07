@@ -1301,10 +1301,10 @@ mod tests {
     }
 
     #[test]
-    fn a_record_that_overstates_the_algorithms_is_a_mismatch() {
-        // The transcript claims RSA-OAEP key transport, the blob says
-        // PKCS#1 v1.5. A verifier reading only the transcript would take the
-        // stronger claim at face value.
+    fn a_record_that_misstates_the_algorithms_is_a_mismatch() {
+        // The transcript says PKCS#1 v1.5 key transport, the blob says
+        // RSA-OAEP. A verifier reading only the transcript would take the
+        // record at face value, whichever way it is wrong.
         let tmp = tempfile::tempdir().unwrap();
         let wrap = &*WRAP;
         let mut outputs = wrap.outputs.clone();
@@ -1314,7 +1314,7 @@ mod tests {
             .expect("the wrap description is a JSON object")
             .insert(
                 "key_encryption_oid".to_string(),
-                json!(rite_sdk::oid::RSAES_OAEP),
+                json!(rite_sdk::oid::RSA_ENCRYPTION),
             );
         let facts = transcript(tmp.path(), wrap, outputs);
 

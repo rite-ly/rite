@@ -46,6 +46,8 @@ use x509_cert::{
 
 use rite_model::params::IssueCertificateParams;
 
+use x509_cert::der::oid::db::rfc5912::RSA_ENCRYPTION;
+
 use super::oids::{
     sig_profile_for_algorithm, verifiable_algorithm_names, verifiable_sign_algorithm,
 };
@@ -374,9 +376,9 @@ fn build_extensions(
         }
         CertProfile::TlsServer => {
             exts.push(build_basic_constraints(false, None)?);
-            exts.push(build_key_usage(
-                KeyUsages::DigitalSignature | KeyUsages::KeyEncipherment,
-            )?);
+            exts.push(build_key_usage(tls_server_key_usages(
+                subject_spki.algorithm.oid,
+            ))?);
             exts.push(build_eku(&[ID_KP_SERVER_AUTH])?);
             exts.push(build_ski(subject_spki)?);
             if let Some(spki) = issuer_spki {
@@ -407,6 +409,21 @@ fn build_extensions(
     }
 
     Ok(exts)
+}
+
+/// What a TLS server certificate permits, given its subject's public key type.
+///
+/// RSA key transport is the only use of `keyEncipherment` in TLS, and only an
+/// `rsaEncryption` key can perform it. The bit is outside what the other key
+/// types allow: RFC 5480 section 3 and RFC 8410 section 9 leave it off their
+/// lists, RFC 4055 section 1.2 limits an RSASSA-PSS key to signatures, and
+/// RFC 9881 section 5 says MUST NOT. A type not named here gets the narrower set.
+fn tls_server_key_usages(subject_key_type: ObjectIdentifier) -> der::flagset::FlagSet<KeyUsages> {
+    if subject_key_type == RSA_ENCRYPTION {
+        KeyUsages::DigitalSignature | KeyUsages::KeyEncipherment
+    } else {
+        KeyUsages::DigitalSignature.into()
+    }
 }
 
 fn build_basic_constraints(
@@ -537,4 +554,18 @@ fn parse_csr(bytes: &[u8]) -> Result<CertReq, der::Error> {
 fn build_validity(validity_days: u32) -> Result<Validity, der::Error> {
     let duration = std::time::Duration::from_secs(u64::from(validity_days).saturating_mul(86_400));
     Validity::from_now(duration)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use x509_cert::der::oid::db::rfc5912::ID_RSASSA_PSS;
+
+    /// `generate_key` cannot produce this key type, so only a CSR from outside
+    /// can bring one here. It is RSA and still may not transport keys.
+    #[test]
+    fn an_rsa_pss_subject_is_not_given_key_encipherment() {
+        assert!(!tls_server_key_usages(ID_RSASSA_PSS).contains(KeyUsages::KeyEncipherment));
+        assert!(tls_server_key_usages(RSA_ENCRYPTION).contains(KeyUsages::KeyEncipherment));
+    }
 }

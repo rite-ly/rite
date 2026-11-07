@@ -53,6 +53,16 @@ rite-openssl = { workspace = true }
 openssl      = { workspace = true }
 base16ct     = { workspace = true }
 tempfile     = { workspace = true }
+libtest-mimic = { workspace = true }
+# The matrix validates each case as `rite check` validates a ceremony.
+rite-resolver = { workspace = true }
+
+# The algorithm matrix registers one test per case at run time, so it brings
+# its own harness. See `tests/algorithms/main.rs`.
+[[test]]
+name    = "algorithms"
+path    = "tests/algorithms/main.rs"
+harness = false
 
 [lints]
 workspace = true

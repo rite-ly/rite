@@ -2736,28 +2736,6 @@ mod tests {
         );
     }
 
-    /// An RSA signature scheme is defined for any modulus size, so the shared
-    /// compatibility check must not pin RSA requests to one key size.
-    #[test]
-    fn signs_with_an_rsa_4096_key() {
-        let mut backend = OpenSslBackend::try_new("test").unwrap();
-        let metadata = backend
-            .generate_key(spec(KeyAlgorithm::Rsa4096, "signing-key-4096"))
-            .unwrap();
-
-        let message = b"Hello, large modulus!";
-        let signature = backend
-            .sign(&metadata.key_id, message, SignAlgorithm::RsaPkcs1Sha256)
-            .unwrap();
-
-        assert!(check(
-            &metadata,
-            message,
-            &signature,
-            SignAlgorithm::RsaPkcs1Sha256
-        ));
-    }
-
     /// A key of the wrong family is refused before any OpenSSL primitive is
     /// selected, and the error names both sides in their DSL spelling.
     #[test]

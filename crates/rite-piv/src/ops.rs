@@ -13,8 +13,9 @@ use yubikey::piv::{self, SlotId};
 use yubikey::{Certificate, YubiKey};
 
 use rite_sdk::{
-    BackendError, KeyAlgorithm, KeyId, KeyMetadata, PivDeviceInfo, PivKeyOrigin, PivPinPolicy,
-    PivSlot, PivSlotInfo, PivTouchPolicy, PublicKeyDer, SignAlgorithm, YubikeySlotMetadata,
+    AgreedSecret, BackendError, EcCurve, EcPoint, KeyAlgorithm, KeyId, KeyMetadata, PivDeviceInfo,
+    PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy, PublicKeyDer, SignAlgorithm,
+    YubikeySlotMetadata,
 };
 
 use crate::convert;
@@ -431,6 +432,170 @@ pub fn sign(
 }
 
 // ============================================================================
+// Key agreement
+// ============================================================================
+
+/// Run ECDH between the private key in a slot and `peer`, and return the
+/// agreed secret Z.
+///
+/// The card computes Z through GENERAL AUTHENTICATE with the peer's point
+/// under tag `0x85` (SP 800-73-5 Part 2, §3.2.4). The PIN must have been
+/// verified in this session if the slot's policy asks for it, and the card
+/// waits for a touch if its touch policy does.
+///
+/// Only the key-management slots agree: 9D and the retired slots `82`..`95`,
+/// which hold its earlier keys. A PIV key carries no usage attribute, so the
+/// slot is its usage, and this refuses the others rather than have the card
+/// run an ECDH it would also run on a signing key. 9E is the case that
+/// matters most: it has no PIN.
+///
+/// Performs ECDH with the key in a PIV slot and returns the shared secret.
+///
+/// The peer's curve selects the algorithm sent to the card. Reading the slot's
+/// curve first would require GET METADATA, a Yubico extension; the card
+/// refuses an algorithm that does not match its key, so a mismatch computes
+/// nothing. The peer point is checked before it reaches the card. The card
+/// applies the slot's PIN and touch policies.
+///
+/// # Errors
+///
+/// - [`BackendError::OperationNotPermitted`] if the slot is not a
+///   key-management slot;
+/// - [`BackendError::InvalidData`] if the peer point is invalid or uses a
+///   different curve from the slot key;
+/// - [`BackendError::UnsupportedAlgorithm`] if the slot key is not EC;
+/// - [`BackendError::SlotEmpty`] if the slot is empty;
+/// - [`BackendError::PinRequired`] if the PIN has not been verified;
+/// - [`BackendError::HardwareFailure`] if the card refuses and the reason
+///   cannot be determined;
+/// - [`BackendError::Other`] if the returned secret has an unexpected length.
+pub fn agree(
+    yk: &mut YubiKey,
+    key_id: &KeyId,
+    peer: &PublicKeyDer,
+) -> Result<AgreedSecret, BackendError> {
+    let piv_slot = slot_from_key_id(key_id)?;
+    permits_agreement(piv_slot, key_id)?;
+    let slot = convert::to_yubikey_slot(piv_slot)?;
+    let point = peer_point(peer)?;
+    let curve = point.curve();
+    let card_algorithm = convert::to_yubikey_algorithm(curve.key_algorithm()).ok_or_else(|| {
+        BackendError::UnsupportedAlgorithm(format!("PIV defines no key agreement on {curve}"))
+    })?;
+
+    match piv::decrypt_data(yk, point.sec1_uncompressed(), card_algorithm, slot) {
+        Ok(z) => agreed_secret(z, curve),
+        Err(yubikey::Error::GenericError) => {
+            let held = match piv::metadata(yk, slot) {
+                Ok(meta) => match meta.algorithm {
+                    piv::ManagementAlgorithmId::Asymmetric(a) => {
+                        SlotKey::Held(convert::from_yubikey_algorithm(a))
+                    }
+                    _ => SlotKey::Held(None),
+                },
+                Err(yubikey::Error::GenericError) => SlotKey::Empty,
+                Err(_) => SlotKey::Unknown,
+            };
+            Err(refusal(held, key_id, curve))
+        }
+        Err(other) => Err(map_error(other)),
+    }
+}
+
+/// Returns an error unless `slot` is a key-management slot.
+fn permits_agreement(slot: PivSlot, key_id: &KeyId) -> Result<(), BackendError> {
+    let purpose = match slot {
+        PivSlot::KeyManagement | PivSlot::Retired(_) => return Ok(()),
+        PivSlot::Authentication => "the authentication slot",
+        PivSlot::Signature => "the signature slot",
+        PivSlot::CardAuthentication => "the card authentication slot, which needs no PIN",
+    };
+    Err(BackendError::OperationNotPermitted(format!(
+        "{key_id} is {purpose}; key agreement is permitted only in slot 9d or retired \
+         key-management slots 82 to 95"
+    )))
+}
+
+/// Parses the peer's EC point and checks that it lies on its curve.
+///
+/// P-256 and P-384 have cofactor 1, so an on-curve point belongs to the
+/// intended group.
+fn peer_point(peer: &PublicKeyDer) -> Result<EcPoint, BackendError> {
+    let point = peer.ec_point().map_err(|e| {
+        BackendError::InvalidData(format!(
+            "the peer key cannot be used for key agreement: {e}"
+        ))
+    })?;
+    let bytes = point.sec1_uncompressed();
+    let on_curve = match point.curve() {
+        EcCurve::P256 => p256::PublicKey::from_sec1_bytes(bytes).is_ok(),
+        EcCurve::P384 => p384::PublicKey::from_sec1_bytes(bytes).is_ok(),
+        // `EcCurve` is #[non_exhaustive]; a curve PIV does not define has no
+        // check here, and no slot holds a key on it.
+        other => {
+            return Err(BackendError::InvalidData(format!(
+                "the peer key uses {other}; PIV key agreement supports only P-256 and P-384"
+            )));
+        }
+    };
+    if !on_curve {
+        return Err(BackendError::InvalidData(format!(
+            "the peer key's point is not on {}",
+            point.curve()
+        )));
+    }
+    Ok(point)
+}
+
+/// Result of asking the card for the key in a slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlotKey {
+    /// The card reports a key, with its algorithm when known.
+    Held(Option<KeyAlgorithm>),
+    /// The card reports that the slot is empty.
+    Empty,
+    /// The card cannot report the slot contents.
+    Unknown,
+}
+
+/// Maps a card refusal to an error using the slot contents, when known.
+fn refusal(held: SlotKey, key_id: &KeyId, peer_curve: EcCurve) -> BackendError {
+    match held {
+        SlotKey::Held(Some(algorithm)) => match EcCurve::of(algorithm) {
+            Some(slot_curve) if slot_curve == peer_curve => BackendError::HardwareFailure(format!(
+                "the card refused key agreement in slot {key_id}, which holds a {slot_curve} key"
+            )),
+            Some(slot_curve) => BackendError::InvalidData(format!(
+                "the peer key uses {peer_curve}, but slot {key_id} holds a {slot_curve} key"
+            )),
+            None => BackendError::UnsupportedAlgorithm(format!(
+                "slot {key_id} holds {algorithm}; key agreement requires an EC key"
+            )),
+        },
+        SlotKey::Held(None) => BackendError::UnsupportedAlgorithm(format!(
+            "slot {key_id} holds a key with an unsupported algorithm"
+        )),
+        SlotKey::Empty => BackendError::SlotEmpty(key_id.to_string()),
+        SlotKey::Unknown => BackendError::HardwareFailure(format!(
+            "the card refused key agreement in slot {key_id}; it cannot report whether the \
+             slot is empty or holds a key on another curve"
+        )),
+    }
+}
+
+/// Returns the shared secret if its length matches the curve's field length.
+fn agreed_secret(z: yubikey::Buffer, curve: EcCurve) -> Result<AgreedSecret, BackendError> {
+    if z.len() != curve.field_len() {
+        return Err(BackendError::Other(format!(
+            "the card returned a {}-byte shared secret; {curve} requires {} bytes",
+            z.len(),
+            curve.field_len()
+        )));
+    }
+    Ok(AgreedSecret::new(z))
+}
+
+// ============================================================================
 // YubiKey-specific operations
 // ============================================================================
 
@@ -652,6 +817,168 @@ mod tests {
             let key_id = key_id_for_slot(slot);
             let piv_slot = slot_from_key_id(&key_id).unwrap();
             assert_eq!(convert::to_yubikey_slot(piv_slot).unwrap(), slot);
+        }
+    }
+
+    // --- key agreement ---
+
+    /// The SPKI vectors `rite-sdk` tests with, copied so this crate packages
+    /// on its own.
+    mod vectors {
+        pub const P256: &[u8] = include_bytes!("../tests/vectors/p256.spki.der");
+        pub const P384: &[u8] = include_bytes!("../tests/vectors/p384.spki.der");
+        pub const RSA_2048: &[u8] = include_bytes!("../tests/vectors/rsa2048.spki.der");
+    }
+
+    fn key(der: &[u8]) -> PublicKeyDer {
+        PublicKeyDer::new(der.to_vec()).unwrap()
+    }
+
+    #[test]
+    fn agreement_runs_in_the_key_management_slots() {
+        for slot in [
+            PivSlot::KeyManagement,
+            PivSlot::Retired(0),
+            PivSlot::Retired(19),
+        ] {
+            let key_id = key_id_for_piv_slot(slot).unwrap();
+            assert!(permits_agreement(slot, &key_id).is_ok(), "{key_id}");
+        }
+    }
+
+    #[test]
+    fn agreement_is_refused_in_the_other_slots_by_name() {
+        for (slot, named) in [
+            (PivSlot::Authentication, "authentication slot"),
+            (PivSlot::Signature, "signature slot"),
+            (PivSlot::CardAuthentication, "needs no PIN"),
+        ] {
+            let key_id = key_id_for_piv_slot(slot).unwrap();
+            let error = permits_agreement(slot, &key_id).unwrap_err();
+            assert!(
+                matches!(&error, BackendError::OperationNotPermitted(m)
+                    if m.contains(named) && m.contains(key_id.as_str())),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_peer_on_its_curve_is_passed_to_the_card_as_its_point() {
+        for (der, curve) in [
+            (vectors::P256, EcCurve::P256),
+            (vectors::P384, EcCurve::P384),
+        ] {
+            let point = peer_point(&key(der)).unwrap();
+            assert_eq!(point.curve(), curve);
+            assert_eq!(point.sec1_uncompressed().len(), curve.point_len());
+        }
+    }
+
+    /// The vector with the last byte of y flipped: still a well-formed SPKI
+    /// with an uncompressed point of the right length, so only the curve
+    /// equation refuses it. The SPKI ends with the point, so the last byte of
+    /// the DER is the last byte of y.
+    fn off_curve(der: &[u8]) -> PublicKeyDer {
+        let mut bytes = der.to_vec();
+        if let Some(last) = bytes.last_mut() {
+            *last ^= 0x01;
+        }
+        PublicKeyDer::new(bytes).unwrap()
+    }
+
+    #[test]
+    fn a_peer_off_its_curve_is_refused_before_the_card() {
+        for (der, curve) in [
+            (vectors::P256, EcCurve::P256),
+            (vectors::P384, EcCurve::P384),
+        ] {
+            let peer = off_curve(der);
+            assert_eq!(peer.ec_point().unwrap().curve(), curve);
+            let error = peer_point(&peer).unwrap_err();
+            assert!(
+                matches!(&error, BackendError::InvalidData(m) if m.contains("not on")),
+                "{curve}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_peer_that_is_not_ec_is_refused_with_the_cause() {
+        let error = peer_point(&key(vectors::RSA_2048)).unwrap_err();
+        assert!(
+            matches!(&error, BackendError::InvalidData(m) if m.contains("not an EC key")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_names_the_curve_mismatch() {
+        let key_id = KeyId::new("piv:9d");
+        let held = SlotKey::Held(Some(KeyAlgorithm::EcdsaP384));
+        let error = refusal(held, &key_id, EcCurve::P256);
+        assert!(
+            matches!(&error, BackendError::InvalidData(m)
+                if m.contains("P-256") && m.contains("P-384") && m.contains("but slot")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_names_a_slot_that_is_not_ec() {
+        let key_id = KeyId::new("piv:9d");
+        for held in [
+            SlotKey::Held(Some(KeyAlgorithm::Rsa2048)),
+            SlotKey::Held(None),
+        ] {
+            let error = refusal(held, &key_id, EcCurve::P256);
+            assert!(
+                matches!(error, BackendError::UnsupportedAlgorithm(_)),
+                "{held:?}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refusal_names_an_empty_slot() {
+        let key_id = KeyId::new("piv:9d");
+        let error = refusal(SlotKey::Empty, &key_id, EcCurve::P256);
+        assert!(
+            matches!(&error, BackendError::SlotEmpty(slot) if slot == "piv:9d"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_the_card_cannot_explain_says_so() {
+        let key_id = KeyId::new("piv:9d");
+        for held in [
+            SlotKey::Unknown,
+            SlotKey::Held(Some(KeyAlgorithm::EcdsaP256)),
+        ] {
+            let error = refusal(held, &key_id, EcCurve::P256);
+            assert!(
+                matches!(&error, BackendError::HardwareFailure(m) if m.contains("refused")),
+                "{held:?}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_secret_is_a_whole_field_element() {
+        // A leading zero is part of Z and is kept.
+        let mut z = vec![0u8; 31];
+        z.push(0x01);
+        let secret = agreed_secret(yubikey::Buffer::new(z.clone()), EcCurve::P256).unwrap();
+        assert_eq!(secret.kdf_input(), z.as_slice());
+
+        for wrong in [31, 33, 48] {
+            let error =
+                agreed_secret(yubikey::Buffer::new(vec![0x01; wrong]), EcCurve::P256).unwrap_err();
+            assert!(
+                matches!(error, BackendError::Other(_)),
+                "{wrong}: {error:?}"
+            );
         }
     }
 

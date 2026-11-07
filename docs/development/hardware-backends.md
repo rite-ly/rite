@@ -63,6 +63,40 @@ The capability is absent rather than refused, which makes it a static property
 only whether an action requires a backend, never whether the named backend can
 do the work.
 
+## Key agreement
+
+Both PIV backends implement `KeyAgreementBackend` for ECDH on P-256 and
+P-384, using GENERAL AUTHENTICATE with the peer's point under tag `0x85`.
+The `yubikey::piv::decrypt_data` function sends this command and is gated by
+the crate's `untested` feature, which `rite-piv` enables. The ceremony
+`decrypt_data` action uses key agreement to open a CMS `kari` container.
+
+- **Slots.** Agreement is permitted in slot 9D and retired key-management slots
+  `82`..`95`. PIV keys have no usage attribute, so the slot determines their
+  use. The backend refuses slots 9A, 9C, and 9E with
+  `OperationNotPermitted`. Slot 9E requires no PIN, so anyone holding the card
+  could use its key for agreement.
+- **Peer key.** The container supplies the ephemeral public key. Before sending
+  it to the card, the backend checks that it is on P-256 or P-384 and that its
+  point lies on that curve. An invalid point returns `InvalidData`. See
+  [`cryptographic-dependencies.md`](cryptographic-dependencies.md) for why
+  this check belongs in the hardware backend.
+- **Curve and slot contents.** The peer's curve selects the card algorithm.
+  The card refuses an algorithm that does not match its key, so a mismatch
+  computes nothing. A card refusal triggers a GET METADATA request, when
+  supported, to identify the slot's key. YubiKey firmware 5.2.3 and later
+  supports this request. Without it, the backend cannot distinguish an empty
+  slot from an incompatible key.
+- **Secret length.** The backend accepts a shared secret only at the full field
+  length: 32 bytes for P-256 or 48 bytes for P-384.
+
+No ceremony can reach agreement on hardware yet: the `decrypt_data` action
+takes its key as a `BackendKey` artifact, which a slot provisioned beforehand
+does not have, and it does not prompt for the PIN required by slot 9D's
+default policy. The mock backend performs agreement in software and does not
+call `rite_piv::ops::agree`. Unit tests cover host-side checks; the manual
+check below describes the hardware test.
+
 A ceremony selects a backend by its provider:
 
 ```yaml
@@ -89,10 +123,11 @@ from the `yubikey` crate's raw key references (`0x82..=0x95`).
 
 ## Operations left unimplemented
 
-These return a clear `UnsupportedOperation` error rather than a silent no-op,
-because they need the `yubikey` crate's `untested` write paths and are not part
-of the initial scope: key import, change PIN, unblock PIN, change management
-key, and block PUK.
+These return a clear `UnsupportedOperation` error rather than a silent no-op:
+key import, change PIN, unblock PIN, change management key, and block PUK.
+The `yubikey` crate gates them behind its `untested` feature, which `rite-piv`
+enables for key agreement. Each operation still needs implementation and
+hardware testing.
 
 ## Verification
 
@@ -130,3 +165,8 @@ CI cannot touch a physical device, so:
      (`openssl dgst -sha256 -verify`). Cargo tests exercise these paths only
      against test doubles; the encoding the card actually accepts (bare digest
      for ECDSA, padded PKCS#1 block for RSA) is proven here or nowhere.
+  5. Test key agreement as described in [Key agreement](#key-agreement):
+     provision an EC key and certificate in slot 9D, encrypt content to the
+     certificate with `openssl cms -encrypt` using an ECDH recipient, then open
+     it with `decrypt_data` and compare the content. Repeat with P-256 and
+     P-384.

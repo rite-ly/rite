@@ -223,6 +223,132 @@ impl PublicKeyDer {
             ))),
         }
     }
+
+    /// Returns the EC point and curve named by this public key's SPKI.
+    ///
+    /// The point is in SEC 1 uncompressed form. This method checks the encoding
+    /// and length, but not whether the point lies on the curve.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::UnsupportedAlgorithm`] if the key is not on a
+    /// supported EC curve, or [`BackendError::InvalidKeyFormat`] if its SPKI
+    /// or point encoding is invalid.
+    pub fn ec_point(&self) -> Result<EcPoint, BackendError> {
+        let algorithm = self.algorithm()?;
+        let curve = EcCurve::of(algorithm).ok_or_else(|| {
+            BackendError::UnsupportedAlgorithm(format!("{algorithm} is not an EC key"))
+        })?;
+        let spki = SubjectPublicKeyInfoRef::from_der(&self.0)
+            .map_err(|e| BackendError::InvalidKeyFormat(format!("SPKI is unreadable: {e}")))?;
+        let point = spki.subject_public_key.as_bytes().ok_or_else(|| {
+            BackendError::InvalidKeyFormat("EC point is not a whole number of bytes".to_string())
+        })?;
+        // `new` has refused a compressed point, so only the length is left.
+        if point.len() != curve.point_len() {
+            return Err(BackendError::InvalidKeyFormat(format!(
+                "a {curve} point is {} bytes uncompressed, and this one is {}",
+                curve.point_len(),
+                point.len()
+            )));
+        }
+        Ok(EcPoint {
+            curve,
+            point: point.to_vec(),
+        })
+    }
+}
+
+/// A supported EC curve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum EcCurve {
+    /// NIST P-256, `secp256r1`.
+    P256,
+    /// NIST P-384, `secp384r1`.
+    P384,
+}
+
+impl EcCurve {
+    /// Returns the curve for an EC key algorithm, or `None` for other algorithms.
+    #[must_use]
+    pub fn of(algorithm: KeyAlgorithm) -> Option<Self> {
+        match algorithm {
+            KeyAlgorithm::EcdsaP256 => Some(Self::P256),
+            KeyAlgorithm::EcdsaP384 => Some(Self::P384),
+            KeyAlgorithm::Rsa2048
+            | KeyAlgorithm::Rsa4096
+            | KeyAlgorithm::Ed25519
+            | KeyAlgorithm::MlDsa44
+            | KeyAlgorithm::MlDsa65
+            | KeyAlgorithm::MlDsa87
+            | KeyAlgorithm::MlKem512
+            | KeyAlgorithm::MlKem768
+            | KeyAlgorithm::MlKem1024
+            | KeyAlgorithm::Aes128
+            | KeyAlgorithm::Aes256 => None,
+        }
+    }
+
+    /// Returns the EC key algorithm for this curve.
+    #[must_use]
+    pub fn key_algorithm(self) -> KeyAlgorithm {
+        match self {
+            Self::P256 => KeyAlgorithm::EcdsaP256,
+            Self::P384 => KeyAlgorithm::EcdsaP384,
+        }
+    }
+
+    /// Returns the field-element length in bytes.
+    #[must_use]
+    pub fn field_len(self) -> usize {
+        match self {
+            Self::P256 => 32,
+            Self::P384 => 48,
+        }
+    }
+
+    /// Returns the SEC 1 uncompressed point length in bytes.
+    #[must_use]
+    pub fn point_len(self) -> usize {
+        match self {
+            Self::P256 => 65,
+            Self::P384 => 97,
+        }
+    }
+}
+
+impl std::fmt::Display for EcCurve {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::P256 => "P-256",
+            Self::P384 => "P-384",
+        })
+    }
+}
+
+/// An EC public point in SEC 1 uncompressed form.
+///
+/// The point's encoding and length are checked when it is constructed.
+/// Whether it lies on the curve must be checked before passing it to a device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EcPoint {
+    curve: EcCurve,
+    point: Vec<u8>,
+}
+
+impl EcPoint {
+    /// Returns the point's curve.
+    #[must_use]
+    pub fn curve(&self) -> EcCurve {
+        self.curve
+    }
+
+    /// Returns the point in SEC 1 uncompressed form.
+    #[must_use]
+    pub fn sec1_uncompressed(&self) -> &[u8] {
+        &self.point
+    }
 }
 
 impl From<PublicKeyDer> for Vec<u8> {
@@ -488,6 +614,61 @@ mod tests {
             );
             assert!(err.to_string().contains(says), "{err}");
         }
+    }
+
+    #[test]
+    fn reads_the_point_out_of_an_ec_key() {
+        for (der, curve, field_len) in [
+            (vectors::P256, EcCurve::P256, 32),
+            (vectors::P384, EcCurve::P384, 48),
+        ] {
+            let point = PublicKeyDer::new(der.to_vec()).unwrap().ec_point().unwrap();
+            let bits = SubjectPublicKeyInfoRef::from_der(der)
+                .unwrap()
+                .subject_public_key
+                .raw_bytes();
+            assert_eq!(point.curve(), curve);
+            assert_eq!(point.curve().field_len(), field_len);
+            assert_eq!(point.sec1_uncompressed().len(), point.curve().point_len());
+            assert_eq!(EcCurve::of(curve.key_algorithm()), Some(curve));
+            assert_eq!(point.sec1_uncompressed(), bits);
+            assert_eq!(point.sec1_uncompressed().first(), Some(&0x04));
+        }
+    }
+
+    #[test]
+    fn a_key_that_is_not_ec_has_no_point() {
+        for der in [vectors::RSA_2048, vectors::ED25519, vectors::ML_DSA_44] {
+            let error = PublicKeyDer::new(der.to_vec())
+                .unwrap()
+                .ec_point()
+                .unwrap_err();
+            assert!(
+                matches!(error, BackendError::UnsupportedAlgorithm(_)),
+                "{error:?}"
+            );
+        }
+    }
+
+    /// A P-256 SPKI whose point has lost its last byte: uncompressed, so
+    /// `new` accepts it, but too short for the curve.
+    #[test]
+    fn refuses_a_point_too_short_for_its_curve() {
+        let spki = SubjectPublicKeyInfoRef::from_der(vectors::P256).unwrap();
+        let bits = spki.subject_public_key.raw_bytes();
+        let (_, truncated) = bits.split_last().unwrap();
+        let der = SubjectPublicKeyInfoRef {
+            algorithm: spki.algorithm,
+            subject_public_key: x509_cert::der::asn1::BitStringRef::from_bytes(truncated).unwrap(),
+        }
+        .to_der()
+        .unwrap();
+
+        let error = PublicKeyDer::new(der).unwrap().ec_point().unwrap_err();
+        assert!(
+            matches!(&error, BackendError::InvalidKeyFormat(m) if m.contains("65 bytes")),
+            "{error:?}"
+        );
     }
 
     /// The mistake the type exists to prevent. Certificate DER handed to an SPKI

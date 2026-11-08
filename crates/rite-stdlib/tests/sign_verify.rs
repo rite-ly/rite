@@ -1,7 +1,8 @@
-// Round trip through the `sign_data` and `verify_signature` actions.
+// The `sign_data` and `verify_signature` actions, beyond the algorithms.
 //
-// The example ceremony covers the happy path end to end. What it cannot show is
-// that verification would have failed: a check that always passes is worth
+// What each algorithm signs and verifies, and each form the key arrives in,
+// is the algorithm matrix (`tests/algorithms/`). What it cannot show is that
+// verification would have failed: a check that always passes is worth
 // nothing, so the negative cases live here.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -162,36 +163,16 @@ fn verify_under(
         .map_err(|e| e.to_string())
 }
 
-#[test]
-fn verifies_a_signature_it_just_produced() {
-    let mut signed = sign_with("ECDSA-P256", &serde_json::json!({}));
-    verify(&mut signed, &serde_json::json!({}), None).expect("signature must verify");
-}
-
-/// ML-DSA signing is hedged, so the same key over the same message gives
-/// different bytes each time. The assertion is that verification succeeds, never
-/// that the signature equals a fixed value.
-#[test]
-fn verifies_a_post_quantum_signature() {
-    let mut signed = sign_with("ML-DSA-65", &serde_json::json!({}));
-    verify(&mut signed, &serde_json::json!({}), None).expect("ML-DSA signature must verify");
-}
-
 /// An RSA key admits two schemes, so the algorithm named at signing time has to
-/// reach verification. Deriving it from the key would pick PKCS#1 v1.5 and fail.
+/// reach verification: deriving it from the key picks PKCS#1 v1.5, which a PSS
+/// signature must fail. That it verifies when the scheme is named is a row of
+/// the algorithm matrix.
 #[test]
-fn round_trips_an_rsa_pss_signature_through_the_override() {
+fn a_pss_signature_does_not_verify_under_the_default_scheme() {
     let mut signed = sign_with(
         "RSA-2048",
         &serde_json::json!({ "algorithm": "RSA-PSS-SHA256" }),
     );
-
-    verify(
-        &mut signed,
-        &serde_json::json!({ "algorithm": "RSA-PSS-SHA256" }),
-        None,
-    )
-    .expect("PSS signature must verify when the scheme is named");
 
     let err = verify(&mut signed, &serde_json::json!({}), None)
         .expect_err("a PSS signature must not verify as PKCS#1 v1.5");
@@ -350,67 +331,6 @@ fn issue_self_signed_certificate(mut signed: Signed) -> Signed {
     signed
 }
 
-/// The four shapes a signer's key arrives in all verify the same signature.
-///
-/// Verification resolves the key before it picks a verifier, so a step written
-/// against a keypair works unchanged when the ceremony later feeds it an
-/// exported key, a certificate, or a file loaded off a USB stick. The PEM and
-/// raw-bytes cases are the ones a ceremony author hits: `piv_read_certificate`
-/// and a `material:` both land as bytes with no artifact type to help.
-#[test]
-fn verifies_under_every_shape_a_key_arrives_in() {
-    let signed = sign_with("ECDSA-P256", &serde_json::json!({}));
-    let mut signed = issue_self_signed_certificate(signed);
-
-    let certificate_der = {
-        let ctx = signed.state.handler_context();
-        match ctx.artifacts.get(&ArtifactId::new("signing_cert")) {
-            Some(ArtifactValue::Certificate(certificate)) => certificate.as_bytes().to_vec(),
-            other => panic!("expected a certificate, got {other:?}"),
-        }
-    };
-    let public_der = rite_sdk::CertificateDer::new(certificate_der.clone())
-        .unwrap()
-        .public_key()
-        .unwrap();
-
-    let staged: Vec<(&str, ArtifactValue)> = vec![
-        // A bare public key, as `export_public` produces it.
-        (
-            "as_public_key",
-            ArtifactValue::PublicKey(public_der.clone()),
-        ),
-        // A certificate that arrived as loose bytes, which is what
-        // `piv_read_certificate` produced before it was typed, and what a
-        // certificate read from a file still looks like.
-        (
-            "as_certificate_bytes",
-            ArtifactValue::Bytes(certificate_der.clone()),
-        ),
-        // PEM off disk, the usual way a counterparty's key reaches a ceremony.
-        (
-            "as_key_pem",
-            ArtifactValue::Bytes(pem("PUBLIC KEY", public_der.as_bytes())),
-        ),
-        (
-            "as_certificate_pem",
-            ArtifactValue::Bytes(pem("CERTIFICATE", &certificate_der)),
-        ),
-    ];
-
-    for (id, value) in staged {
-        signed = signed.replace(id, value);
-        verify_under(id, &mut signed, &serde_json::json!({}), None)
-            .unwrap_or_else(|e| panic!("verification under '{id}' must succeed: {e}"));
-    }
-
-    // The keypair and the certificate artifact itself, for completeness.
-    for id in ["signing_key", "signing_cert"] {
-        verify_under(id, &mut signed, &serde_json::json!({}), None)
-            .unwrap_or_else(|e| panic!("verification under '{id}' must succeed: {e}"));
-    }
-}
-
 /// Naming a backend picks who checks the signature, never what is checked.
 ///
 /// The same certificate artifact that verifies in software verifies through a
@@ -429,12 +349,4 @@ fn a_named_backend_verifies_the_same_input_software_does() {
         Some("openssl"),
     )
     .expect("the backend verifies under the same certificate");
-}
-
-/// PEM-armour `der` under `label`, the way a file on disk carries it.
-fn pem(label: &str, der: &[u8]) -> Vec<u8> {
-    use x509_cert::der::pem::{LineEnding, encode_string};
-    encode_string(label, LineEnding::LF, der)
-        .expect("label is valid")
-        .into_bytes()
 }

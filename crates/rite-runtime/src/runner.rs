@@ -643,9 +643,10 @@ impl Executor {
             state = state.with_material(ArtifactId::new(id.as_str()), artifact);
         }
 
+        let mut bound = HashSet::new();
         let mut backends = RunBackends {
             registry: &mut self.backend_registry,
-            bound: HashSet::new(),
+            bound: &mut bound,
         };
         let has_acts = !self.ceremony.acts.is_empty();
         let mut current_act: Option<ActId> = None;
@@ -678,61 +679,20 @@ impl Executor {
                 }
             }
 
-            reporter.set_current_step(Some(step.id.clone()));
-            reporter.set_current_backend(step.backend.clone());
-            reporter.fact(StepFact::StepStarted {
-                id: step.id.clone(),
-                label: step.step_label.clone(),
-                role: step.role.clone().unwrap_or_else(|| RoleId::new("")),
-            })?;
-
-            // Look up handler
-            let handler = self
-                .registry
-                .get(&step.action)
-                .ok_or(ExecutionError::UnknownAction(step.action))?
-                .clone();
-
-            // The params depend only on what earlier steps produced, so a
-            // block that cannot run is refused before the operator is asked
-            // to start the step.
-            let ctx = state.handler_context();
-            let step_info = step_info_from(step);
-            let params = step_params(handler.as_ref(), step, &step_info, &ctx, reporter)?;
-
-            // Pacing: gate the step body on operator acknowledgement. The
-            // prompt fires with the step header already visible, so the
-            // operator confirms "ready for step X" rather than "what just
-            // happened was fine". `silent` skips it for auto-advancing
-            // bookkeeping steps; `dry_run` skips it for non-interactive
-            // verification.
-            if !step.silent && !dry_run {
-                reporter.prompt(&Prompt::Continue {
-                    hint: Some(format!("Press Enter to start step {}", step.step_label)),
-                })?;
-            }
-
-            let result = execute_step_with_retry(
-                handler.as_ref(),
+            let result = run_step(
                 step,
-                &step_info,
-                &ctx,
-                &params,
+                &self.registry,
+                &state,
                 reporter,
                 &mut backends,
+                !dry_run,
             )?;
-
-            // StepCompleted
-            reporter.fact(StepFact::StepCompleted {
-                id: step.id.clone(),
-                outcome: result.outcome.clone(),
-            })?;
 
             if let StepOutcome::Completed { .. } = &result.outcome {
                 counts.completed = counts.completed.saturating_add(1);
             }
 
-            state = merge_step_result(state, result);
+            merge_step_result(&mut state, result);
 
             // Write output-bound artifacts. The DSL declares which artifact
             // a step `creates`; we promote that to disk if it is also a
@@ -834,10 +794,70 @@ fn artifact_level(action: ActionType, value: &ArtifactValue) -> Level {
     }
 }
 
+/// Run one step, from announcing it to recording how it ended: all the
+/// executor does to a step that does not depend on the run around it.
+///
+/// `paced` asks the operator's acknowledgement before the step body, unless the
+/// step is silent.
+pub(crate) fn run_step(
+    step: &Step,
+    actions: &ActionRegistry,
+    state: &ExecutionState,
+    reporter: &mut Reporter<'_>,
+    backends: &mut RunBackends<'_>,
+    paced: bool,
+) -> Result<StepResult, ExecutionError> {
+    reporter.set_current_step(Some(step.id.clone()));
+    reporter.set_current_backend(step.backend.clone());
+    reporter.fact(StepFact::StepStarted {
+        id: step.id.clone(),
+        label: step.step_label.clone(),
+        role: step.role.clone().unwrap_or_else(|| RoleId::new("")),
+    })?;
+
+    // Look up handler
+    let handler = actions
+        .get(&step.action)
+        .ok_or(ExecutionError::UnknownAction(step.action))?;
+
+    // The params depend only on what earlier steps produced, so a block that
+    // cannot run is refused before the operator is asked to start the step.
+    let ctx = state.handler_context();
+    let step_info = step_info_from(step);
+    let params = step_params(handler.as_ref(), step, &step_info, &ctx, reporter)?;
+
+    // Pacing: gate the step body on operator acknowledgement. The prompt fires
+    // with the step header already visible, so the operator confirms "ready
+    // for step X" rather than "what just happened was fine". `silent` skips it
+    // for auto-advancing bookkeeping steps; a dry run is not paced, for
+    // non-interactive verification.
+    if !step.silent && paced {
+        reporter.prompt(&Prompt::Continue {
+            hint: Some(format!("Press Enter to start step {}", step.step_label)),
+        })?;
+    }
+
+    let result = execute_step_with_retry(
+        handler.as_ref(),
+        step,
+        &step_info,
+        &ctx,
+        &params,
+        reporter,
+        backends,
+    )?;
+
+    reporter.fact(StepFact::StepCompleted {
+        id: step.id.clone(),
+        outcome: result.outcome.clone(),
+    })?;
+    Ok(result)
+}
+
 /// The run's backends, and which of them have had their identity recorded.
-struct RunBackends<'a> {
-    registry: &'a mut BackendRegistry,
-    bound: HashSet<String>,
+pub(crate) struct RunBackends<'a> {
+    pub(crate) registry: &'a mut BackendRegistry,
+    pub(crate) bound: &'a mut HashSet<String>,
 }
 
 impl RunBackends<'_> {
@@ -1076,18 +1096,8 @@ fn validate_parameters(ceremony: &Ceremony) -> Result<(), ExecutionError> {
 }
 
 /// Fold a step's produced artifacts into the running [`ExecutionState`].
-fn merge_step_result(state: ExecutionState, result: StepResult) -> ExecutionState {
-    let mut artifacts = state.artifacts;
-    for (id, value) in result.artifacts {
-        artifacts.insert(id, value);
-    }
-    ExecutionState {
-        params: state.params,
-        roles: state.roles,
-        materials: state.materials,
-        dry_run: state.dry_run,
-        artifacts,
-    }
+pub(crate) fn merge_step_result(state: &mut ExecutionState, result: StepResult) {
+    state.artifacts.extend(result.artifacts);
 }
 
 #[cfg(test)]

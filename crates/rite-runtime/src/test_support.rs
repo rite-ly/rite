@@ -5,15 +5,21 @@
 //! [`Reporter`] in unit and integration tests, so downstream crates can
 //! exercise their actions without dealing with channel plumbing.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use rite_model::StepId;
+use rite_model::{ArtifactId, Step, StepId};
 
+use crate::actions::ArtifactValue;
+use crate::backend::BackendRegistry;
 use crate::clock::{Clock, SystemClock};
+use crate::executor::ExecutionError;
 use crate::protocol::{ExecEvent, PromptId, Response, UiCommand};
 use crate::reporter::Reporter;
+use crate::runner::{ActionRegistry, RunBackends, merge_step_result, run_step};
+use crate::state::ExecutionState;
 use crate::transcript_sink::{InMemorySink, JsonlFileSink, TranscriptSink};
 use rite_model::{Sha256Digest, StepFact, TranscriptHeader};
 
@@ -121,6 +127,73 @@ impl ReporterHarness {
 impl Default for ReporterHarness {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Runs resolved steps one at a time through the executor's own step path,
+/// for a test that needs to see each step's outcome and artifacts.
+///
+/// There is no operator: a step is not paced, and a retry prompt has no answer
+/// unless one is queued on the harness.
+pub struct StepRunner {
+    actions: ActionRegistry,
+    backends: BackendRegistry,
+    bound: HashSet<String>,
+    state: ExecutionState,
+    harness: ReporterHarness,
+}
+
+impl StepRunner {
+    /// A runner with no artifacts, dispatching to `actions` and `backends`.
+    #[must_use]
+    pub fn new(actions: ActionRegistry, backends: BackendRegistry) -> Self {
+        Self {
+            actions,
+            backends,
+            bound: HashSet::new(),
+            state: ExecutionState::new(HashMap::new(), HashMap::new(), HashMap::new(), false),
+            harness: ReporterHarness::new(),
+        }
+    }
+
+    /// Make `value` available to later steps as the material `id`.
+    pub fn add_material(&mut self, id: ArtifactId, value: ArtifactValue) {
+        self.state.artifacts.insert(id, value);
+    }
+
+    /// Run `step`, and keep what it produces for later steps.
+    ///
+    /// # Errors
+    ///
+    /// Returns what would end the run at this step.
+    pub fn run(&mut self, step: &Step) -> Result<(), ExecutionError> {
+        let mut reporter = self.harness.reporter(step.id.clone());
+        let mut backends = RunBackends {
+            registry: &mut self.backends,
+            bound: &mut self.bound,
+        };
+        let result = run_step(
+            step,
+            &self.actions,
+            &self.state,
+            &mut reporter,
+            &mut backends,
+            false,
+        )?;
+        merge_step_result(&mut self.state, result);
+        Ok(())
+    }
+
+    /// The artifact `id`, if a material or a step put it there.
+    #[must_use]
+    pub fn artifact(&self, id: &ArtifactId) -> Option<&ArtifactValue> {
+        self.state.artifacts.get(id)
+    }
+
+    /// Facts recorded so far, in order.
+    #[must_use]
+    pub fn facts(&self) -> &[StepFact] {
+        self.harness.facts()
     }
 }
 

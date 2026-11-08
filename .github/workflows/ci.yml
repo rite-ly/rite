@@ -120,11 +120,14 @@ jobs:
       # The runner links OpenSSL 3.5, which cannot wrap to an ML-KEM key, so
       # the Test job compiles the `ossl360` tests out of `rite-openssl` and
       # skips the post-quantum example. This job bundles OpenSSL 3.6, so both
-      # run here. RITE_OSSL360=0 also compiles the 3.5 side against it.
+      # run here. RITE_OSSL360=0 also compiles the 3.5 side against it. The
+      # algorithm matrix runs every case here: RITE_MATRIX_REQUIRE_BUILD turns
+      # a case this build would skip into a failure.
       - name: Test (vendored OpenSSL)
         run: |
           cargo test -p rite-openssl --features vendored
           cargo test -p rite --features openssl-vendored --test examples
+          RITE_MATRIX_REQUIRE_BUILD=1 cargo test -p rite-stdlib --features openssl-vendored --test algorithms
           RITE_OSSL360=0 cargo clippy -p rite-openssl --features vendored --all-targets -- -D warnings
           RITE_OSSL360=0 cargo test -p rite-openssl --features vendored
 

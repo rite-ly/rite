@@ -53,6 +53,7 @@ insta = { version = "1.47.2", features = ["yaml", "filters"] }
 schemars = "1.2.2"
 jsonschema = { version = "0.60.0", default-features = false }
 assert_cmd = "2.2.2"
+libtest-mimic = "0.8.2"
 secrecy = "0.10.3"
 rpassword = "7.5.2"
 base16ct = { version = "1.0.0", features = ["alloc"] }

@@ -285,7 +285,7 @@ pub const FIXTURES: &[SignatureFixture] = &[
     signed("rsa-2048-pkcs1-sha512", K::Rsa2048, pkcs1("sha512", RSA_2048), Some("RSA-PKCS1-SHA512"), verify_unchecked(Unsupported, NO_SUCH_SIGNATURE)),
     signed("rsa-3072-pkcs1-sha256", K::Rsa3072, pkcs1("sha256", 384), DEFAULT, verify_fails(Unsupported, "RSA key size 3072 bits not supported")),
     // An RSA key restricted to PSS by its SPKI (RFC 4055).
-    signed("rsa-pss-2048-pss-sha256", K::RsaPss2048, pss_sha256(RSA_2048), PSS, verify_fails(Unsupported, "public key algorithm 1.2.840.113549.1.1.10 is not supported")),
+    signed("rsa-pss-2048-pss-sha256", K::RsaPss2048, pss_sha256(RSA_2048), PSS, verify_fails(Unsupported, "public key algorithm id-RSASSA-PSS (1.2.840.113549.1.1.10) is not supported")),
     signed("rsa-1024-pkcs1-sha256", K::Rsa1024, pkcs1("sha256", 128), DEFAULT, verify_fails(Unsupported, "RSA key size 1024 bits not supported")),
     signed("p-256-sha256", K::P256, ecdsa("sha256", 32), DEFAULT, verifies("ECDSA-SHA256")),
     signed("p-384-sha384", K::P384, ecdsa("sha384", 48), DEFAULT, verifies("ECDSA-SHA384")),

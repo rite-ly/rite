@@ -335,47 +335,15 @@ fn check_key_accepted(
 /// Needed wherever the algorithm is not carried alongside the key: CMS
 /// `EnvelopedData` holds the raw key bytes as opaque content, and a bare SPKI
 /// public key arrives with no ceremony metadata attached.
+///
+/// The key's SPKI is classified by [`PublicKeyDer::algorithm`], the reading
+/// every other path uses, so a key Rite has no type for is refused in the same
+/// words whichever step meets it.
 fn key_algorithm_of<T: HasPublic>(pkey: &PKeyRef<T>) -> Result<KeyAlgorithm, BackendError> {
-    match pkey.id() {
-        Id::RSA => match pkey.bits() {
-            2048 => Ok(KeyAlgorithm::Rsa2048),
-            4096 => Ok(KeyAlgorithm::Rsa4096),
-            bits => Err(BackendError::UnsupportedAlgorithm(format!(
-                "RSA key size {bits} bits not supported (expected 2048 or 4096)"
-            ))),
-        },
-        Id::EC => {
-            let ec_key = pkey.ec_key().map_err(|e| ossl_err("Read EC key", &e))?;
-            let nid = ec_key
-                .group()
-                .curve_name()
-                .ok_or_else(|| BackendError::Other("EC key has no named curve".to_string()))?;
-            match nid {
-                Nid::X9_62_PRIME256V1 => Ok(KeyAlgorithm::EcdsaP256),
-                Nid::SECP384R1 => Ok(KeyAlgorithm::EcdsaP384),
-                _ => Err(BackendError::UnsupportedAlgorithm(format!(
-                    "EC curve {nid:?} is not supported (expected P-256 or P-384)"
-                ))),
-            }
-        }
-        Id::ED25519 => Ok(KeyAlgorithm::Ed25519),
-        _ => {
-            for (algorithm, key_type) in &ML_DSA_KEY_TYPES {
-                if pkey.is_a(*key_type) {
-                    return Ok(*algorithm);
-                }
-            }
-            for (algorithm, key_type) in &ML_KEM_KEY_TYPES {
-                if pkey.is_a(*key_type) {
-                    return Ok(*algorithm);
-                }
-            }
-
-            Err(BackendError::UnsupportedAlgorithm(
-                "Key is not RSA, a supported EC curve, Ed25519, ML-DSA, or ML-KEM".to_string(),
-            ))
-        }
-    }
+    let der = pkey
+        .public_key_to_der()
+        .map_err(|e| ossl_err("Export public key", &e))?;
+    PublicKeyDer::new(der)?.algorithm()
 }
 
 /// Seed length shared by every ML-DSA parameter set (FIPS 204 xi is 32 bytes).
@@ -1013,8 +981,8 @@ fn cert_for_public_key(
 /// The refusal for a recipient key that signs and does not encapsulate.
 fn cannot_receive_wrap(algorithm: KeyAlgorithm) -> BackendError {
     BackendError::UnsupportedAlgorithm(format!(
-        "{algorithm} cannot receive a wrap: it signs but does not encapsulate. \
-         Wrap to an RSA, EC or ML-KEM key instead."
+        "{algorithm} cannot be a recipient: it only signs. Wrap to an RSA, EC or \
+         ML-KEM key instead."
     ))
 }
 
@@ -4717,7 +4685,7 @@ mod tests {
     /// An Ed25519 key used to fail inside the certificate builder with a
     /// digest complaint, which said nothing about the actual problem.
     #[test]
-    fn refuses_a_recipient_that_cannot_encapsulate() {
+    fn refuses_a_recipient_that_only_signs() {
         let mut backend = OpenSslBackend::try_new("test").unwrap();
         let target = backend
             .generate_key(extractable(KeyAlgorithm::Rsa2048, "target"))
@@ -4732,7 +4700,7 @@ mod tests {
                 .unwrap_err();
             let message = error.to_string();
             assert!(
-                message.contains("does not encapsulate"),
+                message.contains("cannot be a recipient: it only signs"),
                 "unhelpful error for {algorithm}: {message}"
             );
         }

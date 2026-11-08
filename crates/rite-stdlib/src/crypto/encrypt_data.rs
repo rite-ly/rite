@@ -281,6 +281,14 @@ fn admits_recipient(recipient: &PublicKeyDer) -> Result<(), ActionError> {
     let algorithm = recipient
         .algorithm()
         .map_err(|e| ActionError::Failed(e.to_string()))?;
+    // The words `wrap_key` uses for the same key, so the two steps agree.
+    if !algorithm.can_receive_wrap() {
+        return Err(ActionError::Failed(format!(
+            "{algorithm} cannot be a recipient: it only signs. {} encrypts to an RSA-2048, \
+             RSA-4096, P-256 or P-384 public key.",
+            WrapScheme::CmsAes256Gcm
+        )));
+    }
     if WrapScheme::RsaOaepSha256.accepts_recipient(algorithm)
         || cms::X963Kdf::for_recipient(algorithm).is_some()
     {

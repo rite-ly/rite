@@ -213,8 +213,6 @@ pub const WRITES: &[WriteCase] = &[
     case(WrapKey, PUBLIC, K::SlhDsaSha2_128s, write_fails(Unsupported, Step, "public key algorithm id-slh-dsa-sha2-128s (2.16.840.1.101.3.4.3.20) is not supported")),
     case(WrapKey, PUBLIC, K::Rsa1024, write_fails(Unsupported, Step, "RSA key size 1024 bits not supported")),
     case(WrapKey, PUBLIC, K::Rsa3072, write_fails(Unsupported, Step, "RSA key size 3072 bits not supported")),
-    // wrap_key reads the key with OpenSSL, which calls it not RSA; encrypt_data
-    // reads the SPKI and names its OID.
     case(WrapKey, PUBLIC, K::RsaPss2048, write_fails(Unsupported, Step, "public key algorithm id-RSASSA-PSS (1.2.840.113549.1.1.10) is not supported")),
     case(WrapKey, PUBLIC, K::P521, write_fails(Unsupported, Step, "EC curve secp521r1 (1.3.132.0.35) is not supported")),
     case(WrapKey, PUBLIC, K::Secp256k1, write_fails(Unsupported, Step, "EC curve secp256k1 (1.3.132.0.10) is not supported")),

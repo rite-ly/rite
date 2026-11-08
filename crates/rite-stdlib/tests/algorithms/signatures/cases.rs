@@ -45,6 +45,15 @@ const fn ecdsa(digest: &'static str, scalar: usize) -> Scheme {
     }
 }
 
+/// ECDSA as fixed-width `r || s`, each `scalar` bytes.
+const fn ecdsa_p1363(digest: &'static str, scalar: usize) -> Scheme {
+    Scheme {
+        digest: Some(digest),
+        pkeyopts: &[],
+        encoding: Encoding::P1363 { scalar },
+    }
+}
+
 /// A scheme over the whole message, with a signature of `bytes`.
 const fn whole(bytes: usize) -> Scheme {
     Scheme {
@@ -238,13 +247,6 @@ const PSS_MGF1_SHA1: Scheme = Scheme {
     encoding: Encoding::Bytes(RSA_2048),
 };
 
-/// ECDSA over P-256 and SHA-256, as fixed-width `r || s`.
-const ECDSA_P1363: Scheme = Scheme {
-    digest: Some("sha256"),
-    pkeyopts: &[],
-    encoding: Encoding::P1363 { scalar: 32 },
-};
-
 /// ML-DSA-44 with a non-empty context string (FIPS 204, section 5.2).
 const ML_DSA_44_CONTEXT: Scheme = Scheme {
     digest: None,
@@ -289,9 +291,9 @@ pub const FIXTURES: &[SignatureFixture] = &[
     signed("rsa-1024-pkcs1-sha256", K::Rsa1024, pkcs1("sha256", 128), DEFAULT, verify_fails(Unsupported, "RSA key size 1024 bits not supported")),
     signed("p-256-sha256", K::P256, ecdsa("sha256", 32), DEFAULT, verifies("ECDSA-SHA256")),
     signed("p-384-sha384", K::P384, ecdsa("sha384", 48), DEFAULT, verifies("ECDSA-SHA384")),
-    // OpenSSL fails to parse r || s as DER, and Rite passes its error on as
-    // is, naming neither the encoding nor what it expects.
-    signed("p-256-sha256-p1363", K::P256, ECDSA_P1363, DEFAULT, verify_fails(Unsupported, "Verify operation: OpenSSL error")),
+    // r || s, as JOSE, WebCrypto and PKCS#11 tools write it.
+    signed("p-256-sha256-p1363", K::P256, ecdsa_p1363("sha256", 32), DEFAULT, verifies("ECDSA-SHA256")),
+    signed("p-384-sha384-p1363", K::P384, ecdsa_p1363("sha384", 48), DEFAULT, verifies("ECDSA-SHA384")),
     signed("p-256-sha384", K::P256, ecdsa("sha384", 32), Some("ECDSA-SHA384"), verify_fails(Unsupported, NOT_WITH_THIS_KEY)),
     signed("p-384-sha256", K::P384, ecdsa("sha256", 48), Some("ECDSA-SHA256"), verify_fails(Unsupported, NOT_WITH_THIS_KEY)),
     signed("p-256-sha1", K::P256, ecdsa("sha1", 32), Some("ECDSA-SHA1"), verify_unchecked(Unsupported, NO_SUCH_SIGNATURE)),

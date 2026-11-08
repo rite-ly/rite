@@ -29,6 +29,7 @@ pub mod cms;
 mod der;
 mod key_material;
 mod names;
+pub mod signature;
 mod types;
 
 pub use key_material::{CertificateDer, PublicKeyDer};

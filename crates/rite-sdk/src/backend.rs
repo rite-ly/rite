@@ -117,7 +117,9 @@ pub trait Backend: Send + Sync {
     /// Backend name (unique identifier within a ceremony).
     fn name(&self) -> &str;
 
-    /// Backend provider name (e.g., "software", "yubikey", "pkcs11").
+    /// Backend provider name, as the transcript records it (e.g., "openssl",
+    /// "yubikey", "pkcs11"). For a backend a ceremony can name, the name of
+    /// its [`Provider`](crate::Provider).
     fn provider(&self) -> &str;
 
     /// Fingerprint for audit evidence.

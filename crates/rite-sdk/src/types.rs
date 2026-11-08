@@ -1894,19 +1894,52 @@ pub struct PcrValue {
     pub value: String,
 }
 
+/// The implementation a `backends:` entry names.
+///
+/// Closed: the language knows every provider a ceremony can name, so a
+/// misspelt name is a definition error rather than a failure at the first
+/// step that uses the backend. A backend crate the factory does not create
+/// yet, as `rite-pkcs11`, has no provider here. Whether this build carries one is a separate,
+/// build-relative question, asked before a run starts.
+///
+/// Not `non_exhaustive`: the factory that creates backends matches every
+/// provider, so a new one fails to compile until it is wired in there.
+///
+/// ```
+/// use rite_sdk::Provider;
+///
+/// assert_eq!("yubikey".parse::<Provider>(), Ok(Provider::Yubikey));
+/// assert!("opensl".parse::<Provider>().is_err());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+pub enum Provider {
+    /// Software keys from a seed, for tests and dry runs.
+    Mock,
+    /// Software keys held by OpenSSL.
+    Openssl,
+    /// A smart card's PIV application, over PC/SC.
+    Piv,
+    /// A YubiKey: its PIV application and the device's own management.
+    Yubikey,
+}
+
+names!(Provider {
+    Mock => "mock",
+    Openssl => "openssl",
+    Piv => "piv",
+    Yubikey => "yubikey",
+});
+
 /// Backend configuration entry from a ceremony file.
 ///
-/// The `provider` field identifies the backend by its self-declared name
-/// (e.g., `"software"`, `"yubikey"`). The remaining YAML keys are flattened
-/// into `extra` for backend-specific deserialization.
-///
-/// Each backend crate defines its own config struct and deserializes from
-/// `extra` at startup. This inverts the prior design where the model listed
-/// concrete backend variants; backends now declare themselves.
+/// `provider` names the implementation. The remaining YAML keys are
+/// flattened into `extra`, which each backend crate reads into its own
+/// config struct when the backend is created.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendConfig {
-    /// Backend provider identifier as a lowercase string (e.g., `"software"`).
-    pub provider: String,
+    /// The implementation this backend runs on.
+    pub provider: Provider,
     /// Backend-specific configuration key/value pairs.
     #[serde(flatten)]
     pub extra: serde_json::Value,

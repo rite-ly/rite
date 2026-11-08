@@ -78,33 +78,7 @@ pub fn run(args: Args) {
         std::process::exit(1);
     };
 
-    // Fail fast if this build lacks a feature the ceremony needs: abort before
-    // any hardware is touched, directory created, or transcript opened, rather
-    // than partway through when execution reaches the step. `rite check` warns
-    // on the same condition instead of failing, since the executing build may
-    // differ from the one that validated.
-    let unsupported = crate::common::unsupported_action_names(&resolved);
-    if !unsupported.is_empty() {
-        eprintln!("This build of rite cannot run this ceremony.");
-        eprintln!("  Unsupported action(s): {}", unsupported.join(", "));
-        eprintln!("  Rebuild rite with the required feature(s) enabled.");
-        std::process::exit(1);
-    }
-
-    // Fatal here, for the reason the unsupported-action check above is: this
-    // process is the executor, so a value it cannot carry out stops the run
-    // before the first key exists. `rite check` only warns.
-    let unsupported = crate::common::unsupported_step_params(&resolved);
-    if !unsupported.is_empty() {
-        eprintln!(
-            "This build cannot carry out {} step parameter(s):",
-            unsupported.len()
-        );
-        for issue in &unsupported {
-            eprintln!("  - step '{}': {}", issue.step.as_str(), issue.message);
-        }
-        std::process::exit(1);
-    }
+    refuse_what_this_build_cannot_run(&resolved, args.dry_run);
 
     if let Err(e) = preflight_check_materials(&resolved) {
         eprintln!("Error: {e}");
@@ -129,7 +103,7 @@ pub fn run(args: Args) {
             // Dry-run rehearsal: route every backend through the mock. It
             // performs real (software) crypto, so the ceremony runs end to end
             // without touching the declared provider's hardware.
-            config.provider = "mock".to_string();
+            config.provider = rite_model::Provider::Mock;
         }
         backend_registry.declare(name.clone(), config);
     }
@@ -288,6 +262,54 @@ fn default_frontend() -> Frontend {
 fn is_stdout_tty() -> bool {
     use std::io::IsTerminal;
     std::io::stdout().is_terminal()
+}
+
+/// Exit if this build lacks something the ceremony needs: an action, a step
+/// parameter's value, or a backend's provider. Asked before any hardware is
+/// touched, directory created, or transcript opened, rather than partway
+/// through when execution reaches the step. `rite check` warns on actions
+/// and parameters and does not ask about providers, since the executing
+/// build may differ from the one that validated.
+///
+/// A dry run only warns about providers: it swaps in the mock for every
+/// backend, so a hardware ceremony can be rehearsed on a build without the
+/// hardware's provider, and the warning says the real run would stop here.
+fn refuse_what_this_build_cannot_run(resolved: &rite_model::Ceremony, dry_run: bool) {
+    let unsupported = crate::common::unsupported_action_names(resolved);
+    if !unsupported.is_empty() {
+        eprintln!("This build of rite cannot run this ceremony.");
+        eprintln!("  Unsupported action(s): {}", unsupported.join(", "));
+        eprintln!("  Rebuild rite with the required feature(s) enabled.");
+        std::process::exit(1);
+    }
+
+    let unsupported = crate::common::unsupported_step_params(resolved);
+    if !unsupported.is_empty() {
+        eprintln!(
+            "This build cannot carry out {} step parameter(s):",
+            unsupported.len()
+        );
+        for issue in &unsupported {
+            eprintln!("  - step '{}': {}", issue.step.as_str(), issue.message);
+        }
+        std::process::exit(1);
+    }
+
+    let unbuilt = crate::common::unbuilt_backends(resolved);
+    if !unbuilt.is_empty() {
+        if dry_run {
+            eprintln!("Warning: this build of rite could not run this ceremony for real.");
+        } else {
+            eprintln!("This build of rite cannot run this ceremony.");
+        }
+        for (name, provider) in &unbuilt {
+            eprintln!("  Backend '{name}': provider '{provider}' is not in this build");
+        }
+        eprintln!("  Rebuild rite with the required feature(s) enabled.");
+        if !dry_run {
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(test)]

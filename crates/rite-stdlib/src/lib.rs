@@ -65,7 +65,7 @@ use std::sync::Arc;
 
 use rite_runtime::{ActionRegistry, BackendFactory};
 
-pub use backend::{MockBackend, create_backend, default_backend_factory};
+pub use backend::{MockBackend, create_backend, default_backend_factory, is_built};
 
 #[cfg(feature = "attestation")]
 pub use attestation::AttestAction;

@@ -12,7 +12,7 @@
 //! - [`safe_path`]: Confine untrusted, ceremony-derived names/paths to a directory
 //! - `types` (private): Shared semantic enums: [`ActionType`], [`DutyType`], etc.
 //!
-//! # `BackendConfig`
+//! # `BackendConfig` and `Provider`
 //!
 //! Re-exported from `rite-sdk` for convenience. The canonical definition lives there.
 
@@ -39,7 +39,7 @@ pub mod transcript;
 mod types;
 pub mod validate;
 
-pub use rite_sdk::BackendConfig;
+pub use rite_sdk::{BackendConfig, Provider};
 
 pub use canonical::{CanonicalJsonError, canonical_json, check_numbers};
 pub use digest::{DigestFormatError, Sha256Digest};

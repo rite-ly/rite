@@ -390,7 +390,7 @@ mod tests {
         }));
 
         let config = BackendConfig {
-            provider: "mock".to_string(),
+            provider: rite_sdk::Provider::Mock,
             extra: serde_json::json!({}),
         };
 
@@ -427,7 +427,7 @@ mod tests {
         registry.declare(
             "token".to_string(),
             BackendConfig {
-                provider: "mock".to_string(),
+                provider: rite_sdk::Provider::Mock,
                 extra: serde_json::json!({}),
             },
         );
@@ -481,7 +481,7 @@ mod tests {
         }));
 
         let config = BackendConfig {
-            provider: "yubikey".to_string(),
+            provider: rite_sdk::Provider::Yubikey,
             extra: serde_json::json!({}),
         };
         registry.declare("yk".to_string(), config);

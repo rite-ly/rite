@@ -63,13 +63,21 @@ The capability is absent rather than refused, which makes it a static property
 only whether an action requires a backend, never whether the named backend can
 do the work.
 
-A ceremony selects a backend by provider string:
+A ceremony selects a backend by its provider:
 
 ```yaml
 backends:
   token:
     provider: yubikey   # or: piv
 ```
+
+The providers are a closed list, `rite_sdk::Provider`: `rite check` refuses a
+name outside it. Whether this build carries one is asked by `rite run`, which
+refuses before the first step a provider compiled out of the build. A dry run
+only warns, since it swaps in the mock and can rehearse a hardware ceremony on
+a build without the hardware. A new provider is a variant there, an arm in
+`create_backend` and in `is_built` (`rite-stdlib/src/backend/mod.rs`); the
+compiler points at both.
 
 ## Slots
 

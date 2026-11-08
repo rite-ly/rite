@@ -26,11 +26,13 @@
         "type": "object",
         "properties": {
           "provider": {
-            "description": "The backend provider, such as `openssl`, `piv`, or `yubikey`.",
-            "type": [
-              "string",
-              "number",
-              "boolean"
+            "description": "The implementation the backend runs on.",
+            "type": "string",
+            "enum": [
+              "mock",
+              "openssl",
+              "piv",
+              "yubikey"
             ]
           }
         },

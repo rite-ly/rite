@@ -1943,7 +1943,7 @@ sections:
         ceremony.backends.insert(
             "ssl".to_string(),
             BackendConfig {
-                provider: "openssl".to_string(),
+                provider: rite_model::Provider::Openssl,
                 extra: serde_json::json!({}),
             },
         );
@@ -2311,7 +2311,7 @@ sections:
         ceremony.backends.insert(
             "ssl".to_string(),
             BackendConfig {
-                provider: "openssl".to_string(),
+                provider: rite_model::Provider::Openssl,
                 extra: serde_json::json!({}),
             },
         );

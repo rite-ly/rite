@@ -2413,7 +2413,7 @@ sections:
         backends.declare(
             "token".to_string(),
             rite_sdk::BackendConfig {
-                provider: "mock".to_string(),
+                provider: rite_sdk::Provider::Mock,
                 extra: serde_json::json!({}),
             },
         );

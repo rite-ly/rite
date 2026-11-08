@@ -161,6 +161,36 @@ fn sole_error(yaml: &str) -> String {
     error.message.clone()
 }
 
+/// A provider the language does not know is a definition error, listing the
+/// providers it knows, rather than a failure at the first step that uses the
+/// backend.
+#[test]
+fn a_misspelt_provider_is_reported_by_resolution() {
+    let yaml = r#"
+version: "0.3"
+name: "Misspelt provider"
+roles:
+  officer:
+    person: "Alice"
+backends:
+  ssl:
+    provider: opensl
+sections:
+  main:
+    role: ${role.officer}
+    steps:
+      ready:
+        action: confirm
+        with:
+          message: "Ready?"
+"#;
+    let message = sole_error(yaml);
+    assert!(
+        message.contains("opensl") && message.contains("mock, openssl, piv, yubikey"),
+        "unexpected message: {message}"
+    );
+}
+
 /// A `with:` value outside an action's vocabulary is a resolver diagnostic,
 /// which is what puts it in front of an editor as well as `rite check`.
 #[test]

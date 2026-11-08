@@ -396,8 +396,12 @@ pub(crate) fn backends_schema(_: &mut SchemaGenerator) -> Schema {
             "type": "object",
             "properties": {
                 "provider": {
-                    "description": "The backend provider, such as `openssl`, `piv`, or `yubikey`.",
+                    "description": "The implementation the backend runs on.",
                     "type": "string",
+                    "enum": rite_model::Provider::ALL
+                        .iter()
+                        .map(|provider| provider.as_str())
+                        .collect::<Vec<_>>(),
                 },
             },
             "required": ["provider"],

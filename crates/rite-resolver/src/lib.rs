@@ -687,7 +687,7 @@ sections:
         with:
           algorythm: "${param.algo}"
 backends:
-  soft: { provider: software }
+  soft: { provider: openssl }
 "#;
         let (_, _, diags) = analyze_str(None, yaml);
         let schema: Vec<&str> = diags

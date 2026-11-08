@@ -280,6 +280,22 @@ pub fn preflight_check_materials(resolved: &rite_model::Ceremony) -> Result<(), 
     Ok(())
 }
 
+/// The ceremony's backends whose provider this build lacks, by name.
+///
+/// Build-relative, like [`unsupported_action_names`]: `rite run` refuses
+/// them before the first step, `rite check` does not ask.
+#[must_use]
+pub fn unbuilt_backends(resolved: &Ceremony) -> Vec<(String, rite_model::Provider)> {
+    let mut unbuilt: Vec<_> = resolved
+        .backends
+        .iter()
+        .filter(|(_, config)| !rite_stdlib::is_built(config.provider))
+        .map(|(name, config)| (name.clone(), config.provider))
+        .collect();
+    unbuilt.sort_by(|a, b| a.0.cmp(&b.0));
+    unbuilt
+}
+
 /// Names of actions in the execution plan that *this* build has no handler for.
 ///
 /// "Unsupported" is relative to the running binary: an action is missing only

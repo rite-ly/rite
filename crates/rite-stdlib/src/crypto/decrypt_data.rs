@@ -277,8 +277,8 @@ impl<'a> KeyName<'a> {
             RecipientInfoKind::Kekri => {
                 let check_value = key.check_value.ok_or_else(|| {
                     ActionError::Failed(format!(
-                        "'{display_name}' is a {} key, and this container is addressed to a \
-                         symmetric one",
+                        "'{display_name}' is {}, and this container is addressed to a \
+                         symmetric key",
                         key.algorithm
                     ))
                 })?;
@@ -306,7 +306,7 @@ impl<'a> KeyName<'a> {
         }
         let public_key = key.public_key.ok_or_else(|| {
             ActionError::Failed(format!(
-                "'{display_name}' is a {} key with no public half, and this container is \
+                "'{display_name}' is {}, a key with no public half, and this container is \
                  addressed to {addressed_to}",
                 key.algorithm
             ))

@@ -88,7 +88,7 @@ impl StoredKey {
         match &self.material {
             KeyMaterial::Asymmetric { pkey, .. } => Ok(pkey),
             KeyMaterial::Symmetric { .. } => Err(BackendError::UnsupportedAlgorithm(format!(
-                "'{}' is a {} key, which has no keypair. This operation needs one.",
+                "'{}' is {}, a symmetric key with no keypair. This operation needs one.",
                 self.label, self.algorithm
             ))),
         }
@@ -99,7 +99,7 @@ impl StoredKey {
         match &self.material {
             KeyMaterial::Asymmetric { public_der, .. } => Ok(public_der),
             KeyMaterial::Symmetric { .. } => Err(BackendError::UnsupportedAlgorithm(format!(
-                "'{}' is a {} key, which has no public half to export",
+                "'{}' is {}, a symmetric key with no public half to export",
                 self.label, self.algorithm
             ))),
         }
@@ -113,7 +113,7 @@ impl StoredKey {
                 check_value,
             } => Ok((secret, check_value)),
             KeyMaterial::Asymmetric { .. } => Err(BackendError::UnsupportedAlgorithm(format!(
-                "'{}' is a {} key, and this scheme wraps under a symmetric one",
+                "'{}' is {}, and this scheme wraps under a symmetric key",
                 self.label, self.algorithm
             ))),
         }
@@ -1970,7 +1970,7 @@ fn raw_unwrap(
                 .split_at_checked(modulus_bytes)
                 .ok_or_else(|| {
                     BackendError::InvalidData(format!(
-                        "a {} key wrap is shorter than the {modulus_bytes}-byte \
+                        "the {} key wrap is shorter than the {modulus_bytes}-byte \
                          encapsulation it should start with",
                         wrapped.scheme()
                     ))
@@ -2054,8 +2054,9 @@ impl KeyTransportBackend for OpenSslBackend {
                     let required = scheme.required_kek();
                     if required != Some(kek.algorithm) {
                         return Err(BackendError::UnsupportedAlgorithm(format!(
-                            "{scheme} unwraps under a {} key, and '{}' is {}",
-                            required.map_or_else(|| "symmetric".to_string(), |a| a.to_string()),
+                            "{scheme} unwraps under {}, and '{}' is {}",
+                            required
+                                .map_or_else(|| "a symmetric key".to_string(), |a| a.to_string()),
                             kek.label,
                             kek.algorithm
                         )));

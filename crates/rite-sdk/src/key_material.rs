@@ -18,6 +18,9 @@
 use serde::{Deserialize, Serialize};
 use x509_cert::Certificate;
 use x509_cert::der::asn1::UintRef;
+use x509_cert::der::oid::ObjectIdentifier;
+use x509_cert::der::oid::db::DB;
+use x509_cert::der::oid::db::fips203::{ID_ALG_ML_KEM_512, ID_ALG_ML_KEM_768, ID_ALG_ML_KEM_1024};
 use x509_cert::der::oid::db::fips204::{ID_ML_DSA_44, ID_ML_DSA_65, ID_ML_DSA_87};
 use x509_cert::der::oid::db::rfc5912::{
     ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1,
@@ -200,7 +203,8 @@ impl PublicKeyDer {
                 Ok(SECP_256_R_1) => Ok(KeyAlgorithm::EcdsaP256),
                 Ok(SECP_384_R_1) => Ok(KeyAlgorithm::EcdsaP384),
                 Ok(curve) => Err(BackendError::UnsupportedAlgorithm(format!(
-                    "EC curve {curve} is not supported (expected P-256 or P-384)"
+                    "EC curve {} is not supported (expected P-256 or P-384)",
+                    named(curve)
                 ))),
                 Err(e) => Err(BackendError::InvalidKeyFormat(format!(
                     "EC key does not name a curve: {e}"
@@ -210,8 +214,12 @@ impl PublicKeyDer {
             ID_ML_DSA_44 => Ok(KeyAlgorithm::MlDsa44),
             ID_ML_DSA_65 => Ok(KeyAlgorithm::MlDsa65),
             ID_ML_DSA_87 => Ok(KeyAlgorithm::MlDsa87),
+            ID_ALG_ML_KEM_512 => Ok(KeyAlgorithm::MlKem512),
+            ID_ALG_ML_KEM_768 => Ok(KeyAlgorithm::MlKem768),
+            ID_ALG_ML_KEM_1024 => Ok(KeyAlgorithm::MlKem1024),
             oid => Err(BackendError::UnsupportedAlgorithm(format!(
-                "public key algorithm {oid} is not supported"
+                "public key algorithm {} is not supported",
+                named(oid)
             ))),
         }
     }
@@ -331,6 +339,24 @@ impl TryFrom<Vec<u8>> for CertificateDer {
     }
 }
 
+/// An OID with its registered name where one is known, as
+/// `secp521r1 (1.3.132.0.35)`, so a refusal says what the key is to someone
+/// who does not read OIDs, and still gives the number to search for.
+fn named(oid: ObjectIdentifier) -> String {
+    // The registry const-oid carries has no entry for the Bitcoin curve, and
+    // keys on it are common enough to be offered.
+    const SECP_256_K_1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.132.0.10");
+    let name = if oid == SECP_256_K_1 {
+        Some("secp256k1")
+    } else {
+        DB.by_oid(&oid)
+    };
+    match name {
+        Some(name) => format!("{name} ({oid})"),
+        None => oid.to_string(),
+    }
+}
+
 /// Classify an RSA key by its modulus size.
 ///
 /// `key` is the `subjectPublicKey` payload, an `RSAPublicKey` sequence of
@@ -389,6 +415,11 @@ mod tests {
         pub const ML_DSA_44: &[u8] = include_bytes!("../tests/vectors/mldsa44.spki.der");
         pub const ML_DSA_65: &[u8] = include_bytes!("../tests/vectors/mldsa65.spki.der");
         pub const ML_DSA_87: &[u8] = include_bytes!("../tests/vectors/mldsa87.spki.der");
+        pub const ML_KEM_512: &[u8] = include_bytes!("../tests/vectors/mlkem512.spki.der");
+        pub const ML_KEM_768: &[u8] = include_bytes!("../tests/vectors/mlkem768.spki.der");
+        pub const ML_KEM_1024: &[u8] = include_bytes!("../tests/vectors/mlkem1024.spki.der");
+        pub const P521: &[u8] = include_bytes!("../tests/vectors/p521.spki.der");
+        pub const ED448: &[u8] = include_bytes!("../tests/vectors/ed448.spki.der");
         pub const CERTIFICATE: &[u8] = include_bytes!("../tests/vectors/p256.cert.der");
     }
 
@@ -423,11 +454,39 @@ mod tests {
             (vectors::ML_DSA_44, KeyAlgorithm::MlDsa44),
             (vectors::ML_DSA_65, KeyAlgorithm::MlDsa65),
             (vectors::ML_DSA_87, KeyAlgorithm::MlDsa87),
+            (vectors::ML_KEM_512, KeyAlgorithm::MlKem512),
+            (vectors::ML_KEM_768, KeyAlgorithm::MlKem768),
+            (vectors::ML_KEM_1024, KeyAlgorithm::MlKem1024),
         ];
 
         for (der, expected) in cases {
             let key = PublicKeyDer::new(der.to_vec()).expect("vector is valid SPKI");
             assert_eq!(key.algorithm().unwrap(), expected);
+        }
+    }
+
+    /// A refusal names what the key is, with the OID to search for.
+    #[test]
+    fn names_a_curve_or_algorithm_rite_has_no_key_type_for() {
+        let cases = [
+            (
+                vectors::P521,
+                "EC curve secp521r1 (1.3.132.0.35) is not supported",
+            ),
+            (
+                vectors::ED448,
+                "public key algorithm id-Ed448 (1.3.101.113) is not supported",
+            ),
+        ];
+
+        for (der, says) in cases {
+            let key = PublicKeyDer::new(der.to_vec()).expect("vector is valid SPKI");
+            let err = key.algorithm().unwrap_err();
+            assert!(
+                matches!(err, BackendError::UnsupportedAlgorithm(_)),
+                "{err:?}"
+            );
+            assert!(err.to_string().contains(says), "{err}");
         }
     }
 

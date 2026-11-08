@@ -95,8 +95,9 @@ const fn read_fails(why: Why, at: Stage, says: &'static str) -> Expected<Read> {
 use Stage::{Check, Import, Step};
 use Why::{Refused, Unsupported};
 
-/// A key that signs and cannot be a recipient.
-const CANNOT_RECEIVE: &str = "cannot receive a wrap";
+/// A key that signs and cannot be a recipient, in the words both write steps
+/// use.
+const CANNOT_RECEIVE: &str = "cannot be a recipient: it only signs";
 
 /// `unwrap_key` reads only a wrapped key a step of the same run produced, so
 /// a container from outside is refused before its form is looked at. When it
@@ -207,19 +208,19 @@ pub const WRITES: &[WriteCase] = &[
     case(WrapKey, PUBLIC, K::MlDsa65, write_fails(Refused, Step, CANNOT_RECEIVE)),
     case(WrapKey, PUBLIC, K::MlDsa87, write_fails(Refused, Step, CANNOT_RECEIVE)),
     case(WrapKey, PUBLIC, K::P256Compressed, write_fails(Refused, Step, "the EC public key's point is compressed")),
-    case(WrapKey, PUBLIC, K::BrainpoolP256r1, write_fails(Unsupported, Step, "brainpoolP256r1")),
-    case(WrapKey, PUBLIC, K::BrainpoolP384r1, write_fails(Unsupported, Step, "brainpoolP384r1")),
-    case(WrapKey, PUBLIC, K::SlhDsaSha2_128s, write_fails(Unsupported, Step, "Key is not RSA, a supported EC curve")),
+    case(WrapKey, PUBLIC, K::BrainpoolP256r1, write_fails(Unsupported, Step, "EC curve brainpoolP256r1 (1.3.36.3.3.2.8.1.1.7) is not supported")),
+    case(WrapKey, PUBLIC, K::BrainpoolP384r1, write_fails(Unsupported, Step, "EC curve brainpoolP384r1 (1.3.36.3.3.2.8.1.1.11) is not supported")),
+    case(WrapKey, PUBLIC, K::SlhDsaSha2_128s, write_fails(Unsupported, Step, "public key algorithm id-slh-dsa-sha2-128s (2.16.840.1.101.3.4.3.20) is not supported")),
     case(WrapKey, PUBLIC, K::Rsa1024, write_fails(Unsupported, Step, "RSA key size 1024 bits not supported")),
     case(WrapKey, PUBLIC, K::Rsa3072, write_fails(Unsupported, Step, "RSA key size 3072 bits not supported")),
     // wrap_key reads the key with OpenSSL, which calls it not RSA; encrypt_data
     // reads the SPKI and names its OID.
-    case(WrapKey, PUBLIC, K::RsaPss2048, write_fails(Unsupported, Step, "Key is not RSA, a supported EC curve")),
-    case(WrapKey, PUBLIC, K::P521, write_fails(Unsupported, Step, "secp521r1")),
-    case(WrapKey, PUBLIC, K::Secp256k1, write_fails(Unsupported, Step, "secp256k1")),
-    case(WrapKey, PUBLIC, K::Ed448, write_fails(Unsupported, Step, "Key is not RSA, a supported EC curve")),
-    case(WrapKey, PUBLIC, K::X25519, write_fails(Unsupported, Step, "Key is not RSA, a supported EC curve")),
-    case(WrapKey, PUBLIC, K::X448, write_fails(Unsupported, Step, "Key is not RSA, a supported EC curve")),
+    case(WrapKey, PUBLIC, K::RsaPss2048, write_fails(Unsupported, Step, "public key algorithm id-RSASSA-PSS (1.2.840.113549.1.1.10) is not supported")),
+    case(WrapKey, PUBLIC, K::P521, write_fails(Unsupported, Step, "EC curve secp521r1 (1.3.132.0.35) is not supported")),
+    case(WrapKey, PUBLIC, K::Secp256k1, write_fails(Unsupported, Step, "EC curve secp256k1 (1.3.132.0.10) is not supported")),
+    case(WrapKey, PUBLIC, K::Ed448, write_fails(Unsupported, Step, "public key algorithm id-Ed448 (1.3.101.113) is not supported")),
+    case(WrapKey, PUBLIC, K::X25519, write_fails(Unsupported, Step, "public key algorithm id-X25519 (1.3.101.110) is not supported")),
+    case(WrapKey, PUBLIC, K::X448, write_fails(Unsupported, Step, "public key algorithm id-X448 (1.3.101.111) is not supported")),
     // wrap_key under the raw mechanisms.
     scheme(HELD, K::Rsa2048, "RSA-OAEP-SHA256", Payload::P256, writes(Form::Raw(WrapScheme::RsaOaepSha256))),
     scheme(HELD, K::Rsa4096, "RSA-OAEP-SHA256", Payload::P256, writes(Form::Raw(WrapScheme::RsaOaepSha256))),
@@ -283,25 +284,25 @@ pub const WRITES: &[WriteCase] = &[
     case(EncryptData, PUBLIC, K::Rsa4096, writes(KTRI_OAEP)),
     case(EncryptData, PUBLIC, K::P256, writes(KARI_SHA256)),
     case(EncryptData, PUBLIC, K::P384, writes(KARI_SHA384)),
-    case(EncryptData, PUBLIC, K::MlKem512, write_fails(Unsupported, Step, "public key algorithm 2.16.840.1.101.3.4.4.1 is not supported")),
-    case(EncryptData, PUBLIC, K::MlKem768, write_fails(Unsupported, Step, "public key algorithm 2.16.840.1.101.3.4.4.2 is not supported")),
-    case(EncryptData, PUBLIC, K::MlKem1024, write_fails(Unsupported, Step, "public key algorithm 2.16.840.1.101.3.4.4.3 is not supported")),
-    case(EncryptData, PUBLIC, K::Ed25519, write_fails(Refused, Step, "encrypts to an RSA-2048, RSA-4096, P-256 or P-384 public key")),
-    case(EncryptData, PUBLIC, K::MlDsa44, write_fails(Refused, Step, "encrypts to an RSA-2048, RSA-4096, P-256 or P-384 public key")),
-    case(EncryptData, PUBLIC, K::MlDsa65, write_fails(Refused, Step, "encrypts to an RSA-2048, RSA-4096, P-256 or P-384 public key")),
-    case(EncryptData, PUBLIC, K::MlDsa87, write_fails(Refused, Step, "encrypts to an RSA-2048, RSA-4096, P-256 or P-384 public key")),
+    case(EncryptData, PUBLIC, K::MlKem512, write_fails(Unsupported, Step, "encrypts to an RSA-2048, RSA-4096, P-256 or P-384 public key, and the recipient is ML-KEM-512")),
+    case(EncryptData, PUBLIC, K::MlKem768, write_fails(Unsupported, Step, "encrypts to an RSA-2048, RSA-4096, P-256 or P-384 public key, and the recipient is ML-KEM-768")),
+    case(EncryptData, PUBLIC, K::MlKem1024, write_fails(Unsupported, Step, "encrypts to an RSA-2048, RSA-4096, P-256 or P-384 public key, and the recipient is ML-KEM-1024")),
+    case(EncryptData, PUBLIC, K::Ed25519, write_fails(Refused, Step, CANNOT_RECEIVE)),
+    case(EncryptData, PUBLIC, K::MlDsa44, write_fails(Refused, Step, CANNOT_RECEIVE)),
+    case(EncryptData, PUBLIC, K::MlDsa65, write_fails(Refused, Step, CANNOT_RECEIVE)),
+    case(EncryptData, PUBLIC, K::MlDsa87, write_fails(Refused, Step, CANNOT_RECEIVE)),
     case(EncryptData, PUBLIC, K::P256Compressed, write_fails(Refused, Step, "the EC public key's point is compressed")),
-    case(EncryptData, PUBLIC, K::BrainpoolP256r1, write_fails(Unsupported, Step, "EC curve 1.3.36.3.3.2.8.1.1.7 is not supported")),
-    case(EncryptData, PUBLIC, K::BrainpoolP384r1, write_fails(Unsupported, Step, "EC curve 1.3.36.3.3.2.8.1.1.11 is not supported")),
-    case(EncryptData, PUBLIC, K::SlhDsaSha2_128s, write_fails(Unsupported, Step, "public key algorithm 2.16.840.1.101.3.4.3.20 is not supported")),
+    case(EncryptData, PUBLIC, K::BrainpoolP256r1, write_fails(Unsupported, Step, "EC curve brainpoolP256r1 (1.3.36.3.3.2.8.1.1.7) is not supported")),
+    case(EncryptData, PUBLIC, K::BrainpoolP384r1, write_fails(Unsupported, Step, "EC curve brainpoolP384r1 (1.3.36.3.3.2.8.1.1.11) is not supported")),
+    case(EncryptData, PUBLIC, K::SlhDsaSha2_128s, write_fails(Unsupported, Step, "public key algorithm id-slh-dsa-sha2-128s (2.16.840.1.101.3.4.3.20) is not supported")),
     case(EncryptData, PUBLIC, K::Rsa1024, write_fails(Unsupported, Step, "RSA key size 1024 bits not supported")),
     case(EncryptData, PUBLIC, K::Rsa3072, write_fails(Unsupported, Step, "RSA key size 3072 bits not supported")),
-    case(EncryptData, PUBLIC, K::RsaPss2048, write_fails(Unsupported, Step, "public key algorithm 1.2.840.113549.1.1.10 is not supported")),
-    case(EncryptData, PUBLIC, K::P521, write_fails(Unsupported, Step, "EC curve 1.3.132.0.35 is not supported")),
-    case(EncryptData, PUBLIC, K::Secp256k1, write_fails(Unsupported, Step, "EC curve 1.3.132.0.10 is not supported")),
-    case(EncryptData, PUBLIC, K::Ed448, write_fails(Unsupported, Step, "public key algorithm 1.3.101.113 is not supported")),
-    case(EncryptData, PUBLIC, K::X25519, write_fails(Unsupported, Step, "public key algorithm 1.3.101.110 is not supported")),
-    case(EncryptData, PUBLIC, K::X448, write_fails(Unsupported, Step, "public key algorithm 1.3.101.111 is not supported")),
+    case(EncryptData, PUBLIC, K::RsaPss2048, write_fails(Unsupported, Step, "public key algorithm id-RSASSA-PSS (1.2.840.113549.1.1.10) is not supported")),
+    case(EncryptData, PUBLIC, K::P521, write_fails(Unsupported, Step, "EC curve secp521r1 (1.3.132.0.35) is not supported")),
+    case(EncryptData, PUBLIC, K::Secp256k1, write_fails(Unsupported, Step, "EC curve secp256k1 (1.3.132.0.10) is not supported")),
+    case(EncryptData, PUBLIC, K::Ed448, write_fails(Unsupported, Step, "public key algorithm id-Ed448 (1.3.101.113) is not supported")),
+    case(EncryptData, PUBLIC, K::X25519, write_fails(Unsupported, Step, "public key algorithm id-X25519 (1.3.101.110) is not supported")),
+    case(EncryptData, PUBLIC, K::X448, write_fails(Unsupported, Step, "public key algorithm id-X448 (1.3.101.111) is not supported")),
 ];
 
 // ── Containers written elsewhere ─────────────────────────────────────────────

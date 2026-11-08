@@ -90,8 +90,8 @@ pub fn resolve_artifact_bytes<'a, S: BuildHasher>(
         ) => {
             let id = artifact_id.as_str();
             Err(ExecutionError::InvalidParams(format!(
-                "'{id}' is a {algorithm} key, which is named by its public half \
-                 rather than by a check value"
+                "'{id}' is {algorithm}, a key named by its public half rather \
+                 than by a check value"
             )))
         }
 

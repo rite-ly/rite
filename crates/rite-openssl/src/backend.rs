@@ -18,7 +18,7 @@ use openssl::nid::Nid;
 use openssl::pkey::{HasPublic, Id, PKey, PKeyRef, Private};
 use openssl::pkey_ctx::PkeyCtx;
 use openssl::rsa::{Padding, Rsa};
-use openssl::sign::{Signer, Verifier};
+use openssl::sign::{RsaPssSaltlen, Signer, Verifier};
 use openssl::symm::Cipher;
 use openssl::x509::{X509Builder, X509Extension, X509NameBuilder};
 use rite_sdk::cms;
@@ -466,6 +466,8 @@ fn generate_ml_dsa(algorithm: KeyAlgorithm) -> Result<PKey<Private>, BackendErro
 trait RsaPadding {
     fn padding(&mut self, padding: Padding) -> Result<(), openssl::error::ErrorStack>;
     fn mgf1_md(&mut self, md: MessageDigest) -> Result<(), openssl::error::ErrorStack>;
+    /// The PSS salt length, for the side that chooses one.
+    fn pss_salt(&mut self) -> Result<(), openssl::error::ErrorStack>;
 }
 
 impl RsaPadding for Signer<'_> {
@@ -475,6 +477,12 @@ impl RsaPadding for Signer<'_> {
     fn mgf1_md(&mut self, md: MessageDigest) -> Result<(), openssl::error::ErrorStack> {
         self.set_rsa_mgf1_md(md)
     }
+    /// As long as the digest, the length RFC 8017 recommends and the one
+    /// PKCS#11 tokens and X.509 tooling expect. Left unset, the length is the
+    /// linked OpenSSL's default, which 3.0 sets to the maximum the key allows.
+    fn pss_salt(&mut self) -> Result<(), openssl::error::ErrorStack> {
+        self.set_rsa_pss_saltlen(RsaPssSaltlen::DIGEST_LENGTH)
+    }
 }
 
 impl RsaPadding for Verifier<'_> {
@@ -483,6 +491,11 @@ impl RsaPadding for Verifier<'_> {
     }
     fn mgf1_md(&mut self, md: MessageDigest) -> Result<(), openssl::error::ErrorStack> {
         self.set_rsa_mgf1_md(md)
+    }
+    /// Left to OpenSSL, which reads the length from the signature, so a
+    /// signature another signer made with a longer salt still verifies.
+    fn pss_salt(&mut self) -> Result<(), openssl::error::ErrorStack> {
+        Ok(())
     }
 }
 
@@ -505,7 +518,10 @@ fn apply_rsa_padding<T: RsaPadding>(
                 .map_err(|e| ossl_err("Set PSS padding", &e))?;
             operation
                 .mgf1_md(MessageDigest::sha256())
-                .map_err(|e| ossl_err("Set MGF1 MD", &e))
+                .map_err(|e| ossl_err("Set MGF1 MD", &e))?;
+            operation
+                .pss_salt()
+                .map_err(|e| ossl_err("Set PSS salt length", &e))
         }
         _ => Ok(()),
     }
@@ -3190,6 +3206,30 @@ mod tests {
             valid,
             "Signature produced by imported key must verify against original public key"
         );
+    }
+
+    /// The salt is as long as the digest whatever OpenSSL is linked: a
+    /// verifier told to expect 32 bytes refuses any other length.
+    #[test]
+    fn a_pss_signature_carries_a_salt_as_long_as_the_digest() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let meta = backend
+            .generate_key(spec(KeyAlgorithm::Rsa2048, "signer"))
+            .unwrap();
+        let message = b"salt length";
+        let signature = backend
+            .sign(&meta.key_id, message, SignAlgorithm::RsaPssSha256)
+            .unwrap();
+
+        let public =
+            PKey::public_key_from_der(meta.public_key.as_ref().unwrap().as_bytes()).unwrap();
+        let mut verifier = Verifier::new(MessageDigest::sha256(), &public).unwrap();
+        verifier.set_rsa_padding(Padding::PKCS1_PSS).unwrap();
+        verifier.set_rsa_mgf1_md(MessageDigest::sha256()).unwrap();
+        verifier
+            .set_rsa_pss_saltlen(RsaPssSaltlen::DIGEST_LENGTH)
+            .unwrap();
+        assert!(verifier.verify_oneshot(&signature, message).unwrap());
     }
 
     /// PKCS#8 material for a key this build can make.

@@ -222,13 +222,14 @@ pub(crate) fn place(at: &Pointer) -> (String, Pointer) {
 /// What a step of `action` must hold beside its own fields.
 fn step_rules(action: ActionType) -> Vec<Value> {
     let mut rules = Vec::new();
-    if action.backend_usage() == BackendUsage::Required {
+    let spec = action.spec();
+    if spec.backend == BackendUsage::Required {
         rules.push(json!({
             "required": ["backend"],
             "x-message": format!("action '{action}' requires a backend; add a 'backend:' field"),
         }));
     }
-    let contract = action.reads_contract();
+    let contract = spec.reads;
     if !contract.is_empty() {
         rules.push(json!({
             "required": ["reads"],

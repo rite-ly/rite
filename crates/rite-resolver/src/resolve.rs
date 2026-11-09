@@ -567,7 +567,7 @@ impl ResolveContext {
         step: &schema::StepBody,
         ceremony: &schema::Ceremony,
     ) {
-        if step.backend.is_some() && step.action.backend_usage() == BackendUsage::Unused {
+        if step.backend.is_some() && step.action.spec().backend == BackendUsage::Unused {
             self.warnings
                 .push(ResolveWarning::UnusedBackend { step: id.clone() });
         }
@@ -997,7 +997,7 @@ impl ResolveContext {
                     message,
                 });
             }
-            if step.action.creates_shares()
+            if step.action.spec().creates_shares
                 && let Some(created) = &step.creates
             {
                 // `enter_share` declares the share's length; a split does not.

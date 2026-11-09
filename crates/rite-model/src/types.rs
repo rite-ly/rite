@@ -511,9 +511,32 @@ impl fmt::Display for UnknownSharingScheme {
 
 impl std::error::Error for UnknownSharingScheme {}
 
+/// What the language knows of an action beyond its `with:` schema.
+///
+/// See [`ActionType::spec`]. The resolver and the schema generator read it,
+/// since they cannot see the runtime's `Action` trait. A fact that
+/// depends on this build, as whether a parameter's value can be carried out,
+/// stays on the runtime's handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ActionSpec {
+    /// How the action relates to the `backend:` field on its step.
+    pub backend: BackendUsage,
+    /// What the action requires of its step's `reads:` map.
+    pub reads: ReadsContract,
+    /// Whether the artifact the action creates is shares of a secret, which
+    /// `rite check` tells from the step that made it, since the definition
+    /// does not say what kind an artifact is.
+    pub creates_shares: bool,
+}
+
 /// What an action requires of its step's `reads:` map.
 ///
-/// See [`ActionType::reads_contract`].
+/// A group in `exactly_one_of` is how an action offers two paths over the
+/// same operation. The input the author names selects the path, so naming
+/// both is ambiguous and naming neither leaves the path undetermined.
+///
+/// See [`ActionSpec::reads`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ReadsContract {
@@ -621,166 +644,151 @@ impl ActionType {
         ActionType::GenerateCsr,
     ];
 
-    /// How this action relates to the `backend:` field on its step.
+    /// What the language knows of this action beyond its `with:` schema: one
+    /// descriptor, read by the resolver and the schema generator.
     ///
-    /// TODO: Replace this with a nested enum split — `ActionType::Backend(BackendAction)` vs
-    /// `ActionType::Local(LocalAction)`, once a home is found for the actions that are
-    /// neither. This is a breaking change to every match on `ActionType` variants.
-    pub fn backend_usage(self) -> BackendUsage {
+    /// Each arm writes every field, with no `..Default::default()`, so a field
+    /// added to [`ActionSpec`] fails to compile until every action has decided
+    /// it, the guarantee the separate exhaustive matches gave.
+    #[must_use]
+    // One table for every action is the point; splitting it would bring back
+    // the separate tables this replaces.
+    #[allow(clippy::too_many_lines)]
+    pub fn spec(self) -> ActionSpec {
         match self {
+            ActionType::ClockCheck
+            | ActionType::Confirm
+            | ActionType::CheckValue
+            | ActionType::OralReadback
+            | ActionType::MachineInfo
+            | ActionType::EnterValue
+            | ActionType::EnterSecret
+            | ActionType::Attest
+            | ActionType::GatherEntropy => ActionSpec {
+                backend: BackendUsage::Unused,
+                reads: ReadsContract::NONE,
+                creates_shares: false,
+            },
+            ActionType::Reveal => ActionSpec {
+                backend: BackendUsage::Unused,
+                reads: ReadsContract::required(&["value"]),
+                creates_shares: false,
+            },
             ActionType::GenerateKey
-            | ActionType::SignData
-            | ActionType::WrapKey
-            | ActionType::UnwrapKey
             | ActionType::ExportPublic
-            | ActionType::GenerateCsr
-            | ActionType::IssueCertificate
-            | ActionType::PivReadCertificate
-            | ActionType::PivSign
-            | ActionType::YubikeyAttestSlot
-            | ActionType::ImportKey
-            | ActionType::EncryptData
-            | ActionType::DecryptData
-            | ActionType::SplitSecret
-            | ActionType::TpmAttest => BackendUsage::Required,
-
-            ActionType::VerifySignature => BackendUsage::SoftwareUnlessNamed,
-
-            ActionType::ClockCheck
-            | ActionType::Confirm
-            | ActionType::CheckValue
-            | ActionType::OralReadback
-            | ActionType::Reveal
-            | ActionType::MachineInfo
-            | ActionType::EnterValue
-            | ActionType::EnterSecret
-            | ActionType::Attest
-            | ActionType::CombineShares
-            | ActionType::EnterShare
-            | ActionType::GatherEntropy => BackendUsage::Unused,
-        }
-    }
-
-    /// Whether the artifact this action creates is shares of a secret, which
-    /// `rite check` tells from the step that made it, since the definition
-    /// does not say what kind an artifact is.
-    pub fn creates_shares(self) -> bool {
-        match self {
-            ActionType::SplitSecret | ActionType::EnterShare => true,
-            ActionType::ClockCheck
-            | ActionType::Confirm
-            | ActionType::CheckValue
-            | ActionType::OralReadback
-            | ActionType::Reveal
-            | ActionType::MachineInfo
-            | ActionType::EnterValue
-            | ActionType::EnterSecret
-            | ActionType::GenerateKey
-            | ActionType::WrapKey
-            | ActionType::UnwrapKey
-            | ActionType::ImportKey
-            | ActionType::EncryptData
-            | ActionType::DecryptData
-            | ActionType::CombineShares
-            | ActionType::ExportPublic
-            | ActionType::SignData
-            | ActionType::VerifySignature
-            | ActionType::GenerateCsr
-            | ActionType::IssueCertificate
-            | ActionType::PivReadCertificate
-            | ActionType::PivSign
-            | ActionType::YubikeyAttestSlot
-            | ActionType::Attest
-            | ActionType::GatherEntropy
-            | ActionType::TpmAttest => false,
-        }
-    }
-
-    /// Returns the `reads:` inputs this action requires, and the groups from
-    /// which exactly one input must be named.
-    ///
-    /// A group is how an action offers two paths over the same operation. The
-    /// input the author names selects the path, so naming both is ambiguous and
-    /// naming neither leaves the path undetermined. The resolver reports either
-    /// on the step.
-    pub fn reads_contract(self) -> ReadsContract {
-        match self {
-            ActionType::WrapKey => ReadsContract {
-                required: &["key_to_wrap"],
-                exactly_one_of: &[&["wrapping_key", "recipient"]],
-                optional: &[],
-                // `expect_recipient` is compared against the recipient a wrap
-                // is given, and only the external path has one.
-                with_field_requires: &[("expect_recipient", "recipient")],
-                lists: &[],
-            },
-            ActionType::UnwrapKey => ReadsContract::required(&["unwrapping_key", "wrapped_data"]),
-            ActionType::ImportKey => ReadsContract {
-                required: &["key_material"],
-                exactly_one_of: &[],
-                // What opens an encrypted private key. Read from the store
-                // rather than given in `with:`, so the value is borrowed and
-                // never copied into the step's parameters.
-                optional: &["passphrase"],
-                with_field_requires: &[],
-                lists: &[],
-            },
-            ActionType::EncryptData => ReadsContract {
-                required: &["data"],
-                exactly_one_of: &[&["encryption_key", "recipient"]],
-                optional: &[],
-                // As at `wrap_key`: only the public-key path has a recipient
-                // to compare.
-                with_field_requires: &[("expect_recipient", "recipient")],
-                lists: &[],
-            },
-            ActionType::DecryptData => {
-                ReadsContract::required(&["encrypted_data", "decryption_key"])
-            }
-            ActionType::SplitSecret => ReadsContract::required(&["secret"]),
-            // Two is the smallest threshold; the shares themselves say
-            // whether two is enough, at run time.
-            ActionType::CombineShares => ReadsContract {
-                required: &[],
-                exactly_one_of: &[],
-                optional: &[],
-                with_field_requires: &[],
-                lists: &[ListInput {
-                    name: "shares",
-                    at_least: 2,
-                }],
-            },
-            ActionType::SignData => ReadsContract::required(&["key", "data"]),
-            ActionType::VerifySignature => ReadsContract::required(&["key", "data", "signature"]),
-            // Without `issuer_cert` the certificate is self-issued under the
-            // CSR's subject; with it, the issuer name and key identifier come
-            // from the CA certificate.
-            ActionType::IssueCertificate => ReadsContract {
-                required: &["signing_key", "csr"],
-                exactly_one_of: &[],
-                optional: &["issuer_cert"],
-                with_field_requires: &[],
-                lists: &[],
-            },
-            ActionType::GenerateCsr => ReadsContract::required(&["signing_key"]),
-            ActionType::Reveal => ReadsContract::required(&["value"]),
-
-            ActionType::ClockCheck
-            | ActionType::Confirm
-            | ActionType::CheckValue
-            | ActionType::OralReadback
-            | ActionType::MachineInfo
-            | ActionType::EnterValue
-            | ActionType::EnterSecret
-            | ActionType::GenerateKey
-            | ActionType::ExportPublic
-            | ActionType::Attest
-            | ActionType::GatherEntropy
             | ActionType::TpmAttest
             | ActionType::PivReadCertificate
             | ActionType::PivSign
-            | ActionType::YubikeyAttestSlot
-            | ActionType::EnterShare => ReadsContract::NONE,
+            | ActionType::YubikeyAttestSlot => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract::NONE,
+                creates_shares: false,
+            },
+            ActionType::WrapKey => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract {
+                    required: &["key_to_wrap"],
+                    exactly_one_of: &[&["wrapping_key", "recipient"]],
+                    optional: &[],
+                    // `expect_recipient` is compared against the recipient a
+                    // wrap is given, and only the external path has one.
+                    with_field_requires: &[("expect_recipient", "recipient")],
+                    lists: &[],
+                },
+                creates_shares: false,
+            },
+            ActionType::UnwrapKey => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract::required(&["unwrapping_key", "wrapped_data"]),
+                creates_shares: false,
+            },
+            ActionType::ImportKey => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract {
+                    required: &["key_material"],
+                    exactly_one_of: &[],
+                    // What opens an encrypted private key. Read from the store
+                    // rather than given in `with:`, so the value is borrowed
+                    // and never copied into the step's parameters.
+                    optional: &["passphrase"],
+                    with_field_requires: &[],
+                    lists: &[],
+                },
+                creates_shares: false,
+            },
+            ActionType::EncryptData => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract {
+                    required: &["data"],
+                    exactly_one_of: &[&["encryption_key", "recipient"]],
+                    optional: &[],
+                    // As at `wrap_key`: only the public-key path has a
+                    // recipient to compare.
+                    with_field_requires: &[("expect_recipient", "recipient")],
+                    lists: &[],
+                },
+                creates_shares: false,
+            },
+            ActionType::DecryptData => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract::required(&["encrypted_data", "decryption_key"]),
+                creates_shares: false,
+            },
+            ActionType::SplitSecret => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract::required(&["secret"]),
+                creates_shares: true,
+            },
+            ActionType::CombineShares => ActionSpec {
+                backend: BackendUsage::Unused,
+                reads: ReadsContract {
+                    required: &[],
+                    exactly_one_of: &[],
+                    optional: &[],
+                    with_field_requires: &[],
+                    // Two is the smallest threshold; the shares themselves say
+                    // whether two is enough, at run time.
+                    lists: &[ListInput {
+                        name: "shares",
+                        at_least: 2,
+                    }],
+                },
+                creates_shares: false,
+            },
+            ActionType::EnterShare => ActionSpec {
+                backend: BackendUsage::Unused,
+                reads: ReadsContract::NONE,
+                creates_shares: true,
+            },
+            ActionType::SignData => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract::required(&["key", "data"]),
+                creates_shares: false,
+            },
+            ActionType::VerifySignature => ActionSpec {
+                backend: BackendUsage::SoftwareUnlessNamed,
+                reads: ReadsContract::required(&["key", "data", "signature"]),
+                creates_shares: false,
+            },
+            ActionType::IssueCertificate => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract {
+                    required: &["signing_key", "csr"],
+                    exactly_one_of: &[],
+                    // Without `issuer_cert` the certificate is self-issued
+                    // under the CSR's subject; with it, the issuer name and key
+                    // identifier come from the CA certificate.
+                    optional: &["issuer_cert"],
+                    with_field_requires: &[],
+                    lists: &[],
+                },
+                creates_shares: false,
+            },
+            ActionType::GenerateCsr => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract::required(&["signing_key"]),
+                creates_shares: false,
+            },
         }
     }
 

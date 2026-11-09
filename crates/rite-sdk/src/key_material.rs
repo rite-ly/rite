@@ -308,6 +308,19 @@ impl EcCurve {
         }
     }
 
+    /// Returns the length in bytes of the group order, which sizes an ECDSA
+    /// `r` and `s`.
+    ///
+    /// It equals [`field_len`](Self::field_len) on these curves, but measures
+    /// the order rather than a coordinate.
+    #[must_use]
+    pub fn scalar_len(self) -> usize {
+        match self {
+            Self::P256 => 32,
+            Self::P384 => 48,
+        }
+    }
+
     /// Returns the SEC 1 uncompressed point length in bytes.
     #[must_use]
     pub fn point_len(self) -> usize {
@@ -618,7 +631,7 @@ mod tests {
 
     #[test]
     fn reads_the_point_out_of_an_ec_key() {
-        for (der, curve, field_len) in [
+        for (der, curve, len) in [
             (vectors::P256, EcCurve::P256, 32),
             (vectors::P384, EcCurve::P384, 48),
         ] {
@@ -628,7 +641,8 @@ mod tests {
                 .subject_public_key
                 .raw_bytes();
             assert_eq!(point.curve(), curve);
-            assert_eq!(point.curve().field_len(), field_len);
+            assert_eq!(point.curve().field_len(), len);
+            assert_eq!(point.curve().scalar_len(), len);
             assert_eq!(point.sec1_uncompressed().len(), point.curve().point_len());
             assert_eq!(EcCurve::of(curve.key_algorithm()), Some(curve));
             assert_eq!(point.sec1_uncompressed(), bits);

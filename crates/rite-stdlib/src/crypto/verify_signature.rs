@@ -20,6 +20,11 @@ use rite_model::params::VerifySignatureParams;
 /// Naming a `backend:` chooses who runs the check, not what is checked. The key
 /// resolves the same way either way, so a step gains a hardware or remote
 /// verifier without changing what it accepts.
+///
+/// An ECDSA signature may be DER, as Rite and OpenSSL write it, or `r || s` at
+/// the curve's width (64 bytes for P-256, 96 for P-384), as JOSE, Web Crypto and
+/// PKCS#11 tools write it. The step reads either, and records the fingerprint
+/// of the bytes it was given.
 pub struct VerifySignatureAction;
 
 impl Action for VerifySignatureAction {
@@ -81,6 +86,14 @@ impl Action for VerifySignatureAction {
                         signature_ref.display_name()
                     ))
                 })?;
+        // What the verifier reads. The fingerprint below stays over the bytes
+        // as given, so the transcript names the signature that exists.
+        let readable = rite_sdk::signature::in_der(algorithm, signature).map_err(|e| {
+            ActionError::Failed(format!(
+                "verify_signature input 'signature' ('{}') is not a signature Rite reads: {e}",
+                signature_ref.display_name()
+            ))
+        })?;
 
         reporter.log(
             Icon::Spinner,
@@ -100,9 +113,9 @@ impl Action for VerifySignatureAction {
                      Drop the `backend:` field to check this one in software."
                 ))
             })?;
-            verifier.verify_public_key(&public_key, data, signature, algorithm)?
+            verifier.verify_public_key(&public_key, data, &readable, algorithm)?
         } else {
-            crate::signatures::verify(&public_key, data, signature, algorithm)
+            crate::signatures::verify(&public_key, data, &readable, algorithm)
                 .map_err(|e| ActionError::Failed(format!("Verification failed to run: {e}")))?
         };
 

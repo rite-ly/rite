@@ -193,15 +193,30 @@ fn fails_when_the_signed_data_differs() {
     assert!(err.contains("does not match"), "{err}");
 }
 
+/// Bytes that are neither DER nor `r || s` of the curve's width are refused
+/// by name, not handed to the verifier.
 #[test]
 fn fails_when_the_signature_is_corrupt() {
     let mut signed = sign_with("ECDSA-P256", &serde_json::json!({}))
         .replace("signature", ArtifactValue::Bytes(vec![0u8; 70]));
 
+    let err = verify(&mut signed, &serde_json::json!({}), None)
+        .expect_err("a corrupt signature must fail the step");
     assert!(
-        verify(&mut signed, &serde_json::json!({}), None).is_err(),
-        "a corrupt signature must fail the step"
+        err.contains("takes a DER signature, or r || s in 64 bytes, and this one is 70 bytes"),
+        "{err}"
     );
+}
+
+/// `r || s` of the right width is read, and still has to match.
+#[test]
+fn fails_when_a_raw_signature_does_not_match() {
+    let mut signed = sign_with("ECDSA-P256", &serde_json::json!({}))
+        .replace("signature", ArtifactValue::Bytes(vec![0x01; 64]));
+
+    let err = verify(&mut signed, &serde_json::json!({}), None)
+        .expect_err("a raw signature that was never made must fail");
+    assert!(err.contains("does not match"), "{err}");
 }
 
 /// Naming a backend delegates the check to it. A remote or hardware verifier
@@ -349,4 +364,27 @@ fn a_named_backend_verifies_the_same_input_software_does() {
         Some("openssl"),
     )
     .expect("the backend verifies under the same certificate");
+}
+
+/// A named backend reads `r || s` as software does: the step rewrites it
+/// before either verifier sees it.
+#[test]
+fn a_named_backend_verifies_a_raw_signature() {
+    let signed = sign_with("ECDSA-P256", &serde_json::json!({}));
+    let der = match signed
+        .state
+        .handler_context()
+        .artifacts
+        .get(&ArtifactId::new("signature"))
+    {
+        Some(ArtifactValue::Bytes(bytes)) => bytes.clone(),
+        other => panic!("sign_data wrote {other:?}"),
+    };
+    let sig = openssl::ecdsa::EcdsaSig::from_der(&der).unwrap();
+    let mut raw = sig.r().to_vec_padded(32).unwrap();
+    raw.extend(sig.s().to_vec_padded(32).unwrap());
+    let mut signed = signed.replace("signature", ArtifactValue::Bytes(raw));
+
+    verify(&mut signed, &serde_json::json!({}), Some("openssl"))
+        .expect("the backend verifies the same signature as r || s");
 }

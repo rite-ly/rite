@@ -18,7 +18,7 @@ use std::borrow::Cow;
 use x509_cert::der::asn1::UintRef;
 use x509_cert::der::{Decode, Encode};
 
-use crate::{BackendError, SignAlgorithm};
+use crate::{BackendError, EcCurve, SignAlgorithm};
 
 /// `signature` in the encoding a verifier reads for `algorithm`.
 ///
@@ -62,22 +62,12 @@ pub fn in_der(algorithm: SignAlgorithm, signature: &[u8]) -> Result<Cow<'_, [u8]
 /// The DER tag of a `SEQUENCE`.
 const SEQUENCE: u8 = 0x30;
 
-/// The width of `r` and of `s` in the fixed-width encoding: the size of the
-/// order of the one curve the algorithm signs with, in bytes, as
-/// [`SignAlgorithm::accepts_key`] pins it. `None` for an algorithm that is
-/// not ECDSA. Every variant is listed, so a new ECDSA one is a compile error
-/// here rather than a signature passed on unread.
+/// The width of `r` and of `s` in the fixed-width encoding, from the one
+/// curve the algorithm signs with, or `None` for an algorithm that is not
+/// ECDSA. [`SignAlgorithm::key_algorithm`] and [`EcCurve::of`] both list
+/// every variant, so a new ECDSA scheme is placed at compile time.
 fn scalar_width(algorithm: SignAlgorithm) -> Option<usize> {
-    match algorithm {
-        SignAlgorithm::EcdsaSha256 => Some(32),
-        SignAlgorithm::EcdsaSha384 => Some(48),
-        SignAlgorithm::RsaPkcs1Sha256
-        | SignAlgorithm::RsaPssSha256
-        | SignAlgorithm::Ed25519
-        | SignAlgorithm::MlDsa44
-        | SignAlgorithm::MlDsa65
-        | SignAlgorithm::MlDsa87 => None,
-    }
+    EcCurve::of(algorithm.key_algorithm()).map(EcCurve::scalar_len)
 }
 
 /// Whether `bytes` are exactly a DER `SEQUENCE` of two `INTEGER`s, with

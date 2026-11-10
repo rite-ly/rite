@@ -14,7 +14,7 @@
 use std::fmt;
 
 use crate::der;
-use crate::key_material::PublicKeyDer;
+use crate::key_material::{EcCurve, PublicKeyDer};
 use crate::types::{
     KeyAlgorithm, KeyCheckValue, KeyFingerprint, Oid, RecipientInfoKind, WrapDescription, oid,
 };
@@ -981,25 +981,14 @@ impl KeyAgreeRecipient {
 /// The curve identifier and the KDF of a key agreement with a key of
 /// `algorithm`, if it is one this module writes for.
 ///
-/// The one table of agreement curves, matched exhaustively, so a key
-/// algorithm added to this crate is placed here or refused here at compile
-/// time, for sealing and opening alike.
+/// Which algorithms are EC is [`EcCurve::of`]'s to say, for sealing and
+/// opening alike; this adds what CMS writes for each curve, matched
+/// exhaustively so a new curve is placed here at compile time.
 fn agreement_curve(algorithm: KeyAlgorithm) -> Option<(&'static str, X963Kdf)> {
-    match algorithm {
-        KeyAlgorithm::EcdsaP256 => Some((oid::SECP256R1, X963Kdf::Sha256)),
-        KeyAlgorithm::EcdsaP384 => Some((oid::SECP384R1, X963Kdf::Sha384)),
-        KeyAlgorithm::Rsa2048
-        | KeyAlgorithm::Rsa4096
-        | KeyAlgorithm::Ed25519
-        | KeyAlgorithm::MlDsa44
-        | KeyAlgorithm::MlDsa65
-        | KeyAlgorithm::MlDsa87
-        | KeyAlgorithm::MlKem512
-        | KeyAlgorithm::MlKem768
-        | KeyAlgorithm::MlKem1024
-        | KeyAlgorithm::Aes128
-        | KeyAlgorithm::Aes256 => None,
-    }
+    EcCurve::of(algorithm).map(|curve| match curve {
+        EcCurve::P256 => (oid::SECP256R1, X963Kdf::Sha256),
+        EcCurve::P384 => (oid::SECP384R1, X963Kdf::Sha384),
+    })
 }
 
 /// The X9.63 KDF used to derive a key-encryption key for a CMS key agreement.

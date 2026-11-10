@@ -93,6 +93,21 @@ real token instead, under `#[ignore]` and `SOFTHSM2_MODULE`, and CI runs it
 against SoftHSM. SoftHSM answers for the specification rather than for any
 particular vendor; where a device differs, it differs from that baseline.
 
+## Validating a point before device use
+
+`rite-piv` uses `p256` and `p384` to check a peer point before sending it to
+a PIV card for ECDH. The point is untrusted input from a container. Accepting
+an off-curve point can expose the card's private key in an invalid-curve
+attack over repeated agreements. The check operates on public data and does
+not perform ECDH or another operation with a secret key.
+
+The host checks the point whether or not the card does: FIPS 140 devices must
+validate it, but other PIV cards need not. `rite-piv` is a hardware backend
+and cannot call OpenSSL. A backend that can use OpenSSL can validate a point
+there. `rite-piv` uses `p256` and `p384` for nothing else: no signing,
+verification, or ECDH in software. Their types do not cross the `rite-piv`
+API, so these crates' versions need not match the versions used by `yubikey`.
+
 ## Where the seam is
 
 `rite-stdlib/src/signatures.rs`.

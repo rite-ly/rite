@@ -14,12 +14,23 @@ publish    = true
 [dependencies]
 rite-sdk = { workspace = true }
 
-yubikey    = { workspace = true }
+# The `untested` feature gates `piv::decrypt_data`, the ECDH form of GENERAL
+# AUTHENTICATE that `KeyAgreementBackend::agree` runs. Yubico flags it untested
+# in their CI, not unsafe; it shares its command code with `sign_data`. The
+# other functions behind the flag stay uncalled here.
+yubikey    = { workspace = true, features = ["untested"] }
 # Tracks the `yubikey` crate's der version (0.7), not the workspace der (0.8):
 # this crate only uses der to re-encode certificate/SPKI values returned by
 # yubikey, so its der must match yubikey's or those types lose their der traits.
 der        = "0.7"
 sha2       = { workspace = true }
+# Checks that a peer's point lies on its curve before it reaches the card
+# (`ops::agree`). Validation of untrusted input, not a primitive under a key;
+# see `docs/development/cryptographic-dependencies.md`. No type from either
+# crosses this crate's API, so their version need not track `yubikey`'s,
+# though it does today and compiles nothing new.
+p256       = { version = "0.13", default-features = false, features = ["arithmetic"] }
+p384       = { version = "0.13", default-features = false, features = ["arithmetic"] }
 serde_json = { workspace = true }
 
 [lints]

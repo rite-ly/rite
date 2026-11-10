@@ -9,10 +9,10 @@ use std::sync::{Mutex, MutexGuard};
 
 use rite_piv::{convert, ops};
 use rite_sdk::{
-    Attestation, AttestationBackend, AttestationKind, Backend, BackendConfig, BackendError,
-    CertRef, CertStoreBackend, KeyId, KeyMetadata, KeySpec, KeyStoreBackend, PivBackend,
-    PivDeviceInfo, PivSlot, PivSlotInfo, PublicKeyDer, SignAlgorithm, SignBackend, YubikeyBackend,
-    YubikeySlotMetadata,
+    AgreedSecret, Attestation, AttestationBackend, AttestationKind, Backend, BackendConfig,
+    BackendError, CertRef, CertStoreBackend, KeyAgreementBackend, KeyId, KeyMetadata, KeySpec,
+    KeyStoreBackend, PivBackend, PivDeviceInfo, PivSlot, PivSlotInfo, PublicKeyDer, SignAlgorithm,
+    SignBackend, YubikeyBackend, YubikeySlotMetadata,
 };
 
 /// `YubiKey` backend with PIV + `Yubico` extensions.
@@ -84,6 +84,7 @@ impl Backend for YubikeyDevice {
         as_keystore_mut: KeyStoreBackend,
         as_sign_mut: SignBackend,
         as_attest_mut: AttestationBackend,
+        as_agreement_mut: KeyAgreementBackend,
         as_certstore_mut: CertStoreBackend,
         as_piv_mut: PivBackend,
         as_yubikey_mut: YubikeyBackend,
@@ -138,6 +139,13 @@ impl SignBackend for YubikeyDevice {
     ) -> Result<Vec<u8>, BackendError> {
         let mut yk = self.device()?;
         ops::sign(&mut yk, key_id, message, algorithm)
+    }
+}
+
+impl KeyAgreementBackend for YubikeyDevice {
+    fn agree(&mut self, key_id: &KeyId, peer: &PublicKeyDer) -> Result<AgreedSecret, BackendError> {
+        let mut yk = self.device()?;
+        ops::agree(&mut yk, key_id, peer)
     }
 }
 

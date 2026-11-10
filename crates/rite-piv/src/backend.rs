@@ -6,9 +6,9 @@
 use std::sync::{Mutex, MutexGuard};
 
 use rite_sdk::{
-    Backend, BackendConfig, BackendError, CertRef, CertStoreBackend, KeyId, KeyMetadata, KeySpec,
-    KeyStoreBackend, PivBackend, PivDeviceInfo, PivSlotInfo, PublicKeyDer, SignAlgorithm,
-    SignBackend,
+    AgreedSecret, Backend, BackendConfig, BackendError, CertRef, CertStoreBackend,
+    KeyAgreementBackend, KeyId, KeyMetadata, KeySpec, KeyStoreBackend, PivBackend, PivDeviceInfo,
+    PivSlotInfo, PublicKeyDer, SignAlgorithm, SignBackend,
 };
 
 use crate::ops;
@@ -82,6 +82,7 @@ impl Backend for PivCardBackend {
     rite_sdk::backend_capabilities!(
         as_keystore_mut: KeyStoreBackend,
         as_sign_mut: SignBackend,
+        as_agreement_mut: KeyAgreementBackend,
         as_certstore_mut: CertStoreBackend,
         as_piv_mut: PivBackend,
     );
@@ -135,6 +136,13 @@ impl SignBackend for PivCardBackend {
     ) -> Result<Vec<u8>, BackendError> {
         let mut yk = self.device()?;
         ops::sign(&mut yk, key_id, message, algorithm)
+    }
+}
+
+impl KeyAgreementBackend for PivCardBackend {
+    fn agree(&mut self, key_id: &KeyId, peer: &PublicKeyDer) -> Result<AgreedSecret, BackendError> {
+        let mut yk = self.device()?;
+        ops::agree(&mut yk, key_id, peer)
     }
 }
 

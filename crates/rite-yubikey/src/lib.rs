@@ -8,6 +8,8 @@
 //!
 //! - [`KeyStoreBackend`](rite_sdk::KeyStoreBackend): slot-based key generation
 //! - [`SignBackend`](rite_sdk::SignBackend): on-card signing
+//! - [`KeyAgreementBackend`](rite_sdk::KeyAgreementBackend): ECDH in slot 9D and
+//!   the retired key-management slots
 //! - [`CertStoreBackend`](rite_sdk::CertStoreBackend): slot certificate storage
 //! - [`PivBackend`](rite_sdk::PivBackend): slot management, PIN lifecycle
 //! - [`YubikeyBackend`](rite_sdk::YubikeyBackend): attestation, touch policy, management key

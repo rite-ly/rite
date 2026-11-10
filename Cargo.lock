@@ -2208,6 +2208,8 @@ name = "rite-piv"
 version = "0.8.0"
 dependencies = [
  "der 0.7.10",
+ "p256",
+ "p384",
  "rite-sdk",
  "serde_json",
  "sha2 0.11.1",

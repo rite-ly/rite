@@ -50,19 +50,20 @@ ignore = [
     # `piv` or `yubikey` feature enabled. The default build and the static
     # musl release artifacts do not contain it.
     #
-    # Where it does appear, no secret reaches it: `yubikey` uses the curve
-    # crates only to decode the EC public key a card reports
-    # (`yubikey::piv`) and to verify ECDSA signatures over certificates
-    # (`yubikey::certificate`). Both operate on public values. EC private-key
-    # operations happen on the card.
+    # Where `yubikey` uses these crates, they decode EC public keys returned
+    # by a card (`yubikey::piv`) and verify ECDSA signatures on certificates
+    # (`yubikey::certificate`). `rite-piv` also uses `p256` and `p384` to
+    # check a peer's public point before key agreement. These paths operate on
+    # public values; EC private-key operations happen on the card.
     #
-    # Revisit if any of the following becomes true:
-    #   - `p256`, `p384` or `elliptic-curve` becomes a direct dependency of a
-    #     crate in this workspace;
-    #   - `yubikey` gains a software EC private-key code path (grep the
-    #     dependency for `SigningKey`, `SecretKey`, and `diffie_hellman`);
-    #   - a stable `yubikey` release moves to `crypto-bigint` >= 0.7.6 (drop
-    #     this entry and upgrade).
+    # Revisit if:
+    #   - a workspace crate uses `p256`, `p384` or `elliptic-curve` with a
+    #     secret value (search for `SecretKey`, `NonZeroScalar`, and
+    #     `diffie_hellman`);
+    #   - `yubikey` gains a software EC private-key path (search the dependency
+    #     for `SigningKey`, `SecretKey`, and `diffie_hellman`);
+    #   - a stable `yubikey` release moves to `crypto-bigint` >= 0.7.6, so this
+    #     waiver can be removed.
     { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 only sees public values inside yubikey" },
 ]
 

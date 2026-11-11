@@ -29,7 +29,7 @@ sha2       = { workspace = true }
 # see `docs/development/cryptographic-dependencies.md`. No type from either
 # crosses this crate's API, so their version need not track `yubikey`'s,
 # though it does today and compiles nothing new.
-p256       = { version = "0.13", default-features = false, features = ["arithmetic"] }
+p256       = { version = "0.14", default-features = false, features = ["arithmetic"] }
 p384       = { version = "0.13", default-features = false, features = ["arithmetic"] }
 serde_json = { workspace = true }
 

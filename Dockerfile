@@ -107,7 +107,7 @@ RUN rite --version
 FROM scratch AS binary-glibc
 COPY --from=glibc-floor /usr/local/bin/rite /rite
 
-FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS runtime-base
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS runtime-base
 
 # libpcsclite1 is the shared library the glibc binary links besides glibc. The
 # pcscd daemon and CCID driver are not installed: they are only needed to open a

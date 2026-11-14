@@ -34,6 +34,8 @@ use cryptoki::object::{Attribute, AttributeType, KeyType, ObjectClass};
 use cryptoki::session::{Session, UserType};
 use cryptoki::slot::Slot;
 use cryptoki::types::AuthPin;
+use der::Decode;
+use der::asn1::SequenceRef;
 
 /// Mechanisms with no constant in cryptoki 0.12, compared by raw value.
 const CKM_AES_KEY_WRAP_KWP: u64 = 0x210B;
@@ -258,11 +260,19 @@ fn q3_wrap_output_is_raw_mechanism_bytes() {
     );
     // No ContentInfo, no AlgorithmIdentifier, nothing self-describing. A
     // reader is told the mechanism out of band or not at all, which is what
-    // F8 claimed and this confirms.
-    assert_ne!(
-        wrapped[0], 0x30,
-        "a leading SEQUENCE tag would mean the token had produced a DER structure"
+    // F8 claimed and this confirms. The output is pseudorandom, so its first
+    // byte is 0x30 once in 256 runs: only a SEQUENCE header whose length
+    // spans the whole output would mean a DER structure.
+    assert!(
+        !is_der_sequence(&wrapped),
+        "a SEQUENCE spanning the output would mean the token had produced a DER structure"
     );
+}
+
+/// Whether `bytes` is one DER SEQUENCE whose length covers it exactly.
+fn is_der_sequence(bytes: &[u8]) -> bool {
+    // `from_der` rejects trailing bytes, so a match spans the whole input.
+    <&SequenceRef>::from_der(bytes).is_ok()
 }
 
 /// Q4. Does `CKA_WRAP` gate wrapping, and is `CKA_WRAP_WITH_TRUSTED`

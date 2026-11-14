@@ -2221,6 +2221,7 @@ name = "rite-pkcs11"
 version = "0.8.0"
 dependencies = [
  "cryptoki",
+ "der 0.8.1",
  "rite-sdk",
 ]
 

@@ -22,7 +22,8 @@ use rite_model::{ActionType, BackendUsage, ReadsContract};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde_json::{Value, json};
 
-use crate::schema::{Ceremony, Material, RetrySpec};
+use crate::schema::{Ceremony, Material, MaterialType, RetrySpec, material_type_rule};
+use rite_model::FileKind;
 
 /// The check of a whole definition, compiled on first use and kept for the
 /// process.
@@ -455,33 +456,37 @@ impl JsonSchema for Material {
         let text = |description: &str| json!({ "description": description, "type": "string" });
         let title = text("The name shown for this material in the script.");
         let description = text("A description of the material, shown in the script.");
-        let of_type = |name: &str, fields: Value| {
+        let of_type = |types: Value, fields: Value| {
             json!({
                 "if": {
-                    "properties": { "type": { "const": name } },
+                    "properties": { "type": types },
                     "required": ["type"],
                 },
                 "then": { "properties": fields, "additionalProperties": false },
             })
         };
+        let files: Vec<&str> = FileKind::ALL.iter().map(|kind| kind.as_str()).collect();
+        let names: Vec<&str> = MaterialType::names().collect();
         json_schema!({
             "type": "object",
             "properties": {
                 "type": {
-                    "description": "Use `digital` for a file or `physical` for an item brought to the ceremony.",
+                    "description": "`physical` for an item brought to the ceremony, or the kind of file \
+                        the material is: `bytes` for a file with no meaning of its own.",
                     "type": "string",
-                    "enum": ["digital", "physical"],
+                    "enum": names,
+                    "x-message": material_type_rule(),
                 },
             },
             "required": ["type"],
             "allOf": [
-                of_type("digital", json!({
+                of_type(json!({ "enum": files }), json!({
                     "type": true,
                     "title": title,
                     "description": description,
                     "path": text("The default file path, relative to the ceremony definition."),
                 })),
-                of_type("physical", json!({
+                of_type(json!({ "const": "physical" }), json!({
                     "type": true,
                     "title": title,
                     "description": description,

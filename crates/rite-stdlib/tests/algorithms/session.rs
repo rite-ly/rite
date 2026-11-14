@@ -213,7 +213,11 @@ impl Session {
     ) -> Result<Step, Refused> {
         let mut declared = serde_json::Map::new();
         declared.insert("action".into(), json!(action.action_type()));
-        declared.insert("creates".into(), json!(produces));
+        // An action that makes nothing names no artifact; `produces` then
+        // names only the step.
+        if !action.action_type().spec().creates.is_empty() {
+            declared.insert("creates".into(), json!(produces));
+        }
         declared.insert("with".into(), params.clone());
         if via == Via::Backend {
             declared.insert("backend".into(), json!(BACKEND));
@@ -229,8 +233,8 @@ impl Session {
         // Numbered, because the map the ceremony is written from sorts its
         // keys, and the steps must stay in the order they run.
         let number = self.steps.len().checked_add(1).expect("a few steps");
-        self.steps
-            .push((format!("step_{number:02}_{produces}"), declared));
+        let id = format!("step_{number:02}_{produces}");
+        self.steps.push((id.clone(), declared));
 
         let ceremony = self.ceremony();
         let (resolved, _, diagnostics) = rite_resolver::analyze_str(None, &ceremony.to_string());
@@ -245,10 +249,9 @@ impl Session {
         let plan = resolved
             .expect("a ceremony with no errors resolves")
             .execution_plan;
-        let artifact = ArtifactId::new(produces);
         Ok(plan
             .into_iter()
-            .rfind(|step| step.creates.as_ref() == Some(&artifact))
+            .find(|step| step.id.as_str() == id)
             .expect("the plan holds the step just added"))
     }
 
@@ -260,7 +263,7 @@ impl Session {
             .map(|id| {
                 (
                     id.clone(),
-                    json!({ "type": "digital", "path": format!("{id}.bin") }),
+                    json!({ "type": "bytes", "path": format!("{id}.bin") }),
                 )
             })
             .collect();

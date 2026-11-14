@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 /// Source for a ceremony material.
 ///
-/// A material is either a digital file (loaded at runtime) or a physical item
+/// A material is either a file (loaded at runtime) or a physical item
 /// identified by a human-readable string (serial number, label, batch code).
 ///
 /// `MaterialSource` appears in the IR's [`super::MaterialKind`] after the resolver

@@ -152,7 +152,7 @@ as a document someone sealed with `openssl cms` to a key the ceremony holds.
 ```yaml
 materials:
   sealed_document:
-    type: digital
+    type: encrypted_data
     path: "media/document.p7m"
     description: "Document sealed to the custodian's key."
 

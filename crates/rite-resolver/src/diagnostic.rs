@@ -361,13 +361,15 @@ impl SpanMap {
             ResolveError::DuplicateAct(id) => self.acts.get(id).copied(),
             ResolveError::DuplicateParam(id) => self.params.get(id).copied(),
             ResolveError::DuplicateMaterial(id) => self.materials.get(id).copied(),
-            ResolveError::DuplicateOutput(id) | ResolveError::UnsafeOutputId { id, .. } => {
-                self.outputs.get(id).copied()
-            }
+            ResolveError::DuplicateOutput(id)
+            | ResolveError::UnsafeOutputId { id, .. }
+            | ResolveError::OutputKindMismatch { output: id, .. }
+            | ResolveError::SymmetricKeyOutput { output: id, .. } => self.outputs.get(id).copied(),
             ResolveError::UnknownSection { step, .. }
             | ResolveError::UnknownArtifact { step, .. }
             | ResolveError::InvalidWithValue { step, .. }
             | ResolveError::InvalidRetryAttempts { step }
+            | ResolveError::CreatesNothing { step, .. }
             | ResolveError::ArtifactNeverProduced { step, .. } => self.steps.get(step).copied(),
             ResolveError::SchemaViolation {
                 step,

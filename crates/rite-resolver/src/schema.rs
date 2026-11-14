@@ -11,7 +11,7 @@
 
 use crate::serde_utils;
 use indexmap::IndexMap;
-use rite_model::{ActionType, BackendConfig, DutyType, OutputType, ParameterType, Sha256Digest};
+use rite_model::{ActionType, BackendConfig, DutyType, FileKind, ParameterType, Sha256Digest};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -257,38 +257,33 @@ pub(crate) struct Parameter {
 }
 
 /// A material required before the ceremony starts.
+///
+/// Its `type:` is either `physical` or the kind of file it is, so the tag
+/// is not one name per variant, and the material is read through
+/// [`MaterialDeclaration`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(try_from = "MaterialDeclaration", into = "MaterialDeclaration")]
 pub(crate) enum Material {
-    /// Digital content (cryptographic artifacts, certificates, etc.).
-    Digital {
+    /// A file carried into the ceremony.
+    File {
+        /// What the file holds.
+        kind: FileKind,
         /// Optional display title.
-        #[serde(skip_serializing_if = "Option::is_none")]
         title: Option<String>,
         /// Optional description.
-        #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
         /// Default file path for this material (resolved relative to ceremony file).
-        #[serde(skip_serializing_if = "Option::is_none")]
         path: Option<std::path::PathBuf>,
     },
     /// Physical item participants must bring to the ceremony.
     Physical {
         /// Optional display title.
-        #[serde(skip_serializing_if = "Option::is_none")]
         title: Option<String>,
         /// Optional description.
-        #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
         /// Default human-readable identifier (serial number, label, batch code).
-        #[serde(skip_serializing_if = "Option::is_none")]
         identifier: Option<String>,
         /// Quantity for checklist rendering.
-        #[serde(
-            default,
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "serde_utils::deserialize_opt_u32"
-        )]
         quantity: Option<u32>,
     },
 }
@@ -297,29 +292,215 @@ impl Material {
     /// Get the title of this material (if set).
     pub(crate) fn title(&self) -> Option<&str> {
         match self {
-            Material::Digital { title, .. } | Material::Physical { title, .. } => title.as_deref(),
+            Material::File { title, .. } | Material::Physical { title, .. } => title.as_deref(),
         }
     }
 
     /// Get the description of this material (if set).
     pub(crate) fn description(&self) -> Option<&str> {
         match self {
-            Material::Digital { description, .. } | Material::Physical { description, .. } => {
+            Material::File { description, .. } | Material::Physical { description, .. } => {
                 description.as_deref()
             }
         }
     }
 
-    /// Whether this is a digital material.
-    pub(crate) fn is_digital(&self) -> bool {
-        matches!(self, Material::Digital { .. })
+    /// Whether this material is a file.
+    pub(crate) fn is_file(&self) -> bool {
+        matches!(self, Material::File { .. })
     }
 
-    /// Get the default file path (only meaningful for digital materials).
+    /// Get the default file path (only meaningful for a file).
     pub(crate) fn path(&self) -> Option<&std::path::Path> {
         match self {
-            Material::Digital { path, .. } => path.as_deref(),
+            Material::File { path, .. } => path.as_deref(),
             Material::Physical { .. } => None,
+        }
+    }
+}
+
+/// A material as written: every field any type takes, sorted into a
+/// [`Material`] once the type is known.
+///
+/// The editor schema already refuses a field the type does not take; the
+/// conversion refuses it again for a reader that skipped the schema.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct MaterialDeclaration {
+    #[serde(rename = "type")]
+    declared: MaterialType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<std::path::PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    identifier: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "serde_utils::deserialize_opt_u32"
+    )]
+    quantity: Option<u32>,
+}
+
+/// A material's `type:`: `physical`, or the kind of file it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MaterialType {
+    /// An item brought to the ceremony.
+    Physical,
+    /// A file holding this kind.
+    File(FileKind),
+}
+
+impl MaterialType {
+    /// Every name a material's `type:` takes.
+    pub(crate) fn names() -> impl Iterator<Item = &'static str> {
+        FileKind::ALL
+            .iter()
+            .map(|kind| kind.as_str())
+            .chain(std::iter::once("physical"))
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            MaterialType::Physical => "physical",
+            MaterialType::File(kind) => kind.as_str(),
+        }
+    }
+}
+
+/// The rule a material's `type:` follows, naming what replaces `digital`:
+/// the editor schema's message and the reader's.
+pub(crate) fn material_type_rule() -> String {
+    let names: Vec<&str> = MaterialType::names().collect();
+    format!(
+        "a material's 'type' is 'physical', or the kind of file it is ({}); a file once \
+         declared 'digital' is 'bytes', or the kind it holds",
+        names.join(", ")
+    )
+}
+
+/// An output's `type:` as the editor schema states it: the names inline,
+/// so the rule's message is found where the value breaks it.
+fn output_type_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let names: Vec<&str> = FileKind::ALL.iter().map(|kind| kind.as_str()).collect();
+    schemars::json_schema!({
+        "description": "The kind of file the output is.",
+        "type": "string",
+        "enum": names,
+        "x-message": output_type_rule(),
+    })
+}
+
+/// The rule an output's `type:` follows, naming what replaces the types
+/// that went with the kinds.
+pub(crate) fn output_type_rule() -> String {
+    let names: Vec<&str> = FileKind::ALL.iter().map(|kind| kind.as_str()).collect();
+    format!(
+        "an output's 'type' is the kind of file it is ({}); an output once declared \
+         'document' is 'signature', 'bytes' or 'text'",
+        names.join(", ")
+    )
+}
+
+impl Serialize for MaterialType {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for MaterialType {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        if name == "physical" {
+            return Ok(MaterialType::Physical);
+        }
+        FileKind::ALL
+            .iter()
+            .copied()
+            .find(|kind| kind.as_str() == name)
+            .map(MaterialType::File)
+            .ok_or_else(|| {
+                serde::de::Error::custom(format!("found '{name}': {}", material_type_rule()))
+            })
+    }
+}
+
+impl TryFrom<MaterialDeclaration> for Material {
+    type Error = String;
+
+    fn try_from(declared: MaterialDeclaration) -> Result<Self, String> {
+        let MaterialDeclaration {
+            declared,
+            title,
+            description,
+            path,
+            identifier,
+            quantity,
+        } = declared;
+        match declared {
+            MaterialType::File(kind) => {
+                if identifier.is_some() || quantity.is_some() {
+                    return Err(format!(
+                        "a '{}' material is a file: 'identifier' and 'quantity' are for a \
+                         physical one",
+                        kind.as_str()
+                    ));
+                }
+                Ok(Material::File {
+                    kind,
+                    title,
+                    description,
+                    path,
+                })
+            }
+            MaterialType::Physical => {
+                if path.is_some() {
+                    return Err(
+                        "a physical material has no 'path': declare a file by its kind".into(),
+                    );
+                }
+                Ok(Material::Physical {
+                    title,
+                    description,
+                    identifier,
+                    quantity,
+                })
+            }
+        }
+    }
+}
+
+impl From<Material> for MaterialDeclaration {
+    fn from(material: Material) -> Self {
+        match material {
+            Material::File {
+                kind,
+                title,
+                description,
+                path,
+            } => MaterialDeclaration {
+                declared: MaterialType::File(kind),
+                title,
+                description,
+                path,
+                identifier: None,
+                quantity: None,
+            },
+            Material::Physical {
+                title,
+                description,
+                identifier,
+                quantity,
+            } => MaterialDeclaration {
+                declared: MaterialType::Physical,
+                title,
+                description,
+                path: None,
+                identifier,
+                quantity,
+            },
         }
     }
 }
@@ -330,7 +511,8 @@ impl Material {
 pub(crate) struct OutputDeclaration {
     /// The kind of artifact declared as an output.
     #[serde(rename = "type")]
-    pub(crate) artifact_type: OutputType,
+    #[schemars(schema_with = "output_type_schema")]
+    pub(crate) artifact_type: FileKind,
     /// A description of the declared output.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,

@@ -11,7 +11,7 @@ backends:
 
 materials:
   secret:
-    type: digital
+    type: secret
     path: "test_data/secret.txt"
     title: "The secret"
     description: "Sample secret to split; replace with suitable material for a real ceremony."

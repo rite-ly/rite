@@ -105,9 +105,13 @@ fact type has a default level:
 | restricted | `parameter_bound`, `material_loaded`, `backend_bound`, `prompt_answered`, `wrap_recipient_recorded`, `step_attempt_failed`, `deviation_recorded`, `platform_recorded`, `network_state_recorded` |
 | confidential | `role_assigned`, `material_digest`, `machine_info_recorded` |
 
-`artifact_written` takes its level from the artifact: certificates, public keys, CSRs and
-signatures are public; wrapped keys, ciphertext and other content are restricted; opened content
-is confidential.
+`artifact_written` takes its level from the artifact's kind: certificates, public keys, CSRs
+and signatures are public; wrapped keys, ciphertext and other content are restricted; a
+secret, as opened content or a private key, is confidential and recorded without a digest.
+
+`material_digest` is confidential, except for a certificate, a public key or a CSR: the file
+is parsed as what it declares when it loads, so its digest is public. A material of a secret
+kind, a secret or a private key, has no digest.
 
 A secret value (a private key, a PIN, a passphrase, opened plaintext, a share, a value shown for
 writing down) is never recorded, at any level.
@@ -139,8 +143,8 @@ as a material's name and the digest of its content, they are separate facts. The
   came out
 - `attestation_recorded`, `machine_info_recorded`, `wrap_recipient_recorded`
 - `entropy_seeded`, `entropy_contributed`, `entropy_drawn`
-- `artifact_written`: the file name under `artifacts/`, and its digest unless it is opened
-  content
+- `artifact_written`: the file name under `artifacts/`, the kind its output declares, and its
+  digest unless the kind is secret
 - `deviation_recorded`
 
 The schema lists every field. Digests are written `sha256:` followed by 64 lowercase hex digits.

@@ -4,8 +4,8 @@ use crate::diagnostic::ReferenceContext;
 use rite_model::expression::{ExprError, RefType};
 use rite_model::validate::{Anchor, Pointer};
 use rite_model::{
-    ActId, ActionType, ArtifactId, MaterialId, OutputId, ParamId, ParameterType, RoleId, SectionId,
-    StepId,
+    ActId, ActionType, ArtifactId, ArtifactKind, FileKind, MaterialId, OutputId, ParamId,
+    ParameterType, RoleId, SectionId, StepId,
 };
 use std::path::PathBuf;
 use thiserror::Error;
@@ -354,6 +354,47 @@ pub enum ResolveError {
         reason: String,
     },
 
+    /// An output's declared `type:` is not what the step creating it makes.
+    #[error("{}", output_kind_mismatch(output, *declared, step, *action, makes))]
+    OutputKindMismatch {
+        /// The output.
+        output: OutputId,
+        /// The kind the output declares.
+        declared: FileKind,
+        /// The step that creates the artifact.
+        step: StepId,
+        /// That step's action.
+        action: ActionType,
+        /// What the step makes, as far as its definition tells.
+        makes: Vec<ArtifactKind>,
+    },
+
+    /// An output declares a public key of a step that makes a symmetric key,
+    /// which has none.
+    #[error(
+        "Output '{output}' is declared as 'public_key', but step '{step}' makes an {algorithm} \
+         key, which has no public half to write"
+    )]
+    SymmetricKeyOutput {
+        /// The output.
+        output: OutputId,
+        /// The step that makes the key.
+        step: StepId,
+        /// The key's algorithm, as the step names it.
+        algorithm: String,
+    },
+
+    /// A step names an artifact under `creates:`, but its action makes none.
+    #[error("Step '{step}' names '{artifact}' under 'creates:', but '{action}' makes no artifact")]
+    CreatesNothing {
+        /// The step.
+        step: StepId,
+        /// The artifact it names.
+        artifact: ArtifactId,
+        /// Its action.
+        action: ActionType,
+    },
+
     /// A material's `path:` escapes the ceremony directory.
     ///
     /// Paths embedded in a ceremony file are confined to the directory that
@@ -526,4 +567,31 @@ fn at(location: Option<(usize, usize)>) -> String {
     location.map_or_else(String::new, |(line, column)| {
         format!("line {line}, column {column}: ")
     })
+}
+
+/// Why an output cannot be the kind it declares, from what its step's
+/// action creates.
+fn output_kind_mismatch(
+    output: &OutputId,
+    declared: FileKind,
+    step: &StepId,
+    action: ActionType,
+    makes: &[ArtifactKind],
+) -> String {
+    let by = format!("step '{step}' ('{action}')");
+    if makes.iter().all(|kind| kind.written_as().is_none()) {
+        return format!(
+            "Output '{output}' holds the shares {by} makes, which are never written: each \
+             share is shown to its custodian by a 'reveal' step"
+        );
+    }
+    let written: Vec<String> = makes
+        .iter()
+        .filter_map(|kind| kind.written_as())
+        .map(|kind| format!("'{kind}'"))
+        .collect();
+    format!(
+        "Output '{output}' is declared as '{declared}', but {by} writes {}",
+        written.join(" or ")
+    )
 }

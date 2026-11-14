@@ -11,7 +11,7 @@
 //!    value the field takes from a list, such as an action. Only fires when
 //!    the cursor is not on a known reference value. See [`crate::fields`].
 
-use rite_model::{ArtifactId, Ceremony, MaterialId, MaterialKind};
+use rite_model::{ArtifactId, Ceremony, MaterialId};
 use rite_resolver::{ReferenceTarget, SpanMap};
 use tower_lsp_server::ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
 
@@ -98,10 +98,7 @@ fn hover_for_target(
         }
         ReferenceTarget::Material(id) => {
             let material = resolved.materials.get(id)?;
-            let kind_str = match &material.kind {
-                MaterialKind::Digital { .. } => "digital",
-                MaterialKind::Physical { .. } => "physical",
-            };
+            let kind_str = material.kind.type_name();
             let mut md = format!("**material** · `{kind_str}`");
             if let Some(title) = &material.title {
                 md.push_str(&format!("\n\n{title}"));
@@ -138,10 +135,7 @@ fn artifact_hover(id: &ArtifactId, span_map: &SpanMap, resolved: Option<&Ceremon
     if let Some(ceremony) = resolved
         && let Some(material) = ceremony.materials.get(&MaterialId::new(id.as_str()))
     {
-        let kind_str = match &material.kind {
-            MaterialKind::Digital { .. } => "digital",
-            MaterialKind::Physical { .. } => "physical",
-        };
+        let kind_str = material.kind.type_name();
         let mut md = format!("**artifact** `{id}` · material · `{kind_str}`");
         if let Some(title) = &material.title {
             md.push_str(&format!("\n\n{title}"));

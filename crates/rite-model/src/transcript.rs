@@ -1076,14 +1076,14 @@ pub enum StepFact {
     },
     /// A material was loaded at ceremony start.
     ///
-    /// The digest of a digital material is a separate fact,
+    /// The digest of a file material is a separate fact,
     /// [`MaterialDigest`](StepFact::MaterialDigest), so the two can be
     /// disclosed to different audiences.
     #[cfg_attr(
         test,
         schemars(
             description = "A material was loaded at the start of the run. The digest of a \
-            digital material is a separate fact, material_digest, so the two can be disclosed to \
+            file material is a separate fact, material_digest, so the two can be disclosed to \
             different audiences."
         )
     )]
@@ -1103,10 +1103,10 @@ pub enum StepFact {
         )]
         identifier: Option<String>,
     },
-    /// The digest of a digital material's bytes.
+    /// The digest of a file material's bytes.
     #[cfg_attr(
         test,
-        schemars(description = "The digest of a digital material's bytes, as loaded.")
+        schemars(description = "The digest of a file material's bytes, as loaded.")
     )]
     MaterialDigest {
         /// Material identifier.
@@ -1383,6 +1383,18 @@ pub enum StepFact {
             )
         )]
         file: String,
+        /// What the file holds: the kind its output declares, which the run
+        /// checked the artifact against before writing it. Absent from
+        /// transcripts written by earlier releases.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            test,
+            schemars(
+                description = "What the file holds: the kind its output declares. Absent from \
+                transcripts written by earlier releases."
+            )
+        )]
+        kind: Option<crate::FileKind>,
         /// Digest of the file's bytes. Absent when the artifact is content a
         /// step opened: a digest of a secret can be tested against guesses,
         /// so none is recorded.
@@ -2418,6 +2430,7 @@ mod schema_snapshot_tests {
                 step: StepId::new("s1"),
                 name: "root_cert".to_string(),
                 file: "root_cert.crt".to_string(),
+                kind: Some(crate::FileKind::Certificate),
                 digest: Some(Sha256Digest::of(b"cert")),
             },
             &json!({
@@ -2425,9 +2438,24 @@ mod schema_snapshot_tests {
                 "step": "s1",
                 "name": "root_cert",
                 "file": "root_cert.crt",
+                "kind": "certificate",
                 "digest": Sha256Digest::of(b"cert").as_str(),
             }),
         );
+    }
+
+    /// A transcript from a release that did not record the kind still
+    /// reads, with no kind.
+    #[test]
+    fn artifact_written_without_a_kind_reads() {
+        let fact: StepFact = serde_json::from_value(json!({
+            "type": "artifact_written",
+            "step": "s1",
+            "name": "root_cert",
+            "file": "root_cert.crt",
+        }))
+        .expect("reads");
+        assert!(matches!(fact, StepFact::ArtifactWritten { kind: None, .. }));
     }
 
     #[test]
@@ -2437,6 +2465,7 @@ mod schema_snapshot_tests {
                 step: StepId::new("s1"),
                 name: "opened".to_string(),
                 file: "opened.bin".to_string(),
+                kind: Some(crate::FileKind::Secret),
                 digest: None,
             },
             &json!({
@@ -2444,6 +2473,7 @@ mod schema_snapshot_tests {
                 "step": "s1",
                 "name": "opened",
                 "file": "opened.bin",
+                "kind": "secret",
             }),
         );
     }

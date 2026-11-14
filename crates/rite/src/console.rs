@@ -113,7 +113,7 @@ fn render_fact<W: Write>(out: &mut W, fact: &StepFact) -> io::Result<()> {
 fn material_summary(material: &MaterialOverview) -> String {
     let title = material.display_title();
     let kind = match &material.kind {
-        MaterialOverviewKind::Digital => "digital".to_string(),
+        MaterialOverviewKind::File { kind } => kind.to_string(),
         MaterialOverviewKind::Physical {
             identifier,
             quantity,

@@ -92,7 +92,7 @@ fn resolve_material_paths(
     let dir = ceremony_path.parent().unwrap_or_else(|| Path::new("."));
     let mut errors = Vec::new();
     for (name, material) in &mut ceremony.materials {
-        if let schema::Material::Digital {
+        if let schema::Material::File {
             path: Some(ref mut p),
             ..
         } = *material
@@ -322,7 +322,7 @@ roles: {}
 sections: {}
 materials:
   leaked:
-    type: digital
+    type: bytes
     path: "../../../../etc/passwd"
 "#,
         )
@@ -353,7 +353,7 @@ roles: {}
 sections: {}
 materials:
   local:
-    type: digital
+    type: bytes
     path: "keys/root.pem"
 "#,
         )
@@ -1028,7 +1028,7 @@ parameters:
     type: string
 materials:
   my_material:
-    type: digital
+    type: bytes
 backends:
   ssl:
     provider: openssl
@@ -1224,7 +1224,7 @@ parameters:
     default: "out"
 materials:
   manifest:
-    type: digital
+    type: bytes
 acts:
   - id: setup
     name: "Setup"

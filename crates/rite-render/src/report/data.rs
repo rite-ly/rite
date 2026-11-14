@@ -286,6 +286,7 @@ impl Builder {
                 name,
                 file,
                 digest,
+                ..
             } => {
                 self.artifacts.push(ReportArtifact {
                     step_id: step.as_str().to_string(),

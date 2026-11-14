@@ -196,6 +196,7 @@ mod tests {
             &[
                 ceremony_started("Disclose test"),
                 StepFact::ArtifactWritten {
+                    kind: None,
                     step: rite_model::StepId::new("s1"),
                     name: "root_cert".to_string(),
                     file: "root_cert.pem".to_string(),

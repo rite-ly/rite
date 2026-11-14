@@ -14,7 +14,7 @@
 //! - [`UiSignal`], [`Icon`], UI narration, never on disk
 
 use chrono::{DateTime, Utc};
-use rite_model::{Material, MaterialId, MaterialKind, Prompt, StepFact, StepId};
+use rite_model::{FileKind, Material, MaterialId, MaterialKind, Prompt, StepFact, StepId};
 use secrecy::SecretString;
 
 use crate::system_info::{Environment, SystemInfo};
@@ -92,7 +92,7 @@ pub struct MaterialOverview {
     pub title: Option<String>,
     /// Optional human-readable description.
     pub description: Option<String>,
-    /// Kind of material (digital file or physical item).
+    /// Kind of material (a file of a kind, or a physical item).
     pub kind: MaterialOverviewKind,
 }
 
@@ -102,8 +102,11 @@ pub struct MaterialOverview {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum MaterialOverviewKind {
-    /// File-backed digital material.
-    Digital,
+    /// A file, holding the kind it declares.
+    File {
+        /// What the file holds.
+        kind: FileKind,
+    },
     /// Tangible item with optional identifier and quantity.
     Physical {
         /// Human-readable identifier (e.g. serial number).
@@ -139,7 +142,7 @@ impl MaterialOverview {
     #[must_use]
     pub fn from_material(material: &Material) -> Self {
         let kind = match &material.kind {
-            MaterialKind::Digital { .. } => MaterialOverviewKind::Digital,
+            MaterialKind::File { kind, .. } => MaterialOverviewKind::File { kind: *kind },
             MaterialKind::Physical {
                 identifier,
                 quantity,

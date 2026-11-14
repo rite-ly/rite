@@ -1210,7 +1210,7 @@ fn material_lines(material: &MaterialOverview) -> Vec<Line<'static>> {
 /// One-line summary of a material kind, joined with `" · "`.
 fn kind_summary(kind: &MaterialOverviewKind) -> String {
     match kind {
-        MaterialOverviewKind::Digital => "digital".to_string(),
+        MaterialOverviewKind::File { kind } => kind.to_string(),
         MaterialOverviewKind::Physical {
             identifier,
             quantity,

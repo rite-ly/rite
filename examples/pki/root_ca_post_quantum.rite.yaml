@@ -17,7 +17,7 @@ parameters:
 
 materials:
   transport_pubkey:
-    type: digital
+    type: public_key
     path: "test_keys/kem_transport_public.pem"
     description: |
       ML-KEM-768 (FIPS 203) transport public key. A copy of the wrapped

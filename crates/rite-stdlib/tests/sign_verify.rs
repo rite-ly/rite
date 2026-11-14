@@ -377,7 +377,7 @@ fn a_named_backend_verifies_a_raw_signature() {
         .artifacts
         .get(&ArtifactId::new("signature"))
     {
-        Some(ArtifactValue::Bytes(bytes)) => bytes.clone(),
+        Some(ArtifactValue::Signature(bytes)) => bytes.clone(),
         other => panic!("sign_data wrote {other:?}"),
     };
     let sig = openssl::ecdsa::EcdsaSig::from_der(&der).unwrap();

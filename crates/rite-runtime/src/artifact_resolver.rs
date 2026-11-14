@@ -109,8 +109,18 @@ pub fn resolve_artifact_bytes<'a, S: BuildHasher>(
         // The second reads like the first: what a ceremony does with opened
         // content is what it does with any bytes, and only the write to disk
         // is gated.
-        (ArtifactValue::Bytes(bytes), None) => Ok(bytes),
-        (ArtifactValue::Secret(bytes), None) => Ok(bytes.expose_secret()),
+        // A request and a signature read as their bytes too: `issue_certificate`
+        // reads a CSR, `verify_signature` a signature.
+        (
+            ArtifactValue::Bytes(bytes)
+            | ArtifactValue::Csr(bytes)
+            | ArtifactValue::Signature(bytes),
+            None,
+        ) => Ok(bytes),
+        // `import_key` reads a private key file as its key material.
+        (ArtifactValue::Secret(bytes) | ArtifactValue::PrivateKey(bytes), None) => {
+            Ok(bytes.expose_secret())
+        }
         (ArtifactValue::Text(text), None) => Ok(text.as_bytes()),
 
         // A share has no byte form to borrow; laying one out is a container's

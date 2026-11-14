@@ -531,6 +531,8 @@ fn rsa_algorithm(key: &[u8]) -> Result<KeyAlgorithm, BackendError> {
     let modulus_bits = reader
         .sequence(|body| {
             let modulus: UintRef<'_> = body.decode()?;
+            // Read for the structure only: a sequence must be consumed whole.
+            let _exponent: UintRef<'_> = body.decode()?;
             Ok::<_, x509_cert::der::Error>(bit_length(modulus.as_bytes()))
         })
         .map_err(|e| BackendError::InvalidKeyFormat(format!("RSA modulus cannot be read: {e}")))?;

@@ -7,7 +7,9 @@ use rite_model::{
     ActionType, ArtifactId, ArtifactKind, FileKind, Material, MaterialKind, MaterialSource,
     Sha256Digest, Step, StepId,
 };
-use rite_sdk::{BackendError, CertificateDer, PublicKeyDer, csr_from_file};
+use rite_sdk::{
+    BackendError, CertificateDer, EncryptedData, PublicKeyDer, WrappedKey, csr_from_file,
+};
 use secrecy::{ExposeSecret, SecretBox};
 use std::fs;
 use std::io;
@@ -187,16 +189,25 @@ pub(crate) fn load_material_artifact(
 /// `material_digest` records. A step that needs a key or a certificate
 /// parses the bytes again.
 ///
-/// Elsewhere the kind is the author's claim, held as bytes as before kinds:
-/// a signature, a wrapped key and encrypted content look like any bytes.
-/// `decrypt_data` describes a container from a material's bytes; `unwrap_key`
-/// takes only a wrapped key a step produced. A secret's bytes go straight
-/// into the box that wipes them, before anything can fail.
-fn file_material(kind: FileKind, bytes: Vec<u8>) -> Result<ArtifactValue, String> {
+/// A wrapped key and encrypted content are read as the CMS containers they
+/// claim to be and held as those, so the claim travels with the value: a
+/// step that installs keys is never handed content, whatever the check let
+/// through, and a file that is no container is refused before step 1. A
+/// signature is the author's claim, held as its bytes. A secret's bytes go
+/// straight into the box that wipes them, before anything can fail.
+///
+/// # Errors
+///
+/// Returns why the bytes are not the declared kind.
+pub fn file_material(kind: FileKind, bytes: Vec<u8>) -> Result<ArtifactValue, String> {
     let secret = |bytes: Vec<u8>| SecretBox::new(Box::new(bytes));
     Ok(match kind {
-        FileKind::Bytes | FileKind::WrappedKey | FileKind::EncryptedData => {
-            ArtifactValue::Bytes(bytes)
+        FileKind::Bytes => ArtifactValue::Bytes(bytes),
+        FileKind::WrappedKey => {
+            ArtifactValue::WrappedKey(WrappedKey::from_cms(bytes).map_err(|e| e.to_string())?)
+        }
+        FileKind::EncryptedData => {
+            ArtifactValue::EncryptedData(EncryptedData::from_cms(bytes).map_err(|e| e.to_string())?)
         }
         FileKind::Text => ArtifactValue::Text(
             String::from_utf8(bytes).map_err(|_| "the file is not UTF-8 text".to_string())?,
@@ -387,6 +398,12 @@ mod tests {
             reason.contains("expected 'CERTIFICATE REQUEST'"),
             "{reason}"
         );
+
+        // A wrapped key and encrypted content are read as CMS containers.
+        for kind in [FileKind::WrappedKey, FileKind::EncryptedData] {
+            let reason = refusal(kind, "test_keys/escrow_public.pem");
+            assert!(reason.contains("CMS artifact is not readable"), "{reason}");
+        }
 
         assert!(file_material(FileKind::Text, vec![0xff, 0xfe]).is_err());
     }

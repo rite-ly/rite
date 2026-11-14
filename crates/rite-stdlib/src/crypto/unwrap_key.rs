@@ -67,10 +67,10 @@ impl Action for UnwrapKeyAction {
             ))
         })?;
 
+        // A file declared `wrapped_key` was read as one when it loaded.
         let ArtifactValue::WrappedKey(wrapped) = wrapped_key_artifact else {
             return Err(ActionError::Failed(format!(
-                "Artifact '{wrapped_data_id}' must be a WrappedKey, found: {:?}",
-                std::mem::discriminant(wrapped_key_artifact)
+                "Artifact '{wrapped_data_id}' is not a wrapped key"
             )));
         };
         let wrapped_fingerprint = compute_fingerprint(wrapped.data());

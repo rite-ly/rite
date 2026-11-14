@@ -4,9 +4,10 @@ use crate::diagnostic::ReferenceContext;
 use rite_model::expression::{ExprError, RefType};
 use rite_model::validate::{Anchor, Pointer};
 use rite_model::{
-    ActId, ActionType, ArtifactId, ArtifactKind, FileKind, MaterialId, OutputId, ParamId,
+    Accepts, ActId, ActionType, ArtifactId, ArtifactKind, FileKind, MaterialId, OutputId, ParamId,
     ParameterType, RoleId, SectionId, StepId,
 };
+use rite_sdk::KeyAlgorithm;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -413,6 +414,23 @@ pub enum ResolveError {
         makes: Vec<ArtifactKind>,
     },
 
+    /// A step reads an artifact of a kind its action does not take there.
+    #[error("{}", input_kind_mismatch(step, *action, input.as_deref(), artifact, kinds, accepts))]
+    InputKindMismatch {
+        /// The step that reads the artifact.
+        step: StepId,
+        /// That step's action.
+        action: ActionType,
+        /// The key under `reads:`, or `None` for a lone reference.
+        input: Option<String>,
+        /// The artifact, as the step names it.
+        artifact: String,
+        /// What the artifact may be, as far as the definition tells.
+        kinds: Vec<ArtifactKind>,
+        /// What the input takes.
+        accepts: Accepts,
+    },
+
     /// An output declares a public key of a step that makes a symmetric key,
     /// which has none.
     #[error(
@@ -424,8 +442,57 @@ pub enum ResolveError {
         output: OutputId,
         /// The step that makes the key.
         step: StepId,
-        /// The key's algorithm, as the step names it.
-        algorithm: String,
+        /// The key's algorithm.
+        algorithm: KeyAlgorithm,
+    },
+
+    /// A step reads a property the artifact does not have.
+    #[error("{}", unknown_property(step, *action, artifact, property, kinds))]
+    UnknownProperty {
+        /// The step that reads the property.
+        step: StepId,
+        /// That step's action.
+        action: ActionType,
+        /// The artifact, by its name.
+        artifact: String,
+        /// The property, without its dot.
+        property: String,
+        /// What the artifact may be, as far as the definition tells.
+        kinds: Vec<ArtifactKind>,
+    },
+
+    /// A step reads the public half of a key known to be symmetric, which has
+    /// none.
+    #[error(
+        "Step '{step}' ('{action}') reads the public half of '{artifact}', but '{artifact}' is \
+         an {algorithm} key, which has none"
+    )]
+    SymmetricKeyRead {
+        /// The step that reads the key.
+        step: StepId,
+        /// That step's action.
+        action: ActionType,
+        /// The key, as the step names it.
+        artifact: String,
+        /// The key's algorithm.
+        algorithm: KeyAlgorithm,
+    },
+
+    /// A step reads the check value of a key known to be asymmetric, which is
+    /// named by its public half instead.
+    #[error(
+        "Step '{step}' ('{action}') reads the check value of '{artifact}', but '{artifact}' is \
+         an {algorithm} key, which is named by its public half rather than by a check value"
+    )]
+    AsymmetricKeyCheckValue {
+        /// The step that reads the check value.
+        step: StepId,
+        /// That step's action.
+        action: ActionType,
+        /// The key, as the step names it.
+        artifact: String,
+        /// The key's algorithm.
+        algorithm: KeyAlgorithm,
     },
 
     /// A step names an artifact under `creates:`, but its action makes none.
@@ -650,6 +717,41 @@ fn at(location: Option<(usize, usize)>) -> String {
     })
 }
 
+/// Why a step cannot read an artifact, from what it may be and what the
+/// input takes.
+fn input_kind_mismatch(
+    step: &StepId,
+    action: ActionType,
+    input: Option<&str>,
+    artifact: &str,
+    kinds: &[ArtifactKind],
+    accepts: &Accepts,
+) -> String {
+    let at = match input {
+        None => format!("Step '{step}' ('{action}') reads '{artifact}'"),
+        Some(input) => format!("Step '{step}' ('{action}') reads '{artifact}' as '{input}'"),
+    };
+    format!(
+        "{at}, which takes {accepts}, but '{artifact}' is {}",
+        quoted(kinds)
+    )
+}
+
+/// Why a step cannot read a property of an artifact.
+fn unknown_property(
+    step: &StepId,
+    action: ActionType,
+    artifact: &str,
+    property: &str,
+    kinds: &[ArtifactKind],
+) -> String {
+    format!(
+        "Step '{step}' ('{action}') reads '{artifact}.{property}', but '{artifact}' is {}, \
+         which has no property '{property}' there",
+        quoted(kinds)
+    )
+}
+
 /// Why an output cannot be the kind it declares, from what its step's
 /// action creates.
 fn output_kind_mismatch(
@@ -666,15 +768,20 @@ fn output_kind_mismatch(
              share is shown to its custodian by a 'reveal' step"
         );
     }
-    let written: Vec<String> = makes
-        .iter()
-        .filter_map(|kind| kind.written_as())
-        .map(|kind| format!("'{kind}'"))
-        .collect();
+    let written: Vec<FileKind> = makes.iter().filter_map(|kind| kind.written_as()).collect();
     format!(
         "Output '{output}' is declared as '{declared}', but {by} writes {}",
-        written.join(" or ")
+        quoted(&written)
     )
+}
+
+/// Kinds as alternatives, each quoted: `'a' or 'b'`.
+fn quoted<K: std::fmt::Display>(kinds: &[K]) -> String {
+    kinds
+        .iter()
+        .map(|kind| format!("'{kind}'"))
+        .collect::<Vec<_>>()
+        .join(" or ")
 }
 
 /// The end of [`ResolveError::HeldKeyOnOtherBackend`]'s message: the backend

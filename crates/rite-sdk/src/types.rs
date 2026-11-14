@@ -1363,6 +1363,22 @@ pub struct IncoherentContainer {
     pub description: WrapDescription,
 }
 
+/// CMS bytes could not be taken as a container.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum FromCmsError {
+    /// The bytes are not a CMS enveloped structure Rite reads.
+    #[error(transparent)]
+    Unreadable(#[from] crate::cms::CmsReadError),
+    /// The structure names algorithms the CMS scheme does not admit.
+    #[error(
+        "a CMS container that {} does not admit: it names {}",
+        .0.scheme,
+        serde_json::to_string(&.0.description)
+            .unwrap_or_else(|_| "an unreadable description".to_string())
+    )]
+    Incoherent(#[from] IncoherentContainer),
+}
+
 /// Give a container newtype the three accessors and the checking constructor.
 ///
 /// Both forms answer the same three questions about their bytes. What they do
@@ -1383,6 +1399,20 @@ macro_rules! container_newtype {
                 data: Vec<u8>,
             ) -> Result<Self, IncoherentContainer> {
                 Container::new(scheme, description, data).map(Self)
+            }
+
+            #[doc = concat!("Read ", $what, " from CMS bytes, described from the bytes themselves.")]
+            ///
+            /// The description is read back from the DER rather than restated by
+            /// whoever wrote it, so it cannot disagree with the bytes.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`FromCmsError`] if the bytes are not a CMS enveloped
+            /// structure, or name algorithms the CMS scheme does not admit.
+            pub fn from_cms(data: Vec<u8>) -> Result<Self, FromCmsError> {
+                let facts = crate::cms::describe(&data)?;
+                Ok(Self::new(WrapScheme::CmsAes256Gcm, facts.description, data)?)
             }
 
             #[doc = concat!("The scheme ", $what, " went into.")]

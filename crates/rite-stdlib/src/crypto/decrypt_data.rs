@@ -1,13 +1,15 @@
 //! `decrypt_data` action, recover the content of an encrypted-data artifact.
 
+use std::borrow::Cow;
+
 use rite_model::ActionType;
 use rite_runtime::{
     Action, ActionError, ArtifactValue, BackendKeyMeta, HandlerContext, Icon, Reporter, StepInfo,
     StepResult, compute_fingerprint, resolve_backend_key,
 };
 use rite_sdk::{
-    Backend, EncryptedData, KeyCheckValue, KeyProtection, PublicKeyDer, RecipientInfoKind,
-    WrapScheme, cms,
+    Backend, EncryptedData, FromCmsError, KeyCheckValue, KeyProtection, PublicKeyDer,
+    RecipientInfoKind, WrapScheme, cms,
 };
 use secrecy::SecretBox;
 use serde_json::{Value, json};
@@ -48,28 +50,7 @@ impl Action for DecryptDataAction {
         let artifact = ctx.artifacts.get(&data_id).ok_or_else(|| {
             ActionError::Failed(format!("Encrypted data artifact '{data_id}' not found"))
         })?;
-        let from_material;
-        let encrypted = match artifact {
-            ArtifactValue::EncryptedData(encrypted) => encrypted,
-            // A container sealed outside the ceremony, with `openssl cms
-            // -encrypt` for instance, arrives as a material's bytes. It is
-            // described from those bytes, as one this ceremony produced was.
-            ArtifactValue::Bytes(bytes) => {
-                from_material = container_from_material(&data_id, bytes)?;
-                &from_material
-            }
-            ArtifactValue::WrappedKey(_) => {
-                return Err(ActionError::Failed(format!(
-                    "Artifact '{data_id}' is a wrapped key, which is opened with 'unwrap_key': \
-                     it installs what comes out rather than handing it over as bytes."
-                )));
-            }
-            _ => {
-                return Err(ActionError::Failed(format!(
-                    "Artifact '{data_id}' is not encrypted content"
-                )));
-            }
-        };
+        let encrypted = encrypted_input(&data_id, artifact)?;
         let scheme = encrypted.scheme();
         let data_fingerprint = compute_fingerprint(encrypted.data());
 
@@ -231,26 +212,35 @@ fn open_content_key(
     Ok(transport.open_data_key(key_id, protected, protection)?)
 }
 
-/// Describe a material's bytes as a container this step opens.
-fn container_from_material(
+/// The content a step opens: one a step sealed, or a material's bytes read as
+/// a CMS container.
+fn encrypted_input<'a>(
     data_id: &impl std::fmt::Display,
-    bytes: &[u8],
-) -> Result<EncryptedData, ActionError> {
-    let facts = cms::describe(bytes).map_err(|e| {
-        ActionError::Failed(format!(
-            "Artifact '{data_id}' is neither encrypted content nor a CMS container: {e}"
-        ))
-    })?;
-    EncryptedData::new(WrapScheme::CmsAes256Gcm, facts.description, bytes.to_vec()).map_err(|e| {
-        // The algorithms the container names, so the refusal says which of
-        // them the scheme does not take.
-        let named = serde_json::to_string(&e.description)
-            .unwrap_or_else(|_| "an unreadable description".to_string());
-        ActionError::Failed(format!(
-            "Artifact '{data_id}' is a CMS container that {} does not admit: it names {named}",
-            e.scheme
-        ))
-    })
+    artifact: &'a ArtifactValue,
+) -> Result<Cow<'a, EncryptedData>, ActionError> {
+    match artifact {
+        ArtifactValue::EncryptedData(encrypted) => Ok(Cow::Borrowed(encrypted)),
+        // A container sealed outside the ceremony, with `openssl cms
+        // -encrypt` for instance, arrives as a material's bytes. It is
+        // described from those bytes, as one this ceremony produced was.
+        ArtifactValue::Bytes(bytes) => EncryptedData::from_cms(bytes.clone())
+            .map(Cow::Owned)
+            .map_err(|e| match e {
+                FromCmsError::Unreadable(e) => ActionError::Failed(format!(
+                    "Artifact '{data_id}' is neither encrypted content nor a CMS container: {e}"
+                )),
+                incoherent @ FromCmsError::Incoherent(_) => {
+                    ActionError::Failed(format!("Artifact '{data_id}' is {incoherent}"))
+                }
+            }),
+        ArtifactValue::WrappedKey(_) => Err(ActionError::Failed(format!(
+            "Artifact '{data_id}' is a wrapped key, which is opened with 'unwrap_key': \
+                 it installs what comes out rather than handing it over as bytes."
+        ))),
+        _ => Err(ActionError::Failed(format!(
+            "Artifact '{data_id}' is not encrypted content"
+        ))),
+    }
 }
 
 /// The decryption key, in the form a container's recipient identifier is

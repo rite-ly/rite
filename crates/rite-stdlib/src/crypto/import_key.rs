@@ -160,10 +160,11 @@ fn declared_policy(typed: &ImportKeyParams, algorithm: KeyAlgorithm) -> rite_sdk
 
 /// The passphrase a step named, borrowed from the store.
 ///
-/// Only a secret artifact is accepted. A passphrase read from a material file
-/// or a text artifact would be a passphrase that sat on a disk, which is what
-/// reading it at the keyboard exists to avoid, and the refusal says where to
-/// get one instead.
+/// Only a secret is accepted: one typed at `enter_secret`, or a file declared
+/// `secret`. Text is shown and recorded, and bytes are not wiped, so neither
+/// is a passphrase. A file is the author's call: on a medium a second
+/// custodian brings, it splits custody; beside the key it opens, it protects
+/// nothing, which Rite cannot see from here.
 fn resolve_passphrase<'a>(
     ctx: &'a HandlerContext,
     reference: &ArtifactRef,
@@ -177,15 +178,6 @@ fn resolve_passphrase<'a>(
             reference.display_name()
         )));
     }
-    // A material is a file, whatever kind it declares: a passphrase in one
-    // sat on a disk.
-    if let ArtifactRef::Material { .. } = reference {
-        return Err(ActionError::Failed(format!(
-            "'{}' is a material, read from a file. A passphrase is read at the keyboard by \
-             'enter_secret', so that no copy of it is on any disk.",
-            reference.display_name()
-        )));
-    }
     let id = reference.artifact_id();
     let artifact = ctx.get_artifact(&id).ok_or_else(|| {
         ActionError::Failed(format!(
@@ -194,12 +186,19 @@ fn resolve_passphrase<'a>(
         ))
     })?;
     match artifact {
+        // A file ends with a line break that is not part of the passphrase,
+        // as `openssl -passin file:` reads it: `echo pw > pass.txt` writes one.
+        ArtifactValue::Secret(secret) if matches!(reference, ArtifactRef::Material { .. }) => {
+            let bytes: &[u8] = secret.expose_secret();
+            let line = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+            Ok(line.strip_suffix(b"\r").unwrap_or(line))
+        }
         ArtifactValue::Secret(secret) => Ok(secret.expose_secret()),
         // Named by kind and never displayed: a text artifact prints its
         // text, and this message becomes a fact.
         other => Err(ActionError::Failed(format!(
             "'{}' is {}, not a secret. A passphrase is read at the keyboard by \
-             'enter_secret', so that no copy of it is on any disk.",
+             'enter_secret', or from a file declared 'secret'.",
             reference.display_name(),
             kind_of(other)
         ))),

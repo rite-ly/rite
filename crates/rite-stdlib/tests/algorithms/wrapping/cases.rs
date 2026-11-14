@@ -92,19 +92,12 @@ const fn read_fails(why: Why, at: Stage, says: &'static str) -> Expected<Read> {
     always(Read::Fails(why, Refusal { at, says }))
 }
 
-use Stage::{Check, Import, Step};
+use Stage::{Check, Import, Load, Step};
 use Why::{Refused, Unsupported};
 
 /// A key that signs and cannot be a recipient, in the words both write steps
 /// use.
 const CANNOT_RECEIVE: &str = "cannot be a recipient: it only signs";
-
-/// `unwrap_key` reads only a wrapped key a step of the same run produced, so
-/// a container from outside is refused before its form is looked at. When it
-/// accepts a material, every fixture's `unwrap_key` row changes, which is the
-/// point.
-const UNWRAP_READS_NO_MATERIAL: Expected<Read> =
-    read_fails(Unsupported, Step, "must be a WrappedKey");
 
 // ── Write cases ──────────────────────────────────────────────────────────────
 
@@ -381,7 +374,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[RSAES_OAEP, SHA_256, MGF1, AES_256_GCM],
         lacks: &[RSA_ENCRYPTION, id::COMMON_NAME],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: OPENS,
         decrypt_data: OPENS,
     },
     Fixture {
@@ -392,7 +385,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa4096,
         holds: &[RSAES_OAEP, SHA_256, MGF1, AES_256_GCM],
         lacks: &[RSA_ENCRYPTION],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: OPENS,
         decrypt_data: OPENS,
     },
     Fixture {
@@ -426,8 +419,8 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[RSAES_OAEP, AES_256_GCM],
         lacks: &[id::SHA_1, SHA_256, id::SHA_384, id::SHA_512, MGF1],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
-        decrypt_data: read_fails(Unsupported, Step, "names no hashFunc, which means SHA-1"),
+        unwrap_key: read_fails(Unsupported, Load, "names no hashFunc, which means SHA-1"),
+        decrypt_data: read_fails(Unsupported, Load, "names no hashFunc, which means SHA-1"),
     },
     Fixture {
         name: "ktri-rsa-2048-oaep-sha384",
@@ -447,10 +440,14 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[RSAES_OAEP, id::SHA_384, MGF1],
         lacks: &[SHA_256],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(
+            Unsupported,
+            Load,
+            "hashFunc is 2.16.840.1.101.3.4.2.2, and this reader opens RSAES-OAEP over SHA-256",
+        ),
         decrypt_data: read_fails(
             Unsupported,
-            Step,
+            Load,
             "hashFunc is 2.16.840.1.101.3.4.2.2, and this reader opens RSAES-OAEP over SHA-256",
         ),
     },
@@ -472,10 +469,14 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[RSAES_OAEP, id::SHA_512, MGF1],
         lacks: &[SHA_256],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(
+            Unsupported,
+            Load,
+            "hashFunc is 2.16.840.1.101.3.4.2.3, and this reader opens RSAES-OAEP over SHA-256",
+        ),
         decrypt_data: read_fails(
             Unsupported,
-            Step,
+            Load,
             "hashFunc is 2.16.840.1.101.3.4.2.3, and this reader opens RSAES-OAEP over SHA-256",
         ),
     },
@@ -499,10 +500,14 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[RSAES_OAEP, SHA_256],
         lacks: &[MGF1, id::SHA_1],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(
+            Unsupported,
+            Load,
+            "names no maskGenFunc, which means MGF1 over SHA-1",
+        ),
         decrypt_data: read_fails(
             Unsupported,
-            Step,
+            Load,
             "names no maskGenFunc, which means MGF1 over SHA-1",
         ),
     },
@@ -514,7 +519,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[RSA_ENCRYPTION, AES_256_GCM],
         lacks: &[RSAES_OAEP],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(Unsupported, Step, "RSAES-PKCS1-v1_5"),
         decrypt_data: read_fails(Unsupported, Step, "RSAES-PKCS1-v1_5"),
     },
     Fixture {
@@ -525,7 +530,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[RSAES_OAEP, SHA_256, id::COMMON_NAME],
         lacks: &[],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(Unsupported, Step, "issuer and serial"),
         decrypt_data: read_fails(Unsupported, Step, "issuer and serial"),
     },
     // Key agreement. The curve is not in the container: the originator key
@@ -538,7 +543,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::P256,
         holds: &[DH_SHA256KDF, AES_256_WRAP, AES_256_GCM],
         lacks: &[id::COMMON_NAME],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: OPENS,
         decrypt_data: OPENS,
     },
     Fixture {
@@ -549,7 +554,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::P384,
         holds: &[DH_SHA384KDF, AES_256_WRAP, AES_256_GCM],
         lacks: &[],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: OPENS,
         decrypt_data: OPENS,
     },
     Fixture {
@@ -562,7 +567,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::P384,
         holds: &[DH_SHA256KDF, AES_256_WRAP],
         lacks: &[DH_SHA384KDF],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: OPENS,
         decrypt_data: OPENS,
     },
     Fixture {
@@ -573,7 +578,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::P256,
         holds: &[DH_SHA1KDF, AES_256_WRAP],
         lacks: &[DH_SHA256KDF],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(Unsupported, Step, "SHA-1"),
         decrypt_data: read_fails(Unsupported, Step, "SHA-1"),
     },
     Fixture {
@@ -584,7 +589,11 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::P256,
         holds: &[id::DH_SHA512KDF, AES_256_WRAP],
         lacks: &[],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(
+            Unsupported,
+            Step,
+            "key agreement scheme 1.3.132.1.11.3 is not ECDH",
+        ),
         decrypt_data: read_fails(
             Unsupported,
             Step,
@@ -607,7 +616,11 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::P256,
         holds: &[id::COFACTOR_DH_SHA256KDF, AES_256_WRAP],
         lacks: &[DH_SHA256KDF],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(
+            Unsupported,
+            Step,
+            "key agreement scheme 1.3.132.1.14.1 is not ECDH",
+        ),
         decrypt_data: read_fails(
             Unsupported,
             Step,
@@ -622,7 +635,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::P256,
         holds: &[DH_SHA256KDF, id::COMMON_NAME],
         lacks: &[],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(Unsupported, Step, "issuer and serial"),
         decrypt_data: read_fails(Unsupported, Step, "issuer and serial"),
     },
     Fixture {
@@ -636,7 +649,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::P256,
         holds: &[DH_SHA256KDF, AES_256_WRAP],
         lacks: &[],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(Refused, Step, "is addressed to the key identified by"),
         decrypt_data: read_fails(Refused, Step, "is addressed to the key identified by"),
     },
     Fixture {
@@ -681,7 +694,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Aes256,
         holds: &[AES_256_WRAP, AES_256_GCM],
         lacks: &[],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: OPENS,
         decrypt_data: OPENS,
     },
     Fixture {
@@ -692,7 +705,11 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Aes128,
         holds: &[AES_128_WRAP],
         lacks: &[AES_256_WRAP],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(
+            Unsupported,
+            Step,
+            "names id-aes256-wrap, which needs a 256-bit key",
+        ),
         decrypt_data: read_fails(
             Unsupported,
             Step,
@@ -719,7 +736,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::MlKem768,
         holds: &[id::ML_KEM_768, HKDF_SHA256, AES_256_WRAP],
         lacks: &[],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(Unsupported, Step, "CMS decrypt"),
         decrypt_data: read_fails(
             Unsupported,
             Step,
@@ -737,8 +754,8 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Aes256,
         holds: &[id::PWRI_KEK, id::PBKDF2, AES_256_CBC],
         lacks: &[],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
-        decrypt_data: read_fails(Unsupported, Step, "PasswordRecipientInfo is not a key wrap"),
+        unwrap_key: read_fails(Unsupported, Load, "PasswordRecipientInfo is not a key wrap"),
+        decrypt_data: read_fails(Unsupported, Load, "PasswordRecipientInfo is not a key wrap"),
     },
     // The content cipher. CBC carries no integrity protection; Rite writes no
     // CBC (PCI PIN v3.1, 18-3) and is to accept it on input, which a policy
@@ -751,10 +768,14 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[id::AES_128_GCM],
         lacks: &[AES_256_GCM],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(
+            Unsupported,
+            Load,
+            "\"content_encryption_oid\":\"2.16.840.1.101.3.4.1.6\"",
+        ),
         decrypt_data: read_fails(
             Unsupported,
-            Step,
+            Load,
             "\"content_encryption_oid\":\"2.16.840.1.101.3.4.1.6\"",
         ),
     },
@@ -766,10 +787,14 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[AES_256_CBC],
         lacks: &[AES_256_GCM],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(
+            Unsupported,
+            Load,
+            "\"content_encryption_oid\":\"2.16.840.1.101.3.4.1.42\"",
+        ),
         decrypt_data: read_fails(
             Unsupported,
-            Step,
+            Load,
             "\"content_encryption_oid\":\"2.16.840.1.101.3.4.1.42\"",
         ),
     },
@@ -782,10 +807,14 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[id::AES_128_CBC],
         lacks: &[AES_256_GCM, AES_256_CBC],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(
+            Unsupported,
+            Load,
+            "\"content_encryption_oid\":\"2.16.840.1.101.3.4.1.2\"",
+        ),
         decrypt_data: read_fails(
             Unsupported,
-            Step,
+            Load,
             "\"content_encryption_oid\":\"2.16.840.1.101.3.4.1.2\"",
         ),
     },
@@ -798,10 +827,14 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[id::AES_192_CBC],
         lacks: &[AES_256_GCM, AES_256_CBC],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(
+            Unsupported,
+            Load,
+            "\"content_encryption_oid\":\"2.16.840.1.101.3.4.1.22\"",
+        ),
         decrypt_data: read_fails(
             Unsupported,
-            Step,
+            Load,
             "\"content_encryption_oid\":\"2.16.840.1.101.3.4.1.22\"",
         ),
     },
@@ -813,10 +846,14 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[id::DES_EDE3_CBC],
         lacks: &[AES_256_GCM],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(
+            Unsupported,
+            Load,
+            "\"content_encryption_oid\":\"1.2.840.113549.3.7\"",
+        ),
         decrypt_data: read_fails(
             Unsupported,
-            Step,
+            Load,
             "\"content_encryption_oid\":\"1.2.840.113549.3.7\"",
         ),
     },
@@ -829,7 +866,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[RSAES_OAEP, DH_SHA256KDF],
         lacks: &[],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(Unsupported, Step, "more than one recipient"),
         decrypt_data: read_fails(Unsupported, Step, "more than one recipient"),
     },
     Fixture {
@@ -842,7 +879,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::Rsa2048,
         holds: &[RSAES_OAEP, DH_SHA256KDF],
         lacks: &[],
-        unwrap_key: UNWRAP_READS_NO_MATERIAL,
+        unwrap_key: read_fails(Unsupported, Step, "more than one recipient"),
         decrypt_data: read_fails(Unsupported, Step, "more than one recipient"),
     },
 ];

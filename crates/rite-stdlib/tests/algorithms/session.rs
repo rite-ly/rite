@@ -15,9 +15,9 @@
 //!    backend it names. What the matrix leaves out is the run around the steps:
 //!    the operator, the transcript file and the outputs written to disk.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
-use rite_model::{ArtifactId, Step};
+use rite_model::{ArtifactId, FileKind, Step};
 use rite_openssl::OpenSslBackend;
 use rite_resolver::Severity;
 use rite_runtime::{Action, ArtifactValue, BackendRegistry, test_support::StepRunner};
@@ -76,8 +76,8 @@ impl Via {
 pub struct Session {
     runner: StepRunner,
     /// The artifacts the case put in place, which the ceremony declares as
-    /// materials.
-    materials: BTreeSet<String>,
+    /// materials of these kinds.
+    materials: BTreeMap<String, FileKind>,
     /// The steps so far, as the ceremony writes them.
     steps: Vec<(String, Value)>,
 }
@@ -90,7 +90,7 @@ impl Session {
         ));
         Self {
             runner: StepRunner::new(rite_stdlib::default_registry(), backends),
-            materials: BTreeSet::new(),
+            materials: BTreeMap::new(),
             steps: Vec::new(),
         }
     }
@@ -98,8 +98,18 @@ impl Session {
     /// Make `value` available to later steps as `id`, as a material: bytes
     /// the ceremony reads from a file.
     pub fn add(&mut self, id: &str, value: ArtifactValue) {
-        self.materials.insert(id.to_string());
+        self.materials.insert(id.to_string(), FileKind::Bytes);
         self.runner.add_material(ArtifactId::new(id), value);
+    }
+
+    /// Make a file's `bytes` available as `id`, a material the ceremony
+    /// declares as `kind`, loaded as the runner loads one. A file that is not
+    /// that kind is refused at [`Stage::Load`].
+    pub fn add_file(&mut self, id: &str, kind: FileKind, bytes: Vec<u8>) -> Result<(), Refused> {
+        let value = rite_runtime::file_material(kind, bytes).map_err(|e| (Stage::Load, e))?;
+        self.materials.insert(id.to_string(), kind);
+        self.runner.add_material(ArtifactId::new(id), value);
+        Ok(())
     }
 
     /// The facts the steps so far recorded.
@@ -260,10 +270,10 @@ impl Session {
         let materials: serde_json::Map<String, Value> = self
             .materials
             .iter()
-            .map(|id| {
+            .map(|(id, kind)| {
                 (
                     id.clone(),
-                    json!({ "type": "bytes", "path": format!("{id}.bin") }),
+                    json!({ "type": kind.as_str(), "path": format!("{id}.bin") }),
                 )
             })
             .collect();

@@ -12,7 +12,7 @@
 
 use crate::actions::{ArtifactValue, Share};
 use crate::executor::ExecutionError;
-use rite_model::ArtifactId;
+use rite_model::{ArtifactId, share_index};
 use rite_sdk::{KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer};
 use secrecy::ExposeSecret;
 use std::collections::HashMap;
@@ -187,18 +187,6 @@ pub fn resolve_share<'a, S: BuildHasher>(
     }
 }
 
-/// The `N` of a `share_N` property, or `None` for anything else.
-///
-/// `N` is one or more ASCII digits, no sign, no leading zero, from 1 to
-/// 255: the one spelling of each index, so a name is a share or is not.
-fn share_index(property: &str) -> Option<u8> {
-    let digits = property.strip_prefix("share_")?;
-    if digits.is_empty() || digits.starts_with('0') || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse::<u8>().ok()
-}
-
 /// What an action needs to know about a backend-managed key.
 ///
 /// Borrowed from the artifact store rather than cloned: a caller that needs an
@@ -349,19 +337,6 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(not_a_share.contains("is not a share"), "{not_a_share}");
-    }
-
-    #[test]
-    fn a_share_property_is_digits_from_one_with_no_sign_and_no_leading_zero() {
-        assert_eq!(share_index("share_1"), Some(1));
-        assert_eq!(share_index("share_255"), Some(255));
-        assert_eq!(share_index("share_0"), None);
-        assert_eq!(share_index("share_01"), None);
-        assert_eq!(share_index("share_+1"), None);
-        assert_eq!(share_index("share_256"), None);
-        assert_eq!(share_index("share_"), None);
-        assert_eq!(share_index("share1"), None);
-        assert_eq!(share_index("shares_1"), None);
     }
 
     #[test]

@@ -373,6 +373,10 @@ impl SpanMap {
             | ResolveError::HeldKeyOnOtherBackend { step, .. }
             | ResolveError::PinOnBackendWithoutPin { step, .. }
             | ResolveError::ArtifactNamesMaterial { step, .. }
+            | ResolveError::InputKindMismatch { step, .. }
+            | ResolveError::SymmetricKeyRead { step, .. }
+            | ResolveError::AsymmetricKeyCheckValue { step, .. }
+            | ResolveError::UnknownProperty { step, .. }
             | ResolveError::ArtifactNeverProduced { step, .. } => self.steps.get(step).copied(),
             ResolveError::SchemaViolation {
                 step,

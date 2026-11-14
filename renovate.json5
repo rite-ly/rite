@@ -55,6 +55,13 @@
       groupName: "rust-openssl monorepo"
     },
     {
+      description: "Group RustCrypto curve crates, which share one elliptic-curve stack",
+      matchSourceUrls: [
+        "https://github.com/RustCrypto/elliptic-curves"
+      ],
+      groupName: "RustCrypto elliptic curves"
+    },
+    {
       description: "Delay cargo updates",
       matchManagers: [
         "cargo"

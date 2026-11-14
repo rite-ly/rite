@@ -17,6 +17,8 @@ rite-sdk = { workspace = true }
 # cryptographic implementation. See docs/development/cryptographic-dependencies.md.
 cryptoki = { workspace = true }
 
+[dev-dependencies]
+der = { workspace = true }
 
 [lints]
 workspace = true

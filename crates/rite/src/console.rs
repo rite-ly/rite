@@ -127,6 +127,11 @@ fn material_summary(material: &MaterialOverview) -> String {
             }
             parts.join(" ")
         }
+        MaterialOverviewKind::BackendKey {
+            backend,
+            key_id,
+            algorithm,
+        } => format!("backend_key {algorithm}, {key_id} on {backend}"),
         _ => "unknown".to_string(),
     };
     match &material.description {

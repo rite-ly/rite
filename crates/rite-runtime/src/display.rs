@@ -62,6 +62,17 @@ pub fn fact_summary(fact: &StepFact) -> Option<(Icon, String)> {
         StepFact::BackendBound { name, identity, .. } => {
             Some((Icon::Info, format!("Backend {name}: {identity}")))
         }
+        StepFact::KeyBound {
+            name,
+            backend,
+            key_id,
+            algorithm,
+            fingerprint,
+            ..
+        } => Some((
+            Icon::Checkmark,
+            format!("Key {name}: {algorithm} {fingerprint}, {key_id} on {backend}"),
+        )),
         StepFact::ArtifactWritten { file, .. } => Some((
             Icon::Checkmark,
             format!("Artifact written: artifacts/{file}"),

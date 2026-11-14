@@ -32,8 +32,8 @@ use rite_openssl::OpenSslBackend;
 #[cfg(feature = "openssl")]
 use rite_sdk::{
     DataKey, KeyAgreementBackend, KeyMetadata, KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend,
-    KeyTransportBackend, RandomBackend, SignAlgorithm, SignBackend, VerifyBackend, WrapScheme,
-    WrappedKey,
+    KeyTransportBackend, KeyUsages, RandomBackend, SignAlgorithm, SignBackend, VerifyBackend,
+    WrapScheme, WrappedKey,
 };
 #[cfg(feature = "openssl")]
 use zeroize::Zeroizing;
@@ -69,6 +69,19 @@ const MOCK_SLOT_CERTIFICATE: &[u8] = include_bytes!("fixtures/mock-slot-cert.der
 /// issued by the device about the slot, not by the slot. Clearly synthetic: a
 /// rehearsal cannot produce a chain to the real Yubico root.
 const MOCK_ATTESTATION_CERTIFICATE: &[u8] = include_bytes!("fixtures/mock-attestation-cert.der");
+
+/// The policy of a key standing in for one a device holds: every usage.
+///
+/// A PIV slot carries no usage attribute, the slot is its usage, so a slot's
+/// key signs or agrees as the ceremony asks. A stand-in with the default
+/// signing policy would refuse the agreement that opens content sealed to it.
+#[cfg(feature = "openssl")]
+fn slot_policy() -> KeyPolicy {
+    KeyPolicy {
+        usages: KeyUsages::all(),
+        ..KeyPolicy::default()
+    }
+}
 
 /// Mock backend for testing and dry-run.
 ///
@@ -125,7 +138,7 @@ impl MockBackend {
                 KeySpec {
                     algorithm: KeyAlgorithm::EcdsaP256,
                     label: "mock-piv-slot".to_string(),
-                    policy: KeyPolicy::default(),
+                    policy: slot_policy(),
                     location_hint: None,
                 },
                 MOCK_SLOT_PRIVATE_KEY,
@@ -146,11 +159,49 @@ impl MockBackend {
         }
     }
 
-    /// Return the backing key for `key_id`, minting a synthetic stand-in of the
-    /// algorithm implied by `algorithm` the first time it is seen.
+    /// Hold a stand-in for each key a ceremony declares this backend already
+    /// holds, `(id, algorithm)`, so a rehearsal reads, signs with and agrees
+    /// with it under the declared id.
     ///
-    /// Used by [`SignBackend::sign`] so a rehearsal can sign with a reference
-    /// (a PIV slot, say) whose key was provisioned outside the ceremony.
+    /// A P-256 key is the committed slot key, as for an undeclared reference
+    /// signed with; another algorithm gets a fresh key of that algorithm.
+    ///
+    /// # Errors
+    ///
+    /// Returns what generating a stand-in returns, and
+    /// [`BackendError::UnsupportedOperation`] in a build without the `openssl`
+    /// feature, which has no crypto to stand in with.
+    pub fn with_held_keys(mut self, held: &[(KeyId, KeyAlgorithm)]) -> Result<Self, BackendError> {
+        #[cfg(feature = "openssl")]
+        for (key_id, algorithm) in held {
+            self.stand_in_key(key_id, *algorithm)?;
+        }
+        #[cfg(not(feature = "openssl"))]
+        if !held.is_empty() {
+            return Err(BackendError::UnsupportedOperation(
+                "the mock holds keys only in a build with the 'openssl' feature".to_string(),
+            ));
+        }
+        Ok(self)
+    }
+
+    /// The key backing `key_id`: its own, or the stand-in for a declared
+    /// held key.
+    #[cfg(feature = "openssl")]
+    fn backing(&self, key_id: &KeyId) -> KeyId {
+        self.stand_in_keys
+            .get(key_id.as_str())
+            .cloned()
+            .unwrap_or_else(|| key_id.clone())
+    }
+
+    /// Return the backing key for `key_id`, minting a synthetic stand-in of
+    /// `algorithm` the first time it is seen.
+    ///
+    /// Used for the keys a ceremony declares, and by [`SignBackend::sign`] so a
+    /// rehearsal can sign with a reference (a PIV slot, say) whose key was
+    /// provisioned outside the ceremony. A stand-in permits every usage, as a
+    /// PIV slot carries no usage attribute.
     ///
     /// P-256 references resolve to the slot key, the one the mock also reports
     /// through [`CertStoreBackend::read_cert`] and slot metadata, so a signature
@@ -160,25 +211,26 @@ impl MockBackend {
     fn stand_in_key(
         &mut self,
         key_id: &KeyId,
-        algorithm: SignAlgorithm,
+        algorithm: KeyAlgorithm,
     ) -> Result<KeyId, BackendError> {
-        if algorithm.key_algorithm() == KeyAlgorithm::EcdsaP256 {
-            return Ok(self.slot_key.clone());
-        }
         if let Some(backing) = self.stand_in_keys.get(key_id.as_str()) {
             return Ok(backing.clone());
         }
-        // The signature -> key algorithm pairing is owned by the SDK so the
-        // stand-in cannot drift from what real backends select.
-        let meta = self.crypto.generate_key(KeySpec {
-            algorithm: algorithm.key_algorithm(),
-            label: format!("mock-stand-in:{key_id}"),
-            policy: KeyPolicy::default(),
-            location_hint: None,
-        })?;
+        let backing = if algorithm == KeyAlgorithm::EcdsaP256 {
+            self.slot_key.clone()
+        } else {
+            self.crypto
+                .generate_key(KeySpec {
+                    algorithm,
+                    label: format!("mock-stand-in:{key_id}"),
+                    policy: slot_policy(),
+                    location_hint: None,
+                })?
+                .key_id
+        };
         self.stand_in_keys
-            .insert(key_id.as_str().to_string(), meta.key_id.clone());
-        Ok(meta.key_id)
+            .insert(key_id.as_str().to_string(), backing.clone());
+        Ok(backing)
     }
 }
 
@@ -236,7 +288,7 @@ impl KeyStoreBackend for MockBackend {
     }
 
     fn export_public_key(&self, key_id: &KeyId) -> Result<PublicKeyDer, BackendError> {
-        self.crypto.export_public_key(key_id)
+        self.crypto.export_public_key(&self.backing(key_id))
     }
 
     fn list_keys(&self) -> Result<Vec<KeyMetadata>, BackendError> {
@@ -261,7 +313,9 @@ impl SignBackend for MockBackend {
             // as a pre-provisioned hardware slot. Stand in a synthetic key so
             // the signing step can still be walked end to end.
             Err(BackendError::KeyNotFound(_)) => {
-                let backing = self.stand_in_key(key_id, algorithm)?;
+                // The signature -> key algorithm pairing is owned by the SDK so the
+                // stand-in cannot drift from what real backends select.
+                let backing = self.stand_in_key(key_id, algorithm.key_algorithm())?;
                 self.crypto.sign(&backing, message, algorithm)
             }
             result => result,
@@ -341,7 +395,7 @@ impl KeyAgreementBackend for MockBackend {
         key_id: &KeyId,
         peer: &PublicKeyDer,
     ) -> Result<rite_sdk::AgreedSecret, BackendError> {
-        self.crypto.agree(key_id, peer)
+        self.crypto.agree(&self.backing(key_id), peer)
     }
 }
 
@@ -672,8 +726,9 @@ mod tests {
                     SignAlgorithm::EcdsaSha256,
                 )
                 .expect("the slot key signs");
-            assert!(
-                backend.stand_in_keys.is_empty(),
+            assert_eq!(
+                backend.stand_in_keys.get("piv:9c"),
+                Some(&backend.slot_key),
                 "a P-256 slot reference must not mint a key of its own"
             );
         }

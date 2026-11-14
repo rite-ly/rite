@@ -105,6 +105,9 @@ pub fn run(args: Args) {
             // without touching the declared provider's hardware.
             config.provider = rite_model::Provider::Mock;
         }
+        if config.provider == rite_model::Provider::Mock {
+            hold_declared_keys(&mut config, name, &resolved);
+        }
         backend_registry.declare(name.clone(), config);
     }
 
@@ -262,6 +265,35 @@ fn default_frontend() -> Frontend {
 fn is_stdout_tty() -> bool {
     use std::io::IsTerminal;
     std::io::stdout().is_terminal()
+}
+
+/// Tell a mock backend which keys the ceremony declares it already holds, as
+/// its `held_keys` config, so it stands in for each under the declared id
+/// with the declared algorithm. A rehearsal then reads, signs with and
+/// agrees with the key a device would hold.
+fn hold_declared_keys(
+    config: &mut rite_model::BackendConfig,
+    backend: &str,
+    resolved: &rite_model::Ceremony,
+) {
+    let held: serde_json::Map<String, serde_json::Value> = resolved
+        .materials
+        .iter()
+        .filter_map(|(_, material)| match &material.kind {
+            rite_model::MaterialKind::BackendKey(key) if key.backend == backend => {
+                Some((key.key_id.to_string(), key.algorithm.as_str().into()))
+            }
+            _ => None,
+        })
+        .collect();
+    if held.is_empty() {
+        return;
+    }
+    if let serde_json::Value::Object(extra) = &mut config.extra {
+        extra.insert("held_keys".to_string(), serde_json::Value::Object(held));
+    } else {
+        config.extra = serde_json::json!({ "held_keys": held });
+    }
 }
 
 /// Exit if this build lacks something the ceremony needs: an action, a step

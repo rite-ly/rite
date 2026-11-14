@@ -8,8 +8,10 @@ mod mock;
 
 pub use mock::MockBackend;
 
+use std::collections::BTreeMap;
+
 use rite_runtime::BackendFactory;
-use rite_sdk::{BackendConfig, BackendError, Provider};
+use rite_sdk::{BackendConfig, BackendError, KeyAlgorithm, KeyId, Provider};
 
 /// Whether this build carries `provider`.
 ///
@@ -24,6 +26,27 @@ pub fn is_built(provider: Provider) -> bool {
         Provider::Piv => cfg!(feature = "piv"),
         Provider::Yubikey => cfg!(feature = "yubikey"),
     }
+}
+
+/// The keys a mock backend's config says it holds: `held_keys`, a map from
+/// the id each answers to to its algorithm, `{"piv:9d": "ECDSA-P384"}`.
+///
+/// `rite run` writes it for every mock backend from the ceremony's
+/// `backend_key` materials, so a rehearsal holds the keys a device would.
+fn mock_held_keys(config: &BackendConfig) -> Result<Vec<(KeyId, KeyAlgorithm)>, BackendError> {
+    let Some(held) = config.extra.get("held_keys") else {
+        return Ok(Vec::new());
+    };
+    let held: BTreeMap<String, KeyAlgorithm> =
+        serde_json::from_value(held.clone()).map_err(|e| {
+            BackendError::Configuration(format!(
+                "a mock's 'held_keys' is a map from id to algorithm: {e}"
+            ))
+        })?;
+    Ok(held
+        .into_iter()
+        .map(|(key_id, algorithm)| (KeyId::new(key_id), algorithm))
+        .collect())
 }
 
 /// Create a backend by provider and config.
@@ -47,7 +70,10 @@ pub fn create_backend(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            Ok(Box::new(MockBackend::new(name, seed)))
+            let held = mock_held_keys(config)?;
+            Ok(Box::new(
+                MockBackend::new(name, seed).with_held_keys(&held)?,
+            ))
         }
         Provider::Openssl => {
             #[cfg(feature = "openssl")]

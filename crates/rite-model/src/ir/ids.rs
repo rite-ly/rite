@@ -61,13 +61,19 @@ macro_rules! define_id {
 
 define_id!(
     /// Unique identifier for a role in the ceremony.
-    #[cfg_attr(test, schemars(description = "A role's identifier, as written in the ceremony."))]
+    #[cfg_attr(
+        test,
+        schemars(description = "A role's identifier, as written in the ceremony.")
+    )]
     RoleId
 );
 
 define_id!(
     /// Unique identifier for a step in the ceremony.
-    #[cfg_attr(test, schemars(description = "A step's identifier, as written in the ceremony."))]
+    #[cfg_attr(
+        test,
+        schemars(description = "A step's identifier, as written in the ceremony.")
+    )]
     StepId
 );
 
@@ -78,7 +84,10 @@ define_id!(
 
 define_id!(
     /// Unique identifier for an act in the ceremony.
-    #[cfg_attr(test, schemars(description = "An act's identifier, as written in the ceremony."))]
+    #[cfg_attr(
+        test,
+        schemars(description = "An act's identifier, as written in the ceremony.")
+    )]
     ActId
 );
 

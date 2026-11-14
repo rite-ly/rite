@@ -11,7 +11,10 @@
 
 use crate::serde_utils;
 use indexmap::IndexMap;
-use rite_model::{ActionType, BackendConfig, DutyType, FileKind, ParameterType, Sha256Digest};
+use rite_model::{
+    ActionType, BackendConfig, DutyType, FileKind, KeyAlgorithm, KeyFingerprint, ParameterType,
+    Sha256Digest,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -258,8 +261,8 @@ pub(crate) struct Parameter {
 
 /// A material required before the ceremony starts.
 ///
-/// Its `type:` is either `physical` or the kind of file it is, so the tag
-/// is not one name per variant, and the material is read through
+/// Its `type:` is `physical`, `backend_key`, or the kind of file it is, so
+/// the tag is not one name per variant, and the material is read through
 /// [`MaterialDeclaration`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(try_from = "MaterialDeclaration", into = "MaterialDeclaration")]
@@ -286,22 +289,39 @@ pub(crate) enum Material {
         /// Quantity for checklist rendering.
         quantity: Option<u32>,
     },
+    /// A key a backend already holds, provisioned before the ceremony.
+    BackendKey {
+        /// Optional display title.
+        title: Option<String>,
+        /// Optional description.
+        description: Option<String>,
+        /// The backend that holds the key, by its name under `backends:`.
+        backend: String,
+        /// The reference the backend answers to, such as `piv:9d`.
+        id: String,
+        /// The algorithm the key must have.
+        algorithm: KeyAlgorithm,
+        /// The public key the backend must hold, when the ceremony pins it.
+        fingerprint: Option<KeyFingerprint>,
+    },
 }
 
 impl Material {
     /// Get the title of this material (if set).
     pub(crate) fn title(&self) -> Option<&str> {
         match self {
-            Material::File { title, .. } | Material::Physical { title, .. } => title.as_deref(),
+            Material::File { title, .. }
+            | Material::Physical { title, .. }
+            | Material::BackendKey { title, .. } => title.as_deref(),
         }
     }
 
     /// Get the description of this material (if set).
     pub(crate) fn description(&self) -> Option<&str> {
         match self {
-            Material::File { description, .. } | Material::Physical { description, .. } => {
-                description.as_deref()
-            }
+            Material::File { description, .. }
+            | Material::Physical { description, .. }
+            | Material::BackendKey { description, .. } => description.as_deref(),
         }
     }
 
@@ -314,7 +334,7 @@ impl Material {
     pub(crate) fn path(&self) -> Option<&std::path::Path> {
         match self {
             Material::File { path, .. } => path.as_deref(),
-            Material::Physical { .. } => None,
+            Material::Physical { .. } | Material::BackendKey { .. } => None,
         }
     }
 }
@@ -342,13 +362,24 @@ pub(crate) struct MaterialDeclaration {
         deserialize_with = "serde_utils::deserialize_opt_u32"
     )]
     quantity: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    algorithm: Option<KeyAlgorithm>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fingerprint: Option<KeyFingerprint>,
 }
 
-/// A material's `type:`: `physical`, or the kind of file it is.
+/// A material's `type:`: `physical`, `backend_key`, or the kind of file it
+/// is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MaterialType {
     /// An item brought to the ceremony.
     Physical,
+    /// A key a backend already holds.
+    BackendKey,
     /// A file holding this kind.
     File(FileKind),
 }
@@ -359,12 +390,13 @@ impl MaterialType {
         FileKind::ALL
             .iter()
             .map(|kind| kind.as_str())
-            .chain(std::iter::once("physical"))
+            .chain(["physical", "backend_key"])
     }
 
     fn as_str(self) -> &'static str {
         match self {
             MaterialType::Physical => "physical",
+            MaterialType::BackendKey => "backend_key",
             MaterialType::File(kind) => kind.as_str(),
         }
     }
@@ -375,8 +407,8 @@ impl MaterialType {
 pub(crate) fn material_type_rule() -> String {
     let names: Vec<&str> = MaterialType::names().collect();
     format!(
-        "a material's 'type' is 'physical', or the kind of file it is ({}); a file once \
-         declared 'digital' is 'bytes', or the kind it holds",
+        "a material's 'type' is 'physical', 'backend_key', or the kind of file it is ({}); a \
+         file once declared 'digital' is 'bytes', or the kind it holds",
         names.join(", ")
     )
 }
@@ -413,8 +445,10 @@ impl Serialize for MaterialType {
 impl<'de> Deserialize<'de> for MaterialType {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let name = String::deserialize(deserializer)?;
-        if name == "physical" {
-            return Ok(MaterialType::Physical);
+        match name.as_str() {
+            "physical" => return Ok(MaterialType::Physical),
+            "backend_key" => return Ok(MaterialType::BackendKey),
+            _ => {}
         }
         FileKind::ALL
             .iter()
@@ -438,13 +472,26 @@ impl TryFrom<MaterialDeclaration> for Material {
             path,
             identifier,
             quantity,
+            backend,
+            id,
+            algorithm,
+            fingerprint,
         } = declared;
+        let names_a_held_key =
+            backend.is_some() || id.is_some() || algorithm.is_some() || fingerprint.is_some();
         match declared {
             MaterialType::File(kind) => {
                 if identifier.is_some() || quantity.is_some() {
                     return Err(format!(
                         "a '{}' material is a file: 'identifier' and 'quantity' are for a \
                          physical one",
+                        kind.as_str()
+                    ));
+                }
+                if names_a_held_key {
+                    return Err(format!(
+                        "a '{}' material is a file: 'backend', 'id', 'algorithm' and \
+                         'fingerprint' are for a 'backend_key' one",
                         kind.as_str()
                     ));
                 }
@@ -461,12 +508,51 @@ impl TryFrom<MaterialDeclaration> for Material {
                         "a physical material has no 'path': declare a file by its kind".into(),
                     );
                 }
+                if names_a_held_key {
+                    return Err(
+                        "a physical material has no 'backend', 'id', 'algorithm' or \
+                                'fingerprint': declare a key a backend holds as 'backend_key'"
+                            .into(),
+                    );
+                }
                 Ok(Material::Physical {
                     title,
                     description,
                     identifier,
                     quantity,
                 })
+            }
+            MaterialType::BackendKey => {
+                if path.is_some() || identifier.is_some() || quantity.is_some() {
+                    return Err(
+                        "a 'backend_key' material is read from its backend: 'path', \
+                                'identifier' and 'quantity' are for a file or a physical one"
+                            .into(),
+                    );
+                }
+                let missing: Vec<&str> = [
+                    ("backend", backend.is_none()),
+                    ("id", id.is_none()),
+                    ("algorithm", algorithm.is_none()),
+                ]
+                .into_iter()
+                .filter_map(|(field, absent)| absent.then_some(field))
+                .collect();
+                match (backend, id, algorithm) {
+                    (Some(backend), Some(id), Some(algorithm)) => Ok(Material::BackendKey {
+                        title,
+                        description,
+                        backend,
+                        id,
+                        algorithm,
+                        fingerprint,
+                    }),
+                    _ => Err(format!(
+                        "a 'backend_key' material needs '{}': the backend that holds the key, \
+                         the id it answers to, and the algorithm the key must have",
+                        missing.join("', '")
+                    )),
+                }
             }
         }
     }
@@ -487,6 +573,10 @@ impl From<Material> for MaterialDeclaration {
                 path,
                 identifier: None,
                 quantity: None,
+                backend: None,
+                id: None,
+                algorithm: None,
+                fingerprint: None,
             },
             Material::Physical {
                 title,
@@ -500,6 +590,29 @@ impl From<Material> for MaterialDeclaration {
                 path: None,
                 identifier,
                 quantity,
+                backend: None,
+                id: None,
+                algorithm: None,
+                fingerprint: None,
+            },
+            Material::BackendKey {
+                title,
+                description,
+                backend,
+                id,
+                algorithm,
+                fingerprint,
+            } => MaterialDeclaration {
+                declared: MaterialType::BackendKey,
+                title,
+                description,
+                path: None,
+                identifier: None,
+                quantity: None,
+                backend: Some(backend),
+                id: Some(id),
+                algorithm: Some(algorithm),
+                fingerprint,
             },
         }
     }

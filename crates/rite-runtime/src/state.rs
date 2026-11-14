@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use rite_model::{ArtifactId, MaterialId, ParamId, RoleId, StepOutcome};
+use rite_model::{ArtifactId, HeldKey, MaterialId, ParamId, RoleId, StepOutcome};
 
 use crate::actions::ArtifactValue;
 
@@ -39,6 +39,9 @@ pub struct ExecutionState {
     pub dry_run: bool,
     /// Artifacts produced by completed steps and loaded materials.
     pub artifacts: HashMap<ArtifactId, ArtifactValue>,
+    /// Keys a backend already holds that no step has read yet. The first step
+    /// that reads one binds it, and it moves to `artifacts`.
+    pub held_keys: HashMap<ArtifactId, HeldKey>,
 }
 
 fn resolve_role_in(roles: &HashMap<RoleId, String>, role_id: &RoleId) -> String {
@@ -63,6 +66,7 @@ impl ExecutionState {
             materials,
             dry_run,
             artifacts: HashMap::new(),
+            held_keys: HashMap::new(),
         }
     }
 
@@ -200,6 +204,7 @@ mod tests {
             materials: HashMap::new(),
             dry_run: true,
             artifacts,
+            held_keys: HashMap::new(),
         };
 
         let ctx = state.handler_context();

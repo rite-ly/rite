@@ -187,6 +187,41 @@ pub enum ResolveError {
         material: MaterialId,
     },
 
+    /// A key a backend holds names a backend the ceremony does not declare.
+    #[error("Material '{material}' is held by undeclared backend '{backend}'")]
+    HeldKeyUndeclaredBackend {
+        /// The material.
+        material: MaterialId,
+        /// The backend name that is not declared.
+        backend: String,
+    },
+
+    /// A step reads a key a backend holds without running on that backend.
+    #[error(
+        "Step '{step}' reads '{material}', a key held by backend '{holder}', {}",
+        runs_on(.used.as_deref(), .holder)
+    )]
+    HeldKeyOnOtherBackend {
+        /// The step.
+        step: StepId,
+        /// The key it reads.
+        material: MaterialId,
+        /// The backend that holds the key.
+        holder: String,
+        /// The backend the step runs on, if any.
+        used: Option<String>,
+    },
+
+    /// A step creates an artifact under a material's name, which readers
+    /// would never reach: a name is looked up as a material first.
+    #[error("Step '{step}' creates '{artifact}', the name of a material")]
+    ArtifactNamesMaterial {
+        /// The step.
+        step: StepId,
+        /// The artifact name it creates.
+        artifact: ArtifactId,
+    },
+
     /// Step references a backend not declared in the ceremony.
     #[error("Step '{step}' references undeclared backend '{backend}'")]
     UndeclaredBackend {
@@ -594,4 +629,13 @@ fn output_kind_mismatch(
         "Output '{output}' is declared as '{declared}', but {by} writes {}",
         written.join(" or ")
     )
+}
+
+/// The end of [`ResolveError::HeldKeyOnOtherBackend`]'s message: the backend
+/// the step runs on, or the field to add.
+fn runs_on(used: Option<&str>, holder: &str) -> String {
+    match used {
+        Some(used) => format!("but runs on backend '{used}'"),
+        None => format!("but names no backend: add 'backend: {holder}'"),
+    }
 }

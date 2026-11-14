@@ -1322,7 +1322,7 @@
       "type": "object",
       "properties": {
         "type": {
-          "description": "`physical` for an item brought to the ceremony, or the kind of file the material is: `bytes` for a file with no meaning of its own.",
+          "description": "`physical` for an item brought to the ceremony, `backend_key` for a key a backend already holds, or the kind of file the material is: `bytes` for a file with no meaning of its own.",
           "type": "string",
           "enum": [
             "public_key",
@@ -1335,10 +1335,11 @@
             "secret",
             "bytes",
             "text",
-            "physical"
+            "physical",
+            "backend_key"
           ],
-          "errorMessage": "a material's 'type' is 'physical', or the kind of file it is (public_key, private_key, certificate, csr, signature, wrapped_key, encrypted_data, secret, bytes, text, physical); a file once declared 'digital' is 'bytes', or the kind it holds",
-          "x-message": "a material's 'type' is 'physical', or the kind of file it is (public_key, private_key, certificate, csr, signature, wrapped_key, encrypted_data, secret, bytes, text, physical); a file once declared 'digital' is 'bytes', or the kind it holds"
+          "errorMessage": "a material's 'type' is 'physical', 'backend_key', or the kind of file it is (public_key, private_key, certificate, csr, signature, wrapped_key, encrypted_data, secret, bytes, text, physical, backend_key); a file once declared 'digital' is 'bytes', or the kind it holds",
+          "x-message": "a material's 'type' is 'physical', 'backend_key', or the kind of file it is (public_key, private_key, certificate, csr, signature, wrapped_key, encrypted_data, secret, bytes, text, physical, backend_key); a file once declared 'digital' is 'bytes', or the kind it holds"
         }
       },
       "allOf": [
@@ -1448,6 +1449,85 @@
               "type": true
             },
             "additionalProperties": false
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "backend_key"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "algorithm": {
+                "description": "The algorithm the key must have, checked against the backend when the key is first read.",
+                "type": "string",
+                "enum": [
+                  "RSA-2048",
+                  "RSA-4096",
+                  "ECDSA-P256",
+                  "ECDSA-P384",
+                  "Ed25519",
+                  "ML-DSA-44",
+                  "ML-DSA-65",
+                  "ML-DSA-87",
+                  "ML-KEM-512",
+                  "ML-KEM-768",
+                  "ML-KEM-1024",
+                  "AES-128",
+                  "AES-256"
+                ]
+              },
+              "backend": {
+                "description": "The backend that holds the key, by its name under `backends`.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "description": {
+                "description": "A description of the material, shown in the script.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "fingerprint": {
+                "description": "The SHA-256 fingerprint of the public key the backend must hold, `sha256:` and 64 hex digits. Optional: a template cannot know it.",
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "id": {
+                "description": "The reference the backend answers to, such as `piv:9d` for PIV slot 9D.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "title": {
+                "description": "The name shown for this material in the script.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": true
+            },
+            "additionalProperties": false,
+            "required": [
+              "backend",
+              "id",
+              "algorithm"
+            ]
           }
         }
       ],

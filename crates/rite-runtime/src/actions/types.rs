@@ -1,6 +1,7 @@
 //! Core types for action handling.
 
 use base64ct::{Base64, Encoding};
+use rite_model::{ArtifactKind, FileKind};
 
 use rite_sdk::{
     CertificateDer, EncryptedData, KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer, WrapScheme,
@@ -56,6 +57,13 @@ pub enum ArtifactValue {
     /// wrapper redacts its `Debug` output and hands the bytes out only
     /// through `expose_secret`.
     Secret(SecretBox<Vec<u8>>),
+    /// A private key read from a file, wiped when the artifact is dropped.
+    ///
+    /// The file's bytes as they are, PEM or DER, encrypted or not: the step
+    /// that installs the key reads the encoding. Like a secret it is never
+    /// displayed, and unlike one it never reaches an expression, since no
+    /// step has a use for a private key as a value.
+    PrivateKey(SecretBox<Vec<u8>>),
     /// The shares of a split secret, wiped when the artifact is dropped.
     ///
     /// One artifact for the whole set, so the transcript and the all-subsets
@@ -74,6 +82,17 @@ pub enum ArtifactValue {
 
     /// X.509 certificate. Stored as DER; displayed and serialized as PEM.
     Certificate(CertificateDer),
+
+    /// A PKCS#10 certificate signing request, as DER. Written as PEM by
+    /// default, like a certificate.
+    Csr(Vec<u8>),
+
+    /// A signature over data, in the encoding its algorithm produces.
+    ///
+    /// The same shape as [`Bytes`](ArtifactValue::Bytes) and a different
+    /// claim: a signature exists to be distributed, where bytes may be any
+    /// document the ceremony handled.
+    Signature(Vec<u8>),
 }
 
 /// The shares of one split, as each custodian receives them.
@@ -250,6 +269,10 @@ impl std::fmt::Display for ArtifactValue {
                 let len = bytes.expose_secret().len();
                 write!(f, "Secret({len} bytes)")
             }
+            ArtifactValue::PrivateKey(bytes) => {
+                let len = bytes.expose_secret().len();
+                write!(f, "PrivateKey({len} bytes)")
+            }
             ArtifactValue::Shares(set) => write!(f, "{set:?}"),
             ArtifactValue::Text(text) => {
                 write!(f, "Text({text})")
@@ -259,6 +282,8 @@ impl std::fmt::Display for ArtifactValue {
                 let pem = encode_pem("CERTIFICATE", certificate.as_bytes());
                 write!(f, "{pem}")
             }
+            ArtifactValue::Csr(der) => write!(f, "{}", encode_pem("CERTIFICATE REQUEST", der)),
+            ArtifactValue::Signature(bytes) => write!(f, "Signature({} bytes)", bytes.len()),
         }
     }
 }
@@ -354,6 +379,25 @@ pub struct SerializedArtifact {
 }
 
 impl ArtifactValue {
+    /// What this artifact is.
+    #[must_use]
+    pub fn kind(&self) -> ArtifactKind {
+        match self {
+            ArtifactValue::BackendKey { .. } => ArtifactKind::BackendKey,
+            ArtifactValue::Shares(_) => ArtifactKind::Shares,
+            ArtifactValue::WrappedKey(_) => ArtifactKind::File(FileKind::WrappedKey),
+            ArtifactValue::EncryptedData(_) => ArtifactKind::File(FileKind::EncryptedData),
+            ArtifactValue::PublicKey(_) => ArtifactKind::File(FileKind::PublicKey),
+            ArtifactValue::Bytes(_) => ArtifactKind::File(FileKind::Bytes),
+            ArtifactValue::Secret(_) => ArtifactKind::File(FileKind::Secret),
+            ArtifactValue::PrivateKey(_) => ArtifactKind::File(FileKind::PrivateKey),
+            ArtifactValue::Text(_) => ArtifactKind::File(FileKind::Text),
+            ArtifactValue::Certificate(_) => ArtifactKind::File(FileKind::Certificate),
+            ArtifactValue::Csr(_) => ArtifactKind::File(FileKind::Csr),
+            ArtifactValue::Signature(_) => ArtifactKind::File(FileKind::Signature),
+        }
+    }
+
     /// Serialize artifact to bytes with metadata.
     ///
     /// Returns a `SerializedArtifact` containing both the serialized bytes
@@ -362,10 +406,13 @@ impl ArtifactValue {
     /// Applies sensible defaults if format is None, then validates strictly.
     ///
     /// Supported formats by artifact type:
-    /// - `WrappedKey`: "der" (default), "pem"
-    /// - `PublicKey`: "pem" (default), "der", "base64"
-    /// - `RsaKeypair`: "pem" (default), "der" (private key in PKCS#8)
-    /// - Other artifacts: text representation (format ignored)
+    /// - `WrappedKey`, `EncryptedData`: "der" (default), "pem" where the
+    ///   container has a PEM form
+    /// - `PublicKey`, `Certificate`, `Csr`: "pem" (default), "der", "base64"
+    /// - `Bytes`, `Secret`, `PrivateKey`, `Signature`, `Text`: the bytes as
+    ///   they are
+    ///   (format ignored)
+    /// - `Shares`: refused
     ///
     /// MIME type references:
     /// - application/pkcs7-mime: CMS/PKCS#7 (RFC 5273)
@@ -404,6 +451,11 @@ impl ArtifactValue {
                 mime_type: Some("application/octet-stream".to_string()),
                 extension: "bin",
             }),
+            ArtifactValue::PrivateKey(bytes) => Ok(SerializedArtifact {
+                bytes: bytes.expose_secret().clone(),
+                mime_type: Some("application/octet-stream".to_string()),
+                extension: "key",
+            }),
             // A file holding every share is the secret in the clear under
             // another name. Shares leave the machine one at a time, on paper.
             ArtifactValue::Shares(_) => Err(
@@ -420,6 +472,12 @@ impl ArtifactValue {
             ArtifactValue::Certificate(certificate) => {
                 serialize_der(certificate.as_bytes(), &CERTIFICATE, format)
             }
+            ArtifactValue::Csr(der) => serialize_der(der, &CSR, format),
+            ArtifactValue::Signature(bytes) => Ok(SerializedArtifact {
+                bytes: bytes.clone(),
+                mime_type: Some("application/octet-stream".to_string()),
+                extension: "sig",
+            }),
         }
     }
 }
@@ -446,6 +504,13 @@ const CERTIFICATE: DerArtifact = DerArtifact {
     pem_label: "CERTIFICATE",
     der_mime: "application/pkix-cert",
     name: "a certificate",
+};
+
+/// RFC 5967 registers `application/pkcs10` for a DER request.
+const CSR: DerArtifact = DerArtifact {
+    pem_label: "CERTIFICATE REQUEST",
+    der_mime: "application/pkcs10",
+    name: "a certificate signing request",
 };
 
 /// Render DER material in the format a ceremony asked for, PEM by default.
@@ -488,6 +553,26 @@ mod tests {
     /// `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 |
     ///  openssl pkey -pubout -outform DER`
     const P256_SPKI: &[u8] = include_bytes!("testdata/p256.spki.der");
+
+    /// A request is a DER artifact like a certificate: PEM by default, under
+    /// its own label, and DER under its registered media type.
+    #[test]
+    fn a_csr_serializes_as_pem_by_default_and_der_on_request() {
+        let csr = ArtifactValue::Csr(vec![0x30, 0x03, 0x02, 0x01, 0x00]);
+        assert_eq!(csr.kind(), ArtifactKind::File(FileKind::Csr));
+
+        let pem = csr.serialize(None).unwrap();
+        assert_eq!(pem.extension, "pem");
+        assert!(
+            String::from_utf8(pem.bytes)
+                .unwrap()
+                .starts_with("-----BEGIN CERTIFICATE REQUEST-----")
+        );
+
+        let der = csr.serialize(Some("der")).unwrap();
+        assert_eq!(der.bytes, [0x30, 0x03, 0x02, 0x01, 0x00]);
+        assert_eq!(der.mime_type.as_deref(), Some("application/pkcs10"));
+    }
 
     #[test]
     fn a_public_key_serializes_as_pem_by_default_and_der_on_request() {

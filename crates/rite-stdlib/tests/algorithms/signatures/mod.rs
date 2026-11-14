@@ -159,7 +159,7 @@ fn signed_session(case: &SignCase) -> Result<Session, String> {
 
 fn signature(session: &Session) -> Vec<u8> {
     match session.artifact("signature") {
-        ArtifactValue::Bytes(bytes) => bytes.clone(),
+        ArtifactValue::Signature(bytes) => bytes.clone(),
         other => panic!("sign_data produced {other:?}"),
     }
 }

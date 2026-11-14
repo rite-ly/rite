@@ -8,7 +8,7 @@ use super::SymbolTable;
 use super::ids::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};
 use crate::expression::ExprValue;
 use crate::material::MaterialSource;
-use crate::types::{ActionType, DutyType, Metadata, OutputType, ParameterType};
+use crate::types::{ActionType, DutyType, FileKind, Metadata, ParameterType};
 use rite_sdk::BackendConfig;
 use std::collections::HashMap;
 
@@ -205,8 +205,10 @@ pub struct Parameter {
 /// What kind of material and its resolved source/identifier.
 #[derive(Debug, Clone)]
 pub enum MaterialKind {
-    /// Digital: loaded from file path. `None` if source not yet provided.
-    Digital {
+    /// A file, holding the kind its `type:` declares.
+    File {
+        /// What the file holds.
+        kind: FileKind,
         /// Resolved file source, or `None` if not yet provided.
         source: Option<MaterialSource>,
     },
@@ -217,6 +219,17 @@ pub enum MaterialKind {
         /// Item count for checklist rendering.
         quantity: Option<u32>,
     },
+}
+
+impl MaterialKind {
+    /// The `type:` a ceremony declares: the file's kind, or `physical`.
+    #[must_use]
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            MaterialKind::File { kind, .. } => kind.as_str(),
+            MaterialKind::Physical { .. } => "physical",
+        }
+    }
 }
 
 /// A resolved material with its source.
@@ -241,9 +254,9 @@ impl Material {
         self.title.as_deref().unwrap_or(self.id.as_str())
     }
 
-    /// Whether this is a digital material.
-    pub fn is_digital(&self) -> bool {
-        matches!(self.kind, MaterialKind::Digital { .. })
+    /// Whether this material is a file.
+    pub fn is_file(&self) -> bool {
+        matches!(self.kind, MaterialKind::File { .. })
     }
 
     /// Whether this is a physical material.
@@ -283,8 +296,8 @@ pub struct Output {
     /// Output identifier.
     pub id: OutputId,
 
-    /// Type of output.
-    pub kind: OutputType,
+    /// The kind of file the output is, as the ceremony declares it.
+    pub kind: FileKind,
 
     /// Human-readable description.
     pub description: Option<String>,

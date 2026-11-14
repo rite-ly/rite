@@ -158,7 +158,7 @@ impl Action for GenerateCsrAction {
             None,
         )?;
 
-        let artifact = ArtifactValue::Bytes(csr_der);
+        let artifact = ArtifactValue::Csr(csr_der);
         let message = "PKCS#10 CSR generated".to_string();
 
         if let Some(produces) = &step.produces {

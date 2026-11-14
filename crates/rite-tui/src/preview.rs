@@ -90,7 +90,9 @@ fn sample_overview() -> Model {
             id: MaterialId::new("policy_template"),
             title: None,
             description: Some("X.509 policy template.".to_string()),
-            kind: MaterialOverviewKind::Digital,
+            kind: MaterialOverviewKind::File {
+                kind: rite_model::FileKind::Bytes,
+            },
         },
     ];
     m.pending_prompt = Some(PendingPrompt {

@@ -11,7 +11,7 @@ backends:
 
 materials:
   runbook:
-    type: digital
+    type: bytes
     path: "test_data/recovery_runbook.txt"
     title: "Recovery runbook"
     description: "The document going into the archive."

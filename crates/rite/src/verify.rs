@@ -668,6 +668,7 @@ mod tests {
 
     fn artifact_fact(file: &str, bytes: &[u8]) -> StepFact {
         StepFact::ArtifactWritten {
+            kind: None,
             step: StepId::new("s1"),
             name: "root".to_string(),
             file: file.to_string(),
@@ -739,6 +740,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         write_artifact(tmp.path(), "opened.bin", b"plaintext");
         let fact = StepFact::ArtifactWritten {
+            kind: None,
             step: StepId::new("s1"),
             name: "opened".to_string(),
             file: "opened.bin".to_string(),
@@ -927,6 +929,7 @@ mod tests {
                 at: ts(10),
                 level: rite_model::Level::PUBLIC,
                 fact: StepFact::ArtifactWritten {
+                    kind: None,
                     step: StepId::new("s1"),
                     name: "root".to_string(),
                     file: "root.crt".to_string(),

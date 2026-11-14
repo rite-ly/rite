@@ -121,11 +121,11 @@ fn an_ecdsa_p256_key_carries_a_csr_through_to_a_certificate() {
         .expect("CSR artifact must be produced");
 
     let csr_der = match &csr_artifact {
-        ArtifactValue::Bytes(b) => {
+        ArtifactValue::Csr(b) => {
             assert!(!b.is_empty(), "CSR DER must not be empty");
             b.clone()
         }
-        other => panic!("expected Bytes for CSR, got {other:?}"),
+        other => panic!("expected a CSR, got {other:?}"),
     };
     state = state.with_material(csr_id.clone(), csr_artifact);
 

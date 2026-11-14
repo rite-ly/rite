@@ -140,6 +140,30 @@ impl PublicKeyDer {
         })
     }
 
+    /// Read a public key from a file declared to hold one: SPKI, in DER or
+    /// PEM.
+    ///
+    /// Stricter than [`PublicKeyDer::from_key_material`], which also reads
+    /// the key out of a certificate. A file declared as a public key that
+    /// holds a certificate is a declaration to correct, not a conversion to
+    /// make.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::InvalidKeyFormat`] when the bytes are not an
+    /// SPKI, or a PEM block names something else.
+    pub fn from_file(bytes: &[u8]) -> Result<Self, BackendError> {
+        if let Ok((label, der)) = x509_cert::der::pem::decode_vec(bytes) {
+            return match label {
+                "PUBLIC KEY" => Self::new(der),
+                other => Err(BackendError::InvalidKeyFormat(format!(
+                    "PEM block is labelled '{other}', expected 'PUBLIC KEY'"
+                ))),
+            };
+        }
+        Self::new(bytes.to_vec())
+    }
+
     /// The SPKI DER bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
@@ -533,6 +557,29 @@ fn bit_length(magnitude: &[u8]) -> u32 {
         .unwrap_or(u32::MAX)
         .saturating_mul(8)
         .saturating_add(u8::BITS.saturating_sub(top.leading_zeros()))
+}
+
+/// Read a certificate signing request from a file: PKCS#10, in DER or PEM,
+/// returned as DER.
+///
+/// # Errors
+///
+/// Returns [`BackendError::InvalidKeyFormat`] when the bytes are not a
+/// PKCS#10 request, or a PEM block names something else.
+pub fn csr_from_file(bytes: &[u8]) -> Result<Vec<u8>, BackendError> {
+    let der = match x509_cert::der::pem::decode_vec(bytes) {
+        Ok(("CERTIFICATE REQUEST" | "NEW CERTIFICATE REQUEST", der)) => der,
+        Ok((other, _)) => {
+            return Err(BackendError::InvalidKeyFormat(format!(
+                "PEM block is labelled '{other}', expected 'CERTIFICATE REQUEST'"
+            )));
+        }
+        Err(_) => bytes.to_vec(),
+    };
+    x509_cert::request::CertReq::from_der(&der).map_err(|e| {
+        BackendError::InvalidKeyFormat(format!("not a certificate signing request: {e}"))
+    })?;
+    Ok(der)
 }
 
 #[cfg(test)]

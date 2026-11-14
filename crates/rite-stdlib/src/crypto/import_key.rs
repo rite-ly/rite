@@ -177,6 +177,15 @@ fn resolve_passphrase<'a>(
             reference.display_name()
         )));
     }
+    // A material is a file, whatever kind it declares: a passphrase in one
+    // sat on a disk.
+    if let ArtifactRef::Material { .. } = reference {
+        return Err(ActionError::Failed(format!(
+            "'{}' is a material, read from a file. A passphrase is read at the keyboard by \
+             'enter_secret', so that no copy of it is on any disk.",
+            reference.display_name()
+        )));
+    }
     let id = reference.artifact_id();
     let artifact = ctx.get_artifact(&id).ok_or_else(|| {
         ActionError::Failed(format!(
@@ -206,8 +215,11 @@ fn kind_of(artifact: &ArtifactValue) -> &'static str {
         ArtifactValue::PublicKey(_) => "a public key",
         ArtifactValue::Bytes(_) => "bytes",
         ArtifactValue::Secret(_) => "a secret",
+        ArtifactValue::PrivateKey(_) => "a private key",
         ArtifactValue::Text(_) => "text",
         ArtifactValue::Certificate(_) => "a certificate",
+        ArtifactValue::Csr(_) => "a certificate signing request",
+        ArtifactValue::Signature(_) => "a signature",
         ArtifactValue::Shares(_) => "a set of shares",
     }
 }

@@ -23,7 +23,7 @@ parameters:
 
 materials:
   escrow_pubkey:
-    type: digital
+    type: public_key
     path: "test_keys/escrow_public.pem"
     title: "Escrow transport public key"
     description: "Escrow holder's public transport key."

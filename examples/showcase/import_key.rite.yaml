@@ -11,12 +11,12 @@ backends:
 
 materials:
   kek_component:
-    type: digital
+    type: secret
     path: "test_keys/transport_kek_component.bin"
     title: "Transport KEK component"
     description: "32-byte AES key component on the custodian's media."
   escrow_key:
-    type: digital
+    type: private_key
     path: "test_keys/escrow_private.pem"
     title: "Escrow private key"
     description: |

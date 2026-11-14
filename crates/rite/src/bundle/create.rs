@@ -192,6 +192,7 @@ sections:
                     template: ceremony.source_digest.clone(),
                 },
                 StepFact::ArtifactWritten {
+                    kind: None,
                     step: rite_model::StepId::new("confirm"),
                     name: "cert".to_string(),
                     file: "cert.pem".to_string(),

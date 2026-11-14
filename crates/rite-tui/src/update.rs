@@ -983,7 +983,9 @@ mod tests {
                     id: rite_model::MaterialId::new("yk"),
                     title: Some("YubiKey".to_string()),
                     description: None,
-                    kind: rite_runtime::MaterialOverviewKind::Digital,
+                    kind: rite_runtime::MaterialOverviewKind::File {
+                        kind: rite_model::FileKind::Bytes,
+                    },
                 }],
                 step_count: 5,
             }),

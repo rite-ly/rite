@@ -1322,12 +1322,23 @@
       "type": "object",
       "properties": {
         "type": {
-          "description": "Use `digital` for a file or `physical` for an item brought to the ceremony.",
+          "description": "`physical` for an item brought to the ceremony, or the kind of file the material is: `bytes` for a file with no meaning of its own.",
           "type": "string",
           "enum": [
-            "digital",
+            "public_key",
+            "private_key",
+            "certificate",
+            "csr",
+            "signature",
+            "wrapped_key",
+            "encrypted_data",
+            "secret",
+            "bytes",
+            "text",
             "physical"
-          ]
+          ],
+          "errorMessage": "a material's 'type' is 'physical', or the kind of file it is (public_key, private_key, certificate, csr, signature, wrapped_key, encrypted_data, secret, bytes, text, physical); a file once declared 'digital' is 'bytes', or the kind it holds",
+          "x-message": "a material's 'type' is 'physical', or the kind of file it is (public_key, private_key, certificate, csr, signature, wrapped_key, encrypted_data, secret, bytes, text, physical); a file once declared 'digital' is 'bytes', or the kind it holds"
         }
       },
       "allOf": [
@@ -1335,7 +1346,18 @@
           "if": {
             "properties": {
               "type": {
-                "const": "digital"
+                "enum": [
+                  "public_key",
+                  "private_key",
+                  "certificate",
+                  "csr",
+                  "signature",
+                  "wrapped_key",
+                  "encrypted_data",
+                  "secret",
+                  "bytes",
+                  "text"
+                ]
               }
             },
             "required": [
@@ -1503,57 +1525,26 @@
         },
         "type": {
           "description": "The kind of artifact declared as an output.",
-          "$ref": "#/$defs/OutputType"
+          "type": "string",
+          "enum": [
+            "public_key",
+            "private_key",
+            "certificate",
+            "csr",
+            "signature",
+            "wrapped_key",
+            "encrypted_data",
+            "secret",
+            "bytes",
+            "text"
+          ],
+          "errorMessage": "an output's 'type' is the kind of file it is (public_key, private_key, certificate, csr, signature, wrapped_key, encrypted_data, secret, bytes, text); an output once declared 'document' is 'signature', 'bytes' or 'text'",
+          "x-message": "an output's 'type' is the kind of file it is (public_key, private_key, certificate, csr, signature, wrapped_key, encrypted_data, secret, bytes, text); an output once declared 'document' is 'signature', 'bytes' or 'text'"
         }
       },
       "additionalProperties": false,
       "required": [
         "type"
-      ]
-    },
-    "OutputType": {
-      "description": "What kind of output a ceremony produces.",
-      "oneOf": [
-        {
-          "description": "A public key.",
-          "type": "string",
-          "const": "public_key"
-        },
-        {
-          "description": "A key wrapped for transport, in the container its scheme names.",
-          "type": "string",
-          "const": "wrapped_key"
-        },
-        {
-          "description": "Content encrypted for a recipient, in the container its scheme names.",
-          "type": "string",
-          "const": "encrypted_data"
-        },
-        {
-          "description": "An X.509 certificate.",
-          "type": "string",
-          "const": "certificate"
-        },
-        {
-          "description": "A signed DNSSEC resource record set.",
-          "type": "string",
-          "const": "signed_rrset"
-        },
-        {
-          "description": "A Certificate Transparency signed certificate timestamp.",
-          "type": "string",
-          "const": "sct"
-        },
-        {
-          "description": "A document.",
-          "type": "string",
-          "const": "document"
-        },
-        {
-          "description": "A ceremony log or transcript.",
-          "type": "string",
-          "const": "ceremony_log"
-        }
       ]
     },
     "Parameter": {

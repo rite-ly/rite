@@ -101,7 +101,7 @@ impl Action for SignDataAction {
             Ok(StepResult::completed_with_artifact(
                 summary,
                 produces.clone(),
-                ArtifactValue::Bytes(signature),
+                ArtifactValue::Signature(signature),
             ))
         } else {
             Ok(StepResult::completed(summary))

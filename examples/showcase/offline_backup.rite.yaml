@@ -48,7 +48,7 @@ materials:
     title: "Printed ceremony worksheet"
     description: "Pre-printed worksheet where the crypto officer records fingerprints and serials by hand."
   escrow_pubkey:
-    type: digital
+    type: public_key
     path: "test_keys/escrow_public.pem"
     title: "Escrow transport public key"
     description: |

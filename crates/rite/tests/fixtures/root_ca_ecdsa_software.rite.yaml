@@ -12,7 +12,7 @@ parameters:
 
 materials:
   transport_pubkey:
-    type: digital
+    type: public_key
 
 output:
   root_ca_public_key:

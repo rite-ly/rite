@@ -18,7 +18,10 @@ use rite_model::{
     MaterialSource, Metadata, NamedInput, Output, OutputId, ParamId, Parameter, PostCeremonyDuty,
     RetryPolicy, Role, RoleId, Section, SectionId, Step, StepId, StepInputs, SymbolTable,
 };
-use rite_model::{ActionType, BackendUsage, DutyType, ParameterType, RevealFormat, SharingScheme};
+use rite_model::{
+    ActionType, ArtifactKind, BackendUsage, DutyType, FileKind, Format, ParameterType,
+    RevealFormat, SharingScheme,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Schema versions this resolver understands.
@@ -69,6 +72,7 @@ pub(crate) fn resolve_ceremony(
 
     // Phase 4: Validate artifact ordering
     ctx.validate_artifact_ordering(&execution_plan, &ceremony.materials);
+    ctx.validate_output_kinds(&execution_plan);
 
     // Phase 5: Resolve post-ceremony duties
     let after = ctx.resolve_duties(&ceremony.after);
@@ -245,11 +249,14 @@ impl ResolveContext {
         for (name, material) in materials {
             let id = MaterialId::new(name);
             let kind = match material {
-                schema::Material::Digital { path, .. } => {
+                schema::Material::File { kind, path, .. } => {
                     let source = path
                         .as_ref()
                         .map(|p| MaterialSource::File { file: p.clone() });
-                    MaterialKind::Digital { source }
+                    MaterialKind::File {
+                        kind: *kind,
+                        source,
+                    }
                 }
                 schema::Material::Physical {
                     quantity,
@@ -421,7 +428,7 @@ impl ResolveContext {
             if let Some(source) = inputs.materials.get(name) {
                 if let Some(resolved) = self.materials.get_mut(&id) {
                     match (&mut resolved.kind, source) {
-                        (MaterialKind::Digital { source: s }, MaterialSource::File { .. }) => {
+                        (MaterialKind::File { source: s, .. }, MaterialSource::File { .. }) => {
                             *s = Some(source.clone());
                         }
                         (
@@ -435,7 +442,7 @@ impl ResolveContext {
                         }
                     }
                 }
-            } else if material.is_digital() && material.path().is_none() {
+            } else if material.is_file() && material.path().is_none() {
                 self.add_error(ResolveError::RequiredMaterialMissing(id));
             }
         }
@@ -559,6 +566,55 @@ impl ResolveContext {
         }
 
         steps
+    }
+
+    /// What each step names under `creates:` against what it makes, and each
+    /// output's declared kind against the same.
+    ///
+    /// The step's definition decides what it makes, so a mismatch is found
+    /// here rather than at the end of the step that writes the file. Where
+    /// the definition leaves a choice, as an `enter_value` whose `format:` is
+    /// an expression, the output passes if any choice fits; the write checks
+    /// the one made.
+    fn validate_output_kinds(&mut self, execution_plan: &[Step]) {
+        for step in execution_plan {
+            let Some(created) = &step.creates else {
+                continue;
+            };
+            let makes = step_makes(step);
+            if makes.is_empty() {
+                self.add_error(ResolveError::CreatesNothing {
+                    step: step.id.clone(),
+                    artifact: created.clone(),
+                    action: step.action,
+                });
+                continue;
+            }
+            let id = OutputId::new(created.as_str());
+            let Some(output) = self.outputs.get(&id) else {
+                continue;
+            };
+            let declared = output.kind;
+            if declared == FileKind::PublicKey
+                && let Some(algorithm) = symmetric_algorithm(step)
+            {
+                self.add_error(ResolveError::SymmetricKeyOutput {
+                    output: id,
+                    step: step.id.clone(),
+                    algorithm,
+                });
+                continue;
+            }
+            if !makes.iter().any(|kind| kind.written_as() == Some(declared)) {
+                self.add_error(ResolveError::OutputKindMismatch {
+                    output: id,
+                    declared,
+                    step: step.id.clone(),
+                    action: step.action,
+                    makes,
+                });
+            }
+        }
     }
 
     fn validate_step_backend(
@@ -997,7 +1053,11 @@ impl ResolveContext {
                     message,
                 });
             }
-            if step.action.spec().creates_shares
+            if step
+                .action
+                .spec()
+                .creates
+                .contains(&rite_model::ArtifactKind::Shares)
                 && let Some(created) = &step.creates
             {
                 // `enter_share` declares the share's length; a split does not.
@@ -1243,6 +1303,55 @@ fn is_deferred(with: &rite_model::expression::ExprValue, at: &Pointer) -> bool {
     }
 }
 
+/// The algorithm a step that makes a backend key names, when it is a literal
+/// symmetric one: such a key is written as nothing, having no public half.
+///
+/// Only the literal is known here. A key a backend keeps without exporting
+/// its public half is found when the output is written.
+fn symmetric_algorithm(step: &Step) -> Option<String> {
+    if !step
+        .action
+        .spec()
+        .creates
+        .contains(&ArtifactKind::BackendKey)
+    {
+        return None;
+    }
+    let name = step.with.get("algorithm")?.as_literal_string()?;
+    let algorithm: rite_sdk::KeyAlgorithm =
+        serde_json::from_value(serde_json::Value::from(name)).ok()?;
+    algorithm.is_symmetric().then(|| name.to_string())
+}
+
+/// What a step makes, as far as its definition tells: what its action may
+/// create, narrowed where a literal `with:` value decides among them.
+///
+/// `enter_value` keeps the bytes a value stands for when its `format:` is an
+/// encoding (hex, base64), and the text typed otherwise.
+fn step_makes(step: &Step) -> Vec<ArtifactKind> {
+    let creates = step.action.spec().creates;
+    if step.action != ActionType::EnterValue {
+        return creates.to_vec();
+    }
+    let format = match step.with.get("format") {
+        None => None,
+        Some(value) => match value
+            .as_literal_string()
+            .and_then(|s| serde_json::from_value::<Format>(serde_json::Value::from(s)).ok())
+        {
+            Some(format) => Some(format),
+            // An expression, or a value the schema check reports.
+            None => return creates.to_vec(),
+        },
+    };
+    let kind = if format.is_some_and(Format::is_encoding) {
+        FileKind::Bytes
+    } else {
+        FileKind::Text
+    };
+    vec![ArtifactKind::File(kind)]
+}
+
 #[cfg(test)]
 mod tests {
     /// The schema violations reported on one step, as their messages.
@@ -1458,7 +1567,7 @@ sections:
         ceremony.output.insert(
             "../escape".to_string(),
             schema::OutputDeclaration {
-                artifact_type: rite_model::OutputType::PublicKey,
+                artifact_type: rite_model::FileKind::PublicKey,
                 description: None,
             },
         );
@@ -1592,6 +1701,8 @@ sections:
         ceremony.sections.clear();
 
         let mut step_a = make_step_body();
+        step_a.action = ActionType::EnterValue;
+        step_a.with = Some(serde_json::json!({ "message": "The value" }));
         step_a.creates = Some("${artifact.my_artifact}".to_string());
         let mut section_a = empty_section();
         section_a.steps.insert("step1".to_string(), step_a);
@@ -1606,6 +1717,30 @@ sections:
 
         let result = resolve_ceremony(ceremony, None);
         assert!(result.is_ok(), "Errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn creates_on_an_action_that_makes_nothing_is_an_error() {
+        let mut ceremony = minimal_ceremony();
+        let mut step = make_step_body();
+        step.creates = Some("answer".to_string());
+        ceremony
+            .sections
+            .values_mut()
+            .next()
+            .expect("a section")
+            .steps
+            .insert("ready".to_string(), step);
+
+        let result = resolve_ceremony(ceremony, None);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ResolveError::CreatesNothing { step, .. } if step.as_str() == "ready")),
+            "Errors: {:?}",
+            result.errors
+        );
     }
 
     #[test]
@@ -2335,7 +2470,8 @@ sections:
         let mut ceremony = minimal_ceremony();
         ceremony.materials.insert(
             "shares".to_string(),
-            schema::Material::Digital {
+            schema::Material::File {
+                kind: FileKind::Bytes,
                 title: None,
                 description: None,
                 path: None,

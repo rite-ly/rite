@@ -232,6 +232,61 @@
         }
       ]
     },
+    "FileKind": {
+      "description": "What a file holds, as the step that made it claims: a public key, a certificate, a secret, bytes, and so on.",
+      "oneOf": [
+        {
+          "description": "A public key.",
+          "type": "string",
+          "const": "public_key"
+        },
+        {
+          "description": "A private key. Secret: never shown, and written only when declared.",
+          "type": "string",
+          "const": "private_key"
+        },
+        {
+          "description": "An X.509 certificate.",
+          "type": "string",
+          "const": "certificate"
+        },
+        {
+          "description": "A PKCS#10 certificate signing request.",
+          "type": "string",
+          "const": "csr"
+        },
+        {
+          "description": "A signature over data.",
+          "type": "string",
+          "const": "signature"
+        },
+        {
+          "description": "A key wrapped for transport, in the container its scheme names.",
+          "type": "string",
+          "const": "wrapped_key"
+        },
+        {
+          "description": "Content encrypted for a recipient, in the container its scheme names.",
+          "type": "string",
+          "const": "encrypted_data"
+        },
+        {
+          "description": "A value only the ceremony holds: typed in, opened or recombined. Never shown.",
+          "type": "string",
+          "const": "secret"
+        },
+        {
+          "description": "Content with no cryptographic meaning of its own.",
+          "type": "string",
+          "const": "bytes"
+        },
+        {
+          "description": "Text, as a person reads it.",
+          "type": "string",
+          "const": "text"
+        }
+      ]
+    },
     "Format": {
       "description": "What kind of value a person types.",
       "oneOf": [
@@ -999,7 +1054,7 @@
           ]
         },
         {
-          "description": "A material was loaded at the start of the run. The digest of a digital material is a separate fact, material_digest, so the two can be disclosed to different audiences.",
+          "description": "A material was loaded at the start of the run. The digest of a file material is a separate fact, material_digest, so the two can be disclosed to different audiences.",
           "type": "object",
           "properties": {
             "identifier": {
@@ -1024,7 +1079,7 @@
           ]
         },
         {
-          "description": "The digest of a digital material's bytes, as loaded.",
+          "description": "The digest of a file material's bytes, as loaded.",
           "type": "object",
           "properties": {
             "digest": {
@@ -1305,6 +1360,17 @@
             "file": {
               "description": "The file name in the artifacts directory: a single path component.",
               "type": "string"
+            },
+            "kind": {
+              "description": "What the file holds: the kind its output declares. Absent from transcripts written by earlier releases.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FileKind"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "name": {
               "description": "The artifact's name, as declared in the ceremony.",

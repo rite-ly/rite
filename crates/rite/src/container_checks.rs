@@ -636,6 +636,7 @@ mod tests {
                 fingerprint: None,
             },
             StepFact::ArtifactWritten {
+                kind: None,
                 step: StepId::new("wrap"),
                 name: "wrapped".to_string(),
                 file: "wrapped.p7c".to_string(),
@@ -728,6 +729,7 @@ mod tests {
                 fingerprint: None,
             },
             StepFact::ArtifactWritten {
+                kind: None,
                 step: StepId::new("encrypt"),
                 name: "sealed".to_string(),
                 file: "sealed.p7c".to_string(),
@@ -816,6 +818,7 @@ mod tests {
                     fingerprint: None,
                 },
                 StepFact::ArtifactWritten {
+                    kind: None,
                     step: StepId::new("encrypt"),
                     name: "sealed".to_string(),
                     file: "sealed.p7c".to_string(),
@@ -1010,6 +1013,7 @@ mod tests {
                 fingerprint: None,
             },
             StepFact::ArtifactWritten {
+                kind: None,
                 step: StepId::new("wrap"),
                 name: "wrapped".to_string(),
                 file: "wrapped.p7c".to_string(),
@@ -1118,6 +1122,7 @@ mod tests {
                 fingerprint: None,
             },
             StepFact::ArtifactWritten {
+                kind: None,
                 step: StepId::new("wrap"),
                 name: "wrapped".to_string(),
                 file: "wrapped.p7c".to_string(),
@@ -1208,6 +1213,7 @@ mod tests {
                 fingerprint: None,
             },
             StepFact::ArtifactWritten {
+                kind: None,
                 step: StepId::new("wrap"),
                 name: "wrapped".to_string(),
                 file: "wrapped.p7c".to_string(),

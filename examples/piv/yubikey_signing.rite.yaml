@@ -10,7 +10,7 @@ backends:
 
 materials:
   manifest:
-    type: digital
+    type: bytes
     path: "test_data/release_manifest.txt"
     description: "Release manifest to be signed."
 
@@ -22,7 +22,7 @@ output:
     type: certificate
     description: "YubiKey attestation certificate for slot 9C"
   manifest_signature:
-    type: document
+    type: signature
     description: "Detached ECDSA signature over the release manifest"
 
 roles:

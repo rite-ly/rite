@@ -259,14 +259,15 @@ pub fn resolve_with_spans_or_exit(
     (resolved, spans)
 }
 
-/// Check that all digital materials with file sources exist on disk.
+/// Check that every file material with a path exists on disk.
 ///
 /// Called after resolution succeeds but before execution, so errors are reported
 /// cleanly before any I/O is attempted.
 pub fn preflight_check_materials(resolved: &rite_model::Ceremony) -> Result<(), String> {
     for (id, material) in resolved.materials.iter() {
-        if let MaterialKind::Digital {
+        if let MaterialKind::File {
             source: Some(MaterialSource::File { file }),
+            ..
         } = &material.kind
             && !file.exists()
         {

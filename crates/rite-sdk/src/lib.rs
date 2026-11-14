@@ -32,7 +32,7 @@ mod names;
 pub mod signature;
 mod types;
 
-pub use key_material::{CertificateDer, EcCurve, EcPoint, PublicKeyDer};
+pub use key_material::{CertificateDer, EcCurve, EcPoint, PublicKeyDer, csr_from_file};
 
 pub use backend::{
     AttestationBackend, Backend, BackendError, CertStoreBackend, KeyAgreementBackend,

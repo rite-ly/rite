@@ -112,7 +112,7 @@ pub struct ScriptView {
     pub roles: Vec<RoleView>,
     /// Physical materials for the preparation checklist.
     pub physical_materials: Vec<MaterialView>,
-    /// Digital materials for the preparation checklist.
+    /// File materials for the preparation checklist.
     pub digital_materials: Vec<MaterialView>,
     /// Prose prerequisites for the preparation checklist.
     pub prerequisites: Vec<String>,
@@ -359,7 +359,7 @@ impl ScriptView {
                         identifier,
                         quantity,
                     } => (identifier.clone(), *quantity),
-                    MaterialKind::Digital { .. } => (None, None),
+                    MaterialKind::File { .. } => (None, None),
                 };
                 MaterialView {
                     name: m.display_name().to_string(),
@@ -372,7 +372,7 @@ impl ScriptView {
         let digital_materials = resolved
             .materials
             .iter()
-            .filter(|(_, m)| m.is_digital())
+            .filter(|(_, m)| m.is_file())
             .map(|(_, m)| MaterialView {
                 name: m.display_name().to_string(),
                 description: m.description.clone(),

@@ -108,7 +108,7 @@ impl Action for PivSignAction {
             Ok(StepResult::completed_with_artifact(
                 "PIV signature produced",
                 produces.clone(),
-                ArtifactValue::Bytes(signature),
+                ArtifactValue::Signature(signature),
             ))
         } else {
             Ok(StepResult::completed("PIV signature produced"))
@@ -268,7 +268,7 @@ mod tests {
         assert_eq!(result.artifacts.len(), 1);
         let (id, value) = result.artifacts.first().expect("one produced artifact");
         assert_eq!(id.as_str(), "signature");
-        assert!(matches!(value, ArtifactValue::Bytes(b) if !b.is_empty()));
+        assert!(matches!(value, ArtifactValue::Signature(b) if !b.is_empty()));
 
         // Both the PIN prompt and the signing operation are recorded.
         assert!(

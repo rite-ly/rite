@@ -1069,7 +1069,7 @@ roles: {}
 sections: {}
 materials:
   my_material:
-    type: digital
+    type: bytes
 "#;
         let (_, span_map, _) = lower_ceremony(None, yaml);
         let span = *span_map
@@ -1185,7 +1185,7 @@ name: "Test"
 roles: {}
 materials:
   my_material:
-    type: digital
+    type: bytes
 sections:
   main:
     steps:

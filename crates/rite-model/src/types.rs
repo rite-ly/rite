@@ -524,10 +524,10 @@ pub struct ActionSpec {
     pub backend: BackendUsage,
     /// What the action requires of its step's `reads:` map.
     pub reads: ReadsContract,
-    /// Whether the artifact the action creates is shares of a secret, which
-    /// `rite check` tells from the step that made it, since the definition
-    /// does not say what kind an artifact is.
-    pub creates_shares: bool,
+    /// The kinds of artifact the action may create, empty when it creates
+    /// none. One kind but for an action whose `with:` decides between them,
+    /// as `enter_value` makes text, or bytes when it decodes an encoding.
+    pub creates: &'static [ArtifactKind],
 }
 
 /// What an action requires of its step's `reads:` map.
@@ -661,28 +661,34 @@ impl ActionType {
             | ActionType::CheckValue
             | ActionType::OralReadback
             | ActionType::MachineInfo
-            | ActionType::EnterValue
-            | ActionType::EnterSecret
             | ActionType::Attest
             | ActionType::GatherEntropy => ActionSpec {
                 backend: BackendUsage::Unused,
                 reads: ReadsContract::NONE,
-                creates_shares: false,
+                creates: &[],
             },
             ActionType::Reveal => ActionSpec {
                 backend: BackendUsage::Unused,
                 reads: ReadsContract::required(&["value"]),
-                creates_shares: false,
+                creates: &[],
             },
-            ActionType::GenerateKey
-            | ActionType::ExportPublic
-            | ActionType::TpmAttest
-            | ActionType::PivReadCertificate
-            | ActionType::PivSign
-            | ActionType::YubikeyAttestSlot => ActionSpec {
+            ActionType::EnterValue => ActionSpec {
+                backend: BackendUsage::Unused,
+                reads: ReadsContract::NONE,
+                creates: &[
+                    ArtifactKind::File(FileKind::Text),
+                    ArtifactKind::File(FileKind::Bytes),
+                ],
+            },
+            ActionType::EnterSecret => ActionSpec {
+                backend: BackendUsage::Unused,
+                reads: ReadsContract::NONE,
+                creates: &[ArtifactKind::File(FileKind::Secret)],
+            },
+            ActionType::GenerateKey => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract::NONE,
-                creates_shares: false,
+                creates: &[ArtifactKind::BackendKey],
             },
             ActionType::WrapKey => ActionSpec {
                 backend: BackendUsage::Required,
@@ -695,12 +701,12 @@ impl ActionType {
                     with_field_requires: &[("expect_recipient", "recipient")],
                     lists: &[],
                 },
-                creates_shares: false,
+                creates: &[ArtifactKind::File(FileKind::WrappedKey)],
             },
             ActionType::UnwrapKey => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract::required(&["unwrapping_key", "wrapped_data"]),
-                creates_shares: false,
+                creates: &[ArtifactKind::BackendKey],
             },
             ActionType::ImportKey => ActionSpec {
                 backend: BackendUsage::Required,
@@ -714,7 +720,7 @@ impl ActionType {
                     with_field_requires: &[],
                     lists: &[],
                 },
-                creates_shares: false,
+                creates: &[ArtifactKind::BackendKey],
             },
             ActionType::EncryptData => ActionSpec {
                 backend: BackendUsage::Required,
@@ -727,17 +733,17 @@ impl ActionType {
                     with_field_requires: &[("expect_recipient", "recipient")],
                     lists: &[],
                 },
-                creates_shares: false,
+                creates: &[ArtifactKind::File(FileKind::EncryptedData)],
             },
             ActionType::DecryptData => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract::required(&["encrypted_data", "decryption_key"]),
-                creates_shares: false,
+                creates: &[ArtifactKind::File(FileKind::Secret)],
             },
             ActionType::SplitSecret => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract::required(&["secret"]),
-                creates_shares: true,
+                creates: &[ArtifactKind::Shares],
             },
             ActionType::CombineShares => ActionSpec {
                 backend: BackendUsage::Unused,
@@ -753,22 +759,42 @@ impl ActionType {
                         at_least: 2,
                     }],
                 },
-                creates_shares: false,
+                creates: &[ArtifactKind::File(FileKind::Secret)],
             },
             ActionType::EnterShare => ActionSpec {
                 backend: BackendUsage::Unused,
                 reads: ReadsContract::NONE,
-                creates_shares: true,
+                creates: &[ArtifactKind::Shares],
+            },
+            ActionType::ExportPublic => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract::NONE,
+                creates: &[ArtifactKind::File(FileKind::PublicKey)],
             },
             ActionType::SignData => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract::required(&["key", "data"]),
-                creates_shares: false,
+                creates: &[ArtifactKind::File(FileKind::Signature)],
             },
             ActionType::VerifySignature => ActionSpec {
                 backend: BackendUsage::SoftwareUnlessNamed,
                 reads: ReadsContract::required(&["key", "data", "signature"]),
-                creates_shares: false,
+                creates: &[],
+            },
+            ActionType::TpmAttest => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract::NONE,
+                creates: &[],
+            },
+            ActionType::PivReadCertificate | ActionType::YubikeyAttestSlot => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract::NONE,
+                creates: &[ArtifactKind::File(FileKind::Certificate)],
+            },
+            ActionType::PivSign => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract::NONE,
+                creates: &[ArtifactKind::File(FileKind::Signature)],
             },
             ActionType::IssueCertificate => ActionSpec {
                 backend: BackendUsage::Required,
@@ -782,12 +808,12 @@ impl ActionType {
                     with_field_requires: &[],
                     lists: &[],
                 },
-                creates_shares: false,
+                creates: &[ArtifactKind::File(FileKind::Certificate)],
             },
             ActionType::GenerateCsr => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract::required(&["signing_key"]),
-                creates_shares: false,
+                creates: &[ArtifactKind::File(FileKind::Csr)],
             },
         }
     }
@@ -862,57 +888,117 @@ impl std::fmt::Display for ActionType {
     }
 }
 
-/// What kind of output a ceremony produces.
+/// What a file holds: the `type:` of an output.
+///
+/// A kind is what the step that made the file claims, not what the bytes
+/// look like: a wrapped key and encrypted data have the same shape and
+/// differ in the claim. How the file is laid out (DER, PEM) is the output's
+/// `format:`, not part of the kind.
+// Not `non_exhaustive`, nor is `ArtifactKind`: what decides by kind, as a
+// level or how a file is written, matches every kind, so a new one fails to
+// compile until each place has decided it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum OutputType {
+#[schemars(
+    description = "What a file holds, as the step that made it claims: a public key, a \
+                   certificate, a secret, bytes, and so on."
+)]
+pub enum FileKind {
     /// A public key.
     PublicKey,
+    /// A private key. Secret: never shown, and written only when declared.
+    PrivateKey,
+    /// An X.509 certificate.
+    Certificate,
+    /// A PKCS#10 certificate signing request.
+    Csr,
+    /// A signature over data.
+    Signature,
     /// A key wrapped for transport, in the container its scheme names.
     WrappedKey,
     /// Content encrypted for a recipient, in the container its scheme names.
     EncryptedData,
-    /// An X.509 certificate.
-    Certificate,
-    /// A signed DNSSEC resource record set.
-    SignedRrset,
-    /// A Certificate Transparency signed certificate timestamp.
-    Sct,
-
-    // Documents
-    /// A document.
-    Document,
-    /// A ceremony log or transcript.
-    CeremonyLog,
+    /// A value only the ceremony holds: typed in, opened or recombined. Never shown.
+    Secret,
+    /// Content with no cryptographic meaning of its own.
+    Bytes,
+    /// Text, as a person reads it.
+    Text,
 }
 
-impl std::fmt::Display for OutputType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+crate::types::vocabulary!(FileKind {
+    PublicKey => "public_key",
+    PrivateKey => "private_key",
+    Certificate => "certificate",
+    Csr => "csr",
+    Signature => "signature",
+    WrappedKey => "wrapped_key",
+    EncryptedData => "encrypted_data",
+    Secret => "secret",
+    Bytes => "bytes",
+    Text => "text",
+});
+
+impl FileKind {
+    /// Whether the kind is secret: wiped when dropped, never shown, never
+    /// digested in the transcript, and written only when an output declares
+    /// it.
+    #[must_use]
+    pub fn is_secret(self) -> bool {
         match self {
-            OutputType::PublicKey => write!(f, "public_key"),
-            OutputType::WrappedKey => write!(f, "wrapped_key"),
-            OutputType::EncryptedData => write!(f, "encrypted_data"),
-            OutputType::Certificate => write!(f, "certificate"),
-            OutputType::SignedRrset => write!(f, "signed_rrset"),
-            OutputType::Sct => write!(f, "sct"),
-            OutputType::Document => write!(f, "document"),
-            OutputType::CeremonyLog => write!(f, "ceremony_log"),
+            FileKind::PrivateKey | FileKind::Secret => true,
+            FileKind::PublicKey
+            | FileKind::Certificate
+            | FileKind::Csr
+            | FileKind::Signature
+            | FileKind::WrappedKey
+            | FileKind::EncryptedData
+            | FileKind::Bytes
+            | FileKind::Text => false,
         }
     }
 }
 
-impl OutputType {
-    /// Returns the default file extension for this output type.
-    pub fn default_extension(&self) -> &'static str {
+impl fmt::Display for FileKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// What an artifact is.
+///
+/// Most kinds exist as a file ([`FileKind`]). Two do not: a key held by a
+/// backend, which lives in a device and is written as its public half, and
+/// the shares of a split, which leave only on paper, one at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArtifactKind {
+    /// A kind that exists as a file.
+    File(FileKind),
+    /// A key held by a backend.
+    BackendKey,
+    /// The shares of a split secret.
+    Shares,
+}
+
+impl ArtifactKind {
+    /// The kind this artifact has once written to a file, if it can be
+    /// written: a backend key as its public half, shares not at all.
+    #[must_use]
+    pub fn written_as(self) -> Option<FileKind> {
         match self {
-            OutputType::PublicKey | OutputType::Certificate => "pem",
-            OutputType::WrappedKey
-            | OutputType::EncryptedData
-            | OutputType::SignedRrset
-            | OutputType::Sct => "bin",
-            OutputType::Document => "txt",
-            OutputType::CeremonyLog => "json",
+            ArtifactKind::File(kind) => Some(kind),
+            ArtifactKind::BackendKey => Some(FileKind::PublicKey),
+            ArtifactKind::Shares => None,
+        }
+    }
+}
+
+impl fmt::Display for ArtifactKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ArtifactKind::File(kind) => f.write_str(kind.as_str()),
+            ArtifactKind::BackendKey => f.write_str("backend_key"),
+            ArtifactKind::Shares => f.write_str("shares"),
         }
     }
 }
@@ -1109,22 +1195,14 @@ mod tests {
     }
 
     #[test]
-    fn output_type_serde_roundtrip() {
-        // These strings appear in ceremony YAML `output:` blocks and in file extension
-        // mapping. A rename breaks both YAML parsing and output file naming.
-        let cases: &[(OutputType, &str)] = &[
-            (OutputType::PublicKey, "\"public_key\""),
-            (OutputType::WrappedKey, "\"wrapped_key\""),
-            (OutputType::EncryptedData, "\"encrypted_data\""),
-            (OutputType::Certificate, "\"certificate\""),
-            (OutputType::Document, "\"document\""),
-            (OutputType::CeremonyLog, "\"ceremony_log\""),
-        ];
-        for &(variant, expected) in cases {
-            let serialized = serde_json::to_string(&variant).unwrap();
-            assert_eq!(serialized, expected, "serialize {variant:?}");
-            let deserialized: OutputType = serde_json::from_str(expected).unwrap();
-            assert_eq!(deserialized, variant, "deserialize {expected}");
+    fn file_kind_serde_matches_its_names() {
+        // These strings appear in ceremony YAML `outputs:` blocks, and will
+        // in a transcript: a rename breaks both.
+        for &kind in FileKind::ALL {
+            let serialized = serde_json::to_string(&kind).unwrap();
+            assert_eq!(serialized, format!("\"{kind}\""), "serialize {kind:?}");
+            let deserialized: FileKind = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, kind, "deserialize {serialized}");
         }
     }
 

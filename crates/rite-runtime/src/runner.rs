@@ -36,13 +36,12 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use rite_model::{
-    ActId, ActionType, ArtifactId, Ceremony, Level, MaterialId, MaterialKind, MaterialSource,
-    OutputId, ParamId, RoleId, Sha256Digest, Step, TranscriptHeader,
+    ActId, ActionType, ArtifactId, Ceremony, FileKind, Level, MaterialId, MaterialKind,
+    MaterialSource, OutputId, ParamId, RoleId, Step, TranscriptHeader,
 };
 use rite_sdk::{Backend, BackendError, Retriability};
 use thiserror::Error;
 
-use crate::actions::ArtifactValue;
 use crate::backend::BackendRegistry;
 use crate::clock::{Clock, SystemClock};
 use crate::entropy::DERIVATION_V1;
@@ -617,30 +616,30 @@ impl Executor {
         // audience can learn that an input was loaded without being able to
         // test guesses against its content.
         for (id, material) in self.ceremony.materials.iter() {
-            let artifact = load_material_artifact(id.as_str(), material)?;
+            let loaded = load_material_artifact(id.as_str(), material)?;
             let identifier = match &material.kind {
                 MaterialKind::Physical { identifier, .. } => identifier.clone(),
-                MaterialKind::Digital {
+                MaterialKind::File {
                     source: Some(MaterialSource::Identifier { identifier }),
+                    ..
                 } => Some(identifier.clone()),
-                MaterialKind::Digital { .. } => None,
-            };
-            // A file loads as bytes; an identifier or physical item as text.
-            let digest = match &artifact {
-                ArtifactValue::Bytes(bytes) => Some(Sha256Digest::of(bytes)),
-                _ => None,
+                MaterialKind::File { .. } => None,
             };
             reporter.fact(StepFact::MaterialLoaded {
                 name: id.clone(),
                 identifier,
             })?;
-            if let Some(digest) = digest {
-                reporter.fact(StepFact::MaterialDigest {
-                    name: id.clone(),
-                    digest,
-                })?;
+            if let (Some(digest), MaterialKind::File { kind, .. }) = (loaded.digest, &material.kind)
+            {
+                reporter.fact_at(
+                    material_digest_level(*kind),
+                    StepFact::MaterialDigest {
+                        name: id.clone(),
+                        digest,
+                    },
+                )?;
             }
-            state = state.with_material(ArtifactId::new(id.as_str()), artifact);
+            state = state.with_material(ArtifactId::new(id.as_str()), loaded.value);
         }
 
         let mut bound = HashSet::new();
@@ -701,18 +700,30 @@ impl Executor {
                 && !dry_run
             {
                 let output_id = OutputId::new(artifact_id.as_str());
-                if self.ceremony.outputs.contains(&output_id) {
-                    std::fs::create_dir_all(self.output_config.artifacts_dir()).map_err(|e| {
-                        ExecutionError::OutputWriteFailed {
-                            name: "artifacts directory".to_string(),
-                            reason: e.to_string(),
-                        }
-                    })?;
-
+                if let Some(output) = self.ceremony.outputs.get(&output_id) {
+                    let declared = output.kind;
                     let artifact_value = state.artifacts.get(artifact_id).ok_or_else(|| {
                         ExecutionError::OutputWriteFailed {
                             name: artifact_id.as_str().to_string(),
                             reason: "artifact not produced".to_string(),
+                        }
+                    })?;
+
+                    // `rite check` compared the declared kind with what the
+                    // action may create; this is the one it did create. From
+                    // here on the file is the declared kind.
+                    let made = artifact_value.kind();
+                    if made.written_as() != Some(declared) {
+                        return Err(ExecutionError::OutputWriteFailed {
+                            name: artifact_id.as_str().to_string(),
+                            reason: format!("declared as '{declared}', but the step made {made}"),
+                        });
+                    }
+
+                    std::fs::create_dir_all(self.output_config.artifacts_dir()).map_err(|e| {
+                        ExecutionError::OutputWriteFailed {
+                            name: "artifacts directory".to_string(),
+                            reason: e.to_string(),
                         }
                     })?;
 
@@ -731,19 +742,17 @@ impl Executor {
                         })?
                         .to_string();
 
-                    // Opened content gets no digest: a digest of a secret can
-                    // be tested against guesses.
-                    let digest = match artifact_value {
-                        ArtifactValue::Secret(_) => None,
-                        _ => Some(digest),
-                    };
+                    // A secret gets no digest: a digest of a secret can be
+                    // tested against guesses.
+                    let digest = (!declared.is_secret()).then_some(digest);
 
                     reporter.fact_at(
-                        artifact_level(step.action, artifact_value),
+                        artifact_level(declared),
                         StepFact::ArtifactWritten {
                             step: step.id.clone(),
                             name: artifact_id.as_str().to_string(),
                             file,
+                            kind: Some(declared),
                             digest,
                         },
                     )?;
@@ -764,33 +773,45 @@ struct StepCounts {
     completed: usize,
 }
 
-/// The level an artifact is recorded at, which decides whether a disclosure
-/// carries its file.
+/// The level a file is recorded at, which decides whether a disclosure
+/// carries it.
 ///
-/// Certificates and public keys exist to be distributed. Bytes are public
-/// only from the actions that make distributable bytes, a CSR or a signature;
-/// from any other step they may be a document the ceremony handled, so they
-/// stay restricted. Wrapped keys and encrypted content are ciphertext: not
-/// secret, and not for everyone either. Opened content is confidential and is
-/// never bundled at all.
-fn artifact_level(action: ActionType, value: &ArtifactValue) -> Level {
-    match value {
-        ArtifactValue::Certificate(_) | ArtifactValue::PublicKey(_) => Level::PUBLIC,
-        ArtifactValue::Bytes(_)
-            if matches!(
-                action,
-                ActionType::GenerateCsr | ActionType::SignData | ActionType::PivSign
-            ) =>
-        {
+/// The level follows the kind of the file, not of the value it was written
+/// from: a public key is public whether `export_public` made it or a backend
+/// key was written as its public half. Certificates, public keys, requests
+/// and signatures exist to be distributed. Bytes and text may be any
+/// document the ceremony handled, and wrapped keys and encrypted content are
+/// ciphertext: not secret, and not for everyone either. A secret is
+/// confidential and never bundled.
+fn artifact_level(kind: FileKind) -> Level {
+    match kind {
+        FileKind::Certificate | FileKind::PublicKey | FileKind::Csr | FileKind::Signature => {
             Level::PUBLIC
         }
-        ArtifactValue::Bytes(_)
-        | ArtifactValue::Text(_)
-        | ArtifactValue::WrappedKey(_)
-        | ArtifactValue::EncryptedData(_)
-        | ArtifactValue::BackendKey { .. }
-        | ArtifactValue::Shares(_) => Level::RESTRICTED,
-        ArtifactValue::Secret(_) => Level::CONFIDENTIAL,
+        FileKind::Bytes | FileKind::Text | FileKind::WrappedKey | FileKind::EncryptedData => {
+            Level::RESTRICTED
+        }
+        FileKind::Secret | FileKind::PrivateKey => Level::CONFIDENTIAL,
+    }
+}
+
+/// The level a material file's digest is recorded at.
+///
+/// A certificate, a public key and a request were parsed as such when the
+/// file loaded, so their digest is as public as the file. Any other kind is
+/// a claim the bytes did not confirm, and the file may hold what the author
+/// did not mean to declare, so its digest stays confidential. A secret kind
+/// has no digest at all.
+fn material_digest_level(kind: FileKind) -> Level {
+    match kind {
+        FileKind::Certificate | FileKind::PublicKey | FileKind::Csr => artifact_level(kind),
+        FileKind::Bytes
+        | FileKind::Text
+        | FileKind::Signature
+        | FileKind::WrappedKey
+        | FileKind::EncryptedData
+        | FileKind::Secret
+        | FileKind::PrivateKey => Level::CONFIDENTIAL,
     }
 }
 
@@ -847,11 +868,35 @@ pub(crate) fn run_step(
         backends,
     )?;
 
+    check_created_kinds(step, &result)?;
+
     reporter.fact(StepFact::StepCompleted {
         id: step.id.clone(),
         outcome: result.outcome.clone(),
     })?;
     Ok(result)
+}
+
+/// Refuse an artifact of a kind the step's action never creates.
+///
+/// `rite check` reasons from the action's spec: what a step creates, and so
+/// whether an output may hold it. An action that produces another kind breaks
+/// what was checked, so the run stops before anything reads the artifact.
+fn check_created_kinds(step: &Step, result: &StepResult) -> Result<(), ExecutionError> {
+    let allowed = step.action.spec().creates;
+    match result
+        .artifacts
+        .iter()
+        .find(|(_, value)| !allowed.contains(&value.kind()))
+    {
+        Some((artifact, value)) => Err(ExecutionError::UnexpectedArtifactKind {
+            step: step.id.clone(),
+            action: step.action,
+            artifact: artifact.clone(),
+            produced: value.kind(),
+        }),
+        None => Ok(()),
+    }
 }
 
 /// The run's backends, and which of them have had their identity recorded.
@@ -1065,6 +1110,9 @@ impl ExecutionError {
                 (ErrorClass::Integrity, "output_write_failed")
             }
             ExecutionError::TranscriptError(_) => (ErrorClass::Integrity, "transcript_error"),
+            ExecutionError::UnexpectedArtifactKind { .. } => {
+                (ErrorClass::Integrity, "unexpected_artifact_kind")
+            }
             ExecutionError::BackendError(e) => {
                 let class = if e.retriability().is_retriable() {
                     ErrorClass::Environmental
@@ -1106,7 +1154,9 @@ mod tests {
     use rite_model::ActionType;
 
     use super::*;
+    use crate::actions::ArtifactValue;
     use crate::transcript_sink::InMemorySink;
+    use rite_model::ArtifactKind;
 
     #[test]
     fn action_error_retriability_delegates_to_backend() {
@@ -1330,7 +1380,7 @@ sections:
 
     impl Action for OpensContent {
         fn action_type(&self) -> ActionType {
-            ActionType::Attest
+            ActionType::EnterSecret
         }
 
         fn execute(
@@ -1362,16 +1412,16 @@ roles:
     person: "Alice"
 output:
   opened:
-    type: document
+    type: secret
 sections:
   main:
     role: ${role.participant}
     steps:
       open:
-        action: attest
+        action: enter_secret
         silent: true
         with:
-          statement: "I confirm."
+          message: "The content"
         creates: opened
 "#;
         rite_resolver::resolve(yaml, None)
@@ -1427,6 +1477,33 @@ sections:
         drop(cmd_tx);
         let facts = frontend.join().expect("frontend join");
         (result, facts)
+    }
+
+    /// An action that produces a kind its spec never creates is stopped:
+    /// `rite check` reasoned from the spec, and the artifact would carry a
+    /// claim nothing checked.
+    #[test]
+    fn a_kind_the_action_never_creates_is_refused() {
+        let ceremony = ceremony_writing_opened_content();
+        let step = ceremony.execution_plan.first().expect("one step");
+        let produced =
+            |value| StepResult::completed_with_artifact("done", ArtifactId::new("opened"), value);
+
+        let secret = ArtifactValue::Secret(secrecy::SecretBox::new(Box::new(b"x".to_vec())));
+        assert!(check_created_kinds(step, &produced(secret)).is_ok());
+
+        let bytes = ArtifactValue::Bytes(b"x".to_vec());
+        let refused = check_created_kinds(step, &produced(bytes)).unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                ExecutionError::UnexpectedArtifactKind {
+                    produced: ArtifactKind::File(FileKind::Bytes),
+                    ..
+                }
+            ),
+            "{refused}"
+        );
     }
 
     #[test]
@@ -2495,27 +2572,26 @@ sections:
 
     #[test]
     fn artifact_levels_follow_what_the_artifact_is() {
-        use secrecy::SecretBox;
+        assert_eq!(artifact_level(FileKind::Signature), Level::PUBLIC);
+        assert_eq!(artifact_level(FileKind::Csr), Level::PUBLIC);
+        // A backend key is written as its public half, and recorded as one.
+        let written = ArtifactKind::BackendKey.written_as().expect("written");
+        assert_eq!(artifact_level(written), Level::PUBLIC);
+        // Bytes may be any document the ceremony handled.
+        assert_eq!(artifact_level(FileKind::Bytes), Level::RESTRICTED);
+        assert_eq!(artifact_level(FileKind::Secret), Level::CONFIDENTIAL);
+        assert_eq!(artifact_level(FileKind::PrivateKey), Level::CONFIDENTIAL);
+    }
 
-        let bytes = || ArtifactValue::Bytes(b"x".to_vec());
+    /// A file the run parsed as what it declares has a digest as public as
+    /// the file; a claimed kind keeps it confidential.
+    #[test]
+    fn material_digests_follow_what_the_load_checked() {
+        assert_eq!(material_digest_level(FileKind::PublicKey), Level::PUBLIC);
+        assert_eq!(material_digest_level(FileKind::Certificate), Level::PUBLIC);
+        assert_eq!(material_digest_level(FileKind::Bytes), Level::CONFIDENTIAL);
         assert_eq!(
-            artifact_level(ActionType::SignData, &bytes()),
-            Level::PUBLIC
-        );
-        assert_eq!(
-            artifact_level(ActionType::GenerateCsr, &bytes()),
-            Level::PUBLIC
-        );
-        // Bytes from any other step may be a document the ceremony handled.
-        assert_eq!(
-            artifact_level(ActionType::DecryptData, &bytes()),
-            Level::RESTRICTED
-        );
-        assert_eq!(
-            artifact_level(
-                ActionType::DecryptData,
-                &ArtifactValue::Secret(SecretBox::new(Box::new(b"x".to_vec())))
-            ),
+            material_digest_level(FileKind::WrappedKey),
             Level::CONFIDENTIAL
         );
     }

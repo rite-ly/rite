@@ -1216,6 +1216,51 @@ fn import_key_refuses_a_passphrase_that_is_not_a_secret() {
     assert!(!message.contains("correct horse"));
 }
 
+/// A material declared as a secret still sat on a disk, so it is no more a
+/// passphrase than bytes are.
+#[test]
+fn import_key_refuses_a_passphrase_from_a_material() {
+    let pem = encrypted_pems(b"correct horse").swap_remove(0);
+    let state = make_state()
+        .with_material(ArtifactId::new("escrowed"), ArtifactValue::Bytes(pem))
+        .with_material(
+            ArtifactId::new("escrow_passphrase"),
+            ArtifactValue::Secret(secrecy::SecretBox::new(Box::new(b"correct horse".to_vec()))),
+        );
+    let reads = [
+        (
+            "key_material".to_string(),
+            NamedInput::One(ArtifactRef::Produced {
+                id: ArtifactId::new("escrowed"),
+                property: None,
+            }),
+        ),
+        (
+            "passphrase".to_string(),
+            NamedInput::One(ArtifactRef::Material {
+                id: rite_model::MaterialId::new("escrow_passphrase"),
+                property: None,
+            }),
+        ),
+    ];
+    let step = StepInfo::new(
+        StepId::new("import"),
+        None,
+        Some("mock".to_string()),
+        Some(ArtifactId::new("restored")),
+        Some(StepInputs::Named(reads.into_iter().collect())),
+    );
+    let mut harness = ReporterHarness::new();
+
+    let error = run_import(&state, &step, &mut harness).expect_err("a material sat on a disk");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("is a material") && message.contains("enter_secret"),
+        "{message}"
+    );
+}
+
 /// A secret has no properties, so a reference naming one is a slip that
 /// would otherwise supply the whole secret without a word.
 #[test]

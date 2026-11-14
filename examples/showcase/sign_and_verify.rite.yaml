@@ -11,13 +11,13 @@ backends:
 
 materials:
   manifest:
-    type: digital
+    type: bytes
     path: "test_data/release_manifest.txt"
     description: "Release manifest to sign."
 
 output:
   manifest_signature:
-    type: document
+    type: signature
     description: "Detached signature over the release manifest."
 
 roles:

@@ -108,7 +108,10 @@ fn evaluate_artifact_ref(ref_: &Reference, ctx: &HandlerContext) -> Result<Value
         // Binary content (documents, crypto materials) and opened content:
         // returned as bytes. The value is a copy, since an expression owns
         // what it computes on, and the copy is wiped with the value.
-        ArtifactValue::Bytes(_) | ArtifactValue::Secret(_) => {
+        ArtifactValue::Bytes(_)
+        | ArtifactValue::Csr(_)
+        | ArtifactValue::Signature(_)
+        | ArtifactValue::Secret(_) => {
             // Property access not supported for raw byte artifacts
             if let Some(property) = &ref_.property {
                 return Err(ExecutionError::InvalidParams(format!(
@@ -123,6 +126,11 @@ fn evaluate_artifact_ref(ref_: &Reference, ctx: &HandlerContext) -> Result<Value
         // copied into `with:` as JSON, or into a prompt text that the
         // transcript records; a step that shows or combines a share takes it
         // through `reads:` and holds a borrow instead.
+        ArtifactValue::PrivateKey(_) => Err(ExecutionError::InvalidParams(format!(
+            "'{artifact_id}' is a private key, which no expression renders; name it under \
+             'reads:' of the step that installs it"
+        ))),
+
         ArtifactValue::Shares(_) => Err(ExecutionError::InvalidParams(format!(
             "'{artifact_id}' holds shares of a secret, which no expression renders; \
              name the share under 'reads:' of a step that shows or combines it"

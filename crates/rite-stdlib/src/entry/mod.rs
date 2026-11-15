@@ -8,6 +8,12 @@
 //! flag that could be left off is not what stands between a secret and the
 //! transcript.
 
+mod pin;
+
+pub use pin::EnterPinAction;
+#[cfg(feature = "piv")]
+pub(crate) use pin::enter_and_verify_pin;
+
 use rite_model::params::EntryShape;
 use rite_model::{ActionType, Prompt, RevealFormat, ValidatorSpec};
 use rite_runtime::{

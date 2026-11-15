@@ -1448,6 +1448,186 @@ sections:
                 .collect()
         }
 
+        /// `yaml` with `from` replaced by `to`, which must be in it: a
+        /// replacement that matches nothing would let a test pass vacuously.
+        fn replaced(yaml: &str, from: &str, to: &str) -> String {
+            assert!(yaml.contains(from), "{from:?} is not in the ceremony");
+            yaml.replace(from, to)
+        }
+
+        /// The ceremony with `signing_key` on a YubiKey, and the signing
+        /// step on `step_backend`.
+        fn on_card(material: &str, step_backend: &str) -> String {
+            replaced(
+                &ceremony(material, &format!("        backend: {step_backend}")),
+                "    provider: mock",
+                "    provider: yubikey",
+            )
+        }
+
+        /// `yaml` with an `enter_pin` step on `backend` just before `step`.
+        fn pin_before(yaml: &str, step: &str, backend: &str) -> String {
+            replaced(
+                yaml,
+                &format!("      {step}:\n"),
+                &format!(
+                    "      unlock_{step}:\n        action: enter_pin\n        backend: {backend}\n      {step}:\n"
+                ),
+            )
+        }
+
+        /// The warnings of a resolution about PIN steps, whether or not it succeeded.
+        fn pin_warnings_of(result: &ResolveResult<rite_model::Ceremony>) -> Vec<String> {
+            result
+                .warnings
+                .iter()
+                .map(ToString::to_string)
+                .filter(|w| w.contains("enter_pin"))
+                .collect()
+        }
+
+        /// The warnings of `yaml` about PIN steps; it must resolve.
+        fn pin_warnings(yaml: &str) -> Vec<String> {
+            let result = resolve(yaml, None);
+            assert!(!result.is_err(), "unexpected errors: {:?}", result.errors);
+            pin_warnings_of(&result)
+        }
+
+        /// The one PIN warning of `yaml`.
+        fn only_pin_warning(yaml: &str) -> String {
+            let found = pin_warnings(yaml);
+            let [warning] = found.as_slice() else {
+                panic!("expected one PIN warning: {found:?}");
+            };
+            warning.clone()
+        }
+
+        /// A card refuses its key until the PIN is entered, so using one
+        /// with no `enter_pin` before it is worth a word, but not an error.
+        #[test]
+        fn a_card_key_used_before_any_pin_step_is_warned() {
+            let yaml = on_card(DECLARED, "token");
+            let warning = only_pin_warning(&yaml);
+            assert!(
+                warning.contains("no earlier 'enter_pin'")
+                    && warning.contains("'signing_key'")
+                    && warning.contains("'token'"),
+                "{warning}"
+            );
+            assert_eq!(
+                pin_warnings(&pin_before(&yaml, "sign", "token")),
+                Vec::<String>::new()
+            );
+
+            // A software key needs no PIN, and nor does slot 9E by default.
+            let software = ceremony(DECLARED, "        backend: token");
+            assert_eq!(pin_warnings(&software), Vec::<String>::new());
+            let in_9e = replaced(&yaml, "id: \"piv:9c\"", "id: \"piv:9e\"");
+            assert_eq!(pin_warnings(&in_9e), Vec::<String>::new());
+        }
+
+        /// Slot 9C clears the PIN after each use by default, so a second
+        /// use after one PIN step is worth a word; a PIN step between the
+        /// two silences it.
+        #[test]
+        fn a_slot_9c_key_used_twice_after_one_pin_step_is_warned() {
+            let twice = pin_before(&on_card(DECLARED, "token"), "sign", "token")
+                + r#"      sign_again:
+        action: sign_data
+        backend: token
+        reads:
+          key: "${artifact.signing_key}"
+          data: "${artifact.manifest}"
+        creates: second_signature
+"#;
+            let warning = only_pin_warning(&twice);
+            assert!(
+                warning.contains("'sign_again'") && warning.contains("slot 9C"),
+                "{warning}"
+            );
+            assert_eq!(
+                pin_warnings(&pin_before(&twice, "sign_again", "token")),
+                Vec::<String>::new()
+            );
+
+            // The slot named without its prefix is the same slot.
+            let bare = replaced(&twice, "id: \"piv:9c\"", "id: \"9c\"");
+            assert!(only_pin_warning(&bare).contains("'sign_again'"));
+            // Another slot keeps the PIN, under the default policy.
+            let in_9d = replaced(&twice, "id: \"piv:9c\"", "id: \"piv:9d\"");
+            assert_eq!(pin_warnings(&in_9d), Vec::<String>::new());
+        }
+
+        /// A key a step made on the card needs the PIN as much as one it
+        /// held, but not to check a signature against its public half.
+        #[test]
+        fn a_key_made_on_the_card_is_warned_too() {
+            let yaml = r#"
+version: "0.3"
+name: "Made on the card"
+roles: {}
+backends:
+  token:
+    provider: yubikey
+materials:
+  manifest:
+    type: bytes
+    path: "manifest.txt"
+sections:
+  main:
+    steps:
+      make:
+        action: generate_key
+        backend: token
+        with:
+          algorithm: ECDSA-P256
+        creates: key
+      sign:
+        action: sign_data
+        backend: token
+        reads:
+          key: "${artifact.key}"
+          data: "${artifact.manifest}"
+        creates: signature
+      check:
+        action: verify_signature
+        backend: token
+        reads:
+          key: "${artifact.key}"
+          data: "${artifact.manifest}"
+          signature: "${artifact.signature}"
+"#;
+            let warning = only_pin_warning(yaml);
+            assert!(
+                warning.contains("'sign'") && warning.contains("'key'"),
+                "{warning}"
+            );
+        }
+
+        /// A key read on the wrong backend has its error, not the warning too.
+        #[test]
+        fn a_key_read_on_another_backend_is_not_also_warned() {
+            let result = resolve(&on_card(DECLARED, "software"), None);
+            assert!(result.is_err());
+            assert_eq!(pin_warnings_of(&result), Vec::<String>::new());
+        }
+
+        #[test]
+        fn a_pin_step_on_a_software_backend_is_refused() {
+            let yaml = pin_before(
+                &ceremony(DECLARED, "        backend: token"),
+                "sign",
+                "software",
+            );
+            let found = messages(&yaml);
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("'unlock_sign'") && m.contains("which takes none")),
+                "{found:?}"
+            );
+        }
+
         #[test]
         fn resolves_to_the_key_its_backend_holds() {
             let yaml = ceremony(

@@ -901,6 +901,11 @@ mod tests {
                 json!({"slot": "piv:9d", "algorithm": "ECDSA-SHA384"}),
             ),
             (ActionType::PivReadCertificate, json!({"slot": "8a"})),
+            (ActionType::EnterPin, json!({})),
+            (
+                ActionType::EnterPin,
+                json!({"message": "Unlock the signing card"}),
+            ),
         ] {
             assert_eq!(
                 messages(action, &with),

@@ -32,7 +32,8 @@ pub use crypto::{
 pub use entropy::GatherEntropyParams;
 pub use entry::EntryParams;
 pub use piv::{
-    AttestSlotParams, PIV_SIGN_ALGORITHMS, PIV_SLOT, PivReadCertificateParams, PivSignParams,
+    AttestSlotParams, EnterPinParams, PIV_SIGN_ALGORITHMS, PIV_SLOT, PivReadCertificateParams,
+    PivSignParams,
 };
 pub use pki::{GenerateCsrParams, IssueCertificateParams};
 pub(crate) use schema::names;
@@ -98,6 +99,7 @@ pub fn cross_field(action: ActionType, with: &serde_json::Value) -> Vec<ParamErr
         | ActionType::TpmAttest
         | ActionType::PivReadCertificate
         | ActionType::PivSign
+        | ActionType::EnterPin
         | ActionType::YubikeyAttestSlot
         | ActionType::IssueCertificate
         | ActionType::GenerateCsr => Vec::new(),

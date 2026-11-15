@@ -35,7 +35,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 /// test with the same features as the test itself. Linked-library capabilities
 /// are not, so those are read from the crate that owns the detection.
 fn needs_unavailable_capability(path: &Path) -> bool {
-    // examples/piv uses the hardware-backend actions (`piv_sign`,
+    // examples/piv uses the hardware-backend actions (`piv_read_certificate`,
     // `yubikey_attest_slot`), which are off in the default feature set.
     if !cfg!(feature = "yubikey") && path.starts_with(examples_dir().join("piv")) {
         return true;

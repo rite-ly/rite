@@ -1059,12 +1059,16 @@ fn execute_step_with_retry(
         // work on the world this attempt is not safely re-runnable.
         let no_new_side_effects = reporter.side_effects_emitted() == side_effects_before;
         let retriable = action_err.retriability().is_retriable() && no_new_side_effects;
+        let pin_required = matches!(action_err, ActionError::Backend(BackendError::PinRequired));
         let exec_err = action_error_to_execution(action_err, &step.id);
         reporter.fact(StepFact::StepAttemptFailed {
             step: step.id.clone(),
             attempt,
             error: exec_err.to_error_record(),
         })?;
+        if pin_required && let Some(backend) = &step_info.backend {
+            reporter.log(crate::protocol::Icon::Warning, pin_hint(backend))?;
+        }
 
         let policy_allows = match step.retry {
             RetryPolicy::Never => false,
@@ -1087,6 +1091,18 @@ fn execute_step_with_retry(
         }
         return Err(exec_err);
     }
+}
+
+/// What an operator is told when a device asks for its PIN mid-step.
+///
+/// Retrying does not ask for the PIN, so the hint says where it belongs.
+fn pin_hint(backend: &str) -> String {
+    format!(
+        "Backend '{backend}' asks for its PIN. It is locked until an `enter_pin` step \
+         on it runs: one before this step, or right before it if the key's PIN \
+         policy is `always`. A device reset or removed since its PIN was entered is \
+         locked again. Retrying this step does not ask for the PIN."
+    )
 }
 
 /// Bind each key a backend already held that the step reads and no earlier

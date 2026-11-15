@@ -4,17 +4,6 @@
 
 use rite_sdk::{BackendError, KeyAlgorithm, PivKeyOrigin, PivPinPolicy, PivSlot, PivTouchPolicy};
 
-/// PIV key reference for retired key-management slot index 0.
-///
-/// NIST SP 800-73-5 assigns the retired slots key references `0x82..=0x95`.
-/// Rite's [`PivSlot::Retired`] stores a 0-based index (`0..=19`), while the
-/// `yubikey` crate's `RetiredSlotId` uses the raw key reference. The two
-/// conversion helpers below bridge the representations.
-pub(crate) const RETIRED_KEY_REF_MIN: u8 = 0x82;
-
-/// PIV key reference for retired key-management slot index 19 (NIST SP 800-73-5).
-pub(crate) const RETIRED_KEY_REF_MAX: u8 = 0x95;
-
 /// Convert a Rite `PivSlot` to a `yubikey::piv::SlotId`.
 ///
 /// # Errors
@@ -29,11 +18,13 @@ pub fn to_yubikey_slot(slot: PivSlot) -> Result<yubikey::piv::SlotId, BackendErr
         PivSlot::KeyManagement => SlotId::KeyManagement,
         PivSlot::CardAuthentication => SlotId::CardAuthentication,
         PivSlot::Retired(index) => {
-            let key_ref = RETIRED_KEY_REF_MIN.checked_add(index).ok_or_else(|| {
-                BackendError::Configuration(format!(
-                    "retired PIV slot index {index} out of range (valid: 0..=19)"
-                ))
-            })?;
+            let key_ref = PivSlot::RETIRED_KEY_REF_MIN
+                .checked_add(index)
+                .ok_or_else(|| {
+                    BackendError::Configuration(format!(
+                        "retired PIV slot index {index} out of range (valid: 0..=19)"
+                    ))
+                })?;
             let retired = RetiredSlotId::try_from(key_ref).map_err(|_| {
                 BackendError::Configuration(format!(
                     "retired PIV slot index {index} out of range (valid: 0..=19)"
@@ -56,7 +47,9 @@ pub fn from_yubikey_slot(slot: yubikey::piv::SlotId) -> PivSlot {
         SlotId::Signature => PivSlot::Signature,
         SlotId::KeyManagement => PivSlot::KeyManagement,
         SlotId::CardAuthentication => PivSlot::CardAuthentication,
-        SlotId::Retired(r) => PivSlot::Retired(u8::from(r).saturating_sub(RETIRED_KEY_REF_MIN)),
+        SlotId::Retired(r) => {
+            PivSlot::Retired(u8::from(r).saturating_sub(PivSlot::RETIRED_KEY_REF_MIN))
+        }
         // PIV Authentication (9A), the Yubico F9 attestation slot, and any
         // future vendor slots all map to Authentication.
         _ => PivSlot::Authentication,

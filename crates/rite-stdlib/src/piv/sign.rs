@@ -1,12 +1,11 @@
 //! `piv_sign` action: sign data with a PIV smart card on-device key.
 
-use rite_model::{ActionType, Format, Prompt, StepInputs, ValidatorSpec};
+use rite_model::{ActionType, StepInputs};
 use rite_runtime::{
-    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, Response, StepInfo,
-    StepResult, compute_fingerprint, parse_params, resolve_artifact_bytes,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
+    compute_fingerprint, parse_params, resolve_artifact_bytes,
 };
 use rite_sdk::{Backend, SignAlgorithm};
-use secrecy::ExposeSecret;
 use serde_json::json;
 
 use rite_model::params::{PIV_SIGN_ALGORITHMS, PivSignParams};
@@ -68,7 +67,7 @@ impl Action for PivSignAction {
             .ok_or_else(|| ActionError::Failed("Backend required for PIV signing".into()))?;
         let backend_name = backend.name().to_string();
 
-        verify_pin(backend, &backend_name, reporter)?;
+        crate::entry::enter_and_verify_pin(backend, reporter)?;
 
         // Signing through the Sign capability.
         let signature = {
@@ -116,59 +115,6 @@ impl Action for PivSignAction {
     }
 }
 
-/// What `piv_sign` offers to ceremony authors.
-///
-/// Ask for the PIN and verify it through the PIV capability.
-fn verify_pin(
-    backend: &mut dyn Backend,
-    backend_name: &str,
-    reporter: &mut Reporter<'_>,
-) -> Result<(), ActionError> {
-    let piv = backend.as_piv_mut().ok_or_else(|| {
-        ActionError::Failed(format!(
-            "Backend '{backend_name}' does not support PIV operations"
-        ))
-    })?;
-
-    let retries = piv.pin_retries()?;
-    if retries <= 1 {
-        reporter.log(
-            Icon::Warning,
-            format!("Only {retries} PIN attempt(s) remaining. Card will lock on failure."),
-        )?;
-    }
-
-    // Six to eight bytes, which is what SP 800-73 gives a PIV PIN and what
-    // the card will refuse otherwise. Checked here so a slip costs a retype
-    // rather than one of the card's few attempts.
-    let response = reporter.prompt(&Prompt::Secret {
-        label: "Enter PIV PIN (6 to 8 characters)".to_string(),
-        validator: ValidatorSpec::Format {
-            format: Format::Text,
-            min_length: Some(6),
-            max_length: Some(8),
-        },
-    })?;
-    let Response::Secret(pin) = response else {
-        return Err(ActionError::Failed(
-            "expected a secret response for the PIV PIN".to_string(),
-        ));
-    };
-
-    // The prompt counts characters and the card counts bytes, so a PIN
-    // with a character outside ASCII can pass the one and fail the other.
-    let length = pin.expose_secret().len();
-    if !(6..=8).contains(&length) {
-        return Err(ActionError::Failed(format!(
-            "the PIN is {length} bytes and a PIV PIN is 6 to 8; \
-             nothing was sent to the card"
-        )));
-    }
-    piv.verify_pin(pin.expose_secret().as_bytes())?;
-    reporter.log(Icon::Checkmark, "PIN verified")?;
-    Ok(())
-}
-
 /// Check an algorithm against what a PIV card performs.
 fn piv_sign_algorithm(algorithm: SignAlgorithm) -> Result<SignAlgorithm, ActionError> {
     if PIV_SIGN_ALGORITHMS.contains(&algorithm) {
@@ -188,6 +134,7 @@ fn piv_sign_algorithm(algorithm: SignAlgorithm) -> Result<SignAlgorithm, ActionE
 mod tests {
     use super::*;
     use rite_model::StepFact;
+    use rite_runtime::Response;
     use rite_sdk::{BackendError, KeyId, PivBackend, PivDeviceInfo, PivSlotInfo, SignBackend};
 
     #[test]

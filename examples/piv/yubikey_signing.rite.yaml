@@ -2,13 +2,29 @@ version: "0.3"
 name: "Release Signing with YubiKey PIV"
 description: |
   Sign a release manifest with the PIV key in slot 9C. Read its certificate,
-  request a YubiKey attestation certificate, and produce a detached signature.
+  request a YubiKey attestation certificate, enter the PIN, produce a detached
+  signature, and check it off the card.
 
 backends:
   token:
     provider: yubikey
+  # The signature is checked in software: verifying needs only a public key,
+  # and a check by something other than the card that signed means more.
+  software:
+    provider: openssl
 
 materials:
+  # A key provisioned on the card before the ceremony. Nothing reads the card
+  # when the run starts: the first step that uses the key asks the card for
+  # its public key and checks the algorithm, and records a `key_bound` fact.
+  signing_key:
+    type: backend_key
+    backend: token
+    id: "piv:9c"
+    algorithm: ECDSA-P256
+    # Pin the key once it is known, so another card cannot stand in for it:
+    # fingerprint: "sha256:..."
+    description: "Release signing key, generated on the YubiKey in slot 9C."
   manifest:
     type: bytes
     path: "test_data/release_manifest.txt"
@@ -30,6 +46,7 @@ roles:
     name: "Release Signer"
     person: "Alice Smith"
   witness:
+    name: "Witness"
     person: "Bob Jones"
 
 acts:
@@ -38,12 +55,12 @@ acts:
     description: "Verify the operator and the inserted token before signing."
   - id: signing
     name: "Signing"
-    description: "Read the certificate, attest the key, and sign the manifest."
+    description: "Read the certificate, attest the key, sign the manifest, and check the signature."
   - id: closing
     name: "Closing"
 
 prerequisites:
-  - "A YubiKey is inserted and slot 9C holds the release signing key and its certificate"
+  - "A YubiKey with firmware 5.3 or later is inserted, and slot 9C holds the release signing key and its certificate"
 
 sections:
   environment:
@@ -86,16 +103,33 @@ sections:
     name: "Sign the Manifest"
     role: ${role.signer}
     steps:
-      sign_manifest:
-        action: piv_sign
+      # Entering the PIN is its own step, the signer's act of authorizing
+      # the signature. The transcript records it, never the PIN. Slot 9C
+      # clears the PIN after each use, so it comes right before the one
+      # signature; a second signature would take a second `enter_pin`.
+      unlock_card:
+        action: enter_pin
         backend: token
-        reads: "${artifact.manifest}"
         with:
-          slot: "9c"
-          algorithm: ECDSA-SHA256
           message: "Enter the PIV PIN to authorize signing the release manifest."
+      sign_manifest:
+        action: sign_data
+        backend: token
+        reads:
+          key: "${artifact.signing_key}"
+          data: "${artifact.manifest}"
         creates: manifest_signature
         description: "Produce a detached ECDSA-P256 signature over the manifest."
+      # Checked against the certificate read from the card, as a relying
+      # party will: it also shows the certificate is for the key that signed.
+      check_signature:
+        action: verify_signature
+        backend: software
+        reads:
+          key: "${artifact.signing_cert}"
+          data: "${artifact.manifest}"
+          signature: "${artifact.manifest_signature}"
+        description: "Check the signature in software against the slot 9C certificate."
 
   attestation:
     act: closing

@@ -54,6 +54,17 @@ pub struct PivSignParams {
     pub message: Option<String>,
 }
 
+/// The `with` block of `enter_pin`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct EnterPinParams {
+    /// Shown to the operator before the PIN prompt, such as which key the
+    /// PIN unlocks.
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
 fn default_sign_slot() -> String {
     "9c".to_string()
 }

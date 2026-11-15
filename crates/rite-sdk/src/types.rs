@@ -1695,6 +1695,43 @@ pub enum PivSlot {
 }
 
 impl PivSlot {
+    /// PIV key reference of retired slot index 0; SP 800-73-5 gives the
+    /// retired slots `0x82..=0x95`.
+    pub const RETIRED_KEY_REF_MIN: u8 = 0x82;
+
+    /// Read a slot as a key id or a step names it: `9a`, `9c`, `9d`, `9e`, or
+    /// a retired slot by its key reference in hex, `82` to `95`, optionally
+    /// after `piv:`. `None` for anything else.
+    #[must_use]
+    pub fn from_hint(hint: &str) -> Option<Self> {
+        match hint.strip_prefix("piv:").unwrap_or(hint) {
+            "9a" => Some(PivSlot::Authentication),
+            "9c" => Some(PivSlot::Signature),
+            "9d" => Some(PivSlot::KeyManagement),
+            "9e" => Some(PivSlot::CardAuthentication),
+            // Two hex digits, as the reference is written: `from_str_radix`
+            // alone also reads `082` and `+82`.
+            other if other.len() == 2 && other.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                let key_ref = u8::from_str_radix(other, 16).ok()?;
+                PivSlot::retired(key_ref.checked_sub(Self::RETIRED_KEY_REF_MIN)?)
+            }
+            _ => None,
+        }
+    }
+
+    /// The PIN policy SP 800-73 gives the slot, which a card applies unless
+    /// the key was provisioned with another.
+    #[must_use]
+    pub const fn default_pin_policy(self) -> PivPinPolicy {
+        match self {
+            PivSlot::Signature => PivPinPolicy::Always,
+            PivSlot::CardAuthentication => PivPinPolicy::Never,
+            PivSlot::Authentication | PivSlot::KeyManagement | PivSlot::Retired(_) => {
+                PivPinPolicy::Once
+            }
+        }
+    }
+
     /// Create a retired key management slot from an index in `0..=19`.
     ///
     /// Returns `None` if `index` is out of the valid range.
@@ -1931,6 +1968,17 @@ names!(Provider {
     Yubikey => "yubikey",
 });
 
+impl Provider {
+    /// Whether the device behind it locks its keys behind a PIN.
+    ///
+    /// The mock answers PIN prompts so a rehearsal can walk a PIN step, but
+    /// locks nothing.
+    #[must_use]
+    pub const fn takes_pin(self) -> bool {
+        matches!(self, Provider::Piv | Provider::Yubikey)
+    }
+}
+
 /// Backend configuration entry from a ceremony file.
 ///
 /// `provider` names the implementation. The remaining YAML keys are
@@ -1948,6 +1996,35 @@ pub struct BackendConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The slot a key id names, and the PIN policy SP 800-73 gives it.
+    #[test]
+    fn a_slot_reads_from_its_hint_with_its_default_pin_policy() {
+        for (hint, slot, policy) in [
+            ("piv:9a", PivSlot::Authentication, PivPinPolicy::Once),
+            ("9c", PivSlot::Signature, PivPinPolicy::Always),
+            ("piv:9d", PivSlot::KeyManagement, PivPinPolicy::Once),
+            ("9e", PivSlot::CardAuthentication, PivPinPolicy::Never),
+            ("piv:82", PivSlot::Retired(0), PivPinPolicy::Once),
+            ("95", PivSlot::Retired(19), PivPinPolicy::Once),
+        ] {
+            assert_eq!(PivSlot::from_hint(hint), Some(slot), "{hint}");
+            assert_eq!(slot.default_pin_policy(), policy, "{hint}");
+        }
+        for hint in [
+            "",
+            "9b",
+            "81",
+            "96",
+            "082",
+            "+82",
+            "piv:",
+            "piv:piv:9c",
+            "f9",
+        ] {
+            assert_eq!(PivSlot::from_hint(hint), None, "{hint}");
+        }
+    }
 
     /// An agreed secret's bytes stay out of debug output and logs.
     #[test]

@@ -122,6 +122,9 @@ pub(crate) struct LoadedMaterial {
 }
 
 /// Load a single material into an `ArtifactValue`.
+///
+/// A key a backend holds is not loaded here: it binds at the first step that
+/// reads it.
 pub(crate) fn load_material_artifact(
     name: &str,
     material: &Material,
@@ -131,6 +134,10 @@ pub(crate) fn load_material_artifact(
         digest: None,
     };
     match &material.kind {
+        MaterialKind::BackendKey(_) => Err(ExecutionError::MaterialLoadFailed {
+            name: name.to_string(),
+            reason: "a key a backend holds binds at the first step that reads it".to_string(),
+        }),
         MaterialKind::Physical { identifier, .. } => {
             let text = identifier
                 .as_deref()

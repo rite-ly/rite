@@ -370,6 +370,8 @@ impl SpanMap {
             | ResolveError::InvalidWithValue { step, .. }
             | ResolveError::InvalidRetryAttempts { step }
             | ResolveError::CreatesNothing { step, .. }
+            | ResolveError::HeldKeyOnOtherBackend { step, .. }
+            | ResolveError::ArtifactNamesMaterial { step, .. }
             | ResolveError::ArtifactNeverProduced { step, .. } => self.steps.get(step).copied(),
             ResolveError::SchemaViolation {
                 step,
@@ -414,6 +416,7 @@ impl SpanMap {
             | ResolveError::ParamOutOfRange { param, .. }
             | ResolveError::InvalidDateFormat { param, .. } => self.params.get(param).copied(),
             ResolveError::UnknownMaterial { material, .. }
+            | ResolveError::HeldKeyUndeclaredBackend { material, .. }
             | ResolveError::RequiredMaterialMissing(material)
             | ResolveError::MaterialPathNotFound { material, .. }
             | ResolveError::MaterialSourceMismatch { material, .. } => {

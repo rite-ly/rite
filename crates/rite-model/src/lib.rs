@@ -39,7 +39,7 @@ pub mod transcript;
 mod types;
 pub mod validate;
 
-pub use rite_sdk::{BackendConfig, Provider};
+pub use rite_sdk::{BackendConfig, KeyAlgorithm, KeyFingerprint, KeyId, Provider};
 
 pub use canonical::{CanonicalJsonError, canonical_json, check_numbers};
 pub use digest::{DigestFormatError, Sha256Digest};
@@ -54,9 +54,9 @@ pub use types::{
 };
 
 pub use ir::{
-    Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind, NamedInput,
-    Output, OutputId, ParamId, Parameter, PostCeremonyDuty, RetryPolicy, Role, RoleId, Section,
-    SectionId, Step, StepId, StepInputs, SymbolTable,
+    Act, ActId, ArtifactId, ArtifactRef, Ceremony, HeldKey, Material, MaterialId, MaterialKind,
+    NamedInput, Output, OutputId, ParamId, Parameter, PostCeremonyDuty, RetryPolicy, Role, RoleId,
+    Section, SectionId, Step, StepId, StepInputs, SymbolTable,
 };
 
 pub use display::{Layout, RevealFormat, TypedRow, TypedValue, UnknownRevealFormat};

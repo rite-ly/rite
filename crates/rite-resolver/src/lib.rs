@@ -1395,4 +1395,265 @@ backends:
             assert_eq!(span_text(&yaml, span), "${paramm.outdir}");
         }
     }
+
+    /// A key a backend already holds, declared as a material.
+    mod held_keys {
+        use super::*;
+        use rite_model::{KeyAlgorithm, MaterialKind};
+
+        /// A ceremony signing with `signing_key`, a key on `token`. `material`
+        /// replaces the key's declaration and `step` the signing step's
+        /// `backend:` line.
+        fn ceremony(material: &str, step_backend: &str) -> String {
+            format!(
+                r#"
+version: "0.3"
+name: "Held key"
+roles: {{}}
+backends:
+  token:
+    provider: mock
+  software:
+    provider: openssl
+materials:
+  signing_key:
+{material}
+  manifest:
+    type: bytes
+    path: "manifest.txt"
+sections:
+  main:
+    steps:
+      sign:
+        action: sign_data
+{step_backend}
+        reads:
+          key: "${{artifact.signing_key}}"
+          data: "${{artifact.manifest}}"
+        creates: signature
+"#
+            )
+        }
+
+        const DECLARED: &str = r#"    type: backend_key
+    backend: token
+    id: "piv:9c"
+    algorithm: ECDSA-P256"#;
+
+        fn messages(yaml: &str) -> Vec<String> {
+            resolve(yaml, None)
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        }
+
+        #[test]
+        fn resolves_to_the_key_its_backend_holds() {
+            let yaml = ceremony(
+                &format!(
+                    "{DECLARED}\n    fingerprint: \"sha256:{}\"",
+                    "ab".repeat(32)
+                ),
+                "        backend: token",
+            );
+            let result = resolve(&yaml, None);
+            assert!(!result.is_err(), "unexpected errors: {:?}", result.errors);
+            let ceremony = result.into_result().unwrap();
+            let key = ceremony
+                .materials
+                .get(&MaterialId::new("signing_key"))
+                .unwrap();
+            let MaterialKind::BackendKey(rite_model::HeldKey {
+                backend,
+                key_id,
+                algorithm,
+                fingerprint,
+            }) = &key.kind
+            else {
+                panic!("{:?}", key.kind);
+            };
+            assert_eq!(backend, "token");
+            assert_eq!(key_id.as_str(), "piv:9c");
+            assert_eq!(*algorithm, KeyAlgorithm::EcdsaP256);
+            assert_eq!(
+                fingerprint.map(|f| f.to_string()),
+                Some(format!("sha256:{}", "ab".repeat(32)))
+            );
+            assert_eq!(key.kind.type_name(), "backend_key");
+        }
+
+        #[test]
+        fn names_every_field_a_held_key_is_missing() {
+            let yaml = ceremony(
+                "    type: backend_key\n    id: \"piv:9c\"",
+                "        backend: token",
+            );
+            let found = messages(&yaml);
+            for field in ["backend", "algorithm"] {
+                assert!(
+                    found
+                        .iter()
+                        .any(|m| m.ends_with(&format!("material 'signing_key' requires '{field}'"))),
+                    "{field}: {found:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn refuses_a_field_of_another_type() {
+            let yaml = ceremony(
+                &format!("{DECLARED}\n    path: \"key.pem\""),
+                "        backend: token",
+            );
+            let found = messages(&yaml);
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("material 'signing_key' has no 'path' field")),
+                "{found:?}"
+            );
+
+            let file = ceremony(
+                "    type: public_key\n    path: \"key.pem\"\n    algorithm: ECDSA-P256",
+                "        backend: token",
+            );
+            let found = messages(&file);
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("material 'signing_key' has no 'algorithm' field")),
+                "{found:?}"
+            );
+        }
+
+        /// The conversion refuses what the editor schema refuses, for a
+        /// reader that skips the schema.
+        #[test]
+        fn the_conversion_refuses_what_the_schema_refuses() {
+            let read = |yaml: &str| {
+                serde_json::from_str::<crate::schema::Material>(yaml)
+                    .map(|_| ())
+                    .unwrap_err()
+                    .to_string()
+            };
+            let missing = read(r#"{"type": "backend_key", "id": "piv:9c"}"#);
+            assert!(
+                missing.contains("needs 'backend', 'algorithm'"),
+                "{missing}"
+            );
+            let path = read(
+                r#"{"type": "backend_key", "backend": "token", "id": "piv:9c",
+                    "algorithm": "ECDSA-P256", "path": "key.pem"}"#,
+            );
+            assert!(path.contains("is read from its backend"), "{path}");
+            let file = read(r#"{"type": "public_key", "algorithm": "ECDSA-P256"}"#);
+            assert!(file.contains("are for a 'backend_key' one"), "{file}");
+            let physical = read(r#"{"type": "physical", "backend": "token"}"#);
+            assert!(
+                physical.contains("declare a key a backend holds"),
+                "{physical}"
+            );
+        }
+
+        #[test]
+        fn refuses_a_backend_the_ceremony_does_not_declare() {
+            let yaml = ceremony(
+                &DECLARED.replace("backend: token", "backend: hsm"),
+                "        backend: token",
+            );
+            let result = resolve(&yaml, None);
+            assert!(result.errors.iter().any(|e| matches!(
+                e,
+                ResolveError::HeldKeyUndeclaredBackend { material, backend }
+                    if material.as_str() == "signing_key" && backend == "hsm"
+            )));
+        }
+
+        #[test]
+        fn refuses_a_step_on_another_backend_than_the_one_holding_the_key() {
+            let elsewhere = messages(&ceremony(DECLARED, "        backend: software"));
+            assert!(
+                elsewhere.iter().any(|m| m
+                    == "Step 'sign' reads 'signing_key', a key held by backend 'token', but runs \
+                        on backend 'software'"),
+                "{elsewhere:?}"
+            );
+
+            let nowhere = messages(&ceremony(DECLARED, ""));
+            assert!(
+                nowhere
+                    .iter()
+                    .any(|m| m.ends_with("but names no backend: add 'backend: token'")),
+                "{nowhere:?}"
+            );
+        }
+
+        /// Sealing to a held key, or checking a signature against it, uses
+        /// only its public half, which any backend can.
+        #[test]
+        fn a_step_using_only_the_public_half_runs_anywhere() {
+            let yaml = ceremony(DECLARED, "        backend: token").replace(
+                r#"      sign:
+        action: sign_data
+        backend: token
+        reads:
+          key: "${artifact.signing_key}"
+          data: "${artifact.manifest}"
+        creates: signature"#,
+                r#"      seal:
+        action: encrypt_data
+        backend: software
+        reads:
+          recipient: "${artifact.signing_key}"
+          data: "${artifact.manifest}"
+        creates: sealed"#,
+            );
+            assert!(yaml.contains("action: encrypt_data"));
+            let result = resolve(&yaml, None);
+            assert!(!result.is_err(), "unexpected errors: {:?}", result.errors);
+        }
+
+        /// Each refusal points at what the author has to change: the
+        /// material for its backend, the step for where it runs and what it
+        /// creates.
+        #[test]
+        fn each_refusal_underlines_its_declaration() {
+            let underlined = |yaml: &str, says: &str| {
+                let (_, _, diags) = analyze_str(None, yaml);
+                let diag = diags
+                    .iter()
+                    .find(|d| d.message.contains(says))
+                    .unwrap_or_else(|| panic!("no '{says}' in {diags:?}"));
+                span_text(yaml, diag.span.expect("a span")).to_string()
+            };
+            let undeclared = ceremony(
+                &DECLARED.replace("backend: token", "backend: hsm"),
+                "        backend: token",
+            );
+            assert_eq!(
+                underlined(&undeclared, "undeclared backend 'hsm'"),
+                "signing_key"
+            );
+            let elsewhere = ceremony(DECLARED, "        backend: software");
+            assert_eq!(underlined(&elsewhere, "but runs on backend"), "sign");
+            let named = ceremony(DECLARED, "        backend: token")
+                .replace("creates: signature", "creates: manifest");
+            assert_eq!(underlined(&named, "the name of a material"), "sign");
+        }
+
+        /// Not only for held keys: a reader looks a name up as a material
+        /// first, so an artifact under a material's name is never read.
+        #[test]
+        fn refuses_an_artifact_named_as_a_material() {
+            let yaml = ceremony(DECLARED, "        backend: token")
+                .replace("creates: signature", "creates: manifest");
+            let result = resolve(&yaml, None);
+            assert!(result.errors.iter().any(|e| matches!(
+                e,
+                ResolveError::ArtifactNamesMaterial { step, artifact }
+                    if step.as_str() == "sign" && artifact.as_str() == "manifest"
+            )));
+        }
+    }
 }

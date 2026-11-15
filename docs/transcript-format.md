@@ -101,7 +101,7 @@ fact type has a default level:
 
 | Level | Facts |
 |---|---|
-| public | `ceremony_started`, `role_declared`, `act_started`, `step_started`, `backend_operation`, `attestation_recorded`, `step_completed`, `ceremony_completed`, `ceremony_failed`, and the entropy facts, which `rite verify` needs to re-derive the entropy |
+| public | `ceremony_started`, `role_declared`, `act_started`, `step_started`, `key_bound`, `backend_operation`, `attestation_recorded`, `step_completed`, `ceremony_completed`, `ceremony_failed`, and the entropy facts, which `rite verify` needs to re-derive the entropy |
 | restricted | `parameter_bound`, `material_loaded`, `backend_bound`, `prompt_answered`, `wrap_recipient_recorded`, `step_attempt_failed`, `deviation_recorded`, `platform_recorded`, `network_state_recorded` |
 | confidential | `role_assigned`, `material_digest`, `machine_info_recorded` |
 
@@ -137,6 +137,12 @@ as a material's name and the digest of its content, they are separate facts. The
 - `role_assigned`, `parameter_bound`, `material_loaded`, `material_digest`: the run's inputs,
   one fact each
 - `backend_bound`: a backend's identity, recorded the first time the backend is used
+- `key_bound`: a key a backend already held (a `backend_key` material), recorded in the first
+  step that reads it, once the key there was found to have the declared algorithm, and the
+  pinned fingerprint when there is one: its name, backend, id, algorithm and fingerprint, and
+  whether the fingerprint was pinned. It names the key and never the device, so it is public;
+  the device is on `backend_bound`. A key that is not the declared one fails the step's
+  attempt, which the operator can retry with the right device.
 - `act_started`, `step_started`, `step_attempt_failed`, `step_completed`
 - `prompt_answered`: the prompt, and the answer unless it is a secret
 - `backend_operation`: the kind of operation, the backend the step ran with, and what went in and

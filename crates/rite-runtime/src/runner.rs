@@ -36,12 +36,13 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use rite_model::{
-    ActId, ActionType, ArtifactId, Ceremony, FileKind, Level, MaterialId, MaterialKind,
+    ActId, ActionType, ArtifactId, Ceremony, FileKind, HeldKey, Level, MaterialId, MaterialKind,
     MaterialSource, OutputId, ParamId, RoleId, Step, TranscriptHeader,
 };
 use rite_sdk::{Backend, BackendError, Retriability};
 use thiserror::Error;
 
+use crate::actions::ArtifactValue;
 use crate::backend::BackendRegistry;
 use crate::clock::{Clock, SystemClock};
 use crate::entropy::DERIVATION_V1;
@@ -58,7 +59,9 @@ use crate::system_info::{RunHost, StartupSnapshot};
 use crate::transcript_sink::{TranscriptFingerprint, TranscriptSink};
 use rite_model::network::NetworkMoment;
 use rite_model::validate::Values;
-use rite_model::{ErrorClass, ErrorRecord, Prompt, RetryPolicy, StepFact, StepOutcome};
+use rite_model::{
+    ArtifactRef, ErrorClass, ErrorRecord, Prompt, RetryPolicy, StepFact, StepOutcome,
+};
 
 /// Gather the machine entropy `m` that seeds the ceremony entropy source.
 ///
@@ -616,8 +619,15 @@ impl Executor {
         // audience can learn that an input was loaded without being able to
         // test guesses against its content.
         for (id, material) in self.ceremony.materials.iter() {
-            let loaded = load_material_artifact(id.as_str(), material)?;
+            // A key a backend holds binds at the first step that reads it,
+            // with no file to load or digest.
             let identifier = match &material.kind {
+                MaterialKind::BackendKey(key) => {
+                    state
+                        .held_keys
+                        .insert(ArtifactId::new(id.as_str()), key.clone());
+                    continue;
+                }
                 MaterialKind::Physical { identifier, .. } => identifier.clone(),
                 MaterialKind::File {
                     source: Some(MaterialSource::Identifier { identifier }),
@@ -625,6 +635,7 @@ impl Executor {
                 } => Some(identifier.clone()),
                 MaterialKind::File { .. } => None,
             };
+            let loaded = load_material_artifact(id.as_str(), material)?;
             reporter.fact(StepFact::MaterialLoaded {
                 name: id.clone(),
                 identifier,
@@ -681,7 +692,7 @@ impl Executor {
             let result = run_step(
                 step,
                 &self.registry,
-                &state,
+                &mut state,
                 reporter,
                 &mut backends,
                 !dry_run,
@@ -823,7 +834,7 @@ fn material_digest_level(kind: FileKind) -> Level {
 pub(crate) fn run_step(
     step: &Step,
     actions: &ActionRegistry,
-    state: &ExecutionState,
+    state: &mut ExecutionState,
     reporter: &mut Reporter<'_>,
     backends: &mut RunBackends<'_>,
     paced: bool,
@@ -843,9 +854,14 @@ pub(crate) fn run_step(
 
     // The params depend only on what earlier steps produced, so a block that
     // cannot run is refused before the operator is asked to start the step.
-    let ctx = state.handler_context();
     let step_info = step_info_from(step);
-    let params = step_params(handler.as_ref(), step, &step_info, &ctx, reporter)?;
+    let params = step_params(
+        handler.as_ref(),
+        step,
+        &step_info,
+        &state.handler_context(),
+        reporter,
+    )?;
 
     // Pacing: gate the step body on operator acknowledgement. The prompt fires
     // with the step header already visible, so the operator confirms "ready
@@ -862,7 +878,7 @@ pub(crate) fn run_step(
         handler.as_ref(),
         step,
         &step_info,
-        &ctx,
+        state,
         &params,
         reporter,
         backends,
@@ -996,18 +1012,19 @@ fn step_params(
 
 /// Run one step, retrying transient failures under operator control.
 ///
-/// Each attempt re-acquires the backend handle (it is moved into the handler)
-/// and snapshots the side-effect count beforehand: a transient error is
-/// retriable only if the attempt performed no work on the world yet (the
-/// conservative re-executability gate). Interaction records such as an
-/// answered prompt do not close the gate: a retried attempt simply prompts
-/// again. A retriable error within the step's [`RetryPolicy`] prompts the
-/// operator; any other failure terminates the run.
+/// Each attempt first binds the keys a backend already held that the step
+/// reads and no earlier step has, then re-acquires the backend handle (it is
+/// moved into the handler). It snapshots the side-effect count beforehand: a
+/// transient error is retriable only if the attempt performed no work on the
+/// world yet (the conservative re-executability gate). Interaction records
+/// such as an answered prompt do not close the gate: a retried attempt simply
+/// prompts again. A retriable error within the step's [`RetryPolicy`] prompts
+/// the operator; any other failure terminates the run.
 fn execute_step_with_retry(
     handler: &dyn Action,
     step: &Step,
     step_info: &StepInfo,
-    ctx: &HandlerContext,
+    state: &mut ExecutionState,
     params: &serde_json::Value,
     reporter: &mut Reporter<'_>,
     backends: &mut RunBackends<'_>,
@@ -1016,15 +1033,19 @@ fn execute_step_with_retry(
     loop {
         let side_effects_before = reporter.side_effects_emitted();
 
-        // Backend acquisition is part of the attempt: a failed lazy
+        // Binding a held key and acquiring the backend are part of the
+        // attempt: an empty slot, the wrong card, or a failed lazy
         // initialization (device unplugged, daemon down) carries the same
         // retriability semantics as a backend error inside the handler.
-        let attempt_result = match &step_info.backend {
-            Some(name) => backends.acquire(name, reporter).and_then(|backend| {
-                handler.execute(step_info, ctx, params, reporter, Some(backend))
-            }),
-            None => handler.execute(step_info, ctx, params, reporter, None),
-        };
+        let attempt_result = bind_held_keys(step, state, reporter, backends).and_then(|()| {
+            let ctx = state.handler_context();
+            match &step_info.backend {
+                Some(name) => backends.acquire(name, reporter).and_then(|backend| {
+                    handler.execute(step_info, &ctx, params, reporter, Some(backend))
+                }),
+                None => handler.execute(step_info, &ctx, params, reporter, None),
+            }
+        });
 
         let action_err = match attempt_result {
             Ok(result) => return Ok(result),
@@ -1066,6 +1087,90 @@ fn execute_step_with_retry(
         }
         return Err(exec_err);
     }
+}
+
+/// Bind each key a backend already held that the step reads and no earlier
+/// step has: read its public key from the backend, check it against the
+/// declaration, record a `key_bound` fact, and make it an artifact.
+///
+/// A bound key leaves `held_keys`, so a retried attempt binds only what the
+/// failed one did not: a missing key or the wrong card is retried like a
+/// backend error, once the operator inserts the right one.
+fn bind_held_keys(
+    step: &Step,
+    state: &mut ExecutionState,
+    reporter: &mut Reporter<'_>,
+    backends: &mut RunBackends<'_>,
+) -> Result<(), ActionError> {
+    for input in &step.reads {
+        let ArtifactRef::Material { id, .. } = input else {
+            continue;
+        };
+        let artifact_id = ArtifactId::new(id.as_str());
+        let Some(held) = state.held_keys.get(&artifact_id) else {
+            continue;
+        };
+        let key = bind_held_key(id.as_str(), held, reporter, backends)?;
+        state.held_keys.remove(&artifact_id);
+        state.artifacts.insert(artifact_id, key);
+    }
+    Ok(())
+}
+
+/// Read one held key from its backend and check it against `held`.
+///
+/// A key that is not the declared one is `KeyNotFound`: the declared key is
+/// not where the ceremony says, which the operator can fix by inserting the
+/// right device.
+fn bind_held_key(
+    name: &str,
+    held: &HeldKey,
+    reporter: &mut Reporter<'_>,
+    backends: &mut RunBackends<'_>,
+) -> Result<ArtifactValue, ActionError> {
+    let backend = backends.acquire(&held.backend, reporter)?;
+    let keystore = backend.as_keystore_mut().ok_or_else(|| {
+        ActionError::Failed(format!(
+            "backend '{}' cannot report the keys it holds, so '{name}' cannot be read from it",
+            held.backend
+        ))
+    })?;
+    let public_key = keystore.export_public_key(&held.key_id)?;
+    let algorithm = public_key.algorithm()?;
+    let fingerprint = public_key.fingerprint();
+    let not_the_declared_key = |found: String| {
+        ActionError::Backend(BackendError::KeyNotFound(format!(
+            "'{name}' is declared as a {} key at {} on backend '{}', and {found}",
+            held.algorithm, held.key_id, held.backend
+        )))
+    };
+    if algorithm != held.algorithm {
+        return Err(not_the_declared_key(format!(
+            "the key there is {algorithm}"
+        )));
+    }
+    if let Some(pinned) = held.fingerprint
+        && pinned != fingerprint
+    {
+        return Err(not_the_declared_key(format!(
+            "the key there is {fingerprint}, not the pinned {pinned}"
+        )));
+    }
+    reporter.fact(StepFact::KeyBound {
+        name: name.to_string(),
+        backend: held.backend.clone(),
+        key_id: held.key_id.to_string(),
+        algorithm,
+        fingerprint,
+        pinned: held.fingerprint.is_some(),
+    })?;
+    Ok(ArtifactValue::BackendKey {
+        backend_name: held.backend.clone(),
+        key_id: held.key_id.clone(),
+        algorithm,
+        public_key: Some(public_key),
+        check_value: None,
+    })
 }
 
 /// Map a handler-level [`ActionError`] to the execution-level error the run
@@ -2619,6 +2724,7 @@ sections:
             StepFact::MaterialLoaded { .. } => "material_loaded",
             StepFact::MaterialDigest { .. } => "material_digest",
             StepFact::BackendBound { .. } => "backend_bound",
+            StepFact::KeyBound { .. } => "key_bound",
             StepFact::MachineInfoRecorded { .. } => "machine_info_recorded",
             StepFact::PlatformRecorded { .. } => "platform_recorded",
             StepFact::NetworkStateRecorded { .. } => "network_state_recorded",

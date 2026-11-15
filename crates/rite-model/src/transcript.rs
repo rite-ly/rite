@@ -1150,6 +1150,58 @@ pub enum StepFact {
         )]
         identity: String,
     },
+    /// A key a backend already held was read for the first time in this run.
+    ///
+    /// Recorded once per key, in the first step that reads it, after its
+    /// algorithm, and its fingerprint when the ceremony pins one, were found
+    /// to be the declared ones. Public: it names the key, never the device,
+    /// whose identity is on [`StepFact::BackendBound`].
+    #[cfg_attr(
+        test,
+        schemars(
+            description = "A key a backend already held was read for the first time in this \
+            run, in the first step that reads it, and matched what the ceremony declares. The \
+            device's identity is on the backend's backend_bound fact."
+        )
+    )]
+    KeyBound {
+        /// The material that declares the key.
+        #[cfg_attr(test, schemars(description = "The key's name in the ceremony."))]
+        name: String,
+        /// The backend holding it, by its name in the ceremony.
+        #[cfg_attr(test, schemars(description = "The backend holding the key."))]
+        backend: String,
+        /// The reference the backend answers to.
+        #[cfg_attr(
+            test,
+            schemars(description = "The reference the backend answers to, such as piv:9d.")
+        )]
+        key_id: String,
+        /// The algorithm of the key found.
+        #[cfg_attr(test, schemars(description = "The algorithm of the key found."))]
+        algorithm: rite_sdk::KeyAlgorithm,
+        /// The fingerprint of the public key found.
+        #[cfg_attr(
+            test,
+            schemars(
+                description = "The digest of the public key found, as DER-encoded \
+                SubjectPublicKeyInfo.",
+                with = "Sha256Digest"
+            )
+        )]
+        fingerprint: rite_sdk::KeyFingerprint,
+        /// Whether the ceremony pinned this fingerprint, so the key was
+        /// checked against the definition rather than recorded as found.
+        #[cfg_attr(
+            test,
+            schemars(
+                description = "Whether the ceremony named this fingerprint in advance. When \
+                it did, the key found was checked against it; otherwise the fingerprint records \
+                the key the backend held."
+            )
+        )]
+        pinned: bool,
+    },
     /// A snapshot of the machine the ceremony ran on.
     #[cfg_attr(
         test,
@@ -1619,6 +1671,7 @@ pub const FACT_TYPES: &[&str] = &[
     "material_loaded",
     "material_digest",
     "backend_bound",
+    "key_bound",
     "machine_info_recorded",
     "act_started",
     "step_started",
@@ -1657,6 +1710,9 @@ impl StepFact {
             | StepFact::ActStarted { .. }
             | StepFact::StepStarted { .. }
             | StepFact::BackendOperation { .. }
+            // A key id and a public-key fingerprint, as a backend operation
+            // records for a generated key.
+            | StepFact::KeyBound { .. }
             | StepFact::ArtifactWritten { .. }
             | StepFact::AttestationRecorded { .. }
             | StepFact::StepCompleted { .. }
@@ -1707,6 +1763,8 @@ impl StepFact {
             | StepFact::MaterialLoaded { .. }
             | StepFact::MaterialDigest { .. }
             | StepFact::BackendBound { .. }
+            // Reads a public key the backend already held.
+            | StepFact::KeyBound { .. }
             // Records the host, not work performed on it.
             | StepFact::MachineInfoRecorded { .. }
             | StepFact::PlatformRecorded { .. }
@@ -2024,6 +2082,29 @@ mod schema_snapshot_tests {
                 "name": "token",
                 "provider": "yubikey",
                 "identity": "yubikey-serial=12345678+firmware=5.7.1",
+            }),
+        );
+    }
+
+    #[test]
+    fn key_bound() {
+        assert_json(
+            &StepFact::KeyBound {
+                name: "decryption_key".to_string(),
+                backend: "token".to_string(),
+                key_id: "piv:9d".to_string(),
+                algorithm: rite_sdk::KeyAlgorithm::EcdsaP256,
+                fingerprint: format!("sha256:{}", "ab".repeat(32)).parse().unwrap(),
+                pinned: true,
+            },
+            &json!({
+                "type": "key_bound",
+                "name": "decryption_key",
+                "backend": "token",
+                "key_id": "piv:9d",
+                "algorithm": "ECDSA-P256",
+                "fingerprint": format!("sha256:{}", "ab".repeat(32)),
+                "pinned": true,
             }),
         );
     }

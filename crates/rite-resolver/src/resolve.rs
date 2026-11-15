@@ -55,6 +55,7 @@ pub(crate) fn resolve_ceremony(
     ctx.register_sections(&ceremony.sections);
     ctx.register_parameters(&ceremony.parameters);
     ctx.register_materials(&ceremony.materials);
+    ctx.validate_held_key_backends(&ceremony.backends);
     ctx.register_outputs(&ceremony.output);
 
     // Phase 2: Resolve external inputs
@@ -266,6 +267,18 @@ impl ResolveContext {
                     identifier: identifier.clone(),
                     quantity: *quantity,
                 },
+                schema::Material::BackendKey {
+                    backend,
+                    id: key_id,
+                    algorithm,
+                    fingerprint,
+                    ..
+                } => MaterialKind::BackendKey(rite_model::HeldKey {
+                    backend: backend.clone(),
+                    key_id: rite_model::KeyId::new(key_id),
+                    algorithm: *algorithm,
+                    fingerprint: *fingerprint,
+                }),
             };
             let resolved = Material {
                 id: id.clone(),
@@ -276,6 +289,23 @@ impl ResolveContext {
             if self.materials.insert(id.clone(), resolved).is_err() {
                 self.add_error(ResolveError::DuplicateMaterial(id));
             }
+        }
+    }
+
+    /// A key a backend holds names a backend the ceremony declares.
+    fn validate_held_key_backends<V>(&mut self, backends: &HashMap<String, V>) {
+        let undeclared: Vec<(MaterialId, String)> = self
+            .materials
+            .iter()
+            .filter_map(|(id, material)| match &material.kind {
+                MaterialKind::BackendKey(key) if !backends.contains_key(&key.backend) => {
+                    Some((id.clone(), key.backend.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        for (material, backend) in undeclared {
+            self.add_error(ResolveError::HeldKeyUndeclaredBackend { material, backend });
         }
     }
 
@@ -753,6 +783,16 @@ impl ResolveContext {
             });
             return None;
         }
+        if self
+            .materials
+            .contains(&MaterialId::new(artifact_id.as_str()))
+        {
+            // A reader would get the material: it is looked up first.
+            self.add_error(ResolveError::ArtifactNamesMaterial {
+                step: step.clone(),
+                artifact: artifact_id.clone(),
+            });
+        }
         self.produced_artifacts
             .insert(artifact_id.clone(), step.clone());
         Some(artifact_id)
@@ -1064,6 +1104,23 @@ impl ResolveContext {
                 let declared = literal_length(step).map(|n| (n, step.id.clone()));
                 shares.insert(created.clone(), declared);
             }
+            for (input, reference) in named_reads(step) {
+                if let ArtifactRef::Material { id, .. } = reference
+                    && let Some(Material {
+                        kind: MaterialKind::BackendKey(key),
+                        ..
+                    }) = self.materials.get(id)
+                    && !reads_public_half(step.action, input)
+                    && step.backend.as_deref() != Some(key.backend.as_str())
+                {
+                    self.add_error(ResolveError::HeldKeyOnOtherBackend {
+                        step: step.id.clone(),
+                        material: id.clone(),
+                        holder: key.backend.clone(),
+                        used: step.backend.clone(),
+                    });
+                }
+            }
             for input in &step.reads {
                 if let ArtifactRef::Produced { id, .. } = input
                     && !available.contains(id.as_str())
@@ -1195,6 +1252,38 @@ fn check_shown_share(step: &Step, shares: &mut ShareLengths) -> Vec<String> {
             *known = Some((length, step.id.clone()));
             Vec::new()
         }
+    }
+}
+
+/// Each reference a step reads, with the `reads:` key it is under, or `""`
+/// for a single unnamed input.
+fn named_reads(step: &Step) -> Vec<(&str, &ArtifactRef)> {
+    match &step.reads_resolved {
+        Some(StepInputs::Single(reference)) => vec![("", reference)],
+        Some(StepInputs::Named(inputs)) => inputs
+            .iter()
+            .flat_map(|(name, input)| {
+                input
+                    .refs()
+                    .iter()
+                    .map(move |reference| (name.as_str(), reference))
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Whether the action uses only the public half of the key under `input`,
+/// which any backend can, rather than asking the key's backend to use the
+/// private half: a recipient sealed to, or a key a signature is checked
+/// against.
+// Until inputs declare what they accept (kinds-and-capabilities step 4),
+// this is the one list of public-key inputs.
+fn reads_public_half(action: ActionType, input: &str) -> bool {
+    match action {
+        ActionType::EncryptData | ActionType::WrapKey => input == "recipient",
+        ActionType::VerifySignature => true,
+        _ => false,
     }
 }
 

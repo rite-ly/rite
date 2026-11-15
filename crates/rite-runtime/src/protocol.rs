@@ -14,7 +14,9 @@
 //! - [`UiSignal`], [`Icon`], UI narration, never on disk
 
 use chrono::{DateTime, Utc};
-use rite_model::{FileKind, Material, MaterialId, MaterialKind, Prompt, StepFact, StepId};
+use rite_model::{
+    FileKind, KeyAlgorithm, Material, MaterialId, MaterialKind, Prompt, StepFact, StepId,
+};
 use secrecy::SecretString;
 
 use crate::system_info::{Environment, SystemInfo};
@@ -92,7 +94,8 @@ pub struct MaterialOverview {
     pub title: Option<String>,
     /// Optional human-readable description.
     pub description: Option<String>,
-    /// Kind of material (a file of a kind, or a physical item).
+    /// Kind of material (a file of a kind, a physical item, or a key a
+    /// backend holds).
     pub kind: MaterialOverviewKind,
 }
 
@@ -113,6 +116,15 @@ pub enum MaterialOverviewKind {
         identifier: Option<String>,
         /// Item count for checklist rendering.
         quantity: Option<u32>,
+    },
+    /// A key a backend already holds.
+    BackendKey {
+        /// The backend that holds it, by its name in the ceremony.
+        backend: String,
+        /// The reference the backend answers to.
+        key_id: String,
+        /// The algorithm the key must have.
+        algorithm: KeyAlgorithm,
     },
 }
 
@@ -149,6 +161,11 @@ impl MaterialOverview {
             } => MaterialOverviewKind::Physical {
                 identifier: identifier.clone(),
                 quantity: *quantity,
+            },
+            MaterialKind::BackendKey(key) => MaterialOverviewKind::BackendKey {
+                backend: key.backend.clone(),
+                key_id: key.key_id.to_string(),
+                algorithm: key.algorithm,
             },
         };
         Self {

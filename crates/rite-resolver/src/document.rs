@@ -23,7 +23,7 @@ use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde_json::{Value, json};
 
 use crate::schema::{Ceremony, Material, MaterialType, RetrySpec, material_type_rule};
-use rite_model::FileKind;
+use rite_model::{FileKind, KeyAlgorithm};
 
 /// The check of a whole definition, compiled on first use and kept for the
 /// process.
@@ -471,8 +471,9 @@ impl JsonSchema for Material {
             "type": "object",
             "properties": {
                 "type": {
-                    "description": "`physical` for an item brought to the ceremony, or the kind of file \
-                        the material is: `bytes` for a file with no meaning of its own.",
+                    "description": "`physical` for an item brought to the ceremony, `backend_key` for \
+                        a key a backend already holds, or the kind of file the material is: `bytes` \
+                        for a file with no meaning of its own.",
                     "type": "string",
                     "enum": names,
                     "x-message": material_type_rule(),
@@ -505,6 +506,44 @@ impl JsonSchema for Material {
                         ),
                     },
                 })),
+                {
+                    "if": {
+                        "properties": { "type": { "const": "backend_key" } },
+                        "required": ["type"],
+                    },
+                    "then": {
+                        "properties": {
+                            "type": true,
+                            "title": title,
+                            "description": description,
+                            "backend": text(
+                                "The backend that holds the key, by its name under `backends`."
+                            ),
+                            "id": text(
+                                "The reference the backend answers to, such as `piv:9d` for PIV \
+                                 slot 9D."
+                            ),
+                            "algorithm": {
+                                "description": "The algorithm the key must have, checked against \
+                                    the backend when the key is first read.",
+                                "type": "string",
+                                "enum": KeyAlgorithm::ALL
+                                    .iter()
+                                    .map(|algorithm| algorithm.as_str())
+                                    .collect::<Vec<_>>(),
+                            },
+                            "fingerprint": {
+                                "description": "The SHA-256 fingerprint of the public key the \
+                                    backend must hold, `sha256:` and 64 hex digits. Optional: a \
+                                    template cannot know it.",
+                                "type": "string",
+                                "pattern": "^sha256:[0-9a-f]{64}$",
+                            },
+                        },
+                        "required": ["backend", "id", "algorithm"],
+                        "additionalProperties": false,
+                    },
+                },
             ],
         })
     }

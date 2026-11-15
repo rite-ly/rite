@@ -121,6 +121,44 @@ Slot identifiers in ceremony YAML accept the four standard PIV slots (`9a`,
 stores retired slots as a 0-based index (`0..=19`); `rite-piv` converts to and
 from the `yubikey` crate's raw key references (`0x82..=0x95`).
 
+## Keys provisioned before the ceremony
+
+A key already in a slot is a material of type `backend_key`:
+
+```yaml
+materials:
+  decryption_key:
+    type: backend_key
+    backend: token
+    id: "piv:9d"
+    algorithm: ECDSA-P256
+    fingerprint: "sha256:..."   # optional
+```
+
+`id` and `algorithm` are required: there is no default slot, and the
+algorithm is a claim checked against the card. `fingerprint` pins the public
+key and is optional, since a template cannot know it. The material is an
+artifact like a generated key, so `sign_data`, `decrypt_data` and every other
+action that reads a key take it unchanged.
+
+Nothing is read when the run starts, so the card need only be inserted by the
+first step that names the key in its `reads:`. That step asks the backend for
+the slot's public key, checks the algorithm and any pinned fingerprint, and
+records a public `key_bound` fact (see `docs/transcript-format.md`). An empty
+slot, or a key that is not the declared one, fails the attempt with
+`KeyNotFound`, which the operator can retry after inserting the right card. A
+key referenced only from a `with:` expression is not bound by it; name it in
+`reads:`.
+
+`rite check` refuses a held key on an undeclared backend, and a step that
+uses its private half on another backend. A step that uses only its public
+half (the `recipient` of `encrypt_data` or `wrap_key`, or any input of
+`verify_signature`) may run on any backend; the binding still reads the key
+from its own.
+
+No step verifies the PIN yet, outside `piv_sign`, so on a real card a step
+using a slot whose PIN policy requires it fails with `PinRequired`.
+
 ## Operations left unimplemented
 
 These return a clear `UnsupportedOperation` error rather than a silent no-op:
@@ -149,6 +187,11 @@ CI cannot touch a physical device, so:
   algorithms have no committed slot key and mint a stand-in on first use, so
   their signatures verify only against the exported stand-in. Attestation
   certificates are synthetic throughout: nothing chains to the Yubico root.
+  For each `backend_key` material, `rite run` gives the mock a `held_keys`
+  config naming the id and algorithm, and the mock stands in for the key from
+  the start: the slot key for P-256, a fresh key otherwise. Reading,
+  signing with and agreeing with the declared id all reach the stand-in, which
+  permits every usage, as a slot does.
 - **Manual hardware check** with a real YubiKey, run before a release that
   touches this code:
 

@@ -9,7 +9,7 @@ use super::ids::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, Secti
 use crate::expression::ExprValue;
 use crate::material::MaterialSource;
 use crate::types::{ActionType, DutyType, FileKind, Metadata, ParameterType};
-use rite_sdk::BackendConfig;
+use rite_sdk::{BackendConfig, KeyAlgorithm, KeyFingerprint, KeyId};
 use std::collections::HashMap;
 
 /// A fully resolved ceremony, ready for execution.
@@ -219,15 +219,36 @@ pub enum MaterialKind {
         /// Item count for checklist rendering.
         quantity: Option<u32>,
     },
+    /// A key a backend already holds, provisioned before the ceremony.
+    BackendKey(HeldKey),
+}
+
+/// A key a backend already holds, as the ceremony declares it.
+///
+/// Nothing is loaded at the start. The first step that reads it asks the
+/// backend for its public key and checks it against what is declared here,
+/// so the device need only be present by then.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldKey {
+    /// The backend that holds the key, by its name in the ceremony.
+    pub backend: String,
+    /// The reference the backend answers to, such as `piv:9d`.
+    pub key_id: KeyId,
+    /// The algorithm the key must have.
+    pub algorithm: KeyAlgorithm,
+    /// The public key the backend must hold, when the ceremony pins it.
+    pub fingerprint: Option<KeyFingerprint>,
 }
 
 impl MaterialKind {
-    /// The `type:` a ceremony declares: the file's kind, or `physical`.
+    /// The `type:` a ceremony declares: the file's kind, `physical`, or
+    /// `backend_key`.
     #[must_use]
     pub fn type_name(&self) -> &'static str {
         match self {
             MaterialKind::File { kind, .. } => kind.as_str(),
             MaterialKind::Physical { .. } => "physical",
+            MaterialKind::BackendKey(_) => "backend_key",
         }
     }
 }

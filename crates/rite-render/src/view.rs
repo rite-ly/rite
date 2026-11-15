@@ -114,6 +114,10 @@ pub struct ScriptView {
     pub physical_materials: Vec<MaterialView>,
     /// File materials for the preparation checklist.
     pub digital_materials: Vec<MaterialView>,
+    /// Keys a backend must already hold, for the preparation checklist: the
+    /// identifier names the key, its device and algorithm, and the
+    /// fingerprint when the ceremony pins one.
+    pub held_keys: Vec<MaterialView>,
     /// Prose prerequisites for the preparation checklist.
     pub prerequisites: Vec<String>,
     /// Whether any preparation content exists (materials or prerequisites).
@@ -359,7 +363,7 @@ impl ScriptView {
                         identifier,
                         quantity,
                     } => (identifier.clone(), *quantity),
-                    MaterialKind::File { .. } => (None, None),
+                    MaterialKind::File { .. } | MaterialKind::BackendKey(_) => (None, None),
                 };
                 MaterialView {
                     name: m.display_name().to_string(),
@@ -380,9 +384,29 @@ impl ScriptView {
                 quantity: None,
             })
             .collect::<Vec<_>>();
+        let held_keys = resolved
+            .materials
+            .iter()
+            .filter_map(|(_, m)| match &m.kind {
+                MaterialKind::BackendKey(key) => Some(MaterialView {
+                    name: m.display_name().to_string(),
+                    description: m.description.clone(),
+                    identifier: Some(match &key.fingerprint {
+                        Some(fingerprint) => format!(
+                            "{} on {}, {}, {fingerprint}",
+                            key.key_id, key.backend, key.algorithm
+                        ),
+                        None => format!("{} on {}, {}", key.key_id, key.backend, key.algorithm),
+                    }),
+                    quantity: None,
+                }),
+                MaterialKind::File { .. } | MaterialKind::Physical { .. } => None,
+            })
+            .collect::<Vec<_>>();
         let prerequisites = resolved.prerequisites.clone();
         let has_preparation = !physical_materials.is_empty()
             || !digital_materials.is_empty()
+            || !held_keys.is_empty()
             || !prerequisites.is_empty();
 
         let has_named_acts = !resolved.acts.is_empty();
@@ -456,6 +480,7 @@ impl ScriptView {
             roles,
             physical_materials,
             digital_materials,
+            held_keys,
             prerequisites,
             has_preparation,
             has_named_acts,

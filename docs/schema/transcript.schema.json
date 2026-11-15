@@ -428,6 +428,24 @@
         "counters"
       ]
     },
+    "KeyAlgorithm": {
+      "type": "string",
+      "enum": [
+        "RSA-2048",
+        "RSA-4096",
+        "ECDSA-P256",
+        "ECDSA-P384",
+        "Ed25519",
+        "ML-DSA-44",
+        "ML-DSA-65",
+        "ML-DSA-87",
+        "ML-KEM-512",
+        "ML-KEM-768",
+        "ML-KEM-1024",
+        "AES-128",
+        "AES-256"
+      ]
+    },
     "Level": {
       "description": "The confidentiality level of a line: who may see its fact. Levels are integers ordered from the widest audience to the narrowest, so a disclosure up to a level withholds every line above it. Three levels are built in at fixed values: public (10, anyone), restricted (20, auditors under agreement) and confidential (30, the ceremony's own organisation). Every level a transcript uses is declared in its header.",
       "type": "integer",
@@ -1127,6 +1145,49 @@
             "name",
             "provider",
             "identity"
+          ]
+        },
+        {
+          "description": "A key a backend already held was read for the first time in this run, in the first step that reads it, and matched what the ceremony declares. The device's identity is on the backend's backend_bound fact.",
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "description": "The algorithm of the key found.",
+              "$ref": "#/$defs/KeyAlgorithm"
+            },
+            "backend": {
+              "description": "The backend holding the key.",
+              "type": "string"
+            },
+            "fingerprint": {
+              "description": "The digest of the public key found, as DER-encoded SubjectPublicKeyInfo.",
+              "$ref": "#/$defs/Sha256Digest"
+            },
+            "key_id": {
+              "description": "The reference the backend answers to, such as piv:9d.",
+              "type": "string"
+            },
+            "name": {
+              "description": "The key's name in the ceremony.",
+              "type": "string"
+            },
+            "pinned": {
+              "description": "Whether the ceremony named this fingerprint in advance. When it did, the key found was checked against it; otherwise the fingerprint records the key the backend held.",
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "key_bound"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "backend",
+            "key_id",
+            "algorithm",
+            "fingerprint",
+            "pinned"
           ]
         },
         {

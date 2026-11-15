@@ -161,6 +161,12 @@ impl StepRunner {
         self.state.artifacts.insert(id, value);
     }
 
+    /// Declare `key` as the material `id`, a key its backend already holds,
+    /// bound by the first step that reads it.
+    pub fn add_held_key(&mut self, id: ArtifactId, key: rite_model::HeldKey) {
+        self.state.held_keys.insert(id, key);
+    }
+
     /// Run `step`, and keep what it produces for later steps.
     ///
     /// # Errors
@@ -175,7 +181,7 @@ impl StepRunner {
         let result = run_step(
             step,
             &self.actions,
-            &self.state,
+            &mut self.state,
             &mut reporter,
             &mut backends,
             false,

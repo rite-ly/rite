@@ -76,6 +76,15 @@
 {%- endfor %}
     </ul>
 {%- endif %}
+{%- if script.held_keys %}
+    <h3>Keys on Devices</h3>
+    <p><em>Verify each device holds its key before the ceremony</em></p>
+    <ul class="checklist">
+{%- for m in script.held_keys %}
+      <li><strong>{{ m.name }}</strong> <span class="item-id">{{ m.identifier }}</span>{% if m.description %}<span class="item-desc">{{ m.description }}</span>{% endif %}</li>
+{%- endfor %}
+    </ul>
+{%- endif %}
   </section>
 {%- endif %}
 

@@ -222,6 +222,15 @@ pub enum ResolveError {
         artifact: ArtifactId,
     },
 
+    /// An `enter_pin` step names a software backend, which takes no PIN.
+    #[error("Step '{step}' enters a PIN on backend '{backend}', which takes none")]
+    PinOnBackendWithoutPin {
+        /// The step.
+        step: StepId,
+        /// The backend it names.
+        backend: String,
+    },
+
     /// Step references a backend not declared in the ceremony.
     #[error("Step '{step}' references undeclared backend '{backend}'")]
     UndeclaredBackend {
@@ -484,6 +493,30 @@ pub enum ResolveWarning {
         /// The step ID.
         step: StepId,
     },
+    /// A step uses the private half of a key on a PIV device, and no
+    /// earlier `enter_pin` step unlocks that device.
+    ///
+    /// A warning, not an error: a slot whose PIN policy is `never` needs no
+    /// PIN, and the policy is not known until the card is read.
+    HeldKeyWithoutPin {
+        /// The step using the key.
+        step: StepId,
+        /// The key: a `backend_key` material or an artifact made on the device.
+        key: String,
+        /// The backend holding it.
+        backend: String,
+    },
+    /// A step uses a key in slot 9C again with no `enter_pin` since its last
+    /// use. Slot 9C's default PIN policy is `always`, which clears the PIN
+    /// after each use; a warning, since the slot may have another policy.
+    PinSpentBySlot {
+        /// The step using the key again.
+        step: StepId,
+        /// The `backend_key` material.
+        key: String,
+        /// The backend holding it.
+        backend: String,
+    },
 }
 
 impl std::fmt::Display for ResolveWarning {
@@ -511,6 +544,19 @@ impl std::fmt::Display for ResolveWarning {
             ResolveWarning::UnusedBackend { step } => write!(
                 f,
                 "step '{step}' has a 'backend:' field but its action does not use a backend"
+            ),
+            ResolveWarning::HeldKeyWithoutPin { step, key, backend } => write!(
+                f,
+                "step '{step}' uses key '{key}' on backend '{backend}', and no earlier \
+                 'enter_pin' step unlocks it; the card refuses the key until its PIN is \
+                 entered, unless the slot's PIN policy is 'never'"
+            ),
+            ResolveWarning::PinSpentBySlot { step, key, backend } => write!(
+                f,
+                "step '{step}' uses key '{key}' in slot 9C on backend '{backend}' again with \
+                 no 'enter_pin' since its last use; slot 9C clears the PIN after each use \
+                 unless it was provisioned with another PIN policy, so add an 'enter_pin' \
+                 step right before this one"
             ),
         }
     }

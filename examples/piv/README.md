@@ -17,11 +17,28 @@ Windows.
 
 ## `yubikey_signing.rite.yaml`: Release signing with PIV
 
-Signs a release manifest with the key in PIV slot 9C. The ceremony reads its
-certificate, requests a Yubico F9 attestation certificate showing the key was
-generated on the device and not imported, signs the manifest with the PIN, and
+Signs a release manifest with the key in PIV slot 9C. The ceremony declares
+the key as a `backend_key` material, reads its certificate, requests a Yubico
+F9 attestation certificate showing the key was generated on the device and not
+imported, asks for the PIN in an `enter_pin` step, signs the manifest with
+`sign_data`, checks the signature in software against the certificate, and
 records witness and operator attestations. Slot 9C must already contain the
-signing key and certificate.
+signing key and certificate, and the YubiKey needs firmware 5.3 or later, which
+reports a slot's public key.
+
+Slot 9C clears the PIN after each signature, so a ceremony signing twice with
+it puts an `enter_pin` step before each. To bind the ceremony to one card, add
+the key's `fingerprint:` to the material once it is known: a run shows it in
+the `key_bound` fact.
+
+To prepare a YubiKey kept for testing, generate a key and a self-signed
+certificate in 9C with `ykman`. This replaces whatever slot 9C holds; the
+second command asks for the PIN (factory default `123456`):
+
+```sh
+ykman piv keys generate --algorithm ECCP256 9c 9c.pub
+ykman piv certificates generate --subject "CN=Release Signing" 9c 9c.pub
+```
 
 Check the definition without a card:
 

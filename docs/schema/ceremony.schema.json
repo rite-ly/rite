@@ -283,6 +283,11 @@
           "const": "piv_sign"
         },
         {
+          "description": "Ask for a device's PIN and have the device verify it.\n\nLater steps on the same backend use the unlocked device. A key whose PIN policy is `always` needs this step right before each use. The PIN is never recorded.",
+          "type": "string",
+          "const": "enter_pin"
+        },
+        {
           "description": "Produce a YubiKey attestation for a PIV key.\n\nThe YubiKey attestation key in slot F9 signs a certificate for the key in the named slot.",
           "type": "string",
           "const": "yubikey_attest_slot"
@@ -572,6 +577,31 @@
                   "enum": [
                     "CMS-AES-256-GCM"
                   ]
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "EnterPinParams": {
+      "description": "The `with` block of `enter_pin`.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Shown to the operator before the PIN prompt, such as which key the PIN unlocks.",
+              "anyOf": [
+                {
+                  "type": "string"
                 },
                 {
                   "$ref": "#/$defs/Expression"
@@ -3339,6 +3369,36 @@
                 "properties": {
                   "with": {
                     "$ref": "#/$defs/PivSignParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "enter_pin"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'enter_pin' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'enter_pin' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/EnterPinParams"
                   }
                 }
               }

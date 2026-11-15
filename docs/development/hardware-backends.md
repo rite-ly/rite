@@ -47,6 +47,7 @@ build split.
 |------------------------|-----------|------------------------------------------|---------------|
 | `piv_read_certificate` | `piv`     | `CertStoreBackend::read_cert`            | `Certificate` |
 | `piv_sign`             | `piv`     | `PivBackend` (PIN) + `SignBackend::sign` | `Bytes`       |
+| `enter_pin`            | (none)    | `PivBackend::verify_pin`                 | nothing       |
 | `yubikey_attest_slot`  | `yubikey` | `YubikeyBackend::attest_slot`            | `Certificate` |
 
 Both certificate-producing actions return a parsed `CertificateDer`, so a
@@ -156,8 +157,52 @@ half (the `recipient` of `encrypt_data` or `wrap_key`, or any input of
 `verify_signature`) may run on any backend; the binding still reads the key
 from its own.
 
-No step verifies the PIN yet, outside `piv_sign`, so on a real card a step
-using a slot whose PIN policy requires it fails with `PinRequired`.
+## Entering the PIN
+
+A card refuses a private-key operation until its PIN is entered. An
+`enter_pin` step asks for it and has the card verify it; the steps after it
+on the same backend use the unlocked card:
+
+```yaml
+unlock:
+  action: enter_pin
+  backend: token
+  with:
+    message: "Enter the PIN of the release signing card"   # optional
+sign:
+  action: sign_data
+  backend: token
+  reads:
+    key: ${artifact.signing_key}
+    data: ${artifact.manifest}
+  creates: signature
+```
+
+The step reads the card's retry count first, warns at one try left, and
+asks again for a PIN outside 6 to 8 bytes before sending it, so a slip costs no
+try.
+A wrong PIN fails the attempt with the tries left, and the operator may retry;
+a blocked PIN stops the run. The transcript records a `verify_pin` backend
+operation with the tries left before entry, never the PIN or its length.
+`piv_sign` still asks for the PIN itself, through the same code, and needs no
+`enter_pin` before it: one there would only make the operator type the PIN
+twice.
+
+The card stays unlocked until the run ends, the card is reset or removed, or
+another program selects an application on it (the PC/SC connection is
+shared). A slot whose PIN policy is `always` clears it after each use: slot
+9C defaults to `always` on a YubiKey, so a ceremony signing twice with it
+enters the PIN before each signature. Rite does not keep the PIN to replay
+it, which would undo that policy. A step that meets a locked card fails with
+`PinRequired`, and the operator is told where the `enter_pin` step belongs;
+retrying does not ask for the PIN.
+
+`rite check` warns when a step uses the private half of a key on a `piv` or
+`yubikey` backend, held before the run or made on it, with no `enter_pin` on
+it earlier (except in slot 9E, which needs no PIN by default), and when a key
+in slot 9C is used again with no `enter_pin` since its last use. Warnings, not errors: a slot's policy may differ from the
+default, and it is not known before the card is read. An `enter_pin` on an
+`openssl` backend is an error.
 
 ## Operations left unimplemented
 
@@ -174,11 +219,11 @@ CI cannot touch a physical device, so:
 - **Unit tests** cover the pure logic (slot parsing, type conversion, error
   mapping, signing-algorithm parsing) and each action's `execute` against the
   `MockBackend`, using the `ReporterHarness` to assert the produced artifact and
-  the emitted `BackendOperation` fact. The `piv_sign` test answers the PIN
-  prompt via `ReporterHarness::enqueue_response`. These run in CI behind the
+  the emitted `BackendOperation` fact. The `piv_sign` and `enter_pin` tests
+  answer the PIN prompt via `ReporterHarness::enqueue_response`. These run in CI behind the
   `piv`/`yubikey` features (`cargo test -p rite-stdlib --features piv,yubikey`).
 - **Dry run** (`rite run --dry-run --frontend headless`) substitutes the mock
-  backend and walks the whole ceremony, including `piv_sign`, so a rehearsal of
+  backend and walks the whole ceremony, including the PIN step, so a rehearsal of
   a pre-provisioned-slot ceremony completes without hardware. The mock holds one
   committed P-256 keypair standing in for the slot: it reports that key in slot
   metadata, reads the certificate carrying it, and signs P-256 slot references
@@ -191,16 +236,34 @@ CI cannot touch a physical device, so:
   config naming the id and algorithm, and the mock stands in for the key from
   the start: the slot key for P-256, a fresh key otherwise. Reading,
   signing with and agreeing with the declared id all reach the stand-in, which
-  permits every usage, as a slot does.
+  permits every usage, as a slot does. The mock accepts any PIN, reports three
+  tries, and models no PIN policy, so a rehearsal never stops at `PinRequired`;
+  the `rite check` warning above is what catches a missing `enter_pin`.
+- **Hardware suite** (`crates/rite/tests/hardware_yubikey.rs`), run by hand
+  on a YubiKey kept for testing, since it resets the PIV application and
+  provisions its own keys in 9A, 9C and 9D:
+
+  ```sh
+  RITE_HW_YUBIKEY_SERIAL=<serial> cargo test -p rite --features piv,yubikey \
+      --test hardware_yubikey -- --ignored --test-threads=1
+  ```
+
+  It needs `ykman`, and does nothing unless the inserted YubiKey is the one
+  named. It covers `enter_pin`, signing with keys the card held (RSA and
+  P-384, each checked by OpenSSL against the key `ykman` exported), opening
+  what was sealed to 9D, slot 9C needing the PIN before each signature, a
+  wrong PIN retried, pinned fingerprints, `piv_sign` after a PIN step, and a
+  refused management key. Unplugging the card mid-run and the attestation
+  chain stay manual, below.
 - **Manual hardware check** with a real YubiKey, run before a release that
   touches this code:
 
   1. Provision a signing key and certificate in slot 9C
      (`ykman piv keys generate`, `ykman piv certificates generate`).
   2. Run `examples/piv/yubikey_signing.rite.yaml` with the device inserted.
-  3. Confirm `piv_sign` prompts for the PIN and produces a signature, and that
-     `yubikey_attest_slot` emits an attestation certificate that chains to the
-     Yubico attestation root.
+  3. Confirm `enter_pin` prompts for the PIN, `sign_data` produces a
+     signature that `check_signature` accepts, and `yubikey_attest_slot` emits
+     an attestation certificate that chains to the Yubico attestation root.
   4. Cover the full algorithm matrix, not just the example's default: repeat
      `piv_sign` for each supported algorithm (`ECDSA-SHA256`, `ECDSA-SHA384`,
      `RSA-PKCS1-SHA256`, each against a slot provisioned with the matching key

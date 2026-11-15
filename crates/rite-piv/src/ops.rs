@@ -59,31 +59,8 @@ pub fn map_error(e: yubikey::Error) -> BackendError {
 ///
 /// Returns `BackendError::Configuration` for an unrecognized slot string.
 pub fn slot_from_hint(hint: &str) -> Result<PivSlot, BackendError> {
-    let s = hint.strip_prefix("piv:").unwrap_or(hint);
-    match s {
-        "9a" => Ok(PivSlot::Authentication),
-        "9c" => Ok(PivSlot::Signature),
-        "9d" => Ok(PivSlot::KeyManagement),
-        "9e" => Ok(PivSlot::CardAuthentication),
-        other => {
-            // Retired key-management slots are addressed by their NIST key
-            // reference (0x82..=0x95). Rite stores them as a 0-based index.
-            // Two hex digits, as the reference is written: `from_str_radix`
-            // alone also reads `082` and `+82`.
-            let unknown = || BackendError::Configuration(format!("Unknown PIV slot: {hint}"));
-            if other.len() != 2 || !other.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Err(unknown());
-            }
-            let key_ref = u8::from_str_radix(other, 16).map_err(|_| unknown())?;
-            if (convert::RETIRED_KEY_REF_MIN..=convert::RETIRED_KEY_REF_MAX).contains(&key_ref) {
-                Ok(PivSlot::Retired(
-                    key_ref.saturating_sub(convert::RETIRED_KEY_REF_MIN),
-                ))
-            } else {
-                Err(unknown())
-            }
-        }
-    }
+    PivSlot::from_hint(hint)
+        .ok_or_else(|| BackendError::Configuration(format!("Unknown PIV slot: {hint}")))
 }
 
 /// Parse a PIV slot from a `KeyId`.
@@ -143,10 +120,29 @@ pub fn device_info(yk: &YubiKey) -> PivDeviceInfo {
 
 /// Get the number of remaining PIN retries.
 ///
+/// Read from the PIN's metadata (firmware 5.3 and later), which leaves a
+/// verified PIN as it is. A card that cannot answer that, whatever status
+/// it gives, falls back to the `yubikey` crate's empty VERIFY. That call
+/// re-selects the applet first: on firmware 5.7 the PIN stays verified and
+/// is reported as 0 retries, and other cards may clear it. Call it before
+/// the PIN is entered, not after.
+///
 /// # Errors
 ///
-/// Returns a `BackendError` if the device query fails.
+/// Returns `PinBlocked` when the metadata reports no tries left, and a
+/// `BackendError` if the fallback query fails.
 pub fn pin_retries(yk: &mut YubiKey) -> Result<u32, BackendError> {
+    match piv::metadata(yk, SlotId::Management(piv::ManagementSlotId::Pin)) {
+        Ok(piv::SlotMetadata {
+            retries: Some(retries),
+            ..
+        }) if retries.remaining_count == 0 => return Err(BackendError::PinBlocked),
+        Ok(piv::SlotMetadata {
+            retries: Some(retries),
+            ..
+        }) => return Ok(u32::from(retries.remaining_count)),
+        Ok(_) | Err(_) => {}
+    }
     yk.get_pin_retries().map(u32::from).map_err(map_error)
 }
 
@@ -154,10 +150,15 @@ pub fn pin_retries(yk: &mut YubiKey) -> Result<u32, BackendError> {
 ///
 /// # Errors
 ///
-/// Returns a `BackendError` if the key is malformed or authentication fails.
+/// Returns a `BackendError` if the key is malformed, and
+/// `ManagementKeyRequired` if the card refuses it: [`map_error`] reads an
+/// authentication failure as a missing PIN, which here it is not.
 pub fn authenticate_management(yk: &mut YubiKey, mgm_key: &[u8]) -> Result<(), BackendError> {
     let key = yubikey::MgmKey::from_bytes(mgm_key).map_err(map_error)?;
-    yk.authenticate(key).map_err(map_error)
+    yk.authenticate(key).map_err(|error| match error {
+        yubikey::Error::AuthenticationError => BackendError::ManagementKeyRequired,
+        other => map_error(other),
+    })
 }
 
 // ============================================================================

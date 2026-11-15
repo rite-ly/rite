@@ -371,6 +371,7 @@ impl SpanMap {
             | ResolveError::InvalidRetryAttempts { step }
             | ResolveError::CreatesNothing { step, .. }
             | ResolveError::HeldKeyOnOtherBackend { step, .. }
+            | ResolveError::PinOnBackendWithoutPin { step, .. }
             | ResolveError::ArtifactNamesMaterial { step, .. }
             | ResolveError::ArtifactNeverProduced { step, .. } => self.steps.get(step).copied(),
             ResolveError::SchemaViolation {
@@ -479,7 +480,9 @@ impl SpanMap {
             ResolveWarning::UnusedOutput(id) => self.outputs.get(id).copied(),
             ResolveWarning::ArtifactNotOutput(id) => self.artifacts.get(id).copied(),
             ResolveWarning::UnknownRoleInInputs { role } => self.roles.get(role).copied(),
-            ResolveWarning::UnusedBackend { step } => self.steps.get(step).copied(),
+            ResolveWarning::UnusedBackend { step }
+            | ResolveWarning::HeldKeyWithoutPin { step, .. }
+            | ResolveWarning::PinSpentBySlot { step, .. } => self.steps.get(step).copied(),
         }
     }
 }

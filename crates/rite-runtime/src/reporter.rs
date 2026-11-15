@@ -493,6 +493,18 @@ impl<'a> Reporter<'a> {
         }
     }
 
+    /// The id the next prompt takes. With [`Self::continue_prompt_ids`], a
+    /// test that builds a reporter per step numbers prompts across them as
+    /// the runner's one reporter does.
+    pub(crate) fn next_prompt_id(&self) -> u64 {
+        self.next_prompt_id
+    }
+
+    /// Number this reporter's prompts from `next`.
+    pub(crate) fn continue_prompt_ids(&mut self, next: u64) {
+        self.next_prompt_id = next;
+    }
+
     fn allocate_prompt_id(&mut self) -> PromptId {
         let id = PromptId::new(self.next_prompt_id);
         self.next_prompt_id = self.next_prompt_id.wrapping_add(1);

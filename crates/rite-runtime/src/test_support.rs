@@ -141,6 +141,8 @@ pub struct StepRunner {
     bound: HashSet<String>,
     state: ExecutionState,
     harness: ReporterHarness,
+    /// The id the next prompt takes, carried from step to step.
+    next_prompt_id: u64,
 }
 
 impl StepRunner {
@@ -153,6 +155,7 @@ impl StepRunner {
             bound: HashSet::new(),
             state: ExecutionState::new(HashMap::new(), HashMap::new(), HashMap::new(), false),
             harness: ReporterHarness::new(),
+            next_prompt_id: 0,
         }
     }
 
@@ -173,7 +176,10 @@ impl StepRunner {
     ///
     /// Returns what would end the run at this step.
     pub fn run(&mut self, step: &Step) -> Result<(), ExecutionError> {
+        // A reporter per step, numbering prompts on from the last, so
+        // answers queued for a whole run reach the steps that ask.
         let mut reporter = self.harness.reporter(step.id.clone());
+        reporter.continue_prompt_ids(self.next_prompt_id);
         let mut backends = RunBackends {
             registry: &mut self.backends,
             bound: &mut self.bound,
@@ -185,8 +191,9 @@ impl StepRunner {
             &mut reporter,
             &mut backends,
             false,
-        )?;
-        merge_step_result(&mut self.state, result);
+        );
+        self.next_prompt_id = reporter.next_prompt_id();
+        merge_step_result(&mut self.state, result?);
         Ok(())
     }
 
@@ -194,6 +201,18 @@ impl StepRunner {
     #[must_use]
     pub fn artifact(&self, id: &ArtifactId) -> Option<&ArtifactValue> {
         self.state.artifacts.get(id)
+    }
+
+    /// The bytes of the artifact `id`, as a step reading it would see them.
+    #[must_use]
+    pub fn artifact_bytes(&self, id: &ArtifactId) -> Option<&[u8]> {
+        crate::resolve_artifact_bytes(&self.state.artifacts, id, None).ok()
+    }
+
+    /// Queue the answer to the next prompt a step asks: a PIN, or whether to
+    /// retry a failed attempt.
+    pub fn enqueue_response(&mut self, response: Response) {
+        self.harness.enqueue_response(response);
     }
 
     /// Facts recorded so far, in order.

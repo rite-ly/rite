@@ -73,6 +73,7 @@ pub(crate) fn resolve_ceremony(
 
     // Phase 4: Validate artifact ordering
     ctx.validate_artifact_ordering(&execution_plan, &ceremony.materials);
+    ctx.check_pin_steps(&execution_plan, &ceremony.backends);
     ctx.validate_output_kinds(&execution_plan);
 
     // Phase 5: Resolve post-ceremony duties
@@ -1074,6 +1075,94 @@ impl ResolveContext {
         })
     }
 
+    /// Check the PIN steps against the keys they unlock.
+    ///
+    /// Refuses an `enter_pin` on a backend that takes no PIN, and warns
+    /// where a step uses the private half of a key on a device that does
+    /// before any `enter_pin` on it, or uses a key in a slot whose default
+    /// policy is `always` (9C) a second time after one. A key is one the
+    /// device held before the run or one a step made on it. A slot's policy
+    /// may differ from its default, so these are warnings.
+    fn check_pin_steps(
+        &mut self,
+        execution_plan: &[Step],
+        backends: &HashMap<String, rite_sdk::BackendConfig>,
+    ) {
+        let provider = |name: &str| backends.get(name).map(|config| config.provider);
+        let takes_pin = |name: &str| provider(name).is_some_and(rite_sdk::Provider::takes_pin);
+        // Keys a step made on a device that takes a PIN, by artifact.
+        let mut made_on: HashMap<&str, &str> = HashMap::new();
+        let mut unlocked: HashSet<&str> = HashSet::new();
+        // `always` keys used since their device's last PIN step.
+        let mut spent: HashSet<(&str, &str)> = HashSet::new();
+        for step in execution_plan {
+            let on = step.backend.as_deref();
+            if step.action == ActionType::EnterPin
+                && let Some(backend) = on
+            {
+                // The mock locks nothing but answers the prompt, so a
+                // rehearsal can walk the step.
+                if let Some(other) = provider(backend)
+                    && !other.takes_pin()
+                    && other != rite_sdk::Provider::Mock
+                {
+                    self.errors.push(ResolveError::PinOnBackendWithoutPin {
+                        step: step.id.clone(),
+                        backend: backend.to_string(),
+                    });
+                }
+                unlocked.insert(backend);
+                spent.retain(|(holder, _)| *holder != backend);
+                continue;
+            }
+            let held = held_keys_used_privately(&self.materials, step)
+                .into_iter()
+                .filter(|(_, key)| on == Some(key.backend.as_str()) && takes_pin(&key.backend))
+                .map(|(id, key)| {
+                    let policy = rite_sdk::PivSlot::from_hint(key.key_id.as_str())
+                        .map(rite_sdk::PivSlot::default_pin_policy);
+                    (id.as_str(), key.backend.as_str(), policy)
+                });
+            let made = named_reads(step)
+                .into_iter()
+                .filter(|(input, _)| !reads_public_half(step.action, input))
+                .filter_map(|(_, reference)| match reference {
+                    ArtifactRef::Produced { id, .. } => made_on.get_key_value(id.as_str()),
+                    ArtifactRef::Material { .. } => None,
+                })
+                .filter(|(_, holder)| on == Some(**holder))
+                .map(|(id, holder)| (*id, *holder, None));
+            for (key, holder, policy) in held.chain(made) {
+                let warning = if policy == Some(rite_sdk::PivPinPolicy::Never) {
+                    continue;
+                } else if !unlocked.contains(holder) {
+                    ResolveWarning::HeldKeyWithoutPin {
+                        step: step.id.clone(),
+                        key: key.to_string(),
+                        backend: holder.to_string(),
+                    }
+                } else if policy == Some(rite_sdk::PivPinPolicy::Always)
+                    && !spent.insert((holder, key))
+                {
+                    ResolveWarning::PinSpentBySlot {
+                        step: step.id.clone(),
+                        key: key.to_string(),
+                        backend: holder.to_string(),
+                    }
+                } else {
+                    continue;
+                };
+                self.warnings.push(warning);
+            }
+            if let (Some(created), Some(backend)) = (&step.creates, on)
+                && takes_pin(backend)
+                && step_makes(step).contains(&ArtifactKind::BackendKey)
+            {
+                made_on.insert(created.as_str(), backend);
+            }
+        }
+    }
+
     // Phase 4: Artifact Ordering Validation
     fn validate_artifact_ordering(
         &mut self,
@@ -1104,16 +1193,9 @@ impl ResolveContext {
                 let declared = literal_length(step).map(|n| (n, step.id.clone()));
                 shares.insert(created.clone(), declared);
             }
-            for (input, reference) in named_reads(step) {
-                if let ArtifactRef::Material { id, .. } = reference
-                    && let Some(Material {
-                        kind: MaterialKind::BackendKey(key),
-                        ..
-                    }) = self.materials.get(id)
-                    && !reads_public_half(step.action, input)
-                    && step.backend.as_deref() != Some(key.backend.as_str())
-                {
-                    self.add_error(ResolveError::HeldKeyOnOtherBackend {
+            for (id, key) in held_keys_used_privately(&self.materials, step) {
+                if step.backend.as_deref() != Some(key.backend.as_str()) {
+                    self.errors.push(ResolveError::HeldKeyOnOtherBackend {
                         step: step.id.clone(),
                         material: id.clone(),
                         holder: key.backend.clone(),
@@ -1271,6 +1353,28 @@ fn named_reads(step: &Step) -> Vec<(&str, &ArtifactRef)> {
             .collect(),
         None => Vec::new(),
     }
+}
+
+/// The keys a backend held before the run whose private half `step` uses,
+/// with the material each is.
+fn held_keys_used_privately<'a>(
+    materials: &'a SymbolTable<MaterialId, Material>,
+    step: &'a Step,
+) -> Vec<(&'a MaterialId, &'a rite_model::HeldKey)> {
+    named_reads(step)
+        .into_iter()
+        .filter(|(input, _)| !reads_public_half(step.action, input))
+        .filter_map(|(_, reference)| match reference {
+            ArtifactRef::Material { id, .. } => match materials.get(id) {
+                Some(Material {
+                    kind: MaterialKind::BackendKey(key),
+                    ..
+                }) => Some((id, key)),
+                _ => None,
+            },
+            ArtifactRef::Produced { .. } => None,
+        })
+        .collect()
 }
 
 /// Whether the action uses only the public half of the key under `input`,

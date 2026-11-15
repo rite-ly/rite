@@ -40,6 +40,9 @@ sections:
   main:
     role: ${{role.operator}}
     steps:
+      unlock:
+        action: enter_pin
+        backend: token
       sign:
         action: sign_data
         backend: token
@@ -153,13 +156,23 @@ fn each_held_key_binds_at_the_first_step_that_reads_it() {
         .unwrap();
     assert_eq!(decryption["algorithm"], "ECDSA-P384");
 
-    // Bound inside the step that first reads it, after the backend.
+    // The PIN step binds the backend; the key is bound inside the step that
+    // first reads it.
     let position =
         |pred: &dyn Fn(&serde_json::Value) -> bool| run.facts.iter().position(pred).unwrap();
-    let sign_started = position(&|f| f["type"] == "step_started" && f["id"] == "sign");
+    let unlock_started = position(&|f| f["type"] == "step_started" && f["id"] == "unlock");
     let backend_bound = position(&|f| f["type"] == "backend_bound" && f["name"] == "token");
+    let pin_entered = position(&|f| f["type"] == "backend_operation" && f["kind"] == "verify_pin");
+    let sign_started = position(&|f| f["type"] == "step_started" && f["id"] == "sign");
     let key_bound = position(&|f| f["type"] == "key_bound" && f["name"] == "signing_key");
-    assert!(sign_started < backend_bound && backend_bound < key_bound);
+    assert!(unlock_started < backend_bound && backend_bound < pin_entered);
+    assert!(pin_entered < sign_started && sign_started < key_bound);
+    assert_eq!(
+        run.facts
+            .get(pin_entered)
+            .and_then(|fact| fact.pointer("/inputs/retries_before")),
+        Some(&serde_json::json!(3))
+    );
     // 9D is first read by `seal`, which seals to its public half on the
     // software backend; the binding still asks the token.
     let seal_started = position(&|f| f["type"] == "step_started" && f["id"] == "seal");

@@ -278,11 +278,6 @@
           "const": "piv_read_certificate"
         },
         {
-          "description": "Sign data using a key on a PIV card.\n\nThe step asks for the PIN before signing.",
-          "type": "string",
-          "const": "piv_sign"
-        },
-        {
           "description": "Ask for a device's PIN and have the device verify it.\n\nLater steps on the same backend use the unlocked device. A key whose PIN policy is `always` needs this step right before each use. The PIN is never recorded.",
           "type": "string",
           "const": "enter_pin"
@@ -1744,64 +1739,6 @@
           "required": [
             "slot"
           ]
-        },
-        {
-          "$ref": "#/$defs/Expression"
-        }
-      ]
-    },
-    "PivSignParams": {
-      "description": "The `with` block of `piv_sign`.",
-      "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "algorithm": {
-              "description": "The signature algorithm to use. Defaults to `ECDSA-SHA256`.",
-              "anyOf": [
-                {
-                  "type": "string",
-                  "default": "ECDSA-SHA256",
-                  "enum": [
-                    "ECDSA-SHA256",
-                    "ECDSA-SHA384",
-                    "RSA-PKCS1-SHA256"
-                  ]
-                },
-                {
-                  "$ref": "#/$defs/Expression"
-                }
-              ]
-            },
-            "message": {
-              "description": "Shown to the operator when the step starts.",
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "$ref": "#/$defs/Expression"
-                }
-              ]
-            },
-            "slot": {
-              "description": "The PIV slot containing the signing key. Defaults to `9c`.",
-              "anyOf": [
-                {
-                  "type": "string",
-                  "default": "9c",
-                  "errorMessage": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95",
-                  "pattern": "^(piv:)?(9[acde]|8[2-9a-fA-F]|9[0-5])$",
-                  "patternErrorMessage": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95",
-                  "x-message": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95"
-                },
-                {
-                  "$ref": "#/$defs/Expression"
-                }
-              ]
-            }
-          },
-          "additionalProperties": false
         },
         {
           "$ref": "#/$defs/Expression"
@@ -3339,36 +3276,6 @@
                 "properties": {
                   "with": {
                     "$ref": "#/$defs/PivReadCertificateParams"
-                  }
-                }
-              }
-            ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "action": {
-                "const": "piv_sign"
-              }
-            },
-            "required": [
-              "action"
-            ]
-          },
-          "then": {
-            "allOf": [
-              {
-                "errorMessage": "action 'piv_sign' requires a backend; add a 'backend:' field",
-                "required": [
-                  "backend"
-                ],
-                "x-message": "action 'piv_sign' requires a backend; add a 'backend:' field"
-              },
-              {
-                "properties": {
-                  "with": {
-                    "$ref": "#/$defs/PivSignParams"
                   }
                 }
               }

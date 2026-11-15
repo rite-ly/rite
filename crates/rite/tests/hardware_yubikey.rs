@@ -31,7 +31,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use openssl::hash::MessageDigest;
 use openssl::pkey::PKey;
 use openssl::sign::Verifier;
-use rite_model::{ArtifactId, MaterialKind, StepFact};
+use rite_model::{ArtifactId, MaterialKind};
 use rite_runtime::test_support::StepRunner;
 use rite_runtime::{ArtifactValue, BackendRegistry, ExecutionError, Response};
 use rite_sdk::BackendError;
@@ -501,38 +501,6 @@ fn a_pinned_fingerprint_is_checked_against_the_card() {
         "{error:?}"
     );
     assert!(mismatch.facts_of("key_bound").is_empty());
-}
-
-/// `piv_sign` asks for the PIN itself, even after an `enter_pin` step, so the
-/// operator types it twice.
-#[test]
-#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
-fn piv_sign_asks_for_the_pin_again_after_a_pin_step() {
-    let Some((_turn, card)) = card() else { return };
-    let steps = [
-        unlock("unlock"),
-        r#"      sign:
-        action: piv_sign
-        backend: token
-        with:
-          slot: "9a"
-          algorithm: RSA-PKCS1-SHA256
-        reads: ${artifact.manifest}
-        creates: signature
-"#
-        .to_string(),
-    ]
-    .concat();
-    let run = run(&ceremony(card, "", &steps), vec![pin(), pin()]);
-    run.completed();
-    let secrets = run
-        .runner
-        .facts()
-        .iter()
-        .filter(|fact| matches!(fact, StepFact::PromptAnswered { .. }))
-        .count();
-    assert_eq!(secrets, 2);
-    verify_off_card(card, "9a", MessageDigest::sha256(), run.bytes("signature"));
 }
 
 /// A management key the card refuses is reported as such, not as a PIN.

@@ -23,7 +23,7 @@
 //! - `crypto`: crypto actions (`generate_key`, `export_public`, `wrap_key`, `unwrap_key`,
 //!   `sign_data`, `verify_signature`)
 //! - `pki`: PKI actions (`generate_csr`, `issue_certificate`; requires `x509-cert`, `signature`)
-//! - `piv`: PIV smart-card actions (`piv_read_certificate`, `piv_sign`; requires PC/SC)
+//! - `piv`: PIV smart-card actions (`piv_read_certificate`; requires PC/SC)
 //! - `yubikey`: `YubiKey` actions (`yubikey_attest_slot`; implies `piv`; requires PC/SC)
 //! - `default`: all features enabled except the hardware backends (`piv`, `yubikey`)
 //!
@@ -76,10 +76,10 @@ pub use crypto::{
 };
 pub use entropy::GatherEntropyAction;
 pub use entry::{EnterPinAction, EnterSecretAction, EnterValueAction};
+#[cfg(feature = "piv")]
+pub use piv::PivReadCertificateAction;
 #[cfg(feature = "yubikey")]
 pub use piv::YubikeyAttestSlotAction;
-#[cfg(feature = "piv")]
-pub use piv::{PivReadCertificateAction, PivSignAction};
 #[cfg(feature = "pki")]
 pub use pki::{GenerateCsrAction, IssueCertificateAction};
 pub use sharing::{CombineSharesAction, EnterShareAction, RevealAction, SplitSecretAction};
@@ -153,7 +153,6 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
     #[cfg(feature = "piv")]
     {
         registry.register(Arc::new(PivReadCertificateAction));
-        registry.register(Arc::new(PivSignAction));
     }
 
     #[cfg(feature = "yubikey")]

@@ -89,20 +89,6 @@ pub fn key_id_for_slot(slot: SlotId) -> KeyId {
     }
 }
 
-/// Build the canonical `KeyId` for a Rite [`PivSlot`] (e.g. `piv:9c`).
-///
-/// This is the inverse of [`slot_from_key_id`] and the single way to turn a
-/// slot into a key reference; callers must not assemble the `piv:` prefix by
-/// hand, or a slot hint that already carries the prefix gets doubled.
-///
-/// # Errors
-///
-/// Returns `BackendError::Configuration` when a `Retired` slot index is
-/// outside the valid `0..=19` range.
-pub fn key_id_for_piv_slot(slot: PivSlot) -> Result<KeyId, BackendError> {
-    Ok(key_id_for_slot(convert::to_yubikey_slot(slot)?))
-}
-
 // ============================================================================
 // Device operations
 // ============================================================================
@@ -729,32 +715,6 @@ mod tests {
         assert_eq!(key_id_for_slot(SlotId::Attestation), KeyId::new("piv:f9"));
     }
 
-    // --- key_id_for_piv_slot ---
-
-    #[test]
-    fn key_id_for_piv_slot_is_canonical_and_never_double_prefixed() {
-        assert_eq!(
-            key_id_for_piv_slot(PivSlot::Signature).unwrap(),
-            KeyId::new("piv:9c")
-        );
-        assert_eq!(
-            key_id_for_piv_slot(PivSlot::Retired(0)).unwrap(),
-            KeyId::new("piv:82")
-        );
-        // A hint that already carries the prefix parses to the same slot and
-        // therefore the same canonical key id.
-        let slot = slot_from_hint("piv:9c").unwrap();
-        assert_eq!(key_id_for_piv_slot(slot).unwrap(), KeyId::new("piv:9c"));
-    }
-
-    #[test]
-    fn key_id_for_piv_slot_rejects_out_of_range_retired_index() {
-        assert!(matches!(
-            key_id_for_piv_slot(PivSlot::Retired(20)).unwrap_err(),
-            BackendError::Configuration(_)
-        ));
-    }
-
     // --- emsa_pkcs1_v1_5_sha256 ---
 
     fn to_hex(bytes: &[u8]) -> String {
@@ -842,7 +802,7 @@ mod tests {
             PivSlot::Retired(0),
             PivSlot::Retired(19),
         ] {
-            let key_id = key_id_for_piv_slot(slot).unwrap();
+            let key_id = key_id_for_slot(convert::to_yubikey_slot(slot).unwrap());
             assert!(permits_agreement(slot, &key_id).is_ok(), "{key_id}");
         }
     }
@@ -854,7 +814,7 @@ mod tests {
             (PivSlot::Signature, "signature slot"),
             (PivSlot::CardAuthentication, "needs no PIN"),
         ] {
-            let key_id = key_id_for_piv_slot(slot).unwrap();
+            let key_id = key_id_for_slot(convert::to_yubikey_slot(slot).unwrap());
             let error = permits_agreement(slot, &key_id).unwrap_err();
             assert!(
                 matches!(&error, BackendError::OperationNotPermitted(m)

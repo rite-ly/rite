@@ -199,11 +199,6 @@ pub enum ActionType {
     /// Reading a certificate from a PIV slot does not require a PIN.
     // Requires a PIV backend.
     PivReadCertificate,
-    /// Sign data using a key on a PIV card.
-    ///
-    /// The step asks for the PIN before signing.
-    // Requires a PIV backend.
-    PivSign,
     /// Ask for a device's PIN and have the device verify it.
     ///
     /// Later steps on the same backend use the unlocked device. A key whose
@@ -645,7 +640,6 @@ impl ActionType {
         ActionType::GatherEntropy,
         ActionType::TpmAttest,
         ActionType::PivReadCertificate,
-        ActionType::PivSign,
         ActionType::EnterPin,
         ActionType::YubikeyAttestSlot,
         ActionType::IssueCertificate,
@@ -800,11 +794,6 @@ impl ActionType {
                 reads: ReadsContract::NONE,
                 creates: &[ArtifactKind::File(FileKind::Certificate)],
             },
-            ActionType::PivSign => ActionSpec {
-                backend: BackendUsage::Required,
-                reads: ReadsContract::NONE,
-                creates: &[ArtifactKind::File(FileKind::Signature)],
-            },
             ActionType::IssueCertificate => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract {
@@ -889,7 +878,6 @@ impl std::fmt::Display for ActionType {
             ActionType::GatherEntropy => write!(f, "gather_entropy"),
             ActionType::TpmAttest => write!(f, "tpm_attest"),
             ActionType::PivReadCertificate => write!(f, "piv_read_certificate"),
-            ActionType::PivSign => write!(f, "piv_sign"),
             ActionType::EnterPin => write!(f, "enter_pin"),
             ActionType::YubikeyAttestSlot => write!(f, "yubikey_attest_slot"),
             ActionType::IssueCertificate => write!(f, "issue_certificate"),
@@ -1156,7 +1144,6 @@ mod tests {
             (ActionType::Attest, "\"attest\""),
             (ActionType::TpmAttest, "\"tpm_attest\""),
             (ActionType::PivReadCertificate, "\"piv_read_certificate\""),
-            (ActionType::PivSign, "\"piv_sign\""),
             (ActionType::EnterPin, "\"enter_pin\""),
             (ActionType::YubikeyAttestSlot, "\"yubikey_attest_slot\""),
             (ActionType::IssueCertificate, "\"issue_certificate\""),
@@ -1189,7 +1176,6 @@ mod tests {
             ActionType::Attest,
             ActionType::TpmAttest,
             ActionType::PivReadCertificate,
-            ActionType::PivSign,
             ActionType::EnterPin,
             ActionType::YubikeyAttestSlot,
             ActionType::IssueCertificate,
@@ -1390,7 +1376,6 @@ mod tests {
                 | ActionType::GatherEntropy
                 | ActionType::TpmAttest
                 | ActionType::PivReadCertificate
-                | ActionType::PivSign
                 | ActionType::EnterPin
                 | ActionType::YubikeyAttestSlot
                 | ActionType::IssueCertificate

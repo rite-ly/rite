@@ -814,11 +814,6 @@ mod tests {
                 "must be one of",
             ),
             (
-                ActionType::PivSign,
-                json!({"algorithm": "Ed25519"}),
-                "must be one of",
-            ),
-            (
                 ActionType::PivReadCertificate,
                 json!({"slot": "9b"}),
                 "PIV slot",
@@ -895,10 +890,6 @@ mod tests {
             (
                 ActionType::OralReadback,
                 json!({"value": "v", "format": "nato"}),
-            ),
-            (
-                ActionType::PivSign,
-                json!({"slot": "piv:9d", "algorithm": "ECDSA-SHA384"}),
             ),
             (ActionType::PivReadCertificate, json!({"slot": "8a"})),
             (ActionType::EnterPin, json!({})),

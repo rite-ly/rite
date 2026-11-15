@@ -58,8 +58,8 @@ steps:
 
   # Forbid retries where repeated attempts are themselves security-relevant
   # (for example PIN entry against a hardware token).
-  sign_with_token:
-    action: piv_sign
+  unlock_token:
+    action: enter_pin
     backend: yubikey
     retry: never
 ```

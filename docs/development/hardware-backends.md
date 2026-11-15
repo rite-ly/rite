@@ -46,7 +46,6 @@ build split.
 | Action                 | Feature   | Backend capability used                  | Produces      |
 |------------------------|-----------|------------------------------------------|---------------|
 | `piv_read_certificate` | `piv`     | `CertStoreBackend::read_cert`            | `Certificate` |
-| `piv_sign`             | `piv`     | `PivBackend` (PIN) + `SignBackend::sign` | `Bytes`       |
 | `enter_pin`            | (none)    | `PivBackend::verify_pin`                 | nothing       |
 | `yubikey_attest_slot`  | `yubikey` | `YubikeyBackend::attest_slot`            | `Certificate` |
 
@@ -184,9 +183,6 @@ try.
 A wrong PIN fails the attempt with the tries left, and the operator may retry;
 a blocked PIN stops the run. The transcript records a `verify_pin` backend
 operation with the tries left before entry, never the PIN or its length.
-`piv_sign` still asks for the PIN itself, through the same code, and needs no
-`enter_pin` before it: one there would only make the operator type the PIN
-twice.
 
 The card stays unlocked until the run ends, the card is reset or removed, or
 another program selects an application on it (the PC/SC connection is
@@ -217,10 +213,10 @@ hardware testing.
 CI cannot touch a physical device, so:
 
 - **Unit tests** cover the pure logic (slot parsing, type conversion, error
-  mapping, signing-algorithm parsing) and each action's `execute` against the
+  mapping, PKCS#1 encoding) and each action's `execute` against the
   `MockBackend`, using the `ReporterHarness` to assert the produced artifact and
-  the emitted `BackendOperation` fact. The `piv_sign` and `enter_pin` tests
-  answer the PIN prompt via `ReporterHarness::enqueue_response`. These run in CI behind the
+  the emitted `BackendOperation` fact. The `enter_pin` tests answer the PIN
+  prompt via `ReporterHarness::enqueue_response`. These run in CI behind the
   `piv`/`yubikey` features (`cargo test -p rite-stdlib --features piv,yubikey`).
 - **Dry run** (`rite run --dry-run --frontend headless`) substitutes the mock
   backend and walks the whole ceremony, including the PIN step, so a rehearsal of
@@ -252,9 +248,8 @@ CI cannot touch a physical device, so:
   named. It covers `enter_pin`, signing with keys the card held (RSA and
   P-384, each checked by OpenSSL against the key `ykman` exported), opening
   what was sealed to 9D, slot 9C needing the PIN before each signature, a
-  wrong PIN retried, pinned fingerprints, `piv_sign` after a PIN step, and a
-  refused management key. Unplugging the card mid-run and the attestation
-  chain stay manual, below.
+  wrong PIN retried, pinned fingerprints, and a refused management key.
+  Unplugging the card mid-run and the attestation chain stay manual, below.
 - **Manual hardware check** with a real YubiKey, run before a release that
   touches this code:
 
@@ -265,7 +260,7 @@ CI cannot touch a physical device, so:
      signature that `check_signature` accepts, and `yubikey_attest_slot` emits
      an attestation certificate that chains to the Yubico attestation root.
   4. Cover the full algorithm matrix, not just the example's default: repeat
-     `piv_sign` for each supported algorithm (`ECDSA-SHA256`, `ECDSA-SHA384`,
+     `sign_data` for each supported algorithm (`ECDSA-SHA256`, `ECDSA-SHA384`,
      `RSA-PKCS1-SHA256`, each against a slot provisioned with the matching key
      type) and verify every signature off-card against the slot certificate
      (`openssl dgst -sha256 -verify`). Cargo tests exercise these paths only

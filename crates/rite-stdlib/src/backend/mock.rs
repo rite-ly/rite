@@ -50,6 +50,7 @@ use zeroize::Zeroizing;
 /// than the absent hardware it is.
 ///
 /// Secret only in form. It guards nothing and is committed deliberately.
+#[cfg(feature = "openssl")]
 const MOCK_SLOT_PRIVATE_KEY: &[u8] = include_bytes!("fixtures/mock-slot-key.pkcs8.der");
 
 /// The public half of [`MOCK_SLOT_PRIVATE_KEY`], in SPKI DER.
@@ -171,18 +172,23 @@ impl MockBackend {
     /// Returns what generating a stand-in returns, and
     /// [`BackendError::UnsupportedOperation`] in a build without the `openssl`
     /// feature, which has no crypto to stand in with.
-    pub fn with_held_keys(mut self, held: &[(KeyId, KeyAlgorithm)]) -> Result<Self, BackendError> {
+    pub fn with_held_keys(self, held: &[(KeyId, KeyAlgorithm)]) -> Result<Self, BackendError> {
         #[cfg(feature = "openssl")]
-        for (key_id, algorithm) in held {
-            self.stand_in_key(key_id, *algorithm)?;
+        {
+            let mut this = self;
+            for (key_id, algorithm) in held {
+                this.stand_in_key(key_id, *algorithm)?;
+            }
+            Ok(this)
         }
         #[cfg(not(feature = "openssl"))]
-        if !held.is_empty() {
-            return Err(BackendError::UnsupportedOperation(
+        if held.is_empty() {
+            Ok(self)
+        } else {
+            Err(BackendError::UnsupportedOperation(
                 "the mock holds keys only in a build with the 'openssl' feature".to_string(),
-            ));
+            ))
         }
-        Ok(self)
     }
 
     /// The key backing `key_id`: its own, or the stand-in for a declared
@@ -515,6 +521,7 @@ impl YubikeyBackend for MockBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "openssl")]
     use rite_sdk::CertificateDer;
 
     #[test]

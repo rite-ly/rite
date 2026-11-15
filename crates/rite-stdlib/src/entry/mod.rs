@@ -11,8 +11,6 @@
 mod pin;
 
 pub use pin::EnterPinAction;
-#[cfg(feature = "piv")]
-pub(crate) use pin::enter_and_verify_pin;
 
 use rite_model::params::EntryShape;
 use rite_model::{ActionType, Prompt, RevealFormat, ValidatorSpec};

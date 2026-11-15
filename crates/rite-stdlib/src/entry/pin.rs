@@ -6,7 +6,7 @@ use rite_runtime::{
     Action, ActionError, HandlerContext, Icon, Reporter, Response, StepInfo, StepResult,
     parse_params,
 };
-use rite_sdk::Backend;
+use rite_sdk::{Backend, PivBackend};
 use secrecy::ExposeSecret;
 use serde_json::json;
 
@@ -38,8 +38,13 @@ impl Action for EnterPinAction {
         let backend =
             backend.ok_or_else(|| ActionError::Failed("enter_pin requires a backend".into()))?;
         let name = backend.name().to_string();
+        let piv = backend.as_piv_mut().ok_or_else(|| {
+            ActionError::Failed(format!(
+                "backend '{name}' takes no PIN: it is not a PIV device"
+            ))
+        })?;
 
-        let retries_before = enter_and_verify_pin(backend, reporter)?;
+        let retries_before = enter_and_verify_pin(piv, reporter)?;
         reporter.backend_operation(
             "verify_pin",
             json!({ "retries_before": retries_before }),
@@ -50,8 +55,7 @@ impl Action for EnterPinAction {
     }
 }
 
-/// Ask for the PIN of the device behind `backend` and have the device verify
-/// it, returning how many tries the device had left before this entry.
+/// Ask for the device's PIN and have the device verify it, returning how many tries the device had left before this entry.
 ///
 /// The retry count is read before the PIN is sent, so the warning at one
 /// try left comes before that try is spent.
@@ -61,20 +65,13 @@ impl Action for EnterPinAction {
 /// The backend's errors: `PinFailed` with the tries left for a wrong PIN,
 /// `PinBlocked` once none are. A PIN of the wrong length is asked again
 /// before anything reaches the device, so it costs no try.
-pub(crate) fn enter_and_verify_pin(
-    backend: &mut dyn Backend,
+fn enter_and_verify_pin(
+    piv: &mut dyn PivBackend,
     reporter: &mut Reporter<'_>,
 ) -> Result<u32, ActionError> {
-    let backend_name = backend.name().to_string();
-    let piv = backend.as_piv_mut().ok_or_else(|| {
-        ActionError::Failed(format!(
-            "backend '{backend_name}' takes no PIN: it is not a PIV device"
-        ))
-    })?;
-
     let retries = piv.pin_retries()?;
     // 0 comes only from a card that reads a verified PIN so; a blocked PIN
-    // is `PinBlocked` above.
+    // is `PinBlocked` from `pin_retries`.
     if retries == 1 {
         reporter.log(
             Icon::Warning,

@@ -12,9 +12,9 @@ use rite_model::params::SignDataParams;
 
 /// Sign data with a key the backend holds.
 ///
-/// The generic counterpart to `piv_sign`: it works with any backend
-/// implementing `SignBackend`, and takes the key by artifact reference rather
-/// than by device slot.
+/// Works with any backend implementing `SignBackend`, and takes the key by
+/// artifact reference: one a step made, or one the backend held before the
+/// run, declared as a `backend_key` material.
 pub struct SignDataAction;
 
 impl Action for SignDataAction {

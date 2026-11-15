@@ -1,7 +1,6 @@
 //! Params for the PIV and `YubiKey` actions.
 
-use rite_sdk::SignAlgorithm;
-use schemars::{JsonSchema, Schema, SchemaGenerator};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A PIV slot as a step names it: `9a`, `9c`, `9d`, `9e`, or a retired slot
@@ -13,15 +12,6 @@ pub const PIV_SLOT: &str = r"^(piv:)?(9[acde]|8[2-9a-fA-F]|9[0-5])$";
 
 const PIV_SLOT_MESSAGE: &str = "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot \
     from 82 to 95";
-
-/// The signature algorithms a PIV card performs. RSA-PSS is absent because
-/// PIV cards apply a raw RSA operation and the client-side PSS encoding is
-/// not implemented; Ed25519 and ML-DSA because no PIV card does them.
-pub const PIV_SIGN_ALGORITHMS: [SignAlgorithm; 3] = [
-    SignAlgorithm::EcdsaSha256,
-    SignAlgorithm::EcdsaSha384,
-    SignAlgorithm::RsaPkcs1Sha256,
-];
 
 /// The `with` block of `piv_read_certificate`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -36,24 +26,6 @@ pub struct PivReadCertificateParams {
     pub message: Option<String>,
 }
 
-/// The `with` block of `piv_sign`.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct PivSignParams {
-    /// The PIV slot containing the signing key. Defaults to `9c`.
-    #[serde(default = "default_sign_slot")]
-    #[schemars(regex(pattern = PIV_SLOT), extend("x-message" = PIV_SLOT_MESSAGE))]
-    pub slot: String,
-    /// The signature algorithm to use. Defaults to `ECDSA-SHA256`.
-    #[serde(default = "default_sign_algorithm")]
-    #[schemars(schema_with = "piv_sign_algorithms")]
-    pub algorithm: SignAlgorithm,
-    /// Shown to the operator when the step starts.
-    #[serde(default)]
-    pub message: Option<String>,
-}
-
 /// The `with` block of `enter_pin`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -63,23 +35,6 @@ pub struct EnterPinParams {
     /// PIN unlocks.
     #[serde(default)]
     pub message: Option<String>,
-}
-
-fn default_sign_slot() -> String {
-    "9c".to_string()
-}
-
-fn default_sign_algorithm() -> SignAlgorithm {
-    SignAlgorithm::EcdsaSha256
-}
-
-fn piv_sign_algorithms(_: &mut SchemaGenerator) -> Schema {
-    let mut schema = super::schema::names(PIV_SIGN_ALGORITHMS.iter().map(|a| a.as_str()));
-    schema.insert(
-        "default".to_string(),
-        default_sign_algorithm().as_str().into(),
-    );
-    schema
 }
 
 /// The `with` block of `yubikey_attest_slot`.
@@ -112,27 +67,5 @@ mod tests {
         let json = serde_json::json!({});
         let result = serde_json::from_value::<PivReadCertificateParams>(json);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn sign_params_defaults() {
-        let json = serde_json::json!({});
-        let params: PivSignParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.slot, "9c");
-        assert_eq!(params.algorithm, SignAlgorithm::EcdsaSha256);
-        assert!(params.message.is_none());
-    }
-
-    #[test]
-    fn sign_params_explicit_values() {
-        let json = serde_json::json!({
-            "slot": "9d",
-            "algorithm": "RSA-PKCS1-SHA256",
-            "message": "Sign the key"
-        });
-        let params: PivSignParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.slot, "9d");
-        assert_eq!(params.algorithm, SignAlgorithm::RsaPkcs1Sha256);
-        assert_eq!(params.message.as_deref(), Some("Sign the key"));
     }
 }

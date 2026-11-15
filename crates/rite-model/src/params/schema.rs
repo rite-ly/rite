@@ -19,8 +19,8 @@ use super::{
     AttestParams, AttestSlotParams, CheckValueParams, ClockCheckParams, ConfirmParams,
     EncryptDataParams, EnterPinParams, EnterShareParams, EntryParams, GatherEntropyParams,
     GenerateCsrParams, GenerateKeyParams, ImportKeyParams, IssueCertificateParams,
-    MachineInfoParams, OralReadbackParams, PivReadCertificateParams, PivSignParams, RevealParams,
-    SignDataParams, SplitSecretParams, UnwrapKeyParams, VerifySignatureParams, WrapKeyParams,
+    MachineInfoParams, OralReadbackParams, PivReadCertificateParams, RevealParams, SignDataParams,
+    SplitSecretParams, UnwrapKeyParams, VerifySignatureParams, WrapKeyParams,
 };
 use crate::{ActionType, Format};
 
@@ -107,7 +107,6 @@ impl ActionType {
             ActionType::Attest => generator.subschema_for::<AttestParams>(),
             ActionType::GatherEntropy => generator.subschema_for::<GatherEntropyParams>(),
             ActionType::PivReadCertificate => generator.subschema_for::<PivReadCertificateParams>(),
-            ActionType::PivSign => generator.subschema_for::<PivSignParams>(),
             ActionType::EnterPin => generator.subschema_for::<EnterPinParams>(),
             ActionType::YubikeyAttestSlot => generator.subschema_for::<AttestSlotParams>(),
             ActionType::IssueCertificate => generator.subschema_for::<IssueCertificateParams>(),

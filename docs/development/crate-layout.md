@@ -63,7 +63,7 @@ flowchart TD
   actions: a backend crate carries no `Action` implementations.
 - Actions live in `rite-stdlib`, never in a backend crate. Generic actions
   dispatch through the `rite-sdk` capability traits and work with any backend;
-  backend-specific actions (`piv_sign`, `yubikey_attest_slot`) are feature-gated
+  backend-specific actions (`piv_read_certificate`, `yubikey_attest_slot`) are feature-gated
   there too. `rite-stdlib` is the integration layer and may depend on backend
   crates (optionally, per feature) to register their actions and build them in
   the factory. Plugin backends are a goal; pluggable actions are not.

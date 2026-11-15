@@ -21,9 +21,9 @@
 //! here (see `rite-yubikey`).
 //!
 //! This crate is a pure backend: it depends only on `rite-sdk` and the vendor
-//! `yubikey` crate. The ceremony actions that drive it (`piv_read_certificate`,
-//! `piv_sign`) live in `rite-stdlib`, which calls [`ops::slot_from_hint`] to
-//! parse slot identifiers from ceremony YAML.
+//! `yubikey` crate. The ceremony actions that drive it live in `rite-stdlib`;
+//! those that name a slot call [`ops::slot_from_hint`] to parse it from
+//! ceremony YAML.
 //!
 //! # Stability
 //!

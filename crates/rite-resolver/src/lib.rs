@@ -1558,11 +1558,8 @@ sections:
             assert_eq!(pin_warnings(&in_9d), Vec::<String>::new());
         }
 
-        /// A key a step made on the card needs the PIN as much as one it
-        /// held, but not to check a signature against its public half.
-        #[test]
-        fn a_key_made_on_the_card_is_warned_too() {
-            let yaml = r#"
+        /// A key a step makes on the card, then signs with.
+        const MADE_ON_CARD: &str = r#"
 version: "0.3"
 name: "Made on the card"
 roles: {}
@@ -1589,7 +1586,14 @@ sections:
           key: "${artifact.key}"
           data: "${artifact.manifest}"
         creates: signature
-      check:
+"#;
+
+        /// A key a step made on the card needs the PIN as much as one it
+        /// held, but not to check a signature against its public half.
+        #[test]
+        fn a_key_made_on_the_card_is_warned_too() {
+            let yaml = MADE_ON_CARD.to_string()
+                + r#"      check:
         action: verify_signature
         backend: token
         reads:
@@ -1597,11 +1601,52 @@ sections:
           data: "${artifact.manifest}"
           signature: "${artifact.signature}"
 "#;
-            let warning = only_pin_warning(yaml);
+            let warning = only_pin_warning(&yaml);
             assert!(
                 warning.contains("'sign'") && warning.contains("'key'"),
                 "{warning}"
             );
+        }
+
+        /// A key `generate_key` made has its slot's default PIN policy: 9C
+        /// spends the PIN on each use, 9E needs none, and no slot is 9A.
+        #[test]
+        fn a_key_made_on_the_card_has_its_slot_policy() {
+            let twice = MADE_ON_CARD.to_string()
+                + r#"      sign_again:
+        action: sign_data
+        backend: token
+        reads:
+          key: "${artifact.key}"
+          data: "${artifact.manifest}"
+        creates: second_signature
+"#;
+            let in_slot = |yaml: &str, slot: &str| {
+                replaced(
+                    yaml,
+                    "algorithm: ECDSA-P256\n",
+                    &format!("algorithm: ECDSA-P256\n          slot: \"{slot}\"\n"),
+                )
+            };
+            let unlocked = pin_before(&twice, "sign", "token");
+
+            let warning = only_pin_warning(&in_slot(&unlocked, "9c"));
+            assert!(
+                warning.contains("'sign_again'") && warning.contains("'key'"),
+                "{warning}"
+            );
+            assert_eq!(pin_warnings(&unlocked), Vec::<String>::new());
+            assert_eq!(
+                pin_warnings(&in_slot(&unlocked, "9d")),
+                Vec::<String>::new()
+            );
+            // Without a PIN step, a 9E key is not warned and a 9A key is,
+            // at each use.
+            assert_eq!(
+                pin_warnings(&in_slot(&twice, "piv:9e")),
+                Vec::<String>::new()
+            );
+            assert_eq!(pin_warnings(&twice).len(), 2);
         }
 
         /// A key read on the wrong backend has its error, not the warning too.

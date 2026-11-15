@@ -196,9 +196,11 @@ retrying does not ask for the PIN.
 `rite check` warns when a step uses the private half of a key on a `piv` or
 `yubikey` backend, held before the run or made on it, with no `enter_pin` on
 it earlier (except in slot 9E, which needs no PIN by default), and when a key
-in slot 9C is used again with no `enter_pin` since its last use. Warnings, not errors: a slot's policy may differ from the
-default, and it is not known before the card is read. An `enter_pin` on an
-`openssl` backend is an error.
+in slot 9C is used again with no `enter_pin` since its last use. The slot is
+the key id of a held key, or the `slot` of the `generate_key` step that made
+it (9A when absent). Warnings, not errors: a held key's policy may differ from
+its slot's default, and it is not known before the card is read. An
+`enter_pin` on an `openssl` backend is an error.
 
 ## Operations left unimplemented
 

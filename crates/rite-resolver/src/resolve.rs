@@ -1196,8 +1196,9 @@ impl ResolveContext {
     /// where a step uses the private half of a key on a device that does
     /// before any `enter_pin` on it, or uses a key in a slot whose default
     /// policy is `always` (9C) a second time after one. A key is one the
-    /// device held before the run or one a step made on it. A slot's policy
-    /// may differ from its default, so these are warnings.
+    /// device held before the run or one a step made on it. A held key's
+    /// policy may differ from its slot's default, so these are warnings; a
+    /// key `generate_key` made has its slot's default.
     fn check_pin_steps(
         &mut self,
         execution_plan: &[Step],
@@ -1205,8 +1206,9 @@ impl ResolveContext {
     ) {
         let provider = |name: &str| backends.get(name).map(|config| config.provider);
         let takes_pin = |name: &str| provider(name).is_some_and(rite_sdk::Provider::takes_pin);
-        // Keys a step made on a device that takes a PIN, by artifact.
-        let mut made_on: HashMap<&str, &str> = HashMap::new();
+        // Keys a step made on a device that takes a PIN, by artifact, with
+        // the PIN policy when the step shows it.
+        let mut made_on: HashMap<&str, (&str, Option<rite_sdk::PivPinPolicy>)> = HashMap::new();
         let mut unlocked: HashSet<&str> = HashSet::new();
         // `always` keys used since their device's last PIN step.
         let mut spent: HashSet<(&str, &str)> = HashSet::new();
@@ -1243,8 +1245,8 @@ impl ResolveContext {
                     ArtifactRef::Produced { id, .. } => made_on.get_key_value(id.as_str()),
                     ArtifactRef::Material { .. } => None,
                 })
-                .filter(|(_, holder)| on == Some(**holder))
-                .map(|(id, holder)| (*id, *holder, None));
+                .filter(|(_, (holder, _))| on == Some(*holder))
+                .map(|(id, (holder, policy))| (*id, *holder, *policy));
             for (key, holder, policy) in held.chain(made) {
                 let warning = if policy == Some(rite_sdk::PivPinPolicy::Never) {
                     continue;
@@ -1271,7 +1273,7 @@ impl ResolveContext {
                 && takes_pin(backend)
                 && step_makes(step).contains(&ArtifactKind::BackendKey)
             {
-                made_on.insert(created.as_str(), backend);
+                made_on.insert(created.as_str(), (backend, generated_pin_policy(step)));
             }
         }
     }
@@ -1504,6 +1506,20 @@ fn through_property(
     } else {
         None
     }
+}
+
+/// The PIN policy of the key a `generate_key` step makes on a PIV device:
+/// its slot's default, since the device generates with the default policy.
+/// `None` for another action, or a slot given by an expression.
+fn generated_pin_policy(step: &Step) -> Option<rite_sdk::PivPinPolicy> {
+    if step.action != ActionType::GenerateKey {
+        return None;
+    }
+    let slot = match step.with.get("slot") {
+        None => rite_sdk::PivSlot::GENERATE_DEFAULT,
+        Some(value) => rite_sdk::PivSlot::from_hint(value.as_literal_string()?)?,
+    };
+    Some(slot.default_pin_policy())
 }
 
 /// Whether a step reads only the public half of the key `reference` names,

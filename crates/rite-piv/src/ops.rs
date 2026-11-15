@@ -240,7 +240,7 @@ pub fn generate_key(
     let piv_slot = slot_hint
         .map(slot_from_hint)
         .transpose()?
-        .unwrap_or(PivSlot::Authentication);
+        .unwrap_or(PivSlot::GENERATE_DEFAULT);
     let slot = convert::to_yubikey_slot(piv_slot)?;
     let spki = piv::generate(
         yk,

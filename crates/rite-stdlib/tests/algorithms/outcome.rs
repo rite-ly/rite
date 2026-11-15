@@ -54,6 +54,9 @@ pub enum Stage {
     /// `rite check`'s validation of the case as a ceremony, before anything
     /// runs. A name Rite does not know is refused here.
     Check,
+    /// The runner reading a material from its file as the kind it declares,
+    /// before step 1.
+    Load,
     /// `import_key` putting the case's key into the backend.
     Import,
     /// `generate_key` making the case's key in the backend.

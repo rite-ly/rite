@@ -48,9 +48,10 @@ pub use material::MaterialSource;
 pub use safe_path::{PathSafetyError, confine, is_safe_component, safe_join, validate_component};
 
 pub use types::{
-    ActionSpec, ActionType, ArtifactKind, BackendUsage, CertProfile, DutyType, FileKind, ListInput,
-    Metadata, ParameterType, ReadsContract, SharingScheme, UnknownCertProfile,
-    UnknownSharingScheme, derive_role_name, derive_step_name, role_type,
+    Accepts, ActionSpec, ActionType, ArtifactKind, BackendUsage, CertProfile, DutyType, FileKind,
+    ListInput, Metadata, ParameterType, ReadInput, ReadsContract, SharingScheme,
+    UnknownCertProfile, UnknownSharingScheme, View, derive_role_name, derive_step_name, role_type,
+    share_index,
 };
 
 pub use ir::{

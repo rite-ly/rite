@@ -238,11 +238,15 @@ step, and `${artifact.restored_key | base64}` would put the key itself wherever
 that step records its inputs, transcript included. Rite does not second-guess
 either.
 
-An encrypted artifact is its own type, so it can be given to `decrypt_data` and
+An encrypted artifact is its own kind, so it can be given to `decrypt_data` and
 not to `unwrap_key`. The reverse holds too. The bytes of the two are the same
-shape and the claims are not, and the type is what keeps them apart. A
-material carries no such claim, which is why `decrypt_data` reads one as a
-container sealed elsewhere.
+shape and the claims are not, and the kind is what keeps them apart: `rite
+check` refuses the other pairing before the run. A material makes the claim by
+its `type:`. `decrypt_data` reads one declared `encrypted_data` or `bytes` as a
+container sealed elsewhere, and `unwrap_key` one declared `wrapped_key`. A file
+declared `encrypted_data` or `wrapped_key` is read as a container when the run
+loads its materials, so one that is not is refused before step 1; one declared
+`bytes` is read by the step.
 
 ## What the transcript records
 

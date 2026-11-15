@@ -41,7 +41,7 @@ mod transcript;
 mod transcript_sink;
 
 // Execution
-pub use executor::{ExecutionError, write_new_file};
+pub use executor::{ExecutionError, file_material, write_new_file};
 
 // Actions
 pub use actions::{ArtifactValue, Share, ShareSet};

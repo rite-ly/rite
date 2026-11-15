@@ -14,14 +14,15 @@ use rite_model::expression::{
 };
 use rite_model::validate::{Anchor, Pointer, Values};
 use rite_model::{
+    Accepts, ActionType, ArtifactKind, BackendUsage, DutyType, FileKind, Format, ParameterType,
+    ReadsContract, RevealFormat, SharingScheme,
+};
+use rite_model::{
     Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind,
     MaterialSource, Metadata, NamedInput, Output, OutputId, ParamId, Parameter, PostCeremonyDuty,
     RetryPolicy, Role, RoleId, Section, SectionId, Step, StepId, StepInputs, SymbolTable,
 };
-use rite_model::{
-    ActionType, ArtifactKind, BackendUsage, DutyType, FileKind, Format, ParameterType,
-    RevealFormat, SharingScheme,
-};
+use rite_sdk::KeyAlgorithm;
 use std::collections::{HashMap, HashSet};
 
 /// Schema versions this resolver understands.
@@ -75,6 +76,7 @@ pub(crate) fn resolve_ceremony(
     ctx.validate_artifact_ordering(&execution_plan, &ceremony.materials);
     ctx.check_pin_steps(&execution_plan, &ceremony.backends);
     ctx.validate_output_kinds(&execution_plan);
+    ctx.validate_input_kinds(&execution_plan);
 
     // Phase 5: Resolve post-ceremony duties
     let after = ctx.resolve_duties(&ceremony.after);
@@ -626,8 +628,12 @@ impl ResolveContext {
                 continue;
             };
             let declared = output.kind;
+            // A symmetric key has no public half, so it is written as
+            // nothing. Only a literal algorithm is known here; a key a backend
+            // keeps without exporting its public half is found when the
+            // output is written.
             if declared == FileKind::PublicKey
-                && let Some(algorithm) = symmetric_algorithm(step)
+                && let Some(algorithm) = literal_algorithm(step).filter(|a| a.is_symmetric())
             {
                 self.add_error(ResolveError::SymmetricKeyOutput {
                     output: id,
@@ -646,6 +652,115 @@ impl ResolveContext {
                 });
             }
         }
+    }
+
+    /// What each step reads against what its action takes there.
+    ///
+    /// An artifact's kind is known from the material that declares it or the
+    /// step that makes it. A reference is refused only when no kind it may
+    /// have is taken. Where the definition leaves the kind open, or the value
+    /// decides, as bytes that may parse as a key, the step that reads it
+    /// finds out.
+    fn validate_input_kinds(&mut self, execution_plan: &[Step]) {
+        let mut made: HashMap<ArtifactId, Made> = HashMap::new();
+        for step in execution_plan {
+            let contract = step.action.spec().reads;
+            for (input, reference, accepts) in read_inputs(step, &contract) {
+                if let Some(algorithm) = self.key_algorithm(reference, &made) {
+                    let public = reads_only_public_half(reference, accepts)
+                        || (reference.property().is_none()
+                            && step.action == ActionType::ExportPublic);
+                    let error = if public && algorithm.is_symmetric() {
+                        Some(ResolveError::SymmetricKeyRead {
+                            step: step.id.clone(),
+                            action: step.action,
+                            artifact: reference.artifact_id().to_string(),
+                            algorithm,
+                        })
+                    } else if reference.property() == Some("kcv") && !algorithm.is_symmetric() {
+                        Some(ResolveError::AsymmetricKeyCheckValue {
+                            step: step.id.clone(),
+                            action: step.action,
+                            artifact: reference.artifact_id().to_string(),
+                            algorithm,
+                        })
+                    } else {
+                        None
+                    };
+                    if let Some(error) = error {
+                        self.add_error(error);
+                        continue;
+                    }
+                }
+                let Some(kinds) = self.kinds_of(reference, &made) else {
+                    continue;
+                };
+                let Some(kinds) = through_property(&kinds, reference.property(), accepts) else {
+                    self.add_error(ResolveError::UnknownProperty {
+                        step: step.id.clone(),
+                        action: step.action,
+                        artifact: reference.artifact_id().to_string(),
+                        property: reference.property().unwrap_or_default().to_string(),
+                        kinds,
+                    });
+                    continue;
+                };
+                if kinds.iter().any(|kind| accepts.may_take(*kind)) {
+                    continue;
+                }
+                self.add_error(ResolveError::InputKindMismatch {
+                    step: step.id.clone(),
+                    action: step.action,
+                    input: input.map(str::to_string),
+                    artifact: reference.display_name(),
+                    kinds,
+                    accepts,
+                });
+            }
+            if let Some(created) = &step.creates {
+                made.insert(
+                    created.clone(),
+                    Made {
+                        kinds: step_makes(step),
+                        algorithm: literal_algorithm(step),
+                    },
+                );
+            }
+        }
+    }
+
+    /// The algorithm of the key a reference names, when it is known: a held
+    /// key's declared algorithm, or the literal one the step that made it
+    /// names.
+    fn key_algorithm(
+        &self,
+        reference: &ArtifactRef,
+        made: &HashMap<ArtifactId, Made>,
+    ) -> Option<KeyAlgorithm> {
+        match reference {
+            ArtifactRef::Material { id, .. } => match &self.materials.get(id)?.kind {
+                MaterialKind::BackendKey(key) => Some(key.algorithm),
+                _ => None,
+            },
+            ArtifactRef::Produced { id, .. } => made.get(id)?.algorithm,
+        }
+    }
+
+    /// What the artifact a reference names may be, from the material that
+    /// declares it or what the step before made, before any property.
+    ///
+    /// `None` where nothing is known: an artifact no earlier step makes,
+    /// which the ordering check reports.
+    fn kinds_of(
+        &self,
+        reference: &ArtifactRef,
+        made: &HashMap<ArtifactId, Made>,
+    ) -> Option<Vec<ArtifactKind>> {
+        let kinds = match reference {
+            ArtifactRef::Material { id, .. } => vec![self.materials.get(id)?.kind.artifact_kind()],
+            ArtifactRef::Produced { id, .. } => made.get(id)?.kinds.clone(),
+        };
+        (!kinds.is_empty()).then_some(kinds)
     }
 
     fn validate_step_backend(
@@ -1123,10 +1238,8 @@ impl ResolveContext {
                         .map(rite_sdk::PivSlot::default_pin_policy);
                     (id.as_str(), key.backend.as_str(), policy)
                 });
-            let made = named_reads(step)
-                .into_iter()
-                .filter(|(input, _)| !reads_public_half(step.action, input))
-                .filter_map(|(_, reference)| match reference {
+            let made = reads_privately(step)
+                .filter_map(|reference| match reference {
                     ArtifactRef::Produced { id, .. } => made_on.get_key_value(id.as_str()),
                     ArtifactRef::Material { .. } => None,
                 })
@@ -1337,34 +1450,14 @@ fn check_shown_share(step: &Step, shares: &mut ShareLengths) -> Vec<String> {
     }
 }
 
-/// Each reference a step reads, with the `reads:` key it is under, or `""`
-/// for a single unnamed input.
-fn named_reads(step: &Step) -> Vec<(&str, &ArtifactRef)> {
-    match &step.reads_resolved {
-        Some(StepInputs::Single(reference)) => vec![("", reference)],
-        Some(StepInputs::Named(inputs)) => inputs
-            .iter()
-            .flat_map(|(name, input)| {
-                input
-                    .refs()
-                    .iter()
-                    .map(move |reference| (name.as_str(), reference))
-            })
-            .collect(),
-        None => Vec::new(),
-    }
-}
-
 /// The keys a backend held before the run whose private half `step` uses,
 /// with the material each is.
 fn held_keys_used_privately<'a>(
     materials: &'a SymbolTable<MaterialId, Material>,
     step: &'a Step,
 ) -> Vec<(&'a MaterialId, &'a rite_model::HeldKey)> {
-    named_reads(step)
-        .into_iter()
-        .filter(|(input, _)| !reads_public_half(step.action, input))
-        .filter_map(|(_, reference)| match reference {
+    reads_privately(step)
+        .filter_map(|reference| match reference {
             ArtifactRef::Material { id, .. } => match materials.get(id) {
                 Some(Material {
                     kind: MaterialKind::BackendKey(key),
@@ -1377,17 +1470,50 @@ fn held_keys_used_privately<'a>(
         .collect()
 }
 
-/// Whether the action uses only the public half of the key under `input`,
+/// The references `step` reads whose private half it may use: all but those
+/// it reads only the public half of.
+fn reads_privately(step: &Step) -> impl Iterator<Item = &ArtifactRef> {
+    read_inputs(step, &step.action.spec().reads)
+        .into_iter()
+        .filter(|(_, reference, accepts)| !reads_only_public_half(reference, *accepts))
+        .map(|(_, reference, _)| reference)
+}
+
+/// What a reference is once its property is read, or `None` when no kind the
+/// artifact may have has that property.
+///
+/// A property is the kind's own ([`ArtifactKind::property`]), or `public`
+/// read by an input that reads a public key from whatever it is given, where
+/// it names what that input reads anyway.
+fn through_property(
+    kinds: &[ArtifactKind],
+    property: Option<&str>,
+    accepts: Accepts,
+) -> Option<Vec<ArtifactKind>> {
+    let Some(property) = property else {
+        return Some(kinds.to_vec());
+    };
+    let owned: Vec<ArtifactKind> = kinds
+        .iter()
+        .filter_map(|kind| kind.property(property))
+        .collect();
+    if !owned.is_empty() {
+        Some(owned)
+    } else if property == "public" && accepts.reads_public_key() {
+        Some(kinds.to_vec())
+    } else {
+        None
+    }
+}
+
+/// Whether a step reads only the public half of the key `reference` names,
 /// which any backend can, rather than asking the key's backend to use the
-/// private half: a recipient sealed to, or a key a signature is checked
-/// against.
-// Until inputs declare what they accept (kinds-and-capabilities step 4),
-// this is the one list of public-key inputs.
-fn reads_public_half(action: ActionType, input: &str) -> bool {
-    match action {
-        ActionType::EncryptData | ActionType::WrapKey => input == "recipient",
-        ActionType::VerifySignature => true,
-        _ => false,
+/// private half: its `.public`, or the key itself read by an input that
+/// reads a public key from whatever it is given, such as a recipient.
+fn reads_only_public_half(reference: &ArtifactRef, accepts: Accepts) -> bool {
+    match reference.property() {
+        Some(property) => property == "public",
+        None => accepts.reads_public_key(),
     }
 }
 
@@ -1496,12 +1622,35 @@ fn is_deferred(with: &rite_model::expression::ExprValue, at: &Pointer) -> bool {
     }
 }
 
-/// The algorithm a step that makes a backend key names, when it is a literal
-/// symmetric one: such a key is written as nothing, having no public half.
-///
-/// Only the literal is known here. A key a backend keeps without exporting
-/// its public half is found when the output is written.
-fn symmetric_algorithm(step: &Step) -> Option<String> {
+/// Each reference a step reads, with the input that reads it (none for a
+/// lone reference) and what that input takes. An input the action does not
+/// have is left out: the schema reports it.
+fn read_inputs<'s>(
+    step: &'s Step,
+    contract: &ReadsContract,
+) -> Vec<(Option<&'s str>, &'s ArtifactRef, Accepts)> {
+    match &step.reads_resolved {
+        None => Vec::new(),
+        Some(StepInputs::Single(reference)) => contract
+            .single
+            .map(|accepts| vec![(None, reference, accepts)])
+            .unwrap_or_default(),
+        Some(StepInputs::Named(named)) => named
+            .iter()
+            .filter_map(|(name, input)| Some((name, input, contract.input(name)?)))
+            .flat_map(|(name, input, accepts)| {
+                input
+                    .refs()
+                    .iter()
+                    .map(move |reference| (Some(name.as_str()), reference, accepts))
+            })
+            .collect(),
+    }
+}
+
+/// The algorithm a step that makes a backend key names, when it is written
+/// as a literal.
+fn literal_algorithm(step: &Step) -> Option<KeyAlgorithm> {
     if !step
         .action
         .spec()
@@ -1510,10 +1659,18 @@ fn symmetric_algorithm(step: &Step) -> Option<String> {
     {
         return None;
     }
-    let name = step.with.get("algorithm")?.as_literal_string()?;
-    let algorithm: rite_sdk::KeyAlgorithm =
-        serde_json::from_value(serde_json::Value::from(name)).ok()?;
-    algorithm.is_symmetric().then(|| name.to_string())
+    step.with
+        .get("algorithm")?
+        .as_literal_string()?
+        .parse()
+        .ok()
+}
+
+/// What an earlier step made, as far as its definition tells.
+struct Made {
+    kinds: Vec<ArtifactKind>,
+    /// The key's algorithm, when the step names a literal one.
+    algorithm: Option<KeyAlgorithm>,
 }
 
 /// What a step makes, as far as its definition tells: what its action may
@@ -2657,19 +2814,20 @@ sections:
         assert!(result.is_ok(), "Errors: {:?}", result.errors);
     }
 
-    /// A `combine_shares` step with the given `reads:` value, resolved on its
-    /// own, with `shares` a material so the references resolve.
+    /// A `combine_shares` step with the given `reads:` value, after a step
+    /// that makes `shares`, so the references resolve.
     fn resolve_combine_with_reads(reads: serde_json::Value) -> ResolveResult<Ceremony> {
         let mut ceremony = minimal_ceremony();
-        ceremony.materials.insert(
-            "shares".to_string(),
-            schema::Material::File {
-                kind: FileKind::Bytes,
-                title: None,
-                description: None,
-                path: None,
-            },
-        );
+        let mut enter = make_step_body();
+        enter.action = ActionType::EnterShare;
+        enter.with = Some(serde_json::json!({ "message": "A share", "length": 35 }));
+        enter.creates = Some("shares".to_string());
+        ceremony
+            .sections
+            .get_mut("main")
+            .unwrap()
+            .steps
+            .insert("enter".to_string(), enter);
         let mut step = make_step_body();
         step.action = ActionType::CombineShares;
         step.reads = Some(reads);

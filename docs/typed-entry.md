@@ -63,10 +63,18 @@ install_the_escrow_key:
 ```
 
 The import records the name of the passphrase artifact and nothing about its
-value. It refuses a passphrase read from anything but a secret artifact, since
-a passphrase that sat in a material file is what typing one exists to avoid,
-and it refuses a passphrase given for a key that turns out not to be
+value. It takes a passphrase only from a secret, so text and bytes are
+refused, and it refuses a passphrase given for a key that turns out not to be
 encrypted: the record says one was supplied, and that has to mean it was used.
+
+A passphrase may also be a material declared `type: secret`. Its bytes are
+held as a typed secret's are, and the transcript records no digest of them.
+One line break at the end of the file is not part of the passphrase, as with
+`openssl -passin file:`, so a file written by `echo` or an editor works.
+A file protects the key only if it travels apart from it: on a medium a
+second custodian brings, it splits custody of the key from custody of what
+opens it; on the same medium as the key, it adds nothing. Typing it at
+`enter_secret` leaves no copy on any disk, and remains the default.
 
 As with opened content, what happens next is the author's call, made in the
 definition. Declaring a secret artifact under `output:` writes it to the run

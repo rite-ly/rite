@@ -1114,10 +1114,7 @@ fn cms_encrypt(cert: openssl::x509::X509, key_material: &[u8]) -> Result<Wrapped
     .map_err(|e| ossl_err("CMS encrypt", &e))?;
 
     let data = cms.to_der().map_err(|e| ossl_err("CMS to DER", &e))?;
-    let facts =
-        rite_sdk::cms::describe(&data).map_err(|e| BackendError::InvalidData(e.to_string()))?;
-    WrappedKey::new(WrapScheme::CmsAes256Gcm, facts.description, data)
-        .map_err(|e| BackendError::InvalidData(e.to_string()))
+    WrappedKey::from_cms(data).map_err(|e| BackendError::InvalidData(e.to_string()))
 }
 
 /// Seal `payload` into a CMS `AuthEnvelopedData` addressed to an RSA or EC
@@ -1134,9 +1131,7 @@ fn cms_seal_to_public(
 ) -> Result<WrappedKey, BackendError> {
     let cek = Zeroizing::new(random.generate_random(32)?);
     let data = seal_envelope(recipient_info_for(recipient, &cek, random)?, &cek, payload)?;
-    let facts = cms::describe(&data).map_err(|e| BackendError::InvalidData(e.to_string()))?;
-    WrappedKey::new(WrapScheme::CmsAes256Gcm, facts.description, data)
-        .map_err(|e| BackendError::InvalidData(e.to_string()))
+    WrappedKey::from_cms(data).map_err(|e| BackendError::InvalidData(e.to_string()))
 }
 
 /// Undo [`cms_seal_to_public`] under the keypair `kek` holds.
@@ -1712,9 +1707,7 @@ fn cms_encrypt_kek(kek: &StoredKey, payload: &[u8]) -> Result<WrappedKey, Backen
     // Described by reading the artifact back, not by restating what was just
     // written. A description that disagreed with the bytes is exactly what
     // this path exists to make impossible.
-    let facts = cms::describe(&data).map_err(|e| BackendError::InvalidData(e.to_string()))?;
-    WrappedKey::new(WrapScheme::CmsAes256Gcm, facts.description, data)
-        .map_err(|e| BackendError::InvalidData(e.to_string()))
+    WrappedKey::from_cms(data).map_err(|e| BackendError::InvalidData(e.to_string()))
 }
 
 /// Seal `payload` into a CMS `AuthEnvelopedData` addressed to one symmetric

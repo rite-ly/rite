@@ -543,16 +543,16 @@ pub struct ActionSpec {
 #[non_exhaustive]
 pub struct ReadsContract {
     /// Inputs every step of this action must name.
-    pub required: &'static [&'static str],
+    pub required: &'static [ReadInput],
     /// Groups from which exactly one input must be named. Each group holds the
     /// alternatives in the order they should be listed to the author.
-    pub exactly_one_of: &'static [&'static [&'static str]],
+    pub exactly_one_of: &'static [&'static [ReadInput]],
     /// Inputs a step may name and the action reads when it does.
     ///
     /// Listed so that a key the action would never look at is refused rather
     /// than dropped: a `reads:` entry that nothing reads is a step running
     /// without what its author gave it.
-    pub optional: &'static [&'static str],
+    pub optional: &'static [ReadInput],
     /// `with:` fields that mean nothing unless the step also names a given
     /// input, as `(field, input)` pairs.
     ///
@@ -569,6 +569,19 @@ pub struct ReadsContract {
     /// holds one reference, and the resolver reports a list where one is
     /// expected as it reports one where a list is.
     pub lists: &'static [ListInput],
+    /// What a lone reference, `reads: "${artifact.x}"`, must be, for an
+    /// action that reads one instead of a map. `None` where the action reads
+    /// no lone reference.
+    pub single: Option<Accepts>,
+}
+
+/// A `reads:` input that holds one reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadInput {
+    /// The key under `reads:`.
+    pub name: &'static str,
+    /// What the reference may be.
+    pub accepts: Accepts,
 }
 
 /// A `reads:` input that holds a list of references.
@@ -578,7 +591,126 @@ pub struct ListInput {
     pub name: &'static str,
     /// Fewest references the list may hold.
     pub at_least: usize,
+    /// What each reference may be.
+    pub accepts: Accepts,
 }
+
+/// What a `reads:` input takes: an artifact that claims one of `kinds`, or
+/// any artifact that can be read as `view`.
+///
+/// A kind is a requirement on the claim. It is what tells a wrapped key from
+/// encrypted content, whose bytes look alike: a step that installs a key
+/// takes the one and not the other. A view is a requirement on the value:
+/// a recipient is anything a public key can be read from, whatever made it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Accepts {
+    /// The kinds taken for what they claim.
+    pub kinds: &'static [ArtifactKind],
+    /// What the input reads any other artifact as, if it reads any.
+    pub view: Option<View>,
+}
+
+impl Accepts {
+    /// Artifacts of these kinds, and no other.
+    #[must_use]
+    pub const fn kinds(kinds: &'static [ArtifactKind]) -> Self {
+        Self { kinds, view: None }
+    }
+
+    /// Any artifact that can be read as `view`.
+    #[must_use]
+    pub const fn view(view: View) -> Self {
+        Self {
+            kinds: &[],
+            view: Some(view),
+        }
+    }
+
+    /// Whether the input reads a public key from whatever it is given, so
+    /// that only a key's public half is used.
+    #[must_use]
+    pub fn reads_public_key(self) -> bool {
+        self.view == Some(View::PublicKey)
+    }
+
+    /// Whether an artifact of `kind` may be taken.
+    ///
+    /// False only where it never is. Where the value decides, as bytes that
+    /// may or may not parse as a key, it is true, and the step that reads
+    /// the bytes says which.
+    #[must_use]
+    pub fn may_take(self, kind: ArtifactKind) -> bool {
+        self.kinds.contains(&kind) || self.view.is_some_and(|view| view.may_read(kind))
+    }
+}
+
+impl fmt::Display for Accepts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut parts: Vec<String> = self.kinds.iter().map(ToString::to_string).collect();
+        if let Some(view) = self.view {
+            parts.push(view.to_string());
+        }
+        if parts.is_empty() {
+            return f.write_str("nothing");
+        }
+        f.write_str(&either(parts.iter().map(String::as_str)))
+    }
+}
+
+/// What an artifact can be read as, whatever kind it is.
+///
+/// A view is partial: a certificate gives a public key, and bytes give one
+/// only if they parse as one, which only the step that reads them finds out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    /// Its bytes: every kind that exists as a file. A backend key is not one,
+    /// though it is written as its public half: that is read as `.public`.
+    Bytes,
+    /// A public key: a backend key's public half, a public key, the key a
+    /// certificate holds, or bytes, text or a secret that parse as one.
+    PublicKey,
+    /// A certificate, or bytes, text or a secret that parse as one.
+    Certificate,
+}
+
+impl View {
+    /// Whether an artifact of `kind` may be read as this view.
+    #[must_use]
+    pub fn may_read(self, kind: ArtifactKind) -> bool {
+        use FileKind as K;
+        match self {
+            View::Bytes => matches!(kind, ArtifactKind::File(_)),
+            View::PublicKey => matches!(
+                kind,
+                ArtifactKind::BackendKey
+                    | ArtifactKind::File(
+                        K::PublicKey | K::Certificate | K::Bytes | K::Text | K::Secret
+                    )
+            ),
+            View::Certificate => matches!(
+                kind,
+                ArtifactKind::File(K::Certificate | K::Bytes | K::Text | K::Secret)
+            ),
+        }
+    }
+}
+
+impl fmt::Display for View {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            View::Bytes => "any file's bytes",
+            View::PublicKey => "anything a public key is read from",
+            View::Certificate => "anything a certificate is read from",
+        })
+    }
+}
+
+/// A key held by a backend, and nothing else.
+const BACKEND_KEY: Accepts = Accepts::kinds(&[ArtifactKind::BackendKey]);
+/// Any artifact that is bytes once written.
+const BYTES: Accepts = Accepts::view(View::Bytes);
+/// Anything a public key is read from.
+const PUBLIC_KEY: Accepts = Accepts::view(View::PublicKey);
 
 impl ReadsContract {
     /// The contract of an action that constrains its inputs in neither way.
@@ -587,19 +719,54 @@ impl ReadsContract {
     /// The contract of an action that requires these inputs and offers no
     /// alternatives between them.
     #[must_use]
-    pub const fn required(fields: &'static [&'static str]) -> Self {
+    pub const fn required(fields: &'static [ReadInput]) -> Self {
         Self {
             required: fields,
             exactly_one_of: &[],
             optional: &[],
             with_field_requires: &[],
             lists: &[],
+            single: None,
         }
+    }
+
+    /// The contract of an action that reads one lone reference.
+    #[must_use]
+    pub const fn single(accepts: Accepts) -> Self {
+        Self {
+            single: Some(accepts),
+            ..Self::NONE
+        }
+    }
+
+    /// The inputs that hold one reference: required, then the alternatives,
+    /// then optional.
+    pub fn singles(&self) -> impl Iterator<Item = &ReadInput> {
+        self.required
+            .iter()
+            .chain(self.exactly_one_of.iter().flat_map(|group| group.iter()))
+            .chain(self.optional)
+    }
+
+    /// What the input of this name accepts, if the action reads one.
+    #[must_use]
+    pub fn input(&self, name: &str) -> Option<Accepts> {
+        let one = self
+            .singles()
+            .find(|input| input.name == name)
+            .map(|input| input.accepts);
+        one.or_else(|| {
+            self.lists
+                .iter()
+                .find(|list| list.name == name)
+                .map(|list| list.accepts)
+        })
     }
 
     /// Whether this contract constrains the `reads:` map at all.
     ///
-    /// `with_field_requires` is a rule over `with:`, so it is not counted here.
+    /// `with_field_requires` is a rule over `with:`, and `single` over a lone
+    /// reference rather than a map, so neither is counted here.
     pub fn is_empty(&self) -> bool {
         self.required.is_empty()
             && self.exactly_one_of.is_empty()
@@ -671,7 +838,14 @@ impl ActionType {
             },
             ActionType::Reveal => ActionSpec {
                 backend: BackendUsage::Unused,
-                reads: ReadsContract::required(&["value"]),
+                // One share, or anything shown as its bytes.
+                reads: ReadsContract::required(&[ReadInput {
+                    name: "value",
+                    accepts: Accepts {
+                        kinds: &[ArtifactKind::Shares],
+                        view: Some(View::Bytes),
+                    },
+                }]),
                 creates: &[],
             },
             ActionType::EnterValue => ActionSpec {
@@ -695,56 +869,132 @@ impl ActionType {
             ActionType::WrapKey => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract {
-                    required: &["key_to_wrap"],
-                    exactly_one_of: &[&["wrapping_key", "recipient"]],
+                    required: &[ReadInput {
+                        name: "key_to_wrap",
+                        accepts: BACKEND_KEY,
+                    }],
+                    exactly_one_of: &[&[
+                        ReadInput {
+                            name: "wrapping_key",
+                            accepts: BACKEND_KEY,
+                        },
+                        ReadInput {
+                            name: "recipient",
+                            accepts: PUBLIC_KEY,
+                        },
+                    ]],
                     optional: &[],
                     // `expect_recipient` is compared against the recipient a
                     // wrap is given, and only the external path has one.
                     with_field_requires: &[("expect_recipient", "recipient")],
                     lists: &[],
+                    single: None,
                 },
                 creates: &[ArtifactKind::File(FileKind::WrappedKey)],
             },
             ActionType::UnwrapKey => ActionSpec {
                 backend: BackendUsage::Required,
-                reads: ReadsContract::required(&["unwrapping_key", "wrapped_data"]),
+                reads: ReadsContract::required(&[
+                    ReadInput {
+                        name: "unwrapping_key",
+                        accepts: BACKEND_KEY,
+                    },
+                    ReadInput {
+                        name: "wrapped_data",
+                        accepts: Accepts {
+                            kinds: &[ArtifactKind::File(FileKind::WrappedKey)],
+                            view: None,
+                        },
+                    },
+                ]),
                 creates: &[ArtifactKind::BackendKey],
             },
             ActionType::ImportKey => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract {
-                    required: &["key_material"],
+                    // A key file, or the raw bytes of a symmetric key.
+                    required: &[ReadInput {
+                        name: "key_material",
+                        accepts: Accepts {
+                            kinds: &[
+                                ArtifactKind::File(FileKind::PrivateKey),
+                                ArtifactKind::File(FileKind::Secret),
+                                ArtifactKind::File(FileKind::Bytes),
+                            ],
+                            view: None,
+                        },
+                    }],
                     exactly_one_of: &[],
                     // What opens an encrypted private key. Read from the store
                     // rather than given in `with:`, so the value is borrowed
                     // and never copied into the step's parameters.
-                    optional: &["passphrase"],
+                    optional: &[ReadInput {
+                        name: "passphrase",
+                        accepts: Accepts {
+                            kinds: &[ArtifactKind::File(FileKind::Secret)],
+                            view: None,
+                        },
+                    }],
                     with_field_requires: &[],
                     lists: &[],
+                    single: None,
                 },
                 creates: &[ArtifactKind::BackendKey],
             },
             ActionType::EncryptData => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract {
-                    required: &["data"],
-                    exactly_one_of: &[&["encryption_key", "recipient"]],
+                    required: &[ReadInput {
+                        name: "data",
+                        accepts: BYTES,
+                    }],
+                    exactly_one_of: &[&[
+                        ReadInput {
+                            name: "encryption_key",
+                            accepts: BACKEND_KEY,
+                        },
+                        ReadInput {
+                            name: "recipient",
+                            accepts: PUBLIC_KEY,
+                        },
+                    ]],
                     optional: &[],
                     // As at `wrap_key`: only the public-key path has a
                     // recipient to compare.
                     with_field_requires: &[("expect_recipient", "recipient")],
                     lists: &[],
+                    single: None,
                 },
                 creates: &[ArtifactKind::File(FileKind::EncryptedData)],
             },
             ActionType::DecryptData => ActionSpec {
                 backend: BackendUsage::Required,
-                reads: ReadsContract::required(&["encrypted_data", "decryption_key"]),
+                // Bytes are a container sealed elsewhere, described when read.
+                // A wrapped key is opened by `unwrap_key`, which installs it.
+                reads: ReadsContract::required(&[
+                    ReadInput {
+                        name: "encrypted_data",
+                        accepts: Accepts {
+                            kinds: &[
+                                ArtifactKind::File(FileKind::EncryptedData),
+                                ArtifactKind::File(FileKind::Bytes),
+                            ],
+                            view: None,
+                        },
+                    },
+                    ReadInput {
+                        name: "decryption_key",
+                        accepts: BACKEND_KEY,
+                    },
+                ]),
                 creates: &[ArtifactKind::File(FileKind::Secret)],
             },
             ActionType::SplitSecret => ActionSpec {
                 backend: BackendUsage::Required,
-                reads: ReadsContract::required(&["secret"]),
+                reads: ReadsContract::required(&[ReadInput {
+                    name: "secret",
+                    accepts: BYTES,
+                }]),
                 creates: &[ArtifactKind::Shares],
             },
             ActionType::CombineShares => ActionSpec {
@@ -759,7 +1009,12 @@ impl ActionType {
                     lists: &[ListInput {
                         name: "shares",
                         at_least: 2,
+                        accepts: Accepts {
+                            kinds: &[ArtifactKind::Shares],
+                            view: None,
+                        },
                     }],
+                    single: None,
                 },
                 creates: &[ArtifactKind::File(FileKind::Secret)],
             },
@@ -770,17 +1025,45 @@ impl ActionType {
             },
             ActionType::ExportPublic => ActionSpec {
                 backend: BackendUsage::Required,
-                reads: ReadsContract::NONE,
+                reads: ReadsContract::single(BACKEND_KEY),
                 creates: &[ArtifactKind::File(FileKind::PublicKey)],
             },
             ActionType::SignData => ActionSpec {
                 backend: BackendUsage::Required,
-                reads: ReadsContract::required(&["key", "data"]),
+                reads: ReadsContract::required(&[
+                    ReadInput {
+                        name: "key",
+                        accepts: BACKEND_KEY,
+                    },
+                    ReadInput {
+                        name: "data",
+                        accepts: BYTES,
+                    },
+                ]),
                 creates: &[ArtifactKind::File(FileKind::Signature)],
             },
             ActionType::VerifySignature => ActionSpec {
                 backend: BackendUsage::SoftwareUnlessNamed,
-                reads: ReadsContract::required(&["key", "data", "signature"]),
+                reads: ReadsContract::required(&[
+                    ReadInput {
+                        name: "key",
+                        accepts: PUBLIC_KEY,
+                    },
+                    ReadInput {
+                        name: "data",
+                        accepts: BYTES,
+                    },
+                    ReadInput {
+                        name: "signature",
+                        accepts: Accepts {
+                            kinds: &[
+                                ArtifactKind::File(FileKind::Signature),
+                                ArtifactKind::File(FileKind::Bytes),
+                            ],
+                            view: None,
+                        },
+                    },
+                ]),
                 creates: &[],
             },
             // A PIN unlocks the device and makes nothing.
@@ -797,20 +1080,45 @@ impl ActionType {
             ActionType::IssueCertificate => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract {
-                    required: &["signing_key", "csr"],
+                    required: &[
+                        ReadInput {
+                            name: "signing_key",
+                            accepts: BACKEND_KEY,
+                        },
+                        ReadInput {
+                            name: "csr",
+                            accepts: Accepts {
+                                kinds: &[
+                                    ArtifactKind::File(FileKind::Csr),
+                                    ArtifactKind::File(FileKind::Bytes),
+                                ],
+                                view: None,
+                            },
+                        },
+                    ],
                     exactly_one_of: &[],
                     // Without `issuer_cert` the certificate is self-issued
                     // under the CSR's subject; with it, the issuer name and key
                     // identifier come from the CA certificate.
-                    optional: &["issuer_cert"],
+                    optional: &[ReadInput {
+                        name: "issuer_cert",
+                        accepts: Accepts {
+                            kinds: &[],
+                            view: Some(View::Certificate),
+                        },
+                    }],
                     with_field_requires: &[],
                     lists: &[],
+                    single: None,
                 },
                 creates: &[ArtifactKind::File(FileKind::Certificate)],
             },
             ActionType::GenerateCsr => ActionSpec {
                 backend: BackendUsage::Required,
-                reads: ReadsContract::required(&["signing_key"]),
+                reads: ReadsContract::required(&[ReadInput {
+                    name: "signing_key",
+                    accepts: BACKEND_KEY,
+                }]),
                 creates: &[ArtifactKind::File(FileKind::Csr)],
             },
         }
@@ -979,6 +1287,21 @@ pub enum ArtifactKind {
 }
 
 impl ArtifactKind {
+    /// The kind of an artifact's `property`: a backend key's `public` is a
+    /// public key and its `kcv` three bytes, and a set's `share_N` one share
+    /// of it. `None` for a property this kind does not have.
+    #[must_use]
+    pub fn property(self, property: &str) -> Option<ArtifactKind> {
+        match (self, property) {
+            (ArtifactKind::BackendKey, "public") => Some(ArtifactKind::File(FileKind::PublicKey)),
+            (ArtifactKind::BackendKey, "kcv") => Some(ArtifactKind::File(FileKind::Bytes)),
+            (ArtifactKind::Shares, share) if share_index(share).is_some() => {
+                Some(ArtifactKind::Shares)
+            }
+            _ => None,
+        }
+    }
+
     /// The kind this artifact has once written to a file, if it can be
     /// written: a backend key as its public half, shares not at all.
     #[must_use]
@@ -999,6 +1322,19 @@ impl fmt::Display for ArtifactKind {
             ArtifactKind::Shares => f.write_str("shares"),
         }
     }
+}
+
+/// The `N` of a `share_N` property, or `None` for anything else.
+///
+/// `N` is one or more ASCII digits, no sign, no leading zero, from 1 to
+/// 255: the one spelling of each index, so a name is a share or is not.
+#[must_use]
+pub fn share_index(property: &str) -> Option<u8> {
+    let digits = property.strip_prefix("share_")?;
+    if digits.is_empty() || digits.starts_with('0') || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u8>().ok()
 }
 
 /// What kind of value a ceremony parameter takes.
@@ -1090,6 +1426,19 @@ impl DutyType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_share_property_is_digits_from_one_with_no_sign_and_no_leading_zero() {
+        assert_eq!(share_index("share_1"), Some(1));
+        assert_eq!(share_index("share_255"), Some(255));
+        assert_eq!(share_index("share_0"), None);
+        assert_eq!(share_index("share_01"), None);
+        assert_eq!(share_index("share_+1"), None);
+        assert_eq!(share_index("share_256"), None);
+        assert_eq!(share_index("share_"), None);
+        assert_eq!(share_index("share1"), None);
+        assert_eq!(share_index("shares_1"), None);
+    }
 
     #[test]
     fn role_type_extracts_prefix() {

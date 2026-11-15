@@ -14,7 +14,7 @@ mod regenerate;
 use std::collections::BTreeSet;
 
 use libtest_mimic::Trial;
-use rite_model::StepFact;
+use rite_model::{FileKind, StepFact};
 use rite_runtime::{Action, ArtifactValue, compute_fingerprint};
 use rite_sdk::{WrapDescription, WrapScheme, cms};
 use rite_stdlib::{DecryptDataAction, EncryptDataAction, UnwrapKeyAction, WrapKeyAction};
@@ -617,10 +617,12 @@ fn fixture_trial(fixture: &'static Fixture, step: ReadStep, policy: Policy) -> T
         let attempt = session
             .import(fixture.opened_with, "key", false)
             .and_then(|()| {
-                session.add(
-                    "container",
-                    ArtifactValue::Bytes(read(&fixture_path(fixture))),
-                );
+                // What the author declares a file sealed elsewhere to be.
+                let kind = match step {
+                    ReadStep::UnwrapKey => FileKind::WrappedKey,
+                    ReadStep::DecryptData => FileKind::EncryptedData,
+                };
+                session.add_file("container", kind, read(&fixture_path(fixture)))?;
                 run_open(&mut session, step, "container", "key", Payload::P256)
             });
         match expected {

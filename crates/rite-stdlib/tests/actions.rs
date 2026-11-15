@@ -1176,8 +1176,8 @@ fn import_key_refuses_a_passphrase_that_was_never_needed() {
     assert!(error.to_string().contains("not encrypted"), "{error}");
 }
 
-/// A passphrase that sat on a disk is what reading one at the keyboard
-/// exists to avoid, so only a secret artifact is accepted.
+/// Only a secret is a passphrase: bytes are not wiped, and text is shown and
+/// recorded.
 #[test]
 fn import_key_refuses_a_passphrase_that_is_not_a_secret() {
     let pem = encrypted_pems(b"correct horse").swap_remove(0);
@@ -1216,16 +1216,25 @@ fn import_key_refuses_a_passphrase_that_is_not_a_secret() {
     assert!(!message.contains("correct horse"));
 }
 
-/// A material declared as a secret still sat on a disk, so it is no more a
-/// passphrase than bytes are.
+/// A file declared `secret` is a passphrase as a typed one is: kept on a
+/// medium of its own, it is how custody of a key and of what opens it is
+/// split between two people.
 #[test]
-fn import_key_refuses_a_passphrase_from_a_material() {
+fn import_key_opens_a_key_with_a_passphrase_from_a_material() {
+    // The line break a file ends with, as `echo` or an editor writes one, is
+    // not part of the passphrase.
+    for file in ["correct horse", "correct horse\n", "correct horse\r\n"] {
+        import_with_a_passphrase_file(file.as_bytes());
+    }
+}
+
+fn import_with_a_passphrase_file(file: &[u8]) {
     let pem = encrypted_pems(b"correct horse").swap_remove(0);
     let state = make_state()
         .with_material(ArtifactId::new("escrowed"), ArtifactValue::Bytes(pem))
         .with_material(
             ArtifactId::new("escrow_passphrase"),
-            ArtifactValue::Secret(secrecy::SecretBox::new(Box::new(b"correct horse".to_vec()))),
+            ArtifactValue::Secret(secrecy::SecretBox::new(Box::new(file.to_vec()))),
         );
     let reads = [
         (
@@ -1252,13 +1261,12 @@ fn import_key_refuses_a_passphrase_from_a_material() {
     );
     let mut harness = ReporterHarness::new();
 
-    let error = run_import(&state, &step, &mut harness).expect_err("a material sat on a disk");
+    let imported = run_import(&state, &step, &mut harness).expect("a secret file opens the key");
 
-    let message = error.to_string();
-    assert!(
-        message.contains("is a material") && message.contains("enter_secret"),
-        "{message}"
-    );
+    assert!(matches!(
+        produced(&imported.artifacts, "restored"),
+        ArtifactValue::BackendKey { .. }
+    ));
 }
 
 /// A secret has no properties, so a reference naming one is a slip that

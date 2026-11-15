@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use rite_model::validate::{Check, Pointer, SchemaError};
-use rite_model::{ActionType, BackendUsage, ReadsContract};
+use rite_model::{Accepts, ActionType, BackendUsage, ReadsContract};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde_json::{Value, json};
 
@@ -263,31 +263,22 @@ fn step_rules(action: ActionType) -> Vec<Value> {
 /// accepts, one reference each or a list where the action takes a list, and
 /// exactly one input of each group of alternatives.
 fn reads_schema(contract: &ReadsContract) -> Value {
-    let one = json!({ "type": "string" });
+    let one =
+        |accepts: &Accepts| json!({ "type": "string", "description": format!("Takes {accepts}.") });
     let mut properties = serde_json::Map::new();
-    let single = contract
-        .required
-        .iter()
-        .chain(
-            contract
-                .exactly_one_of
-                .iter()
-                .flat_map(|group| group.iter()),
-        )
-        .chain(contract.optional);
-    for name in single {
-        properties.insert((*name).to_string(), one.clone());
+    for input in contract.singles() {
+        properties.insert(input.name.to_string(), one(&input.accepts));
     }
     for list in contract.lists {
         properties.insert(
             list.name.to_string(),
-            json!({ "type": "array", "items": one, "minItems": list.at_least }),
+            json!({ "type": "array", "items": one(&list.accepts), "minItems": list.at_least }),
         );
     }
     let required: Vec<&str> = contract
         .required
         .iter()
-        .copied()
+        .map(|input| input.name)
         .chain(contract.lists.iter().map(|list| list.name))
         .collect();
     let alternatives: Vec<Value> = contract
@@ -296,11 +287,14 @@ fn reads_schema(contract: &ReadsContract) -> Value {
         .map(|group| {
             let named = group
                 .iter()
-                .map(|name| format!("'{name}'"))
+                .map(|input| format!("'{}'", input.name))
                 .collect::<Vec<_>>()
                 .join(", ");
             json!({
-                "oneOf": group.iter().map(|name| json!({ "required": [name] })).collect::<Vec<_>>(),
+                "oneOf": group
+                    .iter()
+                    .map(|input| json!({ "required": [input.name] }))
+                    .collect::<Vec<_>>(),
                 "x-message": format!("'reads' must name exactly one of {named}"),
             })
         })

@@ -334,12 +334,8 @@ fn seal_into_container(
     })
     .map_err(|e| ActionError::Failed(format!("Cannot write the CMS container: {e}")))?;
 
-    let facts = cms::describe(&der)
-        .map_err(|e| ActionError::Failed(format!("Cannot read back the container: {e}")))?;
-    // Named here rather than taken, because the container this function writes
-    // is the one thing it does not generalise over.
-    EncryptedData::new(WrapScheme::CmsAes256Gcm, facts.description, der)
-        .map_err(|e| ActionError::Failed(e.to_string()))
+    EncryptedData::from_cms(der)
+        .map_err(|e| ActionError::Failed(format!("Cannot read back the container: {e}")))
 }
 
 /// What came out, and what it says about itself.

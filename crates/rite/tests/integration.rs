@@ -141,6 +141,13 @@ parameters:
     assert_eq!(param.value, serde_json::json!("Production"));
 }
 
+/// Resolve a ceremony expected to hold no diagnostic; `case` names it in the
+/// failure.
+fn assert_clean(yaml: &str, case: &str) {
+    let (_resolved, _spans, diags) = rite_resolver::analyze_str(None, yaml);
+    assert!(diags.is_empty(), "{case}: {diags:?}");
+}
+
 /// Resolve a ceremony expected to hold exactly one error, and return it.
 ///
 /// The span is asserted here because every one of these diagnostics has to
@@ -214,8 +221,7 @@ fn an_output_of_the_wrong_kind_is_reported_by_resolution() {
         "Output 'out' is declared as 'certificate', but step 'sign' ('sign_data') writes \
          'signature'"
     );
-    let (_, _, diags) = rite_resolver::analyze_str(None, &ceremony_with_output("signature", sign));
-    assert!(diags.is_empty(), "{diags:?}");
+    assert_clean(&ceremony_with_output("signature", sign), "signature");
 }
 
 /// A share set is never written, so declaring one as an output is refused
@@ -247,8 +253,7 @@ fn outputs_written_as_another_kind_pass() {
         let yaml = ceremony_with_output(kind, "")
             .replace(&format!("creates: {created}\n"), "creates: out\n");
         let yaml = yaml.replace("${artifact.key}", "${artifact.out}");
-        let (_, _, diags) = rite_resolver::analyze_str(None, &yaml);
-        assert!(diags.is_empty(), "{kind}: {diags:?}");
+        assert_clean(&yaml, kind);
     }
 }
 
@@ -268,8 +273,7 @@ fn an_entry_format_decides_the_output_kind() {
         "Output 'out' is declared as 'text', but step 'note' ('enter_value') writes 'bytes'"
     );
     for (kind, format) in [("bytes", "hex"), ("text", "digits")] {
-        let (_, _, diags) = rite_resolver::analyze_str(None, &entry(kind, format));
-        assert!(diags.is_empty(), "{kind} from {format}: {diags:?}");
+        assert_clean(&entry(kind, format), &format!("{kind} from {format}"));
     }
 }
 
@@ -349,13 +353,307 @@ sections:
         "unexpected message: {message}"
     );
     for kind in ["bytes", "certificate", "secret"] {
-        let (_, _, diags) = rite_resolver::analyze_str(None, &yaml(kind));
-        assert!(diags.is_empty(), "{kind}: {diags:?}");
+        assert_clean(&yaml(kind), kind);
     }
     let physical = yaml("physical");
     assert!(
         sole_error(&physical).contains("path"),
         "a physical material takes no path"
+    );
+}
+
+/// A ceremony with a key pair (`key`), an AES key (`kek`), a typed note
+/// (`note`), a wrap of the key pair (`wrapped`), the given materials, and
+/// `step` under `steps:`.
+fn ceremony_reading(materials: &str, step: &str) -> String {
+    format!(
+        r#"
+version: "0.3"
+name: "Input kinds"
+roles:
+  officer:
+    person: "Alice"
+backends:
+  ssl:
+    provider: openssl
+materials:
+  placeholder:
+    type: physical
+{materials}
+sections:
+  main:
+    role: ${{role.officer}}
+    steps:
+      gen:
+        action: generate_key
+        backend: ssl
+        with:
+          algorithm: ECDSA-P256
+        creates: key
+      aes:
+        action: generate_key
+        backend: ssl
+        with:
+          algorithm: AES-256
+        creates: kek
+      note:
+        action: enter_value
+        with:
+          message: "The note"
+        creates: note
+      wrap:
+        action: wrap_key
+        backend: ssl
+        reads:
+          key_to_wrap: ${{artifact.key}}
+          wrapping_key: ${{artifact.kek}}
+        creates: wrapped
+{step}"#
+    )
+}
+
+/// A step that opens content.
+fn decrypt(reference: &str) -> String {
+    format!(
+        "      open:
+        action: decrypt_data
+        backend: ssl
+        reads:
+          encrypted_data: {reference}
+          decryption_key: ${{artifact.kek}}
+"
+    )
+}
+
+/// A wrapped key looks like encrypted content, and `decrypt_data` would hand
+/// it over as bytes; it is opened by `unwrap_key`, so `rite check` refuses
+/// it, whether a step made it or a file declares it.
+#[test]
+fn a_wrapped_key_is_not_opened_as_content() {
+    assert_eq!(
+        sole_error(&ceremony_reading("", &decrypt("${artifact.wrapped}"))),
+        "Step 'open' ('decrypt_data') reads 'wrapped' as 'encrypted_data', which takes \
+         encrypted_data or bytes, but 'wrapped' is 'wrapped_key'"
+    );
+    let file = "  escrow:\n    type: wrapped_key\n    path: escrow.der\n";
+    let message = sole_error(&ceremony_reading(file, &decrypt("${artifact.escrow}")));
+    assert!(
+        message.contains("but 'escrow' is 'wrapped_key'"),
+        "unexpected message: {message}"
+    );
+    for kind in ["encrypted_data", "bytes"] {
+        let file = format!("  sealed:\n    type: {kind}\n    path: sealed.der\n");
+        let yaml = ceremony_reading(&file, &decrypt("${artifact.sealed}"));
+        assert_clean(&yaml, kind);
+    }
+}
+
+/// `unwrap_key` takes a wrapped key, from a step or from a file that
+/// declares one, and nothing else.
+#[test]
+fn a_wrapped_key_material_is_unwrapped() {
+    let unwrap = "      restore:
+        action: unwrap_key
+        backend: ssl
+        reads:
+          unwrapping_key: ${artifact.kek}
+          wrapped_data: ${artifact.escrow}
+";
+    let file = |kind: &str| format!("  escrow:\n    type: {kind}\n    path: escrow.der\n");
+    assert_clean(
+        &ceremony_reading(&file("wrapped_key"), unwrap),
+        "wrapped_key",
+    );
+    assert_eq!(
+        sole_error(&ceremony_reading(&file("bytes"), unwrap)),
+        "Step 'restore' ('unwrap_key') reads 'escrow' as 'wrapped_data', which takes \
+         wrapped_key, but 'escrow' is 'bytes'"
+    );
+}
+
+/// A passphrase is a secret, typed or read from a file declared one: a typed
+/// note is shown and recorded, so it is not one.
+#[test]
+fn a_passphrase_must_be_a_secret() {
+    let import = "      install:
+        action: import_key
+        backend: ssl
+        with:
+          algorithm: ECDSA-P256
+        reads:
+          key_material: ${artifact.escrow}
+          passphrase: ${artifact.note}
+";
+    let file = "  escrow:\n    type: private_key\n    path: escrow.pem\n";
+    assert_eq!(
+        sole_error(&ceremony_reading(file, import)),
+        "Step 'install' ('import_key') reads 'note' as 'passphrase', which takes secret, but \
+         'note' is 'text'"
+    );
+    let files = format!("{file}  pass:\n    type: secret\n    path: pass.txt\n");
+    let from_file = import.replace("${artifact.note}", "${artifact.pass}");
+    assert_clean(&ceremony_reading(&files, &from_file), "secret file");
+}
+
+/// A lone reference is checked against what the action reads, as a named
+/// one is.
+#[test]
+fn a_lone_reference_of_the_wrong_kind_is_reported() {
+    let export = "      export:
+        action: export_public
+        backend: ssl
+        reads: ${artifact.note}
+";
+    assert_eq!(
+        sole_error(&ceremony_reading("", export)),
+        "Step 'export' ('export_public') reads 'note', which takes backend_key, but 'note' is \
+         'text'"
+    );
+}
+
+/// A property narrows what a reference is: a key pair's `.public` is a
+/// public key, which a recipient takes and a signing key does not.
+#[test]
+fn a_property_decides_what_a_reference_is() {
+    let seal = "      seal:
+        action: encrypt_data
+        backend: ssl
+        reads:
+          data: ${artifact.note}
+          recipient: ${artifact.key.public}
+";
+    assert_clean(&ceremony_reading("", seal), "public half as recipient");
+    let sign = "      sign:
+        action: sign_data
+        backend: ssl
+        reads:
+          key: ${artifact.key.public}
+          data: ${artifact.note}
+";
+    assert_eq!(
+        sole_error(&ceremony_reading("", sign)),
+        "Step 'sign' ('sign_data') reads 'key.public' as 'key', which takes backend_key, but \
+         'key.public' is 'public_key'"
+    );
+}
+
+/// A symmetric key has no public half, whether a step asks for its
+/// `.public`, reads a public key from it, or exports it.
+#[test]
+fn a_symmetric_key_has_no_public_half() {
+    let seal = |recipient: &str| {
+        format!(
+            "      seal:
+        action: encrypt_data
+        backend: ssl
+        reads:
+          data: ${{artifact.note}}
+          recipient: {recipient}
+"
+        )
+    };
+    let message = "Step 'seal' ('encrypt_data') reads the public half of 'kek', but 'kek' is an \
+                   AES-256 key, which has none";
+    for recipient in ["${artifact.kek.public}", "${artifact.kek}"] {
+        assert_eq!(sole_error(&ceremony_reading("", &seal(recipient))), message);
+    }
+    let export = "      export:
+        action: export_public
+        backend: ssl
+        reads: ${artifact.kek}
+";
+    assert_eq!(
+        sole_error(&ceremony_reading("", export)),
+        "Step 'export' ('export_public') reads the public half of 'kek', but 'kek' is an \
+         AES-256 key, which has none"
+    );
+}
+
+/// A key pair is named by its public half, so it has no check value.
+#[test]
+fn a_key_pair_has_no_check_value() {
+    let show = "      show:
+        action: reveal
+        with:
+          message: \"The check value\"
+        reads:
+          value: ${artifact.key.kcv}
+";
+    assert_eq!(
+        sole_error(&ceremony_reading("", show)),
+        "Step 'show' ('reveal') reads the check value of 'key', but 'key' is an ECDSA-P256 \
+         key, which is named by its public half rather than by a check value"
+    );
+    assert_clean(
+        &ceremony_reading("", &show.replace("key.kcv", "kek.kcv")),
+        "symmetric",
+    );
+}
+
+/// A property the artifact does not have is refused, rather than read as
+/// the whole artifact or failing at the step; `.public` stays what an input
+/// that reads a public key reads anyway.
+#[test]
+fn a_property_the_artifact_lacks_is_reported() {
+    let wrap = "      escrow:
+        action: wrap_key
+        backend: ssl
+        reads:
+          key_to_wrap: ${artifact.key.private}
+          wrapping_key: ${artifact.kek}
+";
+    assert_eq!(
+        sole_error(&ceremony_reading("", wrap)),
+        "Step 'escrow' ('wrap_key') reads 'key.private', but 'key' is 'backend_key', which has \
+         no property 'private' there"
+    );
+    let sealed = "  sealed:\n    type: encrypted_data\n    path: sealed.der\n";
+    let message = sole_error(&ceremony_reading(
+        sealed,
+        &decrypt("${artifact.sealed.data}"),
+    ));
+    assert!(
+        message.contains("'sealed' is 'encrypted_data', which has no property 'data'"),
+        "unexpected message: {message}"
+    );
+    let seal = |recipient: &str| {
+        format!(
+            "      seal:
+        action: encrypt_data
+        backend: ssl
+        reads:
+          data: ${{artifact.note}}
+          recipient: {recipient}
+"
+        )
+    };
+    let message = sole_error(&ceremony_reading("", &seal("${artifact.key.pulbic}")));
+    assert!(
+        message.contains("no property 'pulbic'"),
+        "unexpected message: {message}"
+    );
+    let cert = "  ca:\n    type: certificate\n    path: ca.pem\n";
+    assert_clean(
+        &ceremony_reading(cert, &seal("${artifact.ca.public}")),
+        "certificate",
+    );
+}
+
+/// Each reference of a list is checked.
+#[test]
+fn each_reference_of_a_list_is_checked() {
+    let combine = "      recover:
+        action: combine_shares
+        reads:
+          shares: [\"${artifact.note}\", \"${artifact.note}\"]
+        creates: recovered
+";
+    let (_, _, diags) = rite_resolver::analyze_str(None, &ceremony_reading("", combine));
+    let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        ["Step 'recover' ('combine_shares') reads 'note' as 'shares', which takes shares, but \
+             'note' is 'text'"; 2]
     );
 }
 

@@ -166,6 +166,23 @@ of importing something the ceremony did not mean to restore.
 `expect_key` names the key the same way the transcript does: a `sha256:`
 fingerprint for a keypair, a `cmac-aes:` check value for a symmetric key.
 
+A key wrapped outside the ceremony arrives as a material declared
+`wrapped_key`, and `unwrap_key` reads it as it reads one a step produced:
+
+```yaml
+materials:
+  wrapped_kek:
+    type: wrapped_key
+    path: "media/kek.p7m"
+```
+
+The file has to be a CMS container, the only form that says what it is, in one
+of the forms `decrypt_data` opens from a file ([Encrypting
+content](encrypting-content.md)), and one that is not is refused when the run
+loads its materials, before step 1. The raw schemes, RSA-OAEP and AES key wrap,
+carry nothing a reader could describe them by, so they are read only from the
+step that wrapped them.
+
 The declared algorithm also picks the default `policy` usages, sign and verify
 for a keypair and wrap and unwrap for a symmetric key, exactly as at generation.
 `extractable` defaults to true either way, because the backend has just held the
@@ -199,10 +216,13 @@ declared algorithm is checked against what the material turns out to be, so a
 key stored under a name it does not answer to fails the step instead.
 
 A private key is read as PEM or DER, whichever it is, since PEM announces
-itself in its first line and is what `openssl` writes by default. An encrypted
+itself in its first line and is what `openssl` writes by default. Its file is
+declared `private_key`, or `secret` or `bytes` for the raw bytes of a
+symmetric key; text is refused, since text is shown and recorded. An encrypted
 key, in either PEM encoding or as PKCS#8 DER, is opened with the secret a step
-named `passphrase` in `reads:` holds, read at the keyboard by `enter_secret`;
-see [typed-entry.md](typed-entry.md). Without one it is refused by name, and
+named `passphrase` in `reads:` holds, read at the keyboard by `enter_secret`
+or from a file declared `secret`; see [typed-entry.md](typed-entry.md).
+Without one it is refused by name, and
 so is a passphrase given for a key that is not encrypted.
 
 `expect_key` and `policy` work as they do at unwrap, and `expect_key` matters

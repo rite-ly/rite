@@ -8,7 +8,7 @@ use super::SymbolTable;
 use super::ids::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};
 use crate::expression::ExprValue;
 use crate::material::MaterialSource;
-use crate::types::{ActionType, DutyType, FileKind, Metadata, ParameterType};
+use crate::types::{ActionType, ArtifactKind, DutyType, FileKind, Metadata, ParameterType};
 use rite_sdk::{BackendConfig, KeyAlgorithm, KeyFingerprint, KeyId};
 use std::collections::HashMap;
 
@@ -241,6 +241,17 @@ pub struct HeldKey {
 }
 
 impl MaterialKind {
+    /// What a step reading this material is given: the file's kind, the
+    /// identifier of a physical item as text, or a key a backend holds.
+    #[must_use]
+    pub fn artifact_kind(&self) -> ArtifactKind {
+        match self {
+            MaterialKind::File { kind, .. } => ArtifactKind::File(*kind),
+            MaterialKind::Physical { .. } => ArtifactKind::File(FileKind::Text),
+            MaterialKind::BackendKey(_) => ArtifactKind::BackendKey,
+        }
+    }
+
     /// The `type:` a ceremony declares: the file's kind, `physical`, or
     /// `backend_key`.
     #[must_use]

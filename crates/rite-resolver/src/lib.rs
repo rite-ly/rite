@@ -1792,6 +1792,14 @@ sections:
             assert!(yaml.contains("action: encrypt_data"));
             let result = resolve(&yaml, None);
             assert!(!result.is_err(), "unexpected errors: {:?}", result.errors);
+            // Its `.public`, read as content, is the public half too.
+            let content = yaml.replace(
+                r#"data: "${artifact.manifest}""#,
+                r#"data: "${artifact.signing_key.public}""#,
+            );
+            assert!(content.contains("signing_key.public"));
+            let result = resolve(&content, None);
+            assert!(!result.is_err(), "unexpected errors: {:?}", result.errors);
         }
 
         /// Each refusal points at what the author has to change: the

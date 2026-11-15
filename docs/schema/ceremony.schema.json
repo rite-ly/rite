@@ -2379,6 +2379,7 @@
                     "type": "object",
                     "properties": {
                       "value": {
+                        "description": "Takes shares or any file's bytes.",
                         "type": "string"
                       }
                     },
@@ -2559,12 +2560,15 @@
                     "type": "object",
                     "properties": {
                       "key_to_wrap": {
+                        "description": "Takes backend_key.",
                         "type": "string"
                       },
                       "recipient": {
+                        "description": "Takes anything a public key is read from.",
                         "type": "string"
                       },
                       "wrapping_key": {
+                        "description": "Takes backend_key.",
                         "type": "string"
                       }
                     },
@@ -2658,9 +2662,11 @@
                     "type": "object",
                     "properties": {
                       "unwrapping_key": {
+                        "description": "Takes backend_key.",
                         "type": "string"
                       },
                       "wrapped_data": {
+                        "description": "Takes wrapped_key.",
                         "type": "string"
                       }
                     },
@@ -2711,9 +2717,11 @@
                     "type": "object",
                     "properties": {
                       "key_material": {
+                        "description": "Takes private_key, secret or bytes.",
                         "type": "string"
                       },
                       "passphrase": {
+                        "description": "Takes secret.",
                         "type": "string"
                       }
                     },
@@ -2763,12 +2771,15 @@
                     "type": "object",
                     "properties": {
                       "data": {
+                        "description": "Takes any file's bytes.",
                         "type": "string"
                       },
                       "encryption_key": {
+                        "description": "Takes backend_key.",
                         "type": "string"
                       },
                       "recipient": {
+                        "description": "Takes anything a public key is read from.",
                         "type": "string"
                       }
                     },
@@ -2862,9 +2873,11 @@
                     "type": "object",
                     "properties": {
                       "decryption_key": {
+                        "description": "Takes backend_key.",
                         "type": "string"
                       },
                       "encrypted_data": {
+                        "description": "Takes encrypted_data or bytes.",
                         "type": "string"
                       }
                     },
@@ -2924,6 +2937,7 @@
                     "type": "object",
                     "properties": {
                       "secret": {
+                        "description": "Takes any file's bytes.",
                         "type": "string"
                       }
                     },
@@ -2968,6 +2982,7 @@
                       "shares": {
                         "type": "array",
                         "items": {
+                          "description": "Takes shares.",
                           "type": "string"
                         },
                         "minItems": 2
@@ -3090,9 +3105,11 @@
                     "type": "object",
                     "properties": {
                       "data": {
+                        "description": "Takes any file's bytes.",
                         "type": "string"
                       },
                       "key": {
+                        "description": "Takes backend_key.",
                         "type": "string"
                       }
                     },
@@ -3136,12 +3153,15 @@
                     "type": "object",
                     "properties": {
                       "data": {
+                        "description": "Takes any file's bytes.",
                         "type": "string"
                       },
                       "key": {
+                        "description": "Takes anything a public key is read from.",
                         "type": "string"
                       },
                       "signature": {
+                        "description": "Takes signature or bytes.",
                         "type": "string"
                       }
                     },
@@ -3368,12 +3388,15 @@
                     "type": "object",
                     "properties": {
                       "csr": {
+                        "description": "Takes csr or bytes.",
                         "type": "string"
                       },
                       "issuer_cert": {
+                        "description": "Takes anything a certificate is read from.",
                         "type": "string"
                       },
                       "signing_key": {
+                        "description": "Takes backend_key.",
                         "type": "string"
                       }
                     },
@@ -3424,6 +3447,7 @@
                     "type": "object",
                     "properties": {
                       "signing_key": {
+                        "description": "Takes backend_key.",
                         "type": "string"
                       }
                     },

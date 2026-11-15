@@ -3,12 +3,10 @@
 use crossterm::event::{KeyEvent, MouseEvent};
 use rite_runtime::{ExecEvent, UiCommand};
 
-/// Input to the pure [`update`] function.
+/// Input to the pure `update` function.
 ///
 /// Every state transition in the UI corresponds to exactly one `Msg`,
 /// which makes the audit surface a single enum.
-///
-/// [`update`]: crate::update::update
 #[derive(Debug)]
 pub enum Msg {
     /// Key press from the terminal.
@@ -31,10 +29,8 @@ pub enum Msg {
     Quit,
 }
 
-/// Side effect produced by [`update`]. The runtime loop interprets these
+/// Side effect produced by `update`. The runtime loop interprets these
 /// after every `update` call.
-///
-/// [`update`]: crate::update::update
 #[derive(Debug)]
 pub enum Cmd {
     /// Send a command back to the executor thread.

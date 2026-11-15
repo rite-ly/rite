@@ -1,7 +1,7 @@
 //! Test-only helpers for action implementors.
 //!
 //! Provides a [`ReporterHarness`] that owns the channels and an
-//! [`InMemorySink`](crate::InMemorySink) needed to construct a
+//! [`InMemorySink`] needed to construct a
 //! [`Reporter`] in unit and integration tests, so downstream crates can
 //! exercise their actions without dealing with channel plumbing.
 
@@ -290,7 +290,7 @@ pub fn fact_event(fact: StepFact) -> ExecEvent {
     }
 }
 
-/// A [`Clock`](crate::Clock) frozen at a caller-chosen instant, for asserting
+/// A [`Clock`] frozen at a caller-chosen instant, for asserting
 /// that event times come from the injected clock rather than the wall clock.
 pub struct FixedClock(pub DateTime<Utc>);
 

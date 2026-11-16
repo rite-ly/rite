@@ -63,7 +63,7 @@ const VALUE_INFO_PREFIX_V1: &str = "rite/nonce/v1/";
 const SEED_LEN: usize = 32;
 
 /// Longest value a single draw can produce: the `HKDF-Expand` output limit of
-/// `255 * HashLen` bytes (RFC 5869), with SHA-256's 32-byte output. [`expand`]
+/// `255 * HashLen` bytes (RFC 5869), with SHA-256's 32-byte output. `expand`
 /// panics beyond this, so anything replaying a recorded draw must bound the
 /// requested length by this value first.
 pub const MAX_DRAW_LEN: usize = 255 * SEED_LEN;

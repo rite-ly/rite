@@ -25,8 +25,8 @@ use rite_sdk::cms;
 use rite_sdk::{
     AgreedSecret, Backend, BackendError, DataKey, KeyAgreementBackend, KeyAlgorithm, KeyCheckValue,
     KeyFingerprint, KeyId, KeyMetadata, KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend,
-    KeyTransportBackend, KeyUsages, PublicKeyDer, RandomBackend, SignAlgorithm, SignBackend,
-    VerifyBackend, WrapScheme, WrappedKey,
+    KeyTransportBackend, KeyUsages, PublicKeyDer, RandomBackend, SecretKeyValue, SignAlgorithm,
+    SignBackend, VerifyBackend, WrapScheme, WrappedKey,
 };
 use std::collections::HashMap;
 use zeroize::Zeroizing;
@@ -940,6 +940,23 @@ fn permits_export(key: &StoredKey) -> Result<(), BackendError> {
         "key '{}' was generated as non-extractable, so it cannot be wrapped. \
          Add `policy: {{ extractable: true }}` to the step that generates it, \
          or leave the key where it is.",
+        key.label
+    )))
+}
+
+/// Refuse to return a key's value unless its policy allows it.
+///
+/// Returning the value requires both `sensitive: false` and
+/// `extractable: true`, as in PKCS#11. A software backend could return the
+/// bytes regardless, so the policy check is the only guard.
+fn permits_value_export(key: &StoredKey) -> Result<(), BackendError> {
+    if !key.policy.sensitive && key.policy.extractable {
+        return Ok(());
+    }
+    Err(BackendError::OperationNotPermitted(format!(
+        "the policy of key '{}' keeps its value inside the backend. To let the \
+         value leave, give the step that generates, imports or unwraps it \
+         `policy: {{ sensitive: false, extractable: true }}`.",
         key.label
     )))
 }
@@ -2190,6 +2207,22 @@ impl KeyTransportBackend for OpenSslBackend {
 
         wrap_under(recipient_pub_key, &key_material, scheme, self)
     }
+
+    fn export_secret_key(&mut self, key_id: &KeyId) -> Result<SecretKeyValue, BackendError> {
+        let key = self.get_key(key_id)?;
+        let KeyMaterial::Symmetric { secret, .. } = &key.material else {
+            return Err(BackendError::UnsupportedAlgorithm(format!(
+                "'{}' is {}, a keypair. This operation returns only symmetric key \
+                 values; use the `wrap_key` action to move a private key.",
+                key.label, key.algorithm
+            )));
+        };
+        permits_value_export(key)?;
+        let value = Zeroizing::new(secret.to_vec());
+        // Over the copy, not the cached one: what names these bytes.
+        let check_value = key_check_value(&value)?;
+        Ok(SecretKeyValue::new(value, check_value))
+    }
 }
 
 #[cfg(test)]
@@ -2254,6 +2287,75 @@ mod tests {
             },
             ..spec(algorithm, label)
         }
+    }
+
+    /// A key whose value a ceremony intends to take out, to split it.
+    fn exportable(algorithm: KeyAlgorithm, label: &str) -> KeySpec {
+        KeySpec {
+            policy: KeyPolicy {
+                sensitive: false,
+                extractable: true,
+                ..KeyPolicy::default()
+            },
+            ..spec(algorithm, label)
+        }
+    }
+
+    #[test]
+    fn export_secret_key_hands_over_the_value_the_check_value_names() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let meta = backend
+            .generate_key(exportable(KeyAlgorithm::Aes256, "kek"))
+            .unwrap();
+
+        let secret = backend.export_secret_key(&meta.key_id).unwrap();
+
+        assert_eq!(secret.value().len(), 32);
+        // The bytes that came out are the key the backend names, which is
+        // what lets a split be tied to the check value its recovery meets.
+        assert_eq!(
+            key_check_value(secret.value()).unwrap(),
+            *secret.check_value()
+        );
+        assert_eq!(Some(secret.check_value()), meta.check_value.as_ref());
+    }
+
+    #[test]
+    fn export_secret_key_refuses_a_key_generated_to_stay_inside() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        // Each half of the policy alone is not enough, as on a PKCS#11 token.
+        for (sensitive, extractable) in [(true, false), (true, true), (false, false)] {
+            let meta = backend
+                .generate_key(KeySpec {
+                    policy: KeyPolicy {
+                        sensitive,
+                        extractable,
+                        ..KeyPolicy::default()
+                    },
+                    ..spec(KeyAlgorithm::Aes256, "kept")
+                })
+                .unwrap();
+            let error = backend.export_secret_key(&meta.key_id).unwrap_err();
+            assert!(
+                matches!(error, BackendError::OperationNotPermitted(_)),
+                "sensitive={sensitive} extractable={extractable}: {error}"
+            );
+            assert!(error.to_string().contains("sensitive: false"), "{error}");
+        }
+    }
+
+    #[test]
+    fn export_secret_key_refuses_a_keypair_by_name() {
+        let mut backend = OpenSslBackend::try_new("test").unwrap();
+        let meta = backend
+            .generate_key(exportable(KeyAlgorithm::EcdsaP256, "pair"))
+            .unwrap();
+        let error = backend.export_secret_key(&meta.key_id).unwrap_err();
+        assert!(
+            matches!(error, BackendError::UnsupportedAlgorithm(_)),
+            "{error}"
+        );
+        assert!(error.to_string().contains("keypair"), "{error}");
     }
 
     /// A key-encryption key, which wraps and unwraps rather than signs.

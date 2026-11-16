@@ -32,8 +32,8 @@ use rite_openssl::OpenSslBackend;
 #[cfg(feature = "openssl")]
 use rite_sdk::{
     DataKey, KeyAgreementBackend, KeyMetadata, KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend,
-    KeyTransportBackend, KeyUsages, RandomBackend, SignAlgorithm, SignBackend, VerifyBackend,
-    WrapScheme, WrappedKey,
+    KeyTransportBackend, KeyUsages, RandomBackend, SecretKeyValue, SignAlgorithm, SignBackend,
+    VerifyBackend, WrapScheme, WrappedKey,
 };
 #[cfg(feature = "openssl")]
 use zeroize::Zeroizing;
@@ -391,6 +391,10 @@ impl KeyTransportBackend for MockBackend {
     ) -> Result<WrappedKey, BackendError> {
         self.crypto
             .wrap_to_public(key_id, recipient_pub_key, scheme)
+    }
+
+    fn export_secret_key(&mut self, key_id: &KeyId) -> Result<SecretKeyValue, BackendError> {
+        self.crypto.export_secret_key(key_id)
     }
 }
 

@@ -2292,25 +2292,71 @@ fn split(
     threshold: u8,
     shares: u8,
 ) -> (ExecutionState, ArtifactValue) {
-    let secret_id = ArtifactId::new("seed_entropy");
-    let state =
-        make_state().with_material(secret_id.clone(), ArtifactValue::Bytes(secret.to_vec()));
-    let step = step_named("split", "shares", &[("secret", secret_id)]);
-    let made = {
-        let ctx = state.handler_context();
-        let mut reporter = harness.reporter(step.id.clone());
-        SplitSecretAction
-            .execute(
-                &step,
-                &ctx,
-                &serde_json::json!({ "threshold": threshold, "shares": shares }),
-                &mut reporter,
-                Some(backend),
-            )
-            .expect("split_secret completes")
-    };
-    let (_, value) = made.artifacts.into_iter().next().expect("one artifact");
-    (state, value)
+    let secret = (
+        ArtifactId::new("seed_entropy"),
+        ArtifactValue::Bytes(secret.to_vec()),
+    );
+    let (state, made) = try_split(backend, harness, "secret", secret, threshold, shares);
+    (state, made.expect("split_secret completes"))
+}
+
+/// A `split_secret` step reading `secret` under `input`, `secret` or `key`,
+/// with the state holding it so the shares can be added for a combine.
+fn try_split(
+    backend: &mut MockBackend,
+    harness: &mut ReporterHarness,
+    input: &str,
+    (secret_id, secret): (ArtifactId, ArtifactValue),
+    threshold: u8,
+    shares: u8,
+) -> (
+    ExecutionState,
+    Result<ArtifactValue, rite_runtime::ActionError>,
+) {
+    let state = make_state().with_material(secret_id.clone(), secret);
+    let step = step_named("split", "shares", &[(input, secret_id)]);
+    let made = run_split(&state, &step, harness, backend, threshold, shares).map(|made| {
+        let (_, value) = made.artifacts.into_iter().next().expect("one artifact");
+        value
+    });
+    (state, made)
+}
+
+/// Run `step` as a `split_secret` step against `state`.
+fn run_split(
+    state: &ExecutionState,
+    step: &StepInfo,
+    harness: &mut ReporterHarness,
+    backend: &mut MockBackend,
+    threshold: u8,
+    shares: u8,
+) -> Result<rite_runtime::StepResult, rite_runtime::ActionError> {
+    let ctx = state.handler_context();
+    let mut reporter = harness.reporter(step.id.clone());
+    SplitSecretAction.execute(
+        step,
+        &ctx,
+        &serde_json::json!({ "threshold": threshold, "shares": shares }),
+        &mut reporter,
+        Some(backend),
+    )
+}
+
+/// The inputs the first `kind` operation recorded, if one was.
+fn find_operation(harness: &ReporterHarness, kind: &str) -> Option<serde_json::Value> {
+    harness.facts().iter().find_map(|f| match f {
+        StepFact::BackendOperation {
+            kind: recorded,
+            inputs,
+            ..
+        } if recorded == kind => Some(inputs.clone()),
+        _ => None,
+    })
+}
+
+/// The inputs the first `kind` operation recorded.
+fn operation_inputs(harness: &ReporterHarness, kind: &str) -> serde_json::Value {
+    find_operation(harness, kind).unwrap_or_else(|| panic!("{kind} records an operation"))
 }
 
 #[test]
@@ -2330,16 +2376,7 @@ fn combine_shares_recovers_what_split_secret_made() {
     assert_eq!((set.threshold(), set.count()), (2, 3));
 
     // The fact says how, and nothing of what.
-    let inputs = harness
-        .facts()
-        .iter()
-        .find_map(|f| match f {
-            StepFact::BackendOperation { kind, inputs, .. } if kind == "split_secret" => {
-                Some(inputs.clone())
-            }
-            _ => None,
-        })
-        .expect("split_secret records an operation");
+    let inputs = operation_inputs(&harness, "split_secret");
     assert_eq!(inputs.get("scheme").unwrap(), "rite-sss/v1");
     assert!(!inputs.to_string().contains("wallet"));
     assert!(!inputs.to_string().contains("32"), "no length: {inputs}");
@@ -2427,6 +2464,165 @@ fn shares_that_left_as_bytes_come_back_and_combine() {
         ArtifactValue::Secret(bytes) => assert_eq!(bytes.expose_secret().as_slice(), secret),
         other => panic!("combine_shares must produce Secret, got {other:?}"),
     }
+}
+
+/// The policy a key must have been generated with for its value to be split.
+fn exportable_policy() -> KeyPolicy {
+    KeyPolicy {
+        sensitive: false,
+        extractable: true,
+        ..KeyPolicy::default()
+    }
+}
+
+#[test]
+fn split_secret_splits_a_backend_key_that_its_recovery_imports_back() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let (kek_id, kek) = backend_key_with(
+        &mut backend,
+        "kek",
+        KeyAlgorithm::Aes256,
+        exportable_policy(),
+    );
+    let ArtifactValue::BackendKey {
+        check_value: Some(check_value),
+        ..
+    } = &kek
+    else {
+        panic!("an AES key is named by its check value");
+    };
+    let check_value = check_value.to_string();
+    let mut harness = ReporterHarness::new();
+    let (state, shares) = try_split(&mut backend, &mut harness, "key", (kek_id, kek), 2, 3);
+    let shares = shares.expect("an exportable key splits");
+
+    // The record names the key that left by its check value, and still says
+    // nothing of its length.
+    let inputs = operation_inputs(&harness, "split_secret");
+    assert_eq!(
+        inputs.get("key_check_value").and_then(|v| v.as_str()),
+        Some(check_value.as_str())
+    );
+    // The export is a fact of its own, written before the split.
+    let exported = operation_inputs(&harness, "export_secret_key");
+    assert_eq!(
+        exported.get("key_check_value").and_then(|v| v.as_str()),
+        Some(check_value.as_str())
+    );
+    assert!(!inputs.to_string().contains("32"), "no length: {inputs}");
+
+    assert!(matches!(shares, ArtifactValue::Shares(_)), "{shares:?}");
+    let shares_id = ArtifactId::new("shares");
+    let state = state.with_material(shares_id.clone(), shares);
+    let combine = combine_step(&[(&shares_id, Some("share_2")), (&shares_id, Some("share_3"))]);
+    let recovered = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(combine.id.clone());
+        CombineSharesAction
+            .execute(&combine, &ctx, &serde_json::json!({}), &mut reporter, None)
+            .expect("combine_shares completes")
+    };
+    let ArtifactValue::Secret(bytes) = produced(&recovered.artifacts, "recovered") else {
+        panic!("combine_shares must produce Secret");
+    };
+
+    // Imported back, the recovered bytes are the key the split named.
+    let restored = backend
+        .import_key(
+            key_spec_with("restored", KeyAlgorithm::Aes256, KeyPolicy::default()),
+            bytes.expose_secret(),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        restored.check_value.map(|kcv| kcv.to_string()),
+        Some(check_value)
+    );
+}
+
+#[test]
+fn split_secret_refuses_a_key_generated_to_stay_inside() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let kek = backend_key(&mut backend, "kek", KeyAlgorithm::Aes256);
+    let mut harness = ReporterHarness::new();
+    let (_, made) = try_split(&mut backend, &mut harness, "key", kek, 2, 3);
+    let error = made.expect_err("a sensitive key does not leave its backend");
+    assert!(
+        error.to_string().contains("sensitive: false"),
+        "the refusal must say how to generate the key: {error}"
+    );
+}
+
+#[test]
+fn split_secret_reads_a_key_s_check_value_as_secret_bytes() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let (kek_id, kek) = backend_key_with(
+        &mut backend,
+        "kek",
+        KeyAlgorithm::Aes256,
+        exportable_policy(),
+    );
+    let state = make_state().with_material(kek_id.clone(), kek);
+    let map = HashMap::from([(
+        "secret".to_string(),
+        NamedInput::One(ArtifactRef::Produced {
+            id: kek_id,
+            property: Some("kcv".to_string()),
+        }),
+    )]);
+    let step = StepInfo::new(
+        StepId::new("split"),
+        None,
+        None,
+        Some(ArtifactId::new("shares")),
+        Some(StepInputs::Named(map)),
+    );
+    let mut harness = ReporterHarness::new();
+    let made = run_split(&state, &step, &mut harness, &mut backend, 2, 3)
+        .expect("a check value splits like any bytes");
+
+    // The three bytes `.kcv` names, and nothing leaves the backend.
+    let ArtifactValue::Shares(set) = produced(&made.artifacts, "shares") else {
+        panic!("split_secret must produce Shares");
+    };
+    assert_eq!(set.share(1).map(|share| share.y().len()), Some(3));
+    assert!(find_operation(&harness, "export_secret_key").is_none());
+}
+
+#[test]
+fn split_secret_refuses_bytes_read_as_a_key() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let mut harness = ReporterHarness::new();
+    let bytes = (ArtifactId::new("seed"), ArtifactValue::Bytes(vec![7; 32]));
+    let (_, made) = try_split(&mut backend, &mut harness, "key", bytes, 2, 3);
+    let error = made.expect_err("key: reads a key a backend holds");
+    assert!(
+        error.to_string().contains("Use 'secret:' to read bytes"),
+        "{error}"
+    );
+}
+
+#[test]
+fn split_secret_without_creates_refuses_before_the_key_leaves() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let (kek_id, kek) = backend_key_with(
+        &mut backend,
+        "kek",
+        KeyAlgorithm::Aes256,
+        exportable_policy(),
+    );
+    let state = make_state().with_material(kek_id.clone(), kek);
+    let mut step = step_named("split", "shares", &[("key", kek_id)]);
+    step.produces = None;
+    let mut harness = ReporterHarness::new();
+    let error = run_split(&state, &step, &mut harness, &mut backend, 2, 3)
+        .expect_err("shares no step can name are refused");
+    assert!(error.to_string().contains("must create"), "{error}");
+    assert!(
+        harness.facts().is_empty(),
+        "refused before anything happened: {:?}",
+        harness.facts()
+    );
 }
 
 #[test]

@@ -47,6 +47,6 @@ pub use types::{
     KeyId, KeyMetadata, KeyPolicy, KeyProtection, KeySecurityAttributes, KeySpec, KeyUsages, Oid,
     ParseError, PcrValue, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo,
     PivTouchPolicy, Pkcs11Mechanism, Pkcs11TokenFlags, Pkcs11TokenInfo, Provider,
-    RecipientInfoKind, Rfc5280KeyId, SignAlgorithm, TpmInfo, WrapDescription, WrapScheme,
-    WrappedKey, YubikeySlotMetadata, oid,
+    RecipientInfoKind, Rfc5280KeyId, SecretKeyValue, SignAlgorithm, TpmInfo, WrapDescription,
+    WrapScheme, WrappedKey, YubikeySlotMetadata, oid,
 };

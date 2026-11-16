@@ -223,7 +223,7 @@
           "const": "decrypt_data"
         },
         {
-          "description": "Split a secret into shares so that `threshold` of them can recover it.\n\nThe step uses the backend for randomness and checks every subset of `threshold` shares before it completes. The shares are stored in one artifact, and later steps can read individual shares.",
+          "description": "Split a secret into shares so that `threshold` of them can recover it.\n\nReads exactly one of `secret`, bytes the ceremony holds, or `key`, a symmetric key held by a backend. Using `key` shows that the key leaves its backend in this step. Its value leaves only as shares, and no later step can name it. The backend allows this only if the key's policy says `sensitive: false` and `extractable: true`. The step uses the backend for randomness and checks every subset of `threshold` shares before it completes. The shares are stored in one artifact, and later steps can read individual shares.",
           "type": "string",
           "const": "split_secret"
         },
@@ -2936,15 +2936,35 @@
                   "reads": {
                     "type": "object",
                     "properties": {
+                      "key": {
+                        "description": "Takes backend_key.",
+                        "type": "string"
+                      },
                       "secret": {
                         "description": "Takes any file's bytes.",
                         "type": "string"
                       }
                     },
                     "additionalProperties": false,
-                    "required": [
-                      "secret"
-                    ]
+                    "allOf": [
+                      {
+                        "errorMessage": "'reads' must name exactly one of 'secret', 'key'",
+                        "oneOf": [
+                          {
+                            "required": [
+                              "secret"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "key"
+                            ]
+                          }
+                        ],
+                        "x-message": "'reads' must name exactly one of 'secret', 'key'"
+                      }
+                    ],
+                    "required": []
                   }
                 },
                 "required": [

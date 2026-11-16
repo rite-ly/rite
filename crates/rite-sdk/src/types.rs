@@ -1593,6 +1593,43 @@ impl DataKey {
     }
 }
 
+/// The value of a symmetric key returned by a backend, with the check value
+/// computed over that value.
+///
+/// Computing the check value over the returned bytes lets the caller check
+/// that they are the key it named before using them.
+pub struct SecretKeyValue {
+    value: zeroize::Zeroizing<Vec<u8>>,
+    check_value: KeyCheckValue,
+}
+
+impl SecretKeyValue {
+    /// Pair a key's value with its check value.
+    #[must_use]
+    pub fn new(value: zeroize::Zeroizing<Vec<u8>>, check_value: KeyCheckValue) -> Self {
+        Self { value, check_value }
+    }
+
+    /// The key's value.
+    #[must_use]
+    pub fn value(&self) -> &[u8] {
+        &self.value
+    }
+
+    /// The check value of [`value`](Self::value).
+    #[must_use]
+    pub fn check_value(&self) -> &KeyCheckValue {
+        &self.check_value
+    }
+}
+
+/// A `Debug` representation that shows the check value but not the key's value.
+impl std::fmt::Debug for SecretKeyValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SecretKeyValue({})", self.check_value)
+    }
+}
+
 /// The secret a key agreement produces: Z in NIST SP 800-56A, input to a
 /// key-derivation function and never a key on its own.
 ///

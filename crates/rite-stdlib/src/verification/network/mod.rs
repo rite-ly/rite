@@ -1,10 +1,12 @@
 //! The network state of the machine: interfaces, default routes, radios.
 //!
 //! Nothing here sends traffic. Interfaces, addresses and counters come from
-//! `sysinfo` on every platform; on Linux, sysfs adds the kind of each
-//! interface, its carrier and the radios. The route check opens a UDP socket
-//! and connects it, which only queries the routing table. The sysfs probes
-//! read under a root given as a parameter (see `probe_fixtures`).
+//! `sysinfo` on every platform. On Linux, sysfs adds the kind of each
+//! interface, its carrier and the radios; on macOS, `ifconfig`,
+//! `networksetup` and `system_profiler` do (see `macos`). The route check
+//! opens a UDP socket and connects it, which only queries the routing table.
+//! The sysfs probes read under a root given as a parameter (see
+//! `probe_fixtures`).
 
 use std::ffi::OsStr;
 use std::io::ErrorKind;
@@ -17,6 +19,10 @@ use rite_runtime::{Counters, DefaultRoute, InterfaceKind, NetworkInterface, Netw
 
 #[cfg(any(target_os = "linux", test))]
 use super::probe_files::{has_entry, read_trimmed};
+
+// The parsers are tested on every platform; only macOS runs the tools.
+#[cfg(any(target_os = "macos", test))]
+mod macos;
 
 /// An IPv4 address no network uses (RFC 5737, documentation range): only a
 /// default route reaches it.
@@ -41,7 +47,11 @@ pub fn network_snapshot() -> NetworkSnapshot {
     // `sysinfo` fails only on systems it does not support, none of them a
     // Rite target.
     let networks = sysinfo::Networks::new_with_refreshed_list().ok();
-    let interfaces = networks.as_ref().map(interfaces);
+    #[cfg(target_os = "macos")]
+    let links = macos::read_links();
+    #[cfg(target_os = "macos")]
+    let link = |name: &OsStr| macos::link(links.as_ref(), name);
+    let interfaces = networks.as_ref().map(|networks| interfaces(networks, link));
     #[cfg(target_os = "linux")]
     let radios = radios(
         Path::new("/sys/class/rfkill"),
@@ -49,7 +59,9 @@ pub fn network_snapshot() -> NetworkSnapshot {
             .as_ref()
             .map(|interfaces| interfaces.iter().map(|interface| interface.kind)),
     );
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    let radios = links.as_ref().and_then(macos::read_radios);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let radios = None;
     NetworkSnapshot {
         interfaces,
@@ -61,8 +73,12 @@ pub fn network_snapshot() -> NetworkSnapshot {
     }
 }
 
-/// The interfaces `sysinfo` lists, but loopback, sorted by name.
-fn interfaces(networks: &sysinfo::Networks) -> Vec<NetworkInterface> {
+/// The interfaces `sysinfo` lists, but loopback, sorted by name. `link` gives
+/// the kind and carrier of an interface.
+fn interfaces(
+    networks: &sysinfo::Networks,
+    link: impl Fn(&OsStr) -> (InterfaceKind, Option<bool>),
+) -> Vec<NetworkInterface> {
     let mut listed: Vec<_> = networks
         .iter()
         .filter(|(name, data)| is_interface(name) && !is_loopback(name, data.ip_networks()))
@@ -142,7 +158,7 @@ fn link(name: &OsStr) -> (InterfaceKind, Option<bool>) {
     sysfs_link(&Path::new("/sys/class/net").join(name))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn link(_name: &OsStr) -> (InterfaceKind, Option<bool>) {
     (InterfaceKind::Unknown, None)
 }
@@ -364,7 +380,7 @@ mod tests {
                 .iter()
                 .all(|i| !matches!(i.name.as_str(), "lo" | "lo0"))
         );
-        if !cfg!(target_os = "linux") {
+        if !cfg!(any(target_os = "linux", target_os = "macos")) {
             assert!(snapshot.radios.is_none());
         }
     }

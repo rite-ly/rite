@@ -69,16 +69,18 @@ pub struct NetworkState {
     /// Whether a default route exists, per address family.
     #[cfg_attr(test, schemars(description = "Whether a default route exists."))]
     pub default_route: DefaultRoute,
-    /// Radios registered with rfkill (Wi-Fi, Bluetooth, cellular). `None`
-    /// when unknown: outside Linux, when rfkill cannot be read, or when
-    /// rfkill is absent and `/sys/class` or the interface list is
+    /// Radios (Wi-Fi, Bluetooth, cellular): those registered with rfkill on
+    /// Linux, the Wi-Fi devices and Bluetooth controllers on macOS. `None`
+    /// when unknown: on other platforms, when a probe fails, or on Linux
+    /// when rfkill is absent and `/sys/class` or the interface list is
     /// unavailable or a radio interface is present.
     #[cfg_attr(
         test,
         schemars(
-            description = "Radios registered with rfkill (Wi-Fi, Bluetooth, cellular); null when \
-            unknown: outside Linux, when rfkill cannot be read, or when rfkill is absent and \
-            /sys/class or the interface list is unavailable or a radio interface is present."
+            description = "Radios (Wi-Fi, Bluetooth, cellular): rfkill on Linux, the Wi-Fi \
+            devices and Bluetooth controllers on macOS; null when unknown: on other platforms, \
+            when a probe fails, or on Linux when rfkill is absent and /sys/class or the \
+            interface list is unavailable or a radio interface is present."
         )
     )]
     pub radios: Option<Vec<Radio>>,
@@ -90,7 +92,11 @@ impl fmt::Display for NetworkState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.interfaces {
             Some(interfaces) => {
-                let up = interfaces.iter().filter(|i| i.state == "up").count();
+                // macOS reports an interface up as soon as its driver runs.
+                let up = interfaces
+                    .iter()
+                    .filter(|i| i.state == "up" && i.carrier != Some(false))
+                    .count();
                 let addressed = interfaces.iter().filter(|i| i.address).count();
                 write!(
                     f,
@@ -143,10 +149,13 @@ pub struct InterfaceState {
     #[cfg_attr(test, schemars(description = "What kind of link the interface is."))]
     pub kind: InterfaceKind,
     /// Operational state as the system reports it (e.g. `"up"`, `"down"`).
+    /// macOS reports an interface up as soon as its driver runs: `carrier`
+    /// says whether it has a link.
     #[cfg_attr(
         test,
         schemars(
-            description = "The operational state as the system reports it, such as up or down."
+            description = "The operational state as the system reports it, such as up or down; \
+            on macOS, up only means the driver runs, and carrier says whether there is a link."
         )
     )]
     pub state: String,
@@ -202,7 +211,7 @@ pub enum InterfaceKind {
         )
     )]
     Virtual,
-    /// Not determined (every platform but Linux).
+    /// Not determined (Windows, or a probe that failed).
     #[cfg_attr(test, schemars(description = "Not determined."))]
     Unknown,
 }
@@ -288,23 +297,28 @@ pub struct DefaultRoute {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, schemars(description = "A radio and whether it is blocked."))]
 pub struct Radio {
-    /// The radio type as the kernel names it (`"wlan"`, `"bluetooth"`,
-    /// `"wwan"`, `"gps"`, `"nfc"`, ...).
+    /// The radio type in rfkill's vocabulary (`"wlan"`, `"bluetooth"`,
+    /// `"wwan"`, `"gps"`, `"nfc"`, ...), on macOS too.
     #[cfg_attr(
         test,
         schemars(
-            description = "The radio type as the kernel names it, such as wlan or bluetooth."
+            description = "The radio type in rfkill's vocabulary, such as wlan or bluetooth."
         )
     )]
     pub kind: String,
-    /// The name the driver gives the radio (e.g. `"phy0"`, `"hci0"`).
+    /// The name the driver gives the radio (e.g. `"phy0"`, `"hci0"`); on
+    /// macOS the Wi-Fi device (`"en0"`) or the Bluetooth chipset.
     #[cfg_attr(test, schemars(description = "The name the driver gives the radio."))]
     pub name: String,
-    /// Blocked in software (`rfkill block`, a desktop toggle).
+    /// Blocked in software (`rfkill block`, a desktop toggle, the radio
+    /// switched off on macOS).
     #[cfg_attr(test, schemars(description = "Blocked in software."))]
     pub soft_blocked: bool,
-    /// Blocked by a hardware switch.
-    #[cfg_attr(test, schemars(description = "Blocked by a hardware switch."))]
+    /// Blocked by a hardware switch. A Mac has none, so always `false` there.
+    #[cfg_attr(
+        test,
+        schemars(description = "Blocked by a hardware switch; a Mac has none.")
+    )]
     pub hard_blocked: bool,
 }
 

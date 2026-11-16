@@ -137,20 +137,16 @@ fn get_machine_id() -> Option<String> {
 /// The binary is resolved at `/usr/bin/dmesg` (falling back to `/bin/dmesg`),
 /// never through the inherited `PATH`: the output feeds recorded
 /// security-posture evidence, and a `PATH` shim must not be able to forge it.
-/// Returns `None` when the binary is missing or the probe fails (spawn error
-/// or non-zero exit, e.g. an unprivileged read of a restricted kernel
-/// buffer), so callers can record "probe failed" distinctly from "feature
-/// inactive".
+/// Returns `None` when the binary is missing or the probe fails (spawn error,
+/// non-zero exit such as an unprivileged read of a restricted kernel buffer,
+/// or the deadline of `run_probe`), so callers can record "probe failed"
+/// distinctly from "feature inactive".
 #[cfg(target_os = "linux")]
 fn read_dmesg() -> Option<String> {
     let path = ["/usr/bin/dmesg", "/bin/dmesg"]
         .into_iter()
         .find(|p| std::path::Path::new(p).exists())?;
-    let output = std::process::Command::new(path).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    super::probe_command::run_probe(path, &[])
 }
 
 #[cfg(target_os = "linux")]

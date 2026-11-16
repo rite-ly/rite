@@ -1,7 +1,7 @@
 //! `rite check`: validate a ceremony definition file.
 
 use crate::common::{
-    InputArgs, build_inputs_or_exit, resolve_with_spans_or_exit, unsupported_action_names,
+    InputArgs, build_inputs_or_exit, resolve_or_exit, unsupported_action_names,
     unsupported_step_params,
 };
 use clap::Args as ClapArgs;
@@ -14,14 +14,21 @@ use std::path::{Path, PathBuf};
 pub struct Args {
     /// Path to the ceremony YAML file
     pub file: PathBuf,
+    /// Read the ceremony from stdin instead of FILE
+    ///
+    /// FILE still names it: diagnostics point at it and material paths
+    /// resolve against its directory. For an editor that checks a buffer it
+    /// has not saved.
+    #[arg(long)]
+    pub stdin: bool,
     #[command(flatten)]
     pub input: InputArgs,
 }
 
 pub fn run(args: &Args) {
     let inputs = build_inputs_or_exit(&args.input);
-    let (resolved, spans) =
-        resolve_with_spans_or_exit(&args.file, (!inputs.is_empty()).then_some(&inputs));
+    let inputs = (!inputs.is_empty()).then_some(&inputs);
+    let (resolved, spans) = resolve_or_exit(&args.file, args.stdin, inputs);
 
     // A value wrong in any build already failed resolution above. What is
     // left is what this binary in particular cannot carry out.

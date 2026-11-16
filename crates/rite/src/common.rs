@@ -5,7 +5,7 @@ use rite_model::{Ceremony, MaterialKind, MaterialSource};
 use rite_render::{Branding, Theme};
 use rite_resolver::CeremonyInputs;
 use std::collections::HashMap;
-use std::io::BufRead;
+use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
 
 /// Input flags shared by `check`, `run`, and `script`.
@@ -221,25 +221,44 @@ pub fn build_inputs_or_exit(input_args: &InputArgs) -> CeremonyInputs {
     }
 }
 
-/// Resolve a ceremony file, printing diagnostics and exiting on failure.
-///
-/// Used by `check`, `script`, and `report` — any non-interactive entry point
-/// that needs a `Ceremony` from a YAML path.
-pub fn resolve_or_exit(path: &Path, inputs: Option<&CeremonyInputs>) -> Ceremony {
-    resolve_with_spans_or_exit(path, inputs).0
-}
-
-/// Resolve a ceremony file and keep the span map, printing diagnostics and
+/// Resolve a ceremony and keep the span map, printing diagnostics and
 /// exiting on failure.
 ///
-/// Used by `check`, which reports handler-level findings of its own and needs
-/// somewhere in the source to point them at.
-pub fn resolve_with_spans_or_exit(
+/// The definition is read from `path`, or with `stdin` from stdin, for an
+/// editor that checks or renders a buffer it has not saved. `path` then only
+/// names it: diagnostics point at it and material paths resolve against its
+/// directory.
+pub fn resolve_or_exit(
     path: &Path,
+    stdin: bool,
     inputs: Option<&CeremonyInputs>,
 ) -> (Ceremony, rite_resolver::SpanMap) {
-    let (resolved_opt, spans, diags) = rite_resolver::analyze_with_spans(path, inputs);
+    if !stdin {
+        return report_or_exit(rite_resolver::analyze_with_spans(path, inputs));
+    }
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        eprintln!(
+            "--stdin reads the ceremony from a pipe, for example: < {}",
+            path.display()
+        );
+        std::process::exit(1);
+    }
+    let yaml = std::io::read_to_string(stdin).unwrap_or_else(|e| {
+        eprintln!("Failed to read the ceremony from stdin: {e}");
+        std::process::exit(1);
+    });
+    report_or_exit(rite_resolver::analyze_text_with_spans(path, &yaml, inputs))
+}
 
+/// Print the diagnostics of an analysis, and exit when any is an error.
+fn report_or_exit(
+    (resolved_opt, spans, diags): (
+        Option<Ceremony>,
+        rite_resolver::SpanMap,
+        Vec<rite_resolver::Diagnostic>,
+    ),
+) -> (Ceremony, rite_resolver::SpanMap) {
     for d in &diags {
         eprintln!("{d}");
     }

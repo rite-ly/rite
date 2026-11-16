@@ -32,8 +32,8 @@ use crate::key_material::PublicKeyDer;
 use crate::types::{
     AgreedSecret, Attestation, CertRef, DataKey, KeyAlgorithm, KeyId, KeyMetadata, KeyPolicy,
     KeyProtection, KeySecurityAttributes, KeySpec, PcrValue, PivDeviceInfo, PivSlot, PivSlotInfo,
-    Pkcs11Mechanism, Pkcs11TokenInfo, SignAlgorithm, TpmInfo, WrapScheme, WrappedKey,
-    YubikeySlotMetadata,
+    Pkcs11Mechanism, Pkcs11TokenInfo, SecretKeyValue, SignAlgorithm, TpmInfo, WrapScheme,
+    WrappedKey, YubikeySlotMetadata,
 };
 
 /// Implement the `as_*_mut` upcasting helpers on a backend struct.
@@ -321,11 +321,15 @@ pub trait RandomBackend: Backend {
     fn generate_random(&mut self, len: usize) -> Result<Vec<u8>, BackendError>;
 }
 
-/// Key transport (wrapping) operations.
+/// Operations that return or move key material across the backend boundary.
 ///
-/// Every method returns a [`WrappedKey`] carrying the scheme it was asked for
-/// and a [`WrapDescription`](crate::types::WrapDescription) of what it did, so
-/// the caller records an observation rather than a request.
+/// `generate_data_key` and `open_data_key` return a content key for the caller
+/// to use. `wrap`, `unwrap`, `wrap_to_public`, and `export_secret_key` move
+/// keys held by the backend out of or into it.
+///
+/// A wrap returns a [`WrappedKey`] carrying the scheme it was asked for and a
+/// [`WrapDescription`](crate::types::WrapDescription) of what it did, so the
+/// caller records an observation rather than a request.
 pub trait KeyTransportBackend: Backend {
     /// Wrap `key_id` using `wrapping_key_id` under `scheme`.
     fn wrap(
@@ -429,6 +433,31 @@ pub trait KeyTransportBackend: Backend {
         Err(BackendError::UnsupportedOperation(
             "wrap_to_public not supported".to_string(),
         ))
+    }
+
+    /// Return the value of a symmetric key held by the backend.
+    ///
+    /// A "secret key" in the PKCS#11 (`CKO_SECRET_KEY`) and JCA (`SecretKey`)
+    /// sense: a key with no public half. This is the counterpart of
+    /// [`KeyStoreBackend::export_public_key`] for a keypair.
+    ///
+    /// The key's policy must say `sensitive: false` and `extractable: true`.
+    /// This lets a caller protect the value itself, as a k-of-n split does.
+    /// The check value is computed over the returned bytes so the caller can
+    /// compare it with the check value that names the key.
+    ///
+    /// # Errors
+    ///
+    /// Returns `OperationNotPermitted` if the key's policy does not allow its
+    /// value to leave the backend, `UnsupportedAlgorithm` for a keypair, or
+    /// `UnsupportedOperation` if the backend does not implement this method.
+    ///
+    /// Default implementation returns `UnsupportedOperation`.
+    fn export_secret_key(&mut self, key_id: &KeyId) -> Result<SecretKeyValue, BackendError> {
+        Err(BackendError::UnsupportedOperation(format!(
+            "backend '{}' does not let the value of key '{key_id}' out",
+            self.name()
+        )))
     }
 }
 

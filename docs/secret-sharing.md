@@ -40,6 +40,51 @@ room, or a secret a person typed into an earlier step. `threshold` is how
 many shares recover the secret and `shares` how many are made, each from 2
 to 100, with at least as many shares as the threshold.
 
+## Splitting a key
+
+Use `key:` to split a symmetric key held by the backend. The example
+generates a key with an exportable policy and splits it; a later recovery
+can import it with `import_key`:
+
+```yaml
+make_the_kek:
+  action: generate_key
+  backend: openssl
+  with:
+    algorithm: AES-256
+    policy:
+      sensitive: false
+      extractable: true
+  creates: kek
+
+split_the_kek:
+  action: split_secret
+  backend: openssl
+  reads:
+    key: ${artifact.kek}
+  with:
+    threshold: 3
+    shares: 5
+  creates: shares
+```
+
+`key:` shows that the key leaves its backend in this step. Its value is read
+out inside the split and goes no further: no later step can name the key's
+value, only the shares. `key:` names a key whole; its check value,
+`${artifact.kek.kcv}`, is bytes and can be split with `secret:` instead.
+The key's policy decides whether its value may leave: the default keeps it
+inside, and the split is refused. Both `sensitive: false` and
+`extractable: true` are needed. Set these in the step that generates,
+imports, or unwraps the key. A backend that never lets a key's value out,
+such as a PIV card, cannot be used for this input.
+
+The transcript records the export as soon as the value leaves the backend.
+If the split later fails, the transcript still shows the export. Both the
+export and split records carry the key's check value, computed by the
+backend over the bytes it handed over and compared with the one recorded
+for the key. The shares are tied to the key, and the key to whatever it
+encrypted.
+
 ## What a split does before it finishes
 
 Every combination of `threshold` shares is put back together and compared

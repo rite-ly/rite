@@ -149,6 +149,11 @@ pub enum ActionType {
     DecryptData,
     /// Split a secret into shares so that `threshold` of them can recover it.
     ///
+    /// Reads exactly one of `secret`, bytes the ceremony holds, or `key`, a
+    /// symmetric key held by a backend. Using `key` shows that the key leaves
+    /// its backend in this step. Its value leaves only as shares, and no later
+    /// step can name it. The backend allows this only if the key's policy says
+    /// `sensitive: false` and `extractable: true`.
     /// The step uses the backend for randomness and checks every subset of
     /// `threshold` shares before it completes. The shares are stored in one
     /// artifact, and later steps can read individual shares.
@@ -991,10 +996,23 @@ impl ActionType {
             },
             ActionType::SplitSecret => ActionSpec {
                 backend: BackendUsage::Required,
-                reads: ReadsContract::required(&[ReadInput {
-                    name: "secret",
-                    accepts: BYTES,
-                }]),
+                reads: ReadsContract {
+                    required: &[],
+                    exactly_one_of: &[&[
+                        ReadInput {
+                            name: "secret",
+                            accepts: BYTES,
+                        },
+                        ReadInput {
+                            name: "key",
+                            accepts: BACKEND_KEY,
+                        },
+                    ]],
+                    optional: &[],
+                    with_field_requires: &[],
+                    lists: &[],
+                    single: None,
+                },
                 creates: &[ArtifactKind::Shares],
             },
             ActionType::CombineShares => ActionSpec {

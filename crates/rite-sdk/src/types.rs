@@ -1729,6 +1729,9 @@ impl PivSlot {
     /// retired slots `0x82..=0x95`.
     pub const RETIRED_KEY_REF_MIN: u8 = 0x82;
 
+    /// Where `generate_key` puts a key when the step names no slot.
+    pub const GENERATE_DEFAULT: Self = Self::Authentication;
+
     /// Read a slot as a key id or a step names it: `9a`, `9c`, `9d`, `9e`, or
     /// a retired slot by its key reference in hex, `82` to `95`, optionally
     /// after `piv:`. `None` for anything else.

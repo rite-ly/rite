@@ -3158,7 +3158,8 @@ fn seal_share(
 
 /// The quorum-of-tokens shape: each share sealed to one holder's public key,
 /// opened by that holder, and the opened bytes combined. The record names
-/// the share by index and threshold, and its size like any content's.
+/// the share by index and threshold, and records no length, as for any
+/// content.
 #[test]
 fn a_share_sealed_to_each_holder_opens_and_combines() {
     let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
@@ -3189,7 +3190,7 @@ fn a_share_sealed_to_each_holder_opens_and_combines() {
                 "index": index,
             }))
         );
-        assert_eq!(inputs.get("content_bytes"), Some(&serde_json::json!(35)));
+        assert!(inputs.get("content_bytes").is_none(), "{inputs}");
 
         let sealed = result.artifacts.pop().expect("one artifact").1;
         let (decrypted, _) = decrypt_with(&mut backend, sealed, holder);

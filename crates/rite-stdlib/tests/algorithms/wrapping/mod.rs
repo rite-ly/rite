@@ -259,7 +259,6 @@ fn check_identities(case: &WriteCase, session: &Session) -> Result<(), String> {
             }
         }
         WriteStep::EncryptData => {
-            expected.push(("content_bytes", json!(case.payload.key().private().len())));
             if let Path::Held(_) = case.path {
                 expected.push((
                     "encryption_key_check_value",
@@ -412,7 +411,7 @@ fn check_opened(
             if content.expose_secret().as_slice() != payload.key().private().as_slice() {
                 return Err("decrypt_data recovered other bytes than were sealed".to_string());
             }
-            check_decrypted(session, &bytes, scheme, (key, opener), payload)
+            check_decrypted(session, &bytes, scheme, (key, opener))
         }
     }
 }
@@ -471,13 +470,13 @@ fn check_unwrapped(
 }
 
 /// `decrypt_data` recorded the container by its fingerprint, the key that
-/// opened it by its public half or check value, and how much it recovered.
+/// opened it by its public half or check value, and nothing of what it
+/// recovered, not even its length.
 fn check_decrypted(
     session: &Session,
     bytes: &[u8],
     scheme: WrapScheme,
     (key, opener): (&str, Option<Vec<u8>>),
-    payload: Payload,
 ) -> Result<(), String> {
     ran_via(session, "decrypt_data", Via::Backend)?;
     let (inputs, outputs, fingerprint) = operation(session, "decrypt_data")?;
@@ -501,11 +500,11 @@ fn check_decrypted(
             named_by,
         ],
     )?;
-    check_fields(
-        "outputs",
-        outputs,
-        &[("content_bytes", json!(payload.key().private().len()))],
-    )?;
+    if outputs.get("content_bytes").is_some() {
+        return Err(format!(
+            "decrypt_data records the content's length: {outputs}"
+        ));
+    }
     check_fingerprint(fingerprint.as_deref(), Some(&container))
 }
 

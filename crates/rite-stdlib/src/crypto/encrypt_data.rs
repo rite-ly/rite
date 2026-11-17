@@ -70,8 +70,8 @@ impl Action for EncryptDataAction {
         reporter.log(
             Icon::Spinner,
             format!(
-                "Encrypting {} bytes to '{}' under {scheme}...",
-                payload.bytes().len(),
+                "Encrypting '{}' to '{}' under {scheme}...",
+                data_ref.display_name(),
                 key_ref.display_name()
             ),
         )?;
@@ -107,7 +107,7 @@ impl Action for EncryptDataAction {
             Some(fingerprint.clone()),
         )?;
 
-        let message = format!("{} bytes encrypted under {scheme}", payload.bytes().len());
+        let message = format!("'{}' encrypted under {scheme}", data_ref.display_name());
         let value = ArtifactValue::EncryptedData(encrypted);
 
         if let Some(produces) = &step.produces {
@@ -365,11 +365,9 @@ fn recorded_inputs(
     let mut inputs = serde_json::Map::new();
     inputs.insert("scheme".into(), json!(scheme.to_string()));
     inputs.insert("data".into(), json!(data_ref.display_name()));
-    // How much was encrypted, which the container's size says anyway, and
-    // deliberately no digest of it. Content is what a ceremony encrypts
-    // because it is secret, and a hash of a secret is the shape rite#126
-    // removed.
-    inputs.insert("content_bytes".into(), json!(payload.bytes().len()));
+    // Neither a digest nor the length of the content. Content is what a
+    // ceremony encrypts because it is secret: a hash of a secret is the
+    // shape rite#126 removed, and a length is its shape, as for a split.
     match payload {
         Payload::Bytes(_) => {}
         // Which share of which split.

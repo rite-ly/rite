@@ -295,13 +295,12 @@ were checked. For a recovery: the scheme, the threshold, and which share
 indexes went in. For a `reveal`: the message and the acknowledgement.
 For an `enter_share`: the message, the share's index and threshold, and
 the rows that were repaired. For an `encrypt_data` that seals a share:
-the share's scheme, threshold and index, the key it was sealed to, and
-its size, as for any content it seals.
-Never a share, never the secret, and not a digest of either. A split or
-a recovery does not record the secret's length, which is its shape and,
-for a passphrase, its character count. A sealed share gives it away all
-the same: the container is as long as the share, three bytes more than
-the secret.
+the share's scheme, threshold and index, and the key it was sealed to.
+Never a share, never the secret, not a digest of either and not the
+secret's length, which is its shape and, for a passphrase, its character
+count. A sealed share's container is as long as the share, three bytes
+more than the secret, so whoever holds the container can tell the
+secret's length.
 
 ## The scheme
 

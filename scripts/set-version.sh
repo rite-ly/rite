@@ -31,5 +31,6 @@ rm Cargo.toml.bak
 
 cargo update --workspace --quiet
 RITE_UPDATE_SCHEMA=1 cargo test --quiet -p rite-model schema >/dev/null
+RITE_UPDATE_SCHEMA=1 cargo test --quiet -p rite-resolver schema >/dev/null
 
 git diff --stat

@@ -1,21 +1,23 @@
 //! `combine_shares` action, the secret back from shares `split_secret` made.
 
-use rite_model::ActionType;
+use rite_model::{ActionType, SharingScheme};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
-    resolve_share,
 };
 use rite_sdk::Backend;
 use secrecy::SecretBox;
 use serde_json::json;
 
 use super::gf256::{self, Share};
+use super::{ShareOrBytes, wire};
 
 /// Reconstruct a secret from at least a threshold of its shares.
 ///
-/// The shares arrive as `reads: { shares: [...] }`, each a share of a set
-/// an earlier step made or a share a custodian typed back, in whatever
-/// order the ceremony lists them. The index that matters is the one inside
+/// The shares arrive as `reads: { shares: [...] }`, in whatever order the
+/// ceremony lists them. Each is a share of a set an earlier step made, a
+/// share a custodian typed back, or bytes in the share layout: what
+/// `decrypt_data` returns from a share sealed to a holder, or a share file
+/// opened outside Rite. The index that matters is the one inside
 /// the share, which is what the sheet in the bag carries. Each share
 /// records how many are needed, so too few is an error before anything is
 /// computed, and shares that disagree on the threshold or the secret's
@@ -25,7 +27,8 @@ use super::gf256::{self, Share};
 /// something observable.
 ///
 /// Takes no `with:`, and no `scheme:` in particular: the shares carry it,
-/// and a step that could restate it could restate it wrongly.
+/// and a step that could restate it could restate it wrongly. Shares made
+/// under different schemes are refused.
 ///
 /// The result stays in memory and is erased when the run ends.
 pub struct CombineSharesAction;
@@ -49,29 +52,35 @@ impl Action for CombineSharesAction {
         // sees.
         let mut shares = Vec::with_capacity(inputs.len());
         let mut given = Vec::with_capacity(inputs.len());
+        let mut scheme: Option<SharingScheme> = None;
         for (position, input) in inputs.iter().enumerate() {
-            let held = resolve_share(ctx.artifacts, &input.artifact_id(), input.property())
+            let wire::Decoded {
+                scheme: this,
+                share,
+            } = ShareOrBytes::read(ctx, input)
+                .and_then(ShareOrBytes::into_share)
                 .map_err(|e| {
                     ActionError::Failed(format!(
                         "shares[{position}] '{}': {e}",
                         input.display_name()
                     ))
                 })?;
-            // The arithmetic gets its own copy, wiped with it. The store keeps
-            // the share for whatever else the ceremony does with it.
-            let share =
-                Share::new(held.threshold(), held.index(), held.y().to_vec()).map_err(|e| {
-                    ActionError::Failed(format!(
-                        "shares[{position}] '{}' is not a share: {e}",
-                        input.display_name()
-                    ))
-                })?;
+            let first = *scheme.get_or_insert(this);
+            if first != this {
+                return Err(ActionError::Failed(format!(
+                    "shares[{position}] '{}' is a {this} share, and the shares before it are \
+                     {first}; shares of one split share a scheme",
+                    input.display_name()
+                )));
+            }
             given.push(json!({
                 "source": input.display_name(),
                 "index": share.index(),
             }));
             shares.push(share);
         }
+        let scheme = scheme
+            .ok_or_else(|| ActionError::Failed("combine_shares was given no shares".to_string()))?;
 
         let threshold = shares.first().map(Share::threshold).unwrap_or_default();
 
@@ -83,7 +92,18 @@ impl Action for CombineSharesAction {
             ),
         )?;
 
-        let secret = gf256::combine(&shares).map_err(|e| ActionError::Failed(e.to_string()))?;
+        // `SharingScheme` is `#[non_exhaustive]` in `rite-model`, so a scheme
+        // this build does not implement fails with its name in the message.
+        let secret = match scheme {
+            SharingScheme::RiteSssV1 => {
+                gf256::combine(&shares).map_err(|e| ActionError::Failed(e.to_string()))?
+            }
+            other => {
+                return Err(ActionError::Failed(format!(
+                    "This build does not implement the {other} sharing scheme"
+                )));
+            }
+        };
         drop(shares);
 
         reporter.log(Icon::Checkmark, "Secret reconstructed".to_string())?;
@@ -97,7 +117,7 @@ impl Action for CombineSharesAction {
         reporter.backend_operation(
             "combine_shares",
             json!({
-                "scheme": gf256::FORMAT,
+                "scheme": scheme.to_string(),
                 "threshold": threshold,
                 "shares": given,
             }),

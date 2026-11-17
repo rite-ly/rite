@@ -213,7 +213,7 @@
           "const": "unwrap_key"
         },
         {
-          "description": "Encrypt data for a key held by a backend or for a public key.\n\nReads `data` and exactly one of `encryption_key` or `recipient`. With `encryption_key`, the backend generates a content-encryption key and protects it with that key. With `recipient`, a public key held elsewhere, the backend supplies the content-encryption key's random bytes, which are protected with RSAES-OAEP over SHA-256 for an RSA-2048 or RSA-4096 key, or with ECDH and AES key wrap for a P-256 or P-384 key. The data itself is not sent to the backend.",
+          "description": "Encrypt data for a key held by a backend or for a public key.\n\nReads `data` and exactly one of `encryption_key` or `recipient`. With `encryption_key`, the backend generates a content-encryption key and protects it with that key. With `recipient`, a public key held elsewhere, the backend supplies the content-encryption key's random bytes, which are protected with RSAES-OAEP over SHA-256 for an RSA-2048 or RSA-4096 key, or with ECDH and AES key wrap for a P-256 or P-384 key. The data itself is not sent to the backend.\n\n`data` can name one share, such as `shares.share_2`. The share is encrypted in the byte layout of the scheme that made it.",
           "type": "string",
           "const": "encrypt_data"
         },
@@ -223,12 +223,12 @@
           "const": "decrypt_data"
         },
         {
-          "description": "Split a secret into shares so that `threshold` of them can recover it.\n\nReads exactly one of `secret`, bytes the ceremony holds, or `key`, a symmetric key held by a backend. Using `key` shows that the key leaves its backend in this step. Its value leaves only as shares, and no later step can name it. The backend allows this only if the key's policy says `sensitive: false` and `extractable: true`. The step uses the backend for randomness and checks every subset of `threshold` shares before it completes. The shares are stored in one artifact, and later steps can read individual shares.",
+          "description": "Split a secret into shares so that `threshold` of them can recover it.\n\nReads exactly one of `secret`, bytes the ceremony holds, or `key`, a symmetric key held by a backend. Using `key` shows that the key leaves its backend in this step. Its value leaves only as shares, and no later step can name it. The backend allows this only if the key's policy says `sensitive: false` and `extractable: true`. The step uses the backend for randomness and checks every subset of `threshold` shares before it completes. The shares are stored in one artifact, which records the `scheme`, and later steps can read individual shares.",
           "type": "string",
           "const": "split_secret"
         },
         {
-          "description": "Recover a secret from shares.\n\nThe shares must have the same threshold and length. Shares from different splits can produce an incorrect result without an error, so verify the recovered secret separately. The result is erased from memory when the run ends.",
+          "description": "Recover a secret from shares.\n\nEach entry is a share, or bytes in the share layout, such as a share that `decrypt_data` opened. The shares must have the same scheme, threshold and length. Shares from different splits can produce an incorrect result without an error, so verify the recovered secret separately. The result is erased from memory when the run ends.",
           "type": "string",
           "const": "combine_shares"
         },
@@ -2771,7 +2771,7 @@
                     "type": "object",
                     "properties": {
                       "data": {
-                        "description": "Takes any file's bytes.",
+                        "description": "Takes shares or any file's bytes.",
                         "type": "string"
                       },
                       "encryption_key": {
@@ -3002,7 +3002,7 @@
                       "shares": {
                         "type": "array",
                         "items": {
-                          "description": "Takes shares.",
+                          "description": "Takes shares, secret or bytes.",
                           "type": "string"
                         },
                         "minItems": 2

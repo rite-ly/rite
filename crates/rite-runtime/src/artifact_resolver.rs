@@ -12,7 +12,7 @@
 
 use crate::actions::{ArtifactValue, Share};
 use crate::executor::ExecutionError;
-use rite_model::{ArtifactId, share_index};
+use rite_model::{ArtifactId, SharingScheme, share_index};
 use rite_sdk::{KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer};
 use secrecy::ExposeSecret;
 use std::collections::HashMap;
@@ -127,7 +127,7 @@ pub fn resolve_artifact_bytes<'a, S: BuildHasher>(
         // job. A step that reads a share asks for the share.
         (ArtifactValue::Shares(_), _) => Err(ExecutionError::InvalidParams(format!(
             "'{artifact_id}' holds shares of a secret, which are read as shares and not as \
-             bytes; only a step that shows or combines shares can name one"
+             bytes; only a step that shows, seals or combines shares can name one"
         ))),
 
         // X.509 certificate: the whole certificate, not the key inside it.
@@ -145,12 +145,13 @@ pub fn resolve_artifact_bytes<'a, S: BuildHasher>(
 ///
 /// `shares.share_N` names the share evaluated at `N` in a set a split made.
 /// A set holding exactly one share, as a typed-back share arrives, is named
-/// without a property. Borrowed, like every read.
+/// without a property. Borrowed, like every read, and returned with the
+/// scheme of its set, which says how the share is laid out as bytes.
 pub fn resolve_share<'a, S: BuildHasher>(
     artifacts: &'a HashMap<ArtifactId, ArtifactValue, S>,
     artifact_id: &ArtifactId,
     property: Option<&str>,
-) -> Result<&'a Share, ExecutionError> {
+) -> Result<(SharingScheme, &'a Share), ExecutionError> {
     let artifact = artifacts.get(artifact_id).ok_or_else(|| {
         ExecutionError::InvalidParams(format!("Artifact '{artifact_id}' not found"))
     })?;
@@ -160,7 +161,7 @@ pub fn resolve_share<'a, S: BuildHasher>(
              one a custodian typed back"
         )));
     };
-    match property {
+    let share = match property {
         Some(property) => {
             let index = share_index(property).ok_or_else(|| {
                 ExecutionError::InvalidParams(format!(
@@ -184,7 +185,8 @@ pub fn resolve_share<'a, S: BuildHasher>(
                 set.count()
             ))
         }),
-    }
+    }?;
+    Ok((set.scheme(), share))
 }
 
 /// What an action needs to know about a backend-managed key.
@@ -251,6 +253,7 @@ pub fn resolve_backend_key<'a, S: BuildHasher>(
 mod tests {
     use super::*;
     use crate::actions::ShareSet;
+    use rite_model::SharingScheme;
 
     #[test]
     fn resolving_a_bytes_artifact_returns_its_content() {
@@ -279,6 +282,7 @@ mod tests {
 
     fn two_shares() -> HashMap<ArtifactId, ArtifactValue> {
         let set = ShareSet::new(
+            SharingScheme::RiteSssV1,
             2,
             [
                 Share::new(2, 1, vec![0x11; 4]),
@@ -306,6 +310,7 @@ mod tests {
         assert_eq!(
             resolve_share(&artifacts, &id, Some("share_2"))
                 .unwrap()
+                .1
                 .index(),
             2
         );
@@ -327,9 +332,13 @@ mod tests {
         let mut artifacts = artifacts;
         artifacts.insert(
             one.clone(),
-            ArtifactValue::Shares(ShareSet::new(2, [Share::new(2, 3, vec![0x33; 4])])),
+            ArtifactValue::Shares(ShareSet::new(
+                SharingScheme::RiteSssV1,
+                2,
+                [Share::new(2, 3, vec![0x33; 4])],
+            )),
         );
-        assert_eq!(resolve_share(&artifacts, &one, None).unwrap().index(), 3);
+        assert_eq!(resolve_share(&artifacts, &one, None).unwrap().1.index(), 3);
 
         let bytes = ArtifactId::new("bytes");
         artifacts.insert(bytes.clone(), ArtifactValue::Bytes(vec![1]));

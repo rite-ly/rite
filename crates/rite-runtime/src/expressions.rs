@@ -512,7 +512,11 @@ mod tests {
         let mut artifacts: HashMap<ArtifactId, ArtifactValue> = HashMap::new();
         artifacts.insert(
             ArtifactId::new("shares"),
-            ArtifactValue::Shares(crate::ShareSet::new(2, [share])),
+            ArtifactValue::Shares(crate::ShareSet::new(
+                rite_model::SharingScheme::RiteSssV1,
+                2,
+                [share],
+            )),
         );
         let ctx = make_context(HashMap::new(), artifacts);
 

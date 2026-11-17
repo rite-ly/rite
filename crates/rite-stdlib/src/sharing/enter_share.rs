@@ -16,7 +16,6 @@ use rite_sdk::Backend;
 use secrecy::ExposeSecret;
 use serde_json::json;
 
-use super::gf256;
 use super::wire;
 use rite_model::params::EnterShareParams;
 
@@ -58,7 +57,7 @@ impl Action for EnterShareAction {
         // The share is read inside the check, so a refusal goes back to the
         // person with the reason, and the share that passes is kept rather
         // than read twice.
-        let mut read: Option<(gf256::Share, Vec<String>)> = None;
+        let mut read: Option<(wire::Decoded, Vec<String>)> = None;
         let prompt = Prompt::EnterRows {
             label: typed.message.clone(),
             note: typed.note.clone(),
@@ -71,7 +70,7 @@ impl Action for EnterShareAction {
                 return Err("expected the rows of a share".to_string());
             };
             let value = format.decode(text.expose_secret())?;
-            let share = wire::decode(&value.bytes)
+            let decoded = wire::decode(&value.bytes)
                 .map_err(|e| format!("these rows are not a share: {e}"))?;
             if let Some(length) = length
                 && value.bytes.len() != length
@@ -82,11 +81,11 @@ impl Action for EnterShareAction {
                     value.bytes.len()
                 ));
             }
-            read = Some((share, value.repaired));
+            read = Some((decoded, value.repaired));
             Ok(())
         })?;
         drop(response);
-        let (share, repaired) = read.ok_or_else(|| {
+        let (wire::Decoded { scheme, share }, repaired) = read.ok_or_else(|| {
             ActionError::Failed("the rows were accepted and no share was read".into())
         })?;
 
@@ -105,7 +104,7 @@ impl Action for EnterShareAction {
             "enter_share",
             json!({ "format": format.as_str() }),
             json!({
-                "scheme": gf256::FORMAT,
+                "scheme": scheme.to_string(),
                 "threshold": threshold,
                 "index": index,
                 "repaired": repaired,
@@ -114,7 +113,9 @@ impl Action for EnterShareAction {
         )?;
 
         let (threshold, index, y) = share.into_parts();
-        let set = ShareSet::new(threshold, [Share::new(threshold, index, y)]);
+        // The scheme is the one the version byte names, so a share typed
+        // back is laid out again as it was written.
+        let set = ShareSet::new(scheme, threshold, [Share::new(threshold, index, y)]);
         reporter.log(Icon::Info, format!("Share stored as artifact '{produces}'"))?;
         Ok(StepResult::completed_with_artifact(
             format!("Share {index} typed back"),

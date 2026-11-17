@@ -117,8 +117,9 @@ the transcript. A step that shows or combines a share borrows it and gives
 it back.
 
 Shares are never written to a file. A file holding every share is the
-secret under another name. What leaves the machine is one share at a time,
-on paper, through `reveal`.
+secret under another name. What leaves the machine is one share at a time:
+on paper, through `reveal`, or sealed to one holder's public key, through
+`encrypt_data`.
 
 ## Showing a share
 
@@ -217,11 +218,63 @@ share came back, by its index, and which rows needed a repair.
 A run without a screen stops at the step, in a dry run as well: the rows
 are on a sheet only a person holds.
 
+## Sealing a share to a holder
+
+`encrypt_data` seals one share to a key only one holder has, such as a
+public key whose private half is on their card. Only that holder can open
+it:
+
+```yaml
+seal_share_1:
+  action: encrypt_data
+  backend: openssl
+  reads:
+    data: ${artifact.shares.share_1}
+    recipient: ${artifact.holder_1_public}
+  creates: share_1_sealed
+```
+
+The container holds the share's bytes in the layout described under
+[The scheme](#the-scheme), the same bytes a sheet carries. `encryption_key:`
+works too, for a symmetric key a holder's own backend holds.
+
+The threshold holds only if the keys are as separate as the holders. Seal
+each share to a different key, held by a different person: two shares
+sealed to one key are one holder with two votes, and shares sealed under
+keys one backend holds are opened by whoever controls that backend.
+
+At recovery, each holder opens their share with `decrypt_data`, and
+`combine_shares` reads the opened bytes:
+
+```yaml
+open_share_1:
+  action: decrypt_data
+  backend: openssl
+  reads:
+    encrypted_data: ${artifact.share_1_sealed}
+    decryption_key: ${artifact.holder_1_key}
+  creates: opened_share_1
+
+recover_the_kek:
+  action: combine_shares
+  reads:
+    shares:
+      - ${artifact.opened_share_1}
+      - ${artifact.opened_share_3}
+  creates: recovered_kek
+```
+
+The container is CMS `AuthEnvelopedData`, as for any content
+`encrypt_data` seals (see [encrypting-content.md](encrypting-content.md)),
+so a holder can also open it outside Rite with `openssl cms -decrypt
+-inkey` and bring the share back as a file.
+
 ## Putting the secret back
 
 `combine_shares` takes its shares as a list, at least two, in any order:
-shares an earlier step made in the same run, or shares custodians typed
-back, each its own artifact. Each share knows how many are needed, so too
+shares an earlier step made in the same run, shares custodians typed
+back, or bytes in the share layout, such as a share `decrypt_data`
+opened, each its own artifact. Each share knows how many are needed, so too
 few is refused before anything is computed, and shares that disagree with
 each other on that count or on the secret's length are refused as well.
 
@@ -241,15 +294,25 @@ split, which backend supplied the randomness, and how many combinations
 were checked. For a recovery: the scheme, the threshold, and which share
 indexes went in. For a `reveal`: the message and the acknowledgement.
 For an `enter_share`: the message, the share's index and threshold, and
-the rows that were repaired.
-Never a share, never the secret, not a digest of either and not the
-secret's length, which is its shape and, for a passphrase, its character
-count.
+the rows that were repaired. For an `encrypt_data` that seals a share:
+the share's scheme, threshold and index, the key it was sealed to, and
+its size, as for any content it seals.
+Never a share, never the secret, and not a digest of either. A split or
+a recovery does not record the secret's length, which is its shape and,
+for a passphrase, its character count. A sealed share gives it away all
+the same: the container is as long as the share, three bytes more than
+the secret.
 
 ## The scheme
 
-The scheme is named `rite-sss/v1` in the transcript so a recovery decades
-from now knows what it is looking at. It is Shamir's secret sharing over
+A split chooses its scheme with `scheme:` under `with:`. `rite-sss/v1` is
+the default and today the only one. The shares remember it: every step
+that later writes a share out, on paper or sealed to a holder, writes that
+scheme's layout, and a step that reads a share back learns the scheme from
+its first byte. The scheme is named in the transcript so a recovery
+decades from now knows what it is looking at.
+
+`rite-sss/v1` is Shamir's secret sharing over
 GF(2⁸) with the AES polynomial, one polynomial per byte of the secret,
 shares evaluated at 1, 2, 3 and so on, and the secret at 0. That is the
 construction of [draft-mcgrew-tss-03](https://datatracker.ietf.org/doc/html/draft-mcgrew-tss-03)
@@ -259,8 +322,13 @@ section 4.2; Rite's shares combine with any GF(256) implementation of it,
 and the test suite checks the draft's vector and a split computed with
 SLIP-0039's reference implementation.
 
-A share on paper is the share's bytes, `[version 1][threshold][index]`
-followed by the per-byte values, as paper32: five bits per character in
+A share's bytes are `[version][threshold][index]` followed by the
+per-byte values, with version 1 for `rite-sss/v1`. This layout does not
+change: a sheet or a sealed share written today reads the same in any
+later build, and a later scheme gets a version byte of its own. Without the
+first two bytes, it is the plain share of draft-mcgrew-tss-03, section 3.
+
+A share on paper is those bytes as paper32: five bits per character in
 the order `0123456789ABCDEFGHJKMNPQRSTVWXYZ`, rows of 28 characters each
 followed by 4 of parity, the parity being the row's polynomial (through
 its data at the field elements 0 to 27 of GF(32) with x⁵ + x² + 1)

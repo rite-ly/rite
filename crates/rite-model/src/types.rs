@@ -139,6 +139,9 @@ pub enum ActionType {
     /// bytes, which are protected with RSAES-OAEP over SHA-256 for an RSA-2048
     /// or RSA-4096 key, or with ECDH and AES key wrap for a P-256 or P-384 key.
     /// The data itself is not sent to the backend.
+    ///
+    /// `data` can name one share, such as `shares.share_2`. The share is
+    /// encrypted in the byte layout of the scheme that made it.
     EncryptData,
     /// Decrypt data encrypted by `encrypt_data`, or a CMS file sealed
     /// elsewhere and supplied as a material.
@@ -156,11 +159,14 @@ pub enum ActionType {
     /// `sensitive: false` and `extractable: true`.
     /// The step uses the backend for randomness and checks every subset of
     /// `threshold` shares before it completes. The shares are stored in one
-    /// artifact, and later steps can read individual shares.
+    /// artifact, which records the `scheme`, and later steps can read
+    /// individual shares.
     SplitSecret,
     /// Recover a secret from shares.
     ///
-    /// The shares must have the same threshold and length. Shares from
+    /// Each entry is a share, or bytes in the share layout, such as a share
+    /// that `decrypt_data` opened. The shares must have the same scheme,
+    /// threshold and length. Shares from
     /// different splits can produce an incorrect result without an error, so
     /// verify the recovered secret separately. The result is erased from memory
     /// when the run ends.
@@ -456,6 +462,24 @@ impl SharingScheme {
         }
     }
 
+    /// The byte a share's layout starts with under this scheme, which names
+    /// the scheme when the share is read back.
+    #[must_use]
+    pub fn version_byte(self) -> u8 {
+        match self {
+            SharingScheme::RiteSssV1 => 1,
+        }
+    }
+
+    /// The scheme whose layout starts with `byte`, if this build has one.
+    #[must_use]
+    pub fn from_version_byte(byte: u8) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|scheme| scheme.version_byte() == byte)
+    }
+
     /// The length in bytes of one share of a secret of `secret_len` bytes,
     /// as a sheet or a transport holds it: the header, then one byte per
     /// byte of the secret.
@@ -716,6 +740,17 @@ const BACKEND_KEY: Accepts = Accepts::kinds(&[ArtifactKind::BackendKey]);
 const BYTES: Accepts = Accepts::view(View::Bytes);
 /// Anything a public key is read from.
 const PUBLIC_KEY: Accepts = Accepts::view(View::PublicKey);
+/// A share, or a secret or bytes that hold one in its layout.
+const SHARE_LAYOUT: Accepts = Accepts::kinds(&[
+    ArtifactKind::Shares,
+    ArtifactKind::File(FileKind::Secret),
+    ArtifactKind::File(FileKind::Bytes),
+]);
+/// One share, or any artifact's bytes.
+const SHARE_OR_BYTES: Accepts = Accepts {
+    kinds: &[ArtifactKind::Shares],
+    view: Some(View::Bytes),
+};
 
 impl ReadsContract {
     /// The contract of an action that constrains its inputs in neither way.
@@ -846,10 +881,7 @@ impl ActionType {
                 // One share, or anything shown as its bytes.
                 reads: ReadsContract::required(&[ReadInput {
                     name: "value",
-                    accepts: Accepts {
-                        kinds: &[ArtifactKind::Shares],
-                        view: Some(View::Bytes),
-                    },
+                    accepts: SHARE_OR_BYTES,
                 }]),
                 creates: &[],
             },
@@ -951,7 +983,7 @@ impl ActionType {
                 reads: ReadsContract {
                     required: &[ReadInput {
                         name: "data",
-                        accepts: BYTES,
+                        accepts: SHARE_OR_BYTES,
                     }],
                     exactly_one_of: &[&[
                         ReadInput {
@@ -1023,14 +1055,13 @@ impl ActionType {
                     optional: &[],
                     with_field_requires: &[],
                     // Two is the smallest threshold; the shares themselves say
-                    // whether two is enough, at run time.
+                    // whether two is enough, at run time. A secret or bytes
+                    // are a share in its layout, as `decrypt_data` returns
+                    // one sealed to a holder; text or a certificate never is.
                     lists: &[ListInput {
                         name: "shares",
                         at_least: 2,
-                        accepts: Accepts {
-                            kinds: &[ArtifactKind::Shares],
-                            view: None,
-                        },
+                        accepts: SHARE_LAYOUT,
                     }],
                     single: None,
                 },

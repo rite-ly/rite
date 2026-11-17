@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 
 use rite_model::{
-    ArtifactId, ArtifactRef, NamedInput, Prompt, ResponseRecord, StepFact, StepId, StepInputs,
+    ArtifactId, ArtifactRef, NamedInput, Prompt, ResponseRecord, SharingScheme, StepFact, StepId,
+    StepInputs,
 };
 use rite_runtime::{
     Action, ArtifactValue, ExecutionState, Response, Share, ShareSet, StepInfo,
@@ -2430,7 +2431,7 @@ fn shares_that_left_as_bytes_come_back_and_combine() {
     let leave = |index: u8| {
         let share = set.share(index).expect("share exists");
         let math = gf256::Share::new(share.threshold(), share.index(), share.y().to_vec()).unwrap();
-        wire::encode(&math)
+        wire::encode(set.scheme(), &math)
     };
     let bytes_2 = leave(2);
     let bytes_3 = leave(3);
@@ -2443,8 +2444,13 @@ fn shares_that_left_as_bytes_come_back_and_combine() {
     // What comes back: each decoded into a set of one, as a typed-back share
     // will arrive.
     let arrive = |bytes: &[u8]| {
-        let (threshold, index, y) = wire::decode(bytes).unwrap().into_parts();
-        ArtifactValue::Shares(ShareSet::new(threshold, [Share::new(threshold, index, y)]))
+        let wire::Decoded { scheme, share } = wire::decode(bytes).unwrap();
+        let (threshold, index, y) = share.into_parts();
+        ArtifactValue::Shares(ShareSet::new(
+            scheme,
+            threshold,
+            [Share::new(threshold, index, y)],
+        ))
     };
     let a = ArtifactId::new("custodian_a");
     let b = ArtifactId::new("custodian_b");
@@ -2675,7 +2681,7 @@ fn reveal_shows_a_share_and_records_only_that_it_was_shown() {
     let expected = {
         let share = set.share(2).expect("share 2");
         let math = gf256::Share::new(share.threshold(), share.index(), share.y().to_vec()).unwrap();
-        paper::encode(&math)
+        paper::encode(SharingScheme::RiteSssV1, &math)
     };
     let shares_id = ArtifactId::new("shares");
     let state = state.with_material(shares_id.clone(), shares);
@@ -2888,7 +2894,7 @@ fn a_share_typed_back_with_a_slip_combines() {
     let sheet = {
         let share = set.share(3).expect("share 3");
         let math = gf256::Share::new(share.threshold(), share.index(), share.y().to_vec()).unwrap();
-        paper::encode(&math)
+        paper::encode(SharingScheme::RiteSssV1, &math)
     };
     // Two rows as a person types them: grouped, lower case, one slip.
     let mut chars: Vec<char> = sheet.to_ascii_lowercase().chars().collect();
@@ -2958,8 +2964,14 @@ fn a_share_typed_back_with_a_slip_combines() {
 fn rows_that_are_not_the_share_are_asked_for_again() {
     let mut harness = ReporterHarness::new();
     let not_a_share = rite_model::paper32::encode(&[9; 20]);
-    let other_size = paper::encode(&gf256::Share::new(2, 1, vec![1; 16]).unwrap());
-    let right = paper::encode(&gf256::Share::new(2, 1, vec![1; 32]).unwrap());
+    let other_size = paper::encode(
+        SharingScheme::RiteSssV1,
+        &gf256::Share::new(2, 1, vec![1; 16]).unwrap(),
+    );
+    let right = paper::encode(
+        SharingScheme::RiteSssV1,
+        &gf256::Share::new(2, 1, vec![1; 32]).unwrap(),
+    );
     harness.enqueue_response(rows(not_a_share));
     harness.enqueue_retry(rows(other_size));
     harness.enqueue_retry(rows(right));
@@ -3082,4 +3094,196 @@ fn the_published_sheets_recover_their_secret_through_a_slip() {
     assert_eq!(secret, SHEETS_SECRET);
     let serialized = serde_json::to_string(&facts).unwrap();
     assert!(serialized.contains("row 1: character"), "{serialized}");
+}
+
+/// An `encrypt_data` step sealing `shares.share_{index}` to the key under
+/// `input`, `recipient` or `encryption_key`.
+fn seal_share(
+    backend: &mut MockBackend,
+    harness: &mut ReporterHarness,
+    shares: &ArtifactValue,
+    index: u8,
+    (input, key): (&str, ArtifactValue),
+) -> Result<rite_runtime::StepResult, rite_runtime::ActionError> {
+    let ArtifactValue::Shares(set) = shares else {
+        panic!("split_secret must produce Shares");
+    };
+    // A copy of the set: the store owns its artifacts.
+    let copy = ShareSet::new(
+        set.scheme(),
+        set.threshold(),
+        (1..=set.count()).map(|i| {
+            let share = set.share(i).expect("share exists");
+            Share::new(share.threshold(), share.index(), share.y().to_vec())
+        }),
+    );
+    let shares_id = ArtifactId::new("shares");
+    let key_id = ArtifactId::new("holder_key");
+    let state = make_state()
+        .with_material(shares_id.clone(), ArtifactValue::Shares(copy))
+        .with_material(key_id.clone(), key);
+    let map = HashMap::from([
+        (
+            "data".to_string(),
+            NamedInput::One(ArtifactRef::Produced {
+                id: shares_id,
+                property: Some(format!("share_{index}")),
+            }),
+        ),
+        (
+            input.to_string(),
+            NamedInput::One(ArtifactRef::Produced {
+                id: key_id,
+                property: None,
+            }),
+        ),
+    ]);
+    let step = StepInfo::new(
+        StepId::new(format!("seal_share_{index}")),
+        None,
+        Some("mock".to_string()),
+        Some(ArtifactId::new("sealed")),
+        Some(StepInputs::Named(map)),
+    );
+    let ctx = state.handler_context();
+    let mut reporter = harness.reporter(step.id.clone());
+    EncryptDataAction.execute(
+        &step,
+        &ctx,
+        &serde_json::json!({}),
+        &mut reporter,
+        Some(backend),
+    )
+}
+
+/// The quorum-of-tokens shape: each share sealed to one holder's public key,
+/// opened by that holder, and the opened bytes combined. The record names
+/// the share by index and threshold, and its size like any content's.
+#[test]
+fn a_share_sealed_to_each_holder_opens_and_combines() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let mut harness = ReporterHarness::new();
+    let secret = b"32 bytes of key-encryption key!!";
+    let (_, shares) = split(&mut backend, &mut harness, secret, 2, 3);
+
+    let mut opened = Vec::new();
+    for (index, holder) in [(1, "holder_a"), (3, "holder_c")] {
+        let holder = rsa_recipient(&mut backend, holder);
+        let public = ArtifactValue::Bytes(public_half(&holder.1).as_bytes().to_vec());
+        let mut sealing = ReporterHarness::new();
+        let mut result = seal_share(
+            &mut backend,
+            &mut sealing,
+            &shares,
+            index,
+            ("recipient", public),
+        )
+        .expect("encrypt_data seals a share");
+
+        let inputs = operation_inputs(&sealing, "encrypt_data");
+        assert_eq!(
+            inputs.get("share"),
+            Some(&serde_json::json!({
+                "scheme": "rite-sss/v1",
+                "threshold": 2,
+                "index": index,
+            }))
+        );
+        assert_eq!(inputs.get("content_bytes"), Some(&serde_json::json!(35)));
+
+        let sealed = result.artifacts.pop().expect("one artifact").1;
+        let (decrypted, _) = decrypt_with(&mut backend, sealed, holder);
+        let mut decrypted = decrypted.expect("the holder opens their share");
+        opened.push(decrypted.artifacts.pop().expect("one artifact").1);
+    }
+
+    let a = ArtifactId::new("opened_a");
+    let c = ArtifactId::new("opened_c");
+    let [opened_a, opened_c] = <[ArtifactValue; 2]>::try_from(opened).unwrap();
+    let state = make_state()
+        .with_material(a.clone(), opened_a)
+        .with_material(c.clone(), opened_c);
+    let combine = combine_step(&[(&c, None), (&a, None)]);
+    let recovered = {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(combine.id.clone());
+        CombineSharesAction
+            .execute(&combine, &ctx, &serde_json::json!({}), &mut reporter, None)
+            .expect("combine_shares reads opened shares")
+    };
+    match produced(&recovered.artifacts, "recovered") {
+        ArtifactValue::Secret(bytes) => assert_eq!(bytes.expose_secret().as_slice(), secret),
+        other => panic!("combine_shares must produce Secret, got {other:?}"),
+    }
+    let combined = operation_inputs(&harness, "combine_shares");
+    assert_eq!(combined.get("scheme").unwrap(), "rite-sss/v1");
+}
+
+/// A share sealed under a symmetric key a holder's backend holds opens
+/// under that key, and the record names the key by its check value.
+#[test]
+fn encrypt_data_seals_a_share_under_a_backend_key() {
+    let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
+    let mut harness = ReporterHarness::new();
+    let (_, shares) = split(&mut backend, &mut harness, &[7; 32], 2, 3);
+    let (kek_id, kek_meta) = kek(&mut backend, "kek");
+
+    let mut sealing = ReporterHarness::new();
+    let mut result = seal_share(
+        &mut backend,
+        &mut sealing,
+        &shares,
+        2,
+        ("encryption_key", key_artifact(&kek_meta)),
+    )
+    .expect("a share seals under a backend key");
+    let inputs = operation_inputs(&sealing, "encrypt_data");
+    assert_eq!(
+        inputs.get("share").and_then(|s| s.get("index")),
+        Some(&serde_json::json!(2))
+    );
+    assert!(
+        inputs.get("encryption_key_check_value").is_some(),
+        "{inputs}"
+    );
+
+    let sealed = result.artifacts.pop().expect("one artifact").1;
+    let (opened, _) = decrypt_with(&mut backend, sealed, (kek_id, key_artifact(&kek_meta)));
+    let opened = opened.expect("the key opens the share");
+    let ArtifactValue::Shares(set) = &shares else {
+        panic!("split_secret must produce Shares");
+    };
+    let share = set.share(2).expect("share 2");
+    match produced(&opened.artifacts, "recovered") {
+        ArtifactValue::Secret(bytes) => {
+            let bytes = bytes.expose_secret();
+            assert_eq!(
+                bytes.get(..3),
+                Some(&[1, 2, 2][..]),
+                "version, threshold, index"
+            );
+            assert_eq!(bytes.get(3..), Some(share.y()));
+        }
+        other => panic!("decrypt_data must produce Secret, got {other:?}"),
+    }
+}
+
+/// Bytes that are not in the share layout are refused by name.
+#[test]
+fn combine_shares_refuses_bytes_that_are_not_a_share() {
+    let mut harness = ReporterHarness::new();
+    let a = ArtifactId::new("a");
+    let b = ArtifactId::new("b");
+    let state = make_state()
+        .with_material(a.clone(), ArtifactValue::Bytes(vec![1, 2, 1, 0xAA]))
+        .with_material(b.clone(), ArtifactValue::Bytes(vec![9, 2, 2, 0xBB]));
+    let combine = combine_step(&[(&a, None), (&b, None)]);
+    let ctx = state.handler_context();
+    let mut reporter = harness.reporter(combine.id.clone());
+    let error = CombineSharesAction
+        .execute(&combine, &ctx, &serde_json::json!({}), &mut reporter, None)
+        .expect_err("version 9 is no layout this build reads");
+    let error = error.to_string();
+    assert!(error.contains("shares[1] 'b'"), "{error}");
+    assert!(error.contains("version 9"), "{error}");
 }

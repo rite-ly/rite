@@ -148,7 +148,7 @@ impl Action for SplitSecretAction {
         Ok(StepResult::completed_with_artifact(
             message,
             produces.clone(),
-            ArtifactValue::Shares(ShareSet::new(threshold, shares)),
+            ArtifactValue::Shares(ShareSet::new(scheme, threshold, shares)),
         ))
     }
 }

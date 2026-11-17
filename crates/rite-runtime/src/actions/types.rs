@@ -1,7 +1,7 @@
 //! Core types for action handling.
 
 use base64ct::{Base64, Encoding};
-use rite_model::{ArtifactKind, FileKind};
+use rite_model::{ArtifactKind, FileKind, SharingScheme};
 
 use rite_sdk::{
     CertificateDer, EncryptedData, KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer, WrapScheme,
@@ -72,8 +72,9 @@ pub enum ArtifactValue {
     /// read only through `reads:`, never rendered by an expression, since
     /// the copy an expression makes is unwiped JSON and a prompt text is a
     /// transcript fact. The set is not written to the run directory at all;
-    /// shares go onto paper, through a step that shows one at a time. A set
-    /// of one is how a share typed back at a recovery arrives.
+    /// shares leave one at a time, onto paper through `reveal` or sealed to
+    /// one holder's public key through `encrypt_data`. A set of one is how a
+    /// share typed back at a recovery arrives.
     Shares(ShareSet),
 
     /// Display text for physical item references (USB drives, tamper bags, etc.).
@@ -99,10 +100,13 @@ pub enum ArtifactValue {
 ///
 /// The runtime holds the parts and nothing of the arithmetic: what it needs
 /// is to hand one share to a step that names it under `reads:`, and to say
-/// how many there are. A share has no canonical byte form here; laying it
-/// out is a container's job, in a file or on paper. Each share's `y` is
-/// wiped when the set is dropped, and `Debug` prints counts only.
+/// how many there are. A share has no byte form here; laying it out is a
+/// container's job, in a file or on paper. The set records the scheme it
+/// was made under, which the split chose, so every container that lays a
+/// share out writes that scheme's layout. Each share's `y` is wiped when the
+/// set is dropped, and `Debug` prints counts only.
 pub struct ShareSet {
+    scheme: SharingScheme,
     threshold: u8,
     shares: Vec<Share>,
 }
@@ -154,13 +158,23 @@ impl std::fmt::Debug for Share {
 }
 
 impl ShareSet {
-    /// A set of `shares`, index 1 first, of which `threshold` reconstruct
-    /// the secret.
-    pub fn new(threshold: u8, shares: impl IntoIterator<Item = Share>) -> Self {
+    /// A set of `shares` made under `scheme`, index 1 first, of which
+    /// `threshold` reconstruct the secret.
+    pub fn new(
+        scheme: SharingScheme,
+        threshold: u8,
+        shares: impl IntoIterator<Item = Share>,
+    ) -> Self {
         Self {
+            scheme,
             threshold,
             shares: shares.into_iter().collect(),
         }
+    }
+
+    /// The scheme the shares were made under, and laid out in.
+    pub fn scheme(&self) -> SharingScheme {
+        self.scheme
     }
 
     /// How many shares reconstruct the secret.
@@ -192,7 +206,8 @@ impl std::fmt::Debug for ShareSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ShareSet({}-of-{}, {} bytes each)",
+            "ShareSet({}, {}-of-{}, {} bytes each)",
+            self.scheme,
             self.threshold,
             self.shares.len(),
             self.shares
@@ -627,6 +642,7 @@ mod tests {
     #[test]
     fn a_share_set_is_never_written_to_disk() {
         let set = ShareSet::new(
+            SharingScheme::RiteSssV1,
             2,
             [
                 Share::new(2, 1, vec![0xCD; 8]),

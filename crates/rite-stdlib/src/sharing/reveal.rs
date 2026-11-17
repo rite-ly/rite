@@ -10,16 +10,16 @@
 //! `rite script` prints the sheet for it.
 
 use rite_model::display::hex_upper;
-use rite_model::{ActionType, Prompt, RevealFormat, SharingScheme, Shown};
+use rite_model::{ActionType, Prompt, RevealFormat, Shown};
 use rite_model::{bip39, paper32};
 use rite_runtime::{
-    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, Response, StepInfo,
-    StepResult, parse_params, resolve_artifact_bytes, resolve_share,
+    Action, ActionError, HandlerContext, Icon, Reporter, Response, StepInfo, StepResult,
+    parse_params,
 };
 use rite_sdk::Backend;
-use zeroize::Zeroizing;
 
-use super::gf256;
+use super::ShareOrBytes;
+
 use rite_model::params::RevealParams;
 
 /// Show a value in a chosen encoding, and take it off the screen once the
@@ -46,36 +46,32 @@ impl Action for RevealAction {
     ) -> Result<StepResult, ActionError> {
         let typed: RevealParams = parse_params(params)?;
         let input = step.required_named_input("value", "reveal")?;
-        let id = input.artifact_id();
         let name = input.display_name();
 
         let layout = RevealFormat::layout_for(typed.format);
-        let is_share = matches!(ctx.artifacts.get(&id), Some(ArtifactValue::Shares(_)));
+        let read = ShareOrBytes::read(ctx, input)
+            .map_err(|e| ActionError::Failed(format!("value '{name}': {e}")))?;
         // A share is shown as its wire bytes, header first; from there it is
         // bytes like any other value.
         let wire;
-        let (bytes, hint): (&[u8], String) = if is_share {
-            let held = resolve_share(ctx.artifacts, &id, input.property())
-                .map_err(|e| ActionError::Failed(format!("value '{name}': {e}")))?;
-            if layout.format.is_words() {
-                return Err(ActionError::Failed(format!(
-                    "value '{name}' is a share, written in paper32 or hex; {} is for the \
+        let (bytes, hint): (&[u8], String) = match read {
+            ShareOrBytes::Share(scheme, held) => {
+                if layout.format.is_words() {
+                    return Err(ActionError::Failed(format!(
+                        "value '{name}' is a share, written in paper32 or hex; {} is for the \
                      secret the shares combine into",
-                    layout.format
-                )));
+                        layout.format
+                    )));
+                }
+                wire = super::share_bytes(scheme, held)
+                    .map_err(|e| ActionError::Failed(format!("value '{name}': {e}")))?;
+                let hint = format!(
+                    " (a share is its secret plus {} header bytes)",
+                    scheme.header_len()
+                );
+                (&wire, hint)
             }
-            let share = gf256::Share::new(held.threshold(), held.index(), held.y().to_vec())
-                .map_err(|e| ActionError::Failed(format!("value '{name}' is not a share: {e}")))?;
-            wire = Zeroizing::new(super::wire::encode(&share));
-            let hint = format!(
-                " (a share is its secret plus {} header bytes)",
-                SharingScheme::RiteSssV1.header_len()
-            );
-            (&wire, hint)
-        } else {
-            let bytes = resolve_artifact_bytes(ctx.artifacts, &id, input.property())
-                .map_err(|e| ActionError::Failed(format!("value '{name}': {e}")))?;
-            (bytes, String::new())
+            ShareOrBytes::Bytes(bytes) => (bytes, String::new()),
         };
         check_length(typed.length, bytes.len(), layout.format, &name, &hint)?;
         let text = match layout.format {

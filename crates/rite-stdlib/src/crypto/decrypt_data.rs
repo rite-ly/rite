@@ -12,7 +12,7 @@ use rite_sdk::{
     RecipientInfoKind, WrapScheme, cms,
 };
 use secrecy::SecretBox;
-use serde_json::{Value, json};
+use serde_json::json;
 use zeroize::Zeroizing;
 
 use crate::crypto::content::{self, SealedContent};
@@ -123,13 +123,13 @@ impl Action for DecryptDataAction {
                 "decryption_key": key_ref.display_name(),
                 own.field(): own.recorded(),
             }),
-            produced(plaintext.len()),
+            json!({}),
             // The artifact that was opened, which is what links this step to
             // the encrypt that produced it. The content names itself nowhere.
             Some(data_fingerprint),
         )?;
 
-        let message = format!("{} bytes decrypted", plaintext.len());
+        let message = format!("'{}' decrypted", data_ref.display_name());
         // The buffer moves from the cipher's wiping wrapper into the artifact's
         // without a copy. What the wrapper wipes on drop is the empty vector
         // left in its place.
@@ -150,18 +150,6 @@ impl Action for DecryptDataAction {
             Ok(StepResult::completed(message))
         }
     }
-}
-
-/// What came out, and from where.
-///
-/// The size and no digest. What came out is the secret the container existed to
-/// protect, and hashing it would put a digest of a secret in the record. What
-/// links this step to the encrypt that produced it is the artifact fingerprint,
-/// which the fact carries on its own.
-fn produced(content_bytes: usize) -> Value {
-    json!({
-        "content_bytes": content_bytes,
-    })
 }
 
 /// Recover the content key `recipient` carries, under the backend key `own`

@@ -1,10 +1,17 @@
 //! The byte layout of a share, for a file or a transport.
 //!
-//! `[version][threshold][index] || y`, version `0x01`. The version belongs
-//! to this container and not to the share: a share is its three parts, and
-//! a later layout (one that carries an identifier, say) is a second version
-//! here rather than a change to the arithmetic. A paper encoding is another
-//! container again, and reads the parts directly so it can lay them out.
+//! `[version][threshold][index] || y`. The version byte names the scheme the
+//! share was made under, and so the layout of what follows it: `0x01` is
+//! `rite-sss/v1`. The split chooses the scheme, the share set remembers it,
+//! and [`encode`] writes that scheme's layout; [`decode`] reads every version
+//! this build knows and says which scheme it found. A later layout (one that
+//! carries an identifier, say) is a second scheme and a second version byte,
+//! not a change to this one.
+//!
+//! A share written in this layout is meant to be read back years later, by
+//! a later build or by hand, so the `rite-sss/v1` layout does not change.
+//! A paper encoding is another container again, and reads the parts directly
+//! so it can lay them out.
 //!
 //! Minus the first two bytes, this is the plain TSS share of
 //! draft-mcgrew-tss-03 section 3, `index || y`.
@@ -13,28 +20,40 @@ use rite_model::SharingScheme;
 
 use super::gf256::{Share, ShareError};
 
-/// The version byte this layout starts with.
-const VERSION: u8 = 1;
-
-/// Lay a share out as bytes.
-pub fn encode(share: &Share) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(SharingScheme::RiteSssV1.share_len(share.secret_len()));
-    bytes.push(VERSION);
+/// Lay a share made under `scheme` out as bytes.
+pub fn encode(scheme: SharingScheme, share: &Share) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(scheme.share_len(share.secret_len()));
+    bytes.push(scheme.version_byte());
     bytes.push(share.threshold());
     bytes.push(share.index());
     bytes.extend_from_slice(share.y());
     bytes
 }
 
-/// Read a share back from bytes this module laid out.
-pub fn decode(bytes: &[u8]) -> Result<Share, WireError> {
+/// A share read back from bytes, and the scheme its version byte names.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Decoded {
+    /// The scheme the share was made under.
+    pub scheme: SharingScheme,
+    /// The share.
+    pub share: Share,
+}
+
+/// Read a share back from bytes laid out by [`encode`], under any scheme
+/// this build reads.
+///
+/// # Errors
+///
+/// Says why the bytes are not a share: too short, a version this build does
+/// not read, or parts that do not make a share.
+pub fn decode(bytes: &[u8]) -> Result<Decoded, WireError> {
     let (&version, rest) = bytes.split_first().ok_or(WireError::TooShort)?;
-    if version != VERSION {
-        return Err(WireError::UnknownVersion(version));
-    }
+    let scheme =
+        SharingScheme::from_version_byte(version).ok_or(WireError::UnknownVersion(version))?;
     let (&threshold, rest) = rest.split_first().ok_or(WireError::TooShort)?;
     let (&index, y) = rest.split_first().ok_or(WireError::TooShort)?;
-    Share::new(threshold, index, y.to_vec()).map_err(WireError::Share)
+    let share = Share::new(threshold, index, y.to_vec()).map_err(WireError::Share)?;
+    Ok(Decoded { scheme, share })
 }
 
 /// Why bytes did not read as a share.
@@ -59,10 +78,16 @@ mod tests {
     #[test]
     fn a_share_round_trips_through_the_layout() {
         let share = Share::new(2, 3, vec![0xB9, 0xFA]).unwrap();
-        let bytes = encode(&share);
+        let bytes = encode(SharingScheme::RiteSssV1, &share);
         assert_eq!(bytes, [1, 2, 3, 0xB9, 0xFA]);
         assert_eq!(bytes.len(), SharingScheme::RiteSssV1.share_len(2));
-        assert_eq!(decode(&bytes).unwrap(), share);
+        assert_eq!(
+            decode(&bytes).unwrap(),
+            Decoded {
+                scheme: SharingScheme::RiteSssV1,
+                share
+            }
+        );
     }
 
     #[test]

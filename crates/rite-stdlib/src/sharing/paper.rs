@@ -12,21 +12,25 @@
 //! read by the same decoder. What the sheet is labelled is printed on it,
 //! not coded into the rows.
 
+use rite_model::SharingScheme;
 use rite_model::paper32::{self, Repair};
 use zeroize::Zeroizing;
 
 use super::gf256::Share;
 use super::wire::{self, WireError};
 
-/// Write a share as rows, one string with no separators.
-pub fn encode(share: &Share) -> String {
-    let bytes = Zeroizing::new(wire::encode(share));
+/// Write a share made under `scheme` as rows, one string with no
+/// separators.
+pub fn encode(scheme: SharingScheme, share: &Share) -> String {
+    let bytes = Zeroizing::new(wire::encode(scheme, share));
     paper32::encode(&bytes)
 }
 
 /// A share read back from rows a person typed, and what it took.
 #[derive(Debug)]
 pub struct Read {
+    /// The scheme the share was made under.
+    pub scheme: SharingScheme,
     /// The share.
     pub share: Share,
     /// The rows that needed repair, in order, for the person to check.
@@ -41,8 +45,10 @@ pub struct Read {
 /// there and type again, or that the bytes inside are not a share.
 pub fn decode(text: &str) -> Result<Read, PaperError> {
     let decoded = paper32::decode(text).map_err(PaperError::Text)?;
-    let share = wire::decode(&decoded.bytes).map_err(PaperError::Layout)?;
+    let wire::Decoded { scheme, share } =
+        wire::decode(&decoded.bytes).map_err(PaperError::Layout)?;
     Ok(Read {
+        scheme,
         share,
         repaired: decoded.repaired,
     })
@@ -67,12 +73,15 @@ mod tests {
     use crate::sharing::gf256::ShareError;
     use rite_model::paper32::{RepairKind, RowError};
 
+    const V1: SharingScheme = SharingScheme::RiteSssV1;
+
     #[test]
     fn a_share_round_trips_through_paper() {
         let share = Share::new(2, 3, vec![0xB9, 0xFA, 0x07, 0xE1, 0x85]).unwrap();
-        let text = encode(&share);
+        let text = encode(V1, &share);
         let read = decode(&text).unwrap();
         assert_eq!(read.share, share);
+        assert_eq!(read.scheme, V1);
         assert!(read.repaired.is_empty());
         assert_eq!(decode(&text.to_ascii_lowercase()).unwrap().share, share);
         assert_eq!(decode(&format!("  {text}\n")).unwrap().share, share);
@@ -81,15 +90,15 @@ mod tests {
     #[test]
     fn a_seed_share_is_two_rows_of_thirty_two() {
         let share = Share::new(2, 1, vec![0x5A; 32]).unwrap();
-        assert_eq!(encode(&share).len(), 64);
+        assert_eq!(encode(V1, &share).len(), 64);
         let long = Share::new(2, 1, vec![0x5A; 64]).unwrap();
-        assert_eq!(decode(&encode(&long)).unwrap().share, long);
+        assert_eq!(decode(&encode(V1, &long)).unwrap().share, long);
     }
 
     #[test]
     fn a_wrong_character_is_corrected_and_the_row_named() {
         let share = Share::new(3, 2, vec![0x11; 16]).unwrap();
-        let text = encode(&share);
+        let text = encode(V1, &share);
         let mut chars: Vec<char> = text.chars().collect();
         chars[20] = if chars[20] == 'Q' { 'R' } else { 'Q' };
         let wrong: String = chars.iter().collect();

@@ -1,10 +1,10 @@
 //! `encrypt_data` action, encrypt content for a key the backend holds or for a
 //! public key.
 
-use rite_model::{ActionType, ArtifactRef};
+use rite_model::{ActionType, ArtifactRef, SharingScheme};
 use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
-    compute_fingerprint, parse_params, resolve_artifact_bytes, resolve_backend_key,
+    compute_fingerprint, parse_params, resolve_backend_key,
 };
 use rite_sdk::{
     Backend, DataKey, EncryptedData, KeyAlgorithm, KeyCheckValue, KeyProtection, PublicKeyDer,
@@ -14,6 +14,7 @@ use serde_json::json;
 use zeroize::Zeroizing;
 
 use crate::crypto::content;
+use crate::sharing::{ShareOrBytes, share_bytes};
 use rite_model::params::EncryptDataParams;
 
 /// Encrypt bytes into a container only the named key opens.
@@ -27,6 +28,10 @@ use rite_model::params::EncryptDataParams;
 /// key the backend holds, which produces both halves. `recipient:` names a
 /// public key held elsewhere: the backend supplies the content key's random
 /// bytes, and protecting it takes only the public key.
+///
+/// `data:` may also name one share of a split, `shares.share_N`. The share
+/// is sealed in the byte layout of the scheme the split chose, to either
+/// kind of recipient, and the record names it by its index and threshold.
 ///
 /// `wrap_key` for bytes that are not a key, and deliberately a second verb. A
 /// wrap says a key left a backend under protection, and the trust-boundary
@@ -60,20 +65,13 @@ impl Action for EncryptDataAction {
         let data_ref = step.required_named_input("data", "encrypt_data")?;
         let (path, key_ref) = recipient_input(step)?;
 
-        let data_id = data_ref.artifact_id();
-        let payload = resolve_artifact_bytes(ctx.artifacts, &data_id, data_ref.property())
-            .map_err(|e| {
-                ActionError::Failed(format!(
-                    "Cannot read content from '{}': {e}",
-                    data_ref.display_name()
-                ))
-            })?;
+        let payload = read_payload(ctx, data_ref)?;
 
         reporter.log(
             Icon::Spinner,
             format!(
-                "Encrypting {} bytes to '{}' under {scheme}...",
-                payload.len(),
+                "Encrypting '{}' to '{}' under {scheme}...",
+                data_ref.display_name(),
                 key_ref.display_name()
             ),
         )?;
@@ -96,32 +94,12 @@ impl Action for EncryptDataAction {
                 recipient_data_key(&recipient, random)?
             }
         };
-        let encrypted = seal_into_container(content_key, payload)?;
+        let encrypted = seal_into_container(content_key, payload.bytes())?;
 
         let fingerprint = compute_fingerprint(encrypted.data());
         reporter.log(Icon::Checkmark, "Content encrypted")?;
 
-        let inputs = match &addressee {
-            Addressee::CheckValue(check_value) => json!({
-                "scheme": scheme.to_string(),
-                "data": data_ref.display_name(),
-                // How much was encrypted, and deliberately no digest of it.
-                // Content is what a ceremony encrypts because it is secret,
-                // and a hash of a secret is the shape rite#126 removed.
-                "content_bytes": payload.len(),
-                "encryption_key": key_ref.display_name(),
-                "encryption_key_check_value": check_value.to_string(),
-            }),
-            // The fingerprint is in its own fact, recorded before the
-            // encryption, so the method can be published while the recipient
-            // stays withheld.
-            Addressee::PublicKey => json!({
-                "scheme": scheme.to_string(),
-                "data": data_ref.display_name(),
-                "content_bytes": payload.len(),
-                "recipient": key_ref.display_name(),
-            }),
-        };
+        let inputs = recorded_inputs(scheme, data_ref, key_ref, &payload, &addressee);
         reporter.backend_operation(
             "encrypt_data",
             inputs,
@@ -129,7 +107,7 @@ impl Action for EncryptDataAction {
             Some(fingerprint.clone()),
         )?;
 
-        let message = format!("{} bytes encrypted under {scheme}", payload.len());
+        let message = format!("'{}' encrypted under {scheme}", data_ref.display_name());
         let value = ArtifactValue::EncryptedData(encrypted);
 
         if let Some(produces) = &step.produces {
@@ -145,6 +123,44 @@ impl Action for EncryptDataAction {
         } else {
             Ok(StepResult::completed(message))
         }
+    }
+}
+
+/// What `data:` names.
+enum Payload<'a> {
+    /// Bytes the store holds, borrowed.
+    Bytes(&'a [u8]),
+    /// One share, laid out in its scheme's bytes for this step and wiped
+    /// when dropped.
+    Share {
+        bytes: Zeroizing<Vec<u8>>,
+        scheme: SharingScheme,
+        share: &'a rite_runtime::Share,
+    },
+}
+
+impl Payload<'_> {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Bytes(bytes) => bytes,
+            Self::Share { bytes, .. } => bytes,
+        }
+    }
+}
+
+/// Read what `data:` names: one share of a set, or any artifact's bytes.
+fn read_payload<'a>(
+    ctx: &'a HandlerContext,
+    data_ref: &ArtifactRef,
+) -> Result<Payload<'a>, ActionError> {
+    let failed = |e| ActionError::Failed(format!("data '{}': {e}", data_ref.display_name()));
+    match ShareOrBytes::read(ctx, data_ref).map_err(failed)? {
+        ShareOrBytes::Share(scheme, share) => Ok(Payload::Share {
+            bytes: share_bytes(scheme, share).map_err(failed)?,
+            scheme,
+            share,
+        }),
+        ShareOrBytes::Bytes(bytes) => Ok(Payload::Bytes(bytes)),
     }
 }
 
@@ -336,6 +352,52 @@ fn seal_into_container(
 
     EncryptedData::from_cms(der)
         .map_err(|e| ActionError::Failed(format!("Cannot read back the container: {e}")))
+}
+
+/// What the operation record says was encrypted and to whom.
+fn recorded_inputs(
+    scheme: WrapScheme,
+    data_ref: &ArtifactRef,
+    key_ref: &ArtifactRef,
+    payload: &Payload<'_>,
+    addressee: &Addressee,
+) -> serde_json::Value {
+    let mut inputs = serde_json::Map::new();
+    inputs.insert("scheme".into(), json!(scheme.to_string()));
+    inputs.insert("data".into(), json!(data_ref.display_name()));
+    // Neither a digest nor the length of the content. Content is what a
+    // ceremony encrypts because it is secret: a hash of a secret is the
+    // shape rite#126 removed, and a length is its shape, as for a split.
+    match payload {
+        Payload::Bytes(_) => {}
+        // Which share of which split.
+        Payload::Share { scheme, share, .. } => {
+            inputs.insert(
+                "share".into(),
+                json!({
+                    "scheme": scheme.to_string(),
+                    "threshold": share.threshold(),
+                    "index": share.index(),
+                }),
+            );
+        }
+    }
+    match addressee {
+        Addressee::CheckValue(check_value) => {
+            inputs.insert("encryption_key".into(), json!(key_ref.display_name()));
+            inputs.insert(
+                "encryption_key_check_value".into(),
+                json!(check_value.to_string()),
+            );
+        }
+        // The fingerprint is in its own fact, recorded before the
+        // encryption, so the method can be published while the recipient
+        // stays withheld.
+        Addressee::PublicKey => {
+            inputs.insert("recipient".into(), json!(key_ref.display_name()));
+        }
+    }
+    serde_json::Value::Object(inputs)
 }
 
 /// What came out, and what it says about itself.

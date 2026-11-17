@@ -652,8 +652,8 @@ fn each_reference_of_a_list_is_checked() {
     let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
     assert_eq!(
         messages,
-        ["Step 'recover' ('combine_shares') reads 'note' as 'shares', which takes shares, but \
-             'note' is 'text'"; 2]
+        ["Step 'recover' ('combine_shares') reads 'note' as 'shares', which takes shares, \
+             secret or bytes, but 'note' is 'text'"; 2]
     );
 }
 

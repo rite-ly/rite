@@ -26,9 +26,6 @@ use std::fmt;
 
 use zeroize::{Zeroize, Zeroizing};
 
-/// The format name, as the transcript and the bag sheet record it.
-pub const FORMAT: &str = "rite-sss/v1";
-
 // ── GF(2^8) ─────────────────────────────────────────────────────────────────
 
 /// Multiply in GF(2^8) modulo the Rijndael polynomial.

@@ -8,8 +8,7 @@
 #
 #     docs/demo/record.sh
 #
-# Requires: asciinema, tmux, agg. Uses the debug binary at target/debug/rite,
-# so build it first: cargo build -p rite.
+# Requires: asciinema, tmux, agg, Docker (container.sh).
 #
 # `rite` runs directly inside asciinema in a fixed-size tmux pane (no expect
 # layer), so the recording size matches what the TUI renders. Keys are sent
@@ -23,18 +22,11 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$SCRIPT_DIR/../.." && pwd)
 
 SESSION=rite-demo
-RITE="$REPO/target/debug/rite"
 CAST="$REPO/docs/demo/demo.cast"
 GIF="$REPO/docs/demo/demo.gif"
 COLS=100
 ROWS=30
 PAUSE=1.2   # seconds to read each prompt before acting; kept uniform for even pacing
-
-if [ ! -x "$RITE" ]; then
-  echo "rite binary not found at $RITE" >&2
-  echo "build it first: cargo build -p rite" >&2
-  exit 1
-fi
 
 # Stage the ceremony in a temp dir so its output directory lands outside the
 # repo. Cleaned up on exit along with the tmux session.
@@ -42,6 +34,11 @@ WORK=$(mktemp -d)
 trap 'tmux kill-session -t "$SESSION" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/examples"
 cp "$REPO/examples/showcase/demo.rite.yaml" "$WORK/examples/demo.rite.yaml"
+
+# shellcheck source-path=SCRIPTDIR source=container.sh
+. "$SCRIPT_DIR/container.sh"
+build_demo_image
+write_rite_wrapper "$WORK"
 
 # Block until the visible pane matches a regex.
 wait_for() {
@@ -64,7 +61,7 @@ tmux new-session -d -s "$SESSION" -x "$COLS" -y "$ROWS" -c "$WORK"
 tmux set-option -t "$SESSION" status off
 
 # Record only `rite run` (no shell). --quiet drops asciinema's banner.
-key "asciinema rec --quiet --overwrite --command '$RITE run examples/demo.rite.yaml' $CAST" Enter
+key "PATH=\"$WORK/bin:\$PATH\" asciinema rec --quiet --overwrite --command 'rite run examples/demo.rite.yaml' $CAST" Enter
 echo "started..."
 
 # The waits below are coupled to examples/demo.rite.yaml: the step count,

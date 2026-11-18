@@ -65,6 +65,19 @@ ignore = [
     #   - a stable `yubikey` release moves to `crypto-bigint` >= 0.7.6, so this
     #     waiver can be removed.
     { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 only sees public values inside yubikey" },
+
+    # RUSTSEC-2026-0543: `chrono` is unmaintained. Its maintainer is winding
+    # down maintenance and recommends `jiff`. No vulnerability is reported.
+    #
+    # Why it is accepted for now: the advisory reports no defect, only that
+    # fixes will stop. `chrono` is a direct dependency of `rite-runtime`,
+    # `rite-stdlib`, `rite-render`, `rite-tui` and the `rite` build script,
+    # where it reads the clock and formats and parses timestamps.
+    #
+    # Revisit if:
+    #   - a vulnerability or unsoundness advisory is filed against `chrono`;
+    #   - the workspace moves off `chrono`, tracked in #342 (drop this entry).
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; no defect reported, replacement planned" },
 ]
 
 [licenses]

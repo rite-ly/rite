@@ -1,5 +1,5 @@
 {
-  "$id": "https://ritely.io/schemas/0.8.0/ceremony.schema.json",
+  "$id": "https://ritely.io/schemas/0.9.0/ceremony.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Rite ceremony definition",
   "description": "A Rite ceremony definition.",

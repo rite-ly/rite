@@ -73,9 +73,18 @@ pub enum ArtifactValue {
     /// the copy an expression makes is unwiped JSON and a prompt text is a
     /// transcript fact. The set is not written to the run directory at all;
     /// shares leave one at a time, onto paper through `reveal` or sealed to
-    /// one holder's public key through `encrypt_data`. A set of one is how a
-    /// share typed back at a recovery arrives.
+    /// one holder's public key through `encrypt_data`.
     Shares(ShareSet),
+
+    /// One share, as a custodian types it back at a recovery, and the scheme
+    /// its layout names. Read through `reads:` as it is, never by a
+    /// `share_N`, and never written to the run directory.
+    Share {
+        /// The scheme the share was made under, and is laid out in.
+        scheme: SharingScheme,
+        /// The share.
+        share: Share,
+    },
 
     /// Display text for physical item references (USB drives, tamper bags, etc.).
     /// Used in messages and prompts when referencing physical objects.
@@ -191,15 +200,6 @@ impl ShareSet {
     pub fn share(&self, index: u8) -> Option<&Share> {
         self.shares.iter().find(|share| share.index == index)
     }
-
-    /// The one share of a set that holds exactly one, as a typed-back share
-    /// arrives; `None` for a set of several, which has to be named.
-    pub fn only(&self) -> Option<&Share> {
-        match self.shares.as_slice() {
-            [share] => Some(share),
-            _ => None,
-        }
-    }
 }
 
 impl std::fmt::Debug for ShareSet {
@@ -289,6 +289,7 @@ impl std::fmt::Display for ArtifactValue {
                 write!(f, "PrivateKey({len} bytes)")
             }
             ArtifactValue::Shares(set) => write!(f, "{set:?}"),
+            ArtifactValue::Share { scheme, share } => write!(f, "{share:?} ({scheme})"),
             ArtifactValue::Text(text) => {
                 write!(f, "Text({text})")
             }
@@ -400,6 +401,7 @@ impl ArtifactValue {
         match self {
             ArtifactValue::BackendKey { .. } => ArtifactKind::BackendKey,
             ArtifactValue::Shares(_) => ArtifactKind::Shares,
+            ArtifactValue::Share { .. } => ArtifactKind::Share,
             ArtifactValue::WrappedKey(_) => ArtifactKind::File(FileKind::WrappedKey),
             ArtifactValue::EncryptedData(_) => ArtifactKind::File(FileKind::EncryptedData),
             ArtifactValue::PublicKey(_) => ArtifactKind::File(FileKind::PublicKey),
@@ -427,7 +429,7 @@ impl ArtifactValue {
     /// - `Bytes`, `Secret`, `PrivateKey`, `Signature`, `Text`: the bytes as
     ///   they are
     ///   (format ignored)
-    /// - `Shares`: refused
+    /// - `Shares`, `Share`: refused
     ///
     /// MIME type references:
     /// - application/pkcs7-mime: CMS/PKCS#7 (RFC 5273)
@@ -473,9 +475,9 @@ impl ArtifactValue {
             }),
             // A file holding every share is the secret in the clear under
             // another name. Shares leave the machine one at a time, on paper.
-            ArtifactValue::Shares(_) => Err(
-                "A share set is not written to disk; each share is shown to its custodian \
-                 by a step that reads it"
+            ArtifactValue::Shares(_) | ArtifactValue::Share { .. } => Err(
+                "A share is not written to disk; each share is shown to its custodian or \
+                 sealed to them by a step that reads it"
                     .to_string(),
             ),
             ArtifactValue::Text(text) => Ok(SerializedArtifact {

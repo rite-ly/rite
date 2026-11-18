@@ -131,10 +131,12 @@ fn evaluate_artifact_ref(ref_: &Reference, ctx: &HandlerContext) -> Result<Value
              'reads:' of the step that installs it"
         ))),
 
-        ArtifactValue::Shares(_) => Err(ExecutionError::InvalidParams(format!(
-            "'{artifact_id}' holds shares of a secret, which no expression renders; \
+        ArtifactValue::Shares(_) | ArtifactValue::Share { .. } => {
+            Err(ExecutionError::InvalidParams(format!(
+                "'{artifact_id}' holds shares of a secret, which no expression renders; \
              name the share under 'reads:' of a step that shows or combines it"
-        ))),
+            )))
+        }
 
         // Other artifact types - delegate to resolve_artifact_bytes
         _ => {
@@ -518,12 +520,20 @@ mod tests {
                 [share],
             )),
         );
+        artifacts.insert(
+            ArtifactId::new("typed"),
+            ArtifactValue::Share {
+                scheme: rite_model::SharingScheme::RiteSssV1,
+                share: crate::Share::new(2, 2, vec![0xCD; 4]),
+            },
+        );
         let ctx = make_context(HashMap::new(), artifacts);
 
         for text in [
             "${artifact.shares}",
             "${artifact.shares.share_1}",
             "${artifact.shares | hex}",
+            "${artifact.typed}",
         ] {
             let expr = rite_model::expression::parse_expression(text).unwrap();
             let error = evaluate(&expr, &ctx).expect_err(text).to_string();

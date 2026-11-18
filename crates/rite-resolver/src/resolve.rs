@@ -1297,12 +1297,12 @@ impl ResolveContext {
                     message,
                 });
             }
-            if step
-                .action
-                .spec()
-                .creates
-                .contains(&rite_model::ArtifactKind::Shares)
-                && let Some(created) = &step.creates
+            if step.action.spec().creates.iter().any(|kind| {
+                matches!(
+                    kind,
+                    rite_model::ArtifactKind::Shares | rite_model::ArtifactKind::Share
+                )
+            }) && let Some(created) = &step.creates
             {
                 // `enter_share` declares the share's length; a split does not.
                 let declared = literal_length(step).map(|n| (n, step.id.clone()));
@@ -2699,6 +2699,84 @@ sections:
         assert_eq!(refused, ["show_a_share"], "{:?}", result.errors);
     }
 
+    /// A split's set read where one share is taken would fail at its step,
+    /// maybe after other shares left; a typed-back share is one already.
+    #[test]
+    fn a_whole_share_set_is_not_read_as_one_share() {
+        let yaml = r#"
+version: "0.3"
+name: "T"
+roles:
+  p:
+    person: "A"
+sections:
+  main:
+    role: ${role.p}
+    steps:
+      type_the_phrase:
+        action: enter_secret
+        with: { message: "Phrase", format: bip39 }
+        creates: phrase
+      split:
+        action: split_secret
+        reads: { secret: "${artifact.phrase}" }
+        with: { threshold: 2, shares: 3 }
+        creates: shares
+      type_a_share:
+        action: enter_share
+        with: { message: "A share", length: 35 }
+        creates: typed
+      show_the_set:
+        action: reveal
+        reads: { value: "${artifact.shares}" }
+        with: { message: "Share" }
+      show_one:
+        action: reveal
+        reads: { value: "${artifact.shares.share_1}" }
+        with: { message: "Share" }
+      show_typed:
+        action: reveal
+        reads: { value: "${artifact.typed}" }
+        with: { message: "Share" }
+      seal_the_set:
+        action: encrypt_data
+        reads: { data: "${artifact.shares}", recipient: "${artifact.phrase}" }
+        creates: sealed
+      combine_the_set:
+        action: combine_shares
+        reads: { shares: ["${artifact.shares}", "${artifact.typed}"] }
+        creates: one
+      combine_named:
+        action: combine_shares
+        reads: { shares: ["${artifact.shares.share_2}", "${artifact.typed}"] }
+        creates: two
+"#;
+        let result = crate::resolve(yaml, None);
+        let refused: Vec<(&str, String)> = result
+            .errors
+            .iter()
+            .filter_map(|e| match e {
+                ResolveError::InputKindMismatch { step, .. } => {
+                    Some((step.as_str(), e.to_string()))
+                }
+                _ => None,
+            })
+            .collect();
+        let steps: Vec<&str> = refused.iter().map(|(step, _)| *step).collect();
+        assert_eq!(
+            steps,
+            ["show_the_set", "seal_the_set", "combine_the_set"],
+            "{:?}",
+            result.errors
+        );
+        for (_, message) in &refused {
+            assert!(
+                message.ends_with("but 'shares' is 'shares'; name one share, as 'shares.share_1'"),
+                "{message}"
+            );
+        }
+    }
+
     #[test]
     fn a_share_s_length_is_checked_before_the_run() {
         let mut ceremony = minimal_ceremony();
@@ -2830,20 +2908,22 @@ sections:
         assert!(result.is_ok(), "Errors: {:?}", result.errors);
     }
 
-    /// A `combine_shares` step with the given `reads:` value, after a step
-    /// that makes `shares`, so the references resolve.
+    /// A `combine_shares` step with the given `reads:` value, after a
+    /// 2-of-5 split that makes `shares`, so the references resolve.
     fn resolve_combine_with_reads(reads: serde_json::Value) -> ResolveResult<Ceremony> {
         let mut ceremony = minimal_ceremony();
+        let steps = &mut ceremony.sections.get_mut("main").unwrap().steps;
         let mut enter = make_step_body();
-        enter.action = ActionType::EnterShare;
-        enter.with = Some(serde_json::json!({ "message": "A share", "length": 35 }));
-        enter.creates = Some("shares".to_string());
-        ceremony
-            .sections
-            .get_mut("main")
-            .unwrap()
-            .steps
-            .insert("enter".to_string(), enter);
+        enter.action = ActionType::EnterSecret;
+        enter.with = Some(serde_json::json!({ "message": "Phrase", "format": "bip39" }));
+        enter.creates = Some("phrase".to_string());
+        steps.insert("enter".to_string(), enter);
+        let mut split = make_step_body();
+        split.action = ActionType::SplitSecret;
+        split.with = Some(serde_json::json!({ "threshold": 2, "shares": 5 }));
+        split.reads = Some(serde_json::json!({ "secret": "${artifact.phrase}" }));
+        split.creates = Some("shares".to_string());
+        steps.insert("split".to_string(), split);
         let mut step = make_step_body();
         step.action = ActionType::CombineShares;
         step.reads = Some(reads);

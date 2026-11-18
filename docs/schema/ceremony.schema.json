@@ -2379,7 +2379,7 @@
                     "type": "object",
                     "properties": {
                       "value": {
-                        "description": "Takes shares or any file's bytes.",
+                        "description": "Takes share or any file's bytes.",
                         "type": "string"
                       }
                     },
@@ -2771,7 +2771,7 @@
                     "type": "object",
                     "properties": {
                       "data": {
-                        "description": "Takes shares or any file's bytes.",
+                        "description": "Takes share or any file's bytes.",
                         "type": "string"
                       },
                       "encryption_key": {
@@ -3002,7 +3002,7 @@
                       "shares": {
                         "type": "array",
                         "items": {
-                          "description": "Takes shares, secret or bytes.",
+                          "description": "Takes share, secret or bytes.",
                           "type": "string"
                         },
                         "minItems": 2

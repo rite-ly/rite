@@ -1,9 +1,9 @@
 {
-  "$schema": "https://ritely.io/schemas/0.7.1/bundle.schema.json",
+  "$schema": "https://ritely.io/schemas/0.9.0/bundle.schema.json",
   "rite_bundle": 0,
   "kind": "disclosure",
   "threshold": 10,
-  "fingerprint": "sha256:d60c6216002488430f24d6242d776d5d94f45ac8c8adaeaabc22dab40b98ddce",
+  "fingerprint": "sha256:3a367297fdee1c20a53737934e2791fb65f3b9a16deff01b535ca52ac3e944c0",
   "files": [
     {
       "path": "transcript.jsonl",

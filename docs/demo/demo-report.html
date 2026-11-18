@@ -581,17 +581,21 @@ code, .hash {
 
   <div class="summary-box">
     <p><strong>Status:</strong> <span class="status-completed">Completed</span></p>
-    <p><strong>Started:</strong> 2026-10-18 09:17:09 UTC</p>
-    <p><strong>Completed:</strong> 2026-10-18 09:17:10 UTC</p>
+    <p><strong>Started:</strong> 2026-11-18 20:16:38 UTC</p>
+    <p><strong>Completed:</strong> 2026-11-18 20:16:39 UTC</p>
     <p><strong>Duration:</strong> 0s</p>
-    <p><strong>Transcript fingerprint:</strong> <code>sha256:d60c6216002488430f24d6242d776d5d94f45ac8c8adaeaabc22dab40b98ddce</code></p>
+    <p><strong>Transcript fingerprint:</strong> <code>sha256:3a367297fdee1c20a53737934e2791fb65f3b9a16deff01b535ca52ac3e944c0</code></p>
   </div>
+  <h2>Where It Ran</h2>
+  <p><strong>Platform:</strong> Debian GNU&#x2f;Linux 13 (trixie) on aarch64, in a docker container, no VM marker found, Secure Boot unknown</p>
+  <p><strong>Network at opening</strong> (2026-11-18 20:16:38 UTC): 9 interfaces (0 up, 0 with an address), default route IPv4 no, IPv6 no, no radios</p>
+  <p><strong>Network at closing</strong> (2026-11-18 20:16:39 UTC): 9 interfaces (0 up, 0 with an address), default route IPv4 no, IPv6 no, no radios</p>
   <h2>Artifacts</h2>
   <table class="artifacts">
     <thead><tr><th>Name</th><th>Step</th><th>File</th><th>Fingerprint</th></tr></thead>
     <tbody>
-      <tr><td>root_cert</td><td><code>issue_root_cert</code></td><td><code>root_cert.pem</code></td><td><code class="hash">sha256:e4ee1558be8ac4917bb506d7eb62d00ce407878ae14e1166fe65f42d35c25d4d</code></td></tr>
-      <tr><td>root_public_key</td><td><code>export_public_key</code></td><td><code>root_public_key.pem</code></td><td><code class="hash">sha256:36a60cd6cf743afdc7bc6cbbd389fc4763256bd5c08aeb84ef733ddf1b14a66b</code></td></tr>
+      <tr><td>root_cert</td><td><code>issue_root_cert</code></td><td><code>root_cert.pem</code></td><td><code class="hash">sha256:1dc1596d11bc00e36fdc160d3bb814e3e77e463db9f62d2856e336948fda0277</code></td></tr>
+      <tr><td>root_public_key</td><td><code>export_public_key</code></td><td><code>root_public_key.pem</code></td><td><code class="hash">sha256:b78867e879b3685e54dc172290b72eec595523ad4ff88a64c481ecbbea17af59</code></td></tr>
     </tbody>
   </table>
   <h2>Roles</h2>
@@ -603,16 +607,16 @@ code, .hash {
   <table class="execution-log">
     <thead><tr><th class="step-num">Label</th><th>Step</th><th class="role">Role</th><th>Started</th><th>Completed</th><th>Outcome</th></tr></thead>
     <tbody>
-      <tr><td class="step-num">1</td><td><code>verify_air_gap</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:09 UTC</td><td>completed, Verification confirmed</td></tr>
-      <tr><td class="step-num">2</td><td><code>generate_root_key</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:09 UTC</td><td>completed, RSA-4096 keypair generated</td></tr>
-      <tr><td class="step-num">3</td><td><code>generate_root_csr</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:09 UTC</td><td>completed, PKCS#10 CSR generated</td></tr>
-      <tr><td class="step-num">4</td><td><code>issue_root_cert</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:09 UTC</td><td>completed, X.509 certificate issued from CSR</td></tr>
-      <tr><td class="step-num">5</td><td><code>export_public_key</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:09 UTC</td><td>completed, Public key exported</td></tr>
-      <tr><td class="step-num">6</td><td><code>witness_attest</code></td><td class="role"><abbr title="Witness">Wi</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:09 UTC</td><td>completed, Attestation recorded for Witness</td></tr>
-      <tr><td class="step-num">7</td><td><code>officer_attest</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-10-18 09:17:09 UTC</td><td>2026-10-18 09:17:10 UTC</td><td>completed, Attestation recorded for Crypto Officer</td></tr>
+      <tr><td class="step-num">1</td><td><code>verify_air_gap</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-11-18 20:16:38 UTC</td><td>2026-11-18 20:16:38 UTC</td><td>completed, Verification confirmed</td></tr>
+      <tr><td class="step-num">2</td><td><code>generate_root_key</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-11-18 20:16:38 UTC</td><td>2026-11-18 20:16:39 UTC</td><td>completed, RSA-4096 keypair generated</td></tr>
+      <tr><td class="step-num">3</td><td><code>generate_root_csr</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-11-18 20:16:39 UTC</td><td>2026-11-18 20:16:39 UTC</td><td>completed, PKCS#10 CSR generated</td></tr>
+      <tr><td class="step-num">4</td><td><code>issue_root_cert</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-11-18 20:16:39 UTC</td><td>2026-11-18 20:16:39 UTC</td><td>completed, X.509 certificate issued from CSR</td></tr>
+      <tr><td class="step-num">5</td><td><code>export_public_key</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-11-18 20:16:39 UTC</td><td>2026-11-18 20:16:39 UTC</td><td>completed, Public key exported</td></tr>
+      <tr><td class="step-num">6</td><td><code>witness_attest</code></td><td class="role"><abbr title="Witness">Wi</abbr></td><td>2026-11-18 20:16:39 UTC</td><td>2026-11-18 20:16:39 UTC</td><td>completed, Attestation recorded for Witness</td></tr>
+      <tr><td class="step-num">7</td><td><code>officer_attest</code></td><td class="role"><abbr title="Crypto Officer">CO</abbr></td><td>2026-11-18 20:16:39 UTC</td><td>2026-11-18 20:16:39 UTC</td><td>completed, Attestation recorded for Crypto Officer</td></tr>
     </tbody>
   </table>
 
-  <div class="report-footer">Generated by Rite v0.7.1</div>
+  <div class="report-footer">Generated by Rite v0.9.0</div>
 </body>
 </html>

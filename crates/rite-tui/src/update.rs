@@ -5,8 +5,8 @@
 //! outside world is returned as a [`Cmd`] for the runtime loop to
 //! interpret.
 
-use chrono::{DateTime, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use rite_model::EventTime;
 
 use rite_model::{Prompt, StepFact};
 use rite_runtime::{
@@ -31,7 +31,9 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::Tick => {
             model.tick = model.tick.wrapping_add(1);
-            model.now = chrono::Local::now();
+            if let Ok(now) = EventTime::now() {
+                model.now = now;
+            }
             if drip_due(model)
                 && let Some(event) = model.pending_events.pop_front()
             {
@@ -519,12 +521,10 @@ fn install_prompt(
     });
 }
 
-fn handle_fact(model: &mut Model, at: DateTime<Utc>, fact: &StepFact) -> Vec<Cmd> {
-    // Event time from the transcript envelope, rendered in the operator's local
+fn handle_fact(model: &mut Model, at: EventTime, fact: &StepFact) -> Vec<Cmd> {
+    // Event time from the transcript envelope, shown in the operator's local
     // zone. Carried on the event so it survives the drip queue: the log column
     // and deviation list show when the event happened, not when it drained.
-    let at_local = at.with_timezone(&chrono::Local);
-
     // Model-specific side-effects first (header, dividers, screen
     // transitions, deviation list). The log feed is fed afterwards from
     // the shared `fact_summary`, so the live log mirrors the console
@@ -544,13 +544,13 @@ fn handle_fact(model: &mut Model, at: DateTime<Utc>, fact: &StepFact) -> Vec<Cmd
         }
         StepFact::PlatformRecorded { platform } => {
             model.platform = Some(RecordedPlatform {
-                at: at_local,
+                at,
                 platform: platform.clone(),
             });
         }
         StepFact::NetworkStateRecorded { moment, network } => {
             model.network = Some(RecordedNetwork {
-                at: at_local,
+                at,
                 moment: *moment,
                 state: network.clone(),
             });
@@ -592,7 +592,7 @@ fn handle_fact(model: &mut Model, at: DateTime<Utc>, fact: &StepFact) -> Vec<Cmd
             model.deviations.push(DeviationView {
                 step: step.clone(),
                 text: text.clone(),
-                at: at_local,
+                at,
             });
         }
         StepFact::CeremonyCompleted { .. } => {
@@ -620,7 +620,7 @@ fn handle_fact(model: &mut Model, at: DateTime<Utc>, fact: &StepFact) -> Vec<Cmd
         StepFact::StepStarted { .. } | StepFact::ActStarted { .. }
     ) && let Some((icon, text)) = fact_summary(fact)
     {
-        model.push_entry_at(icon, text, at_local);
+        model.push_entry_at(icon, text, at);
     }
 
     Vec::new()
@@ -684,7 +684,11 @@ mod tests {
                     radios: None,
                 },
             };
-            let _ = handle_fact(&mut model, Utc::now(), &fact);
+            let _ = handle_fact(
+                &mut model,
+                rite_runtime::test_support::fixed_test_time(),
+                &fact,
+            );
         }
         assert_eq!(
             model.network.map(|recorded| recorded.moment),

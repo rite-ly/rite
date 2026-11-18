@@ -20,7 +20,7 @@ crossterm = { workspace = true }
 crossbeam-channel = { workspace = true }
 secrecy = { workspace = true }
 zeroize = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true, features = ["tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
 
 [lints]
 workspace = true

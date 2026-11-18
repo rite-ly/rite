@@ -13,7 +13,6 @@
 //!   converted to [`rite_model::ResponseRecord`] when persisted)
 //! - [`UiSignal`], [`Icon`], UI narration, never on disk
 
-use chrono::{DateTime, Utc};
 use rite_model::{
     FileKind, KeyAlgorithm, Material, MaterialId, MaterialKind, Prompt, StepFact, StepId,
 };
@@ -265,7 +264,7 @@ pub enum ExecEvent {
         /// emitted, the same `at` recorded on the transcript envelope. Frontends
         /// display this rather than their own receipt time, so live timestamps
         /// match the audit record.
-        at: DateTime<Utc>,
+        at: rite_model::EventTime,
         /// The fact itself.
         fact: StepFact,
     },

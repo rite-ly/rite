@@ -9,8 +9,8 @@
 #
 #     docs/demo/render-prints.sh
 #
-# Requires the debug binary at target/debug/rite, so build it first:
-# cargo build -p rite. Regenerate whenever the showcase ceremony, the
+# Requires Docker: the run happens in a container (container.sh). Regenerate
+# after the release commit, whenever the showcase ceremony, the
 # script/report templates, the transcript format, or the vendored logo change.
 #
 # The script and reports are branded with the project name and the logo
@@ -33,15 +33,14 @@ CEREMONY="$REPO/examples/showcase/demo.rite.yaml"
 BRAND_NAME="Rite-ly"
 LOGO="$SCRIPT_DIR/logo.svg"
 
-if [ ! -x "$RITE" ]; then
-  echo "rite binary not found at $RITE" >&2
-  echo "build it first: cargo build -p rite" >&2
-  exit 1
-fi
-
 # The run's output directory lands in a temp dir, cleaned up on exit.
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+
+# shellcheck source-path=SCRIPTDIR source=container.sh
+. "$SCRIPT_DIR/container.sh"
+build_demo_image
+cp "$CEREMONY" "$WORK/demo.rite.yaml"
 
 # Printed protocol participants follow by hand.
 "$RITE" script "$CEREMONY" \
@@ -51,8 +50,8 @@ trap 'rm -rf "$WORK"' EXIT
 echo "wrote $SCRIPT_DIR/demo-script.html"
 
 # One headless run, packed with the ceremony it ran from.
-"$RITE" run --frontend headless -o "$WORK" "$CEREMONY" >/dev/null
-OUT=$(ls -d "$WORK"/*/ | head -1)
+rite_in_container "$WORK" run --frontend headless -o out demo.rite.yaml >/dev/null
+OUT=$(ls -d "$WORK"/out/*/ | head -1)
 rm -rf "$SCRIPT_DIR/demo-bundle" "$SCRIPT_DIR/demo-disclosure"
 "$RITE" bundle create "$OUT" --definition "$CEREMONY" -o "$SCRIPT_DIR/demo-bundle" >/dev/null
 echo "wrote $SCRIPT_DIR/demo-bundle/"

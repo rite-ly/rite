@@ -27,3 +27,6 @@ the crypto officer and the witness are in the bundle, and not in the disclosure.
 
 `render-prints.sh` produces every file here except the GIF, from one run, and `record.sh` records the GIF. See each
 script for when to run it.
+
+Both scripts run the ceremony in a container with no network (`container.sh`), so the published transcript records
+no interface of the machine that regenerated it.

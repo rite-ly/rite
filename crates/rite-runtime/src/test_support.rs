@@ -195,6 +195,14 @@ impl StepRunner {
         self.state.held_keys.insert(id, key);
     }
 
+    /// Declare `credential`, a credential its backend has, for the steps
+    /// that read it.
+    pub fn add_credential(&mut self, credential: rite_model::Credential) {
+        self.state
+            .credentials
+            .insert(credential.id.clone(), credential);
+    }
+
     /// Run `step`, and keep what it produces for later steps.
     ///
     /// # Errors

@@ -176,6 +176,9 @@ fn expression_completions(
     for id in span_map.artifacts.keys() {
         candidates.push(("artifact", id.as_str()));
     }
+    for id in span_map.credentials.keys() {
+        candidates.push(("credential", id.as_str()));
+    }
 
     // The replace range covers only the text after `${` up to the cursor.
     // This lets VS Code use the typed prefix (e.g. "role.") for client-side
@@ -216,7 +219,7 @@ fn expression_completions(
 #[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use rite_model::{MaterialId, ParamId, RoleId};
+    use rite_model::{CredentialId, MaterialId, ParamId, RoleId};
     use rite_resolver::{Span, SpanMap};
 
     fn dummy_span() -> Span {
@@ -236,13 +239,15 @@ mod tests {
         map
     }
 
-    /// Mixed `SpanMap`: two roles, one param, one material.
+    /// Mixed `SpanMap`: two roles, one param, one material, one credential.
     fn span_map_mixed() -> SpanMap {
         let mut map = SpanMap::default();
         map.roles.insert(RoleId::new("operator"), dummy_span());
         map.roles.insert(RoleId::new("witness"), dummy_span());
         map.params.insert(ParamId::new("threshold"), dummy_span());
         map.materials.insert(MaterialId::new("card"), dummy_span());
+        map.credentials
+            .insert(CredentialId::new("card_pin"), dummy_span());
         map
     }
 
@@ -358,6 +363,7 @@ mod tests {
             [
                 // The `card` material, offered under the namespace that reads it.
                 "artifact.card",
+                "credential.card_pin",
                 "param.threshold",
                 "role.operator",
                 "role.witness"

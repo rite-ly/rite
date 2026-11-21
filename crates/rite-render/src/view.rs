@@ -118,6 +118,10 @@ pub struct ScriptView {
     /// identifier names the key, its device and algorithm, and the
     /// fingerprint when the ceremony pins one.
     pub held_keys: Vec<MaterialView>,
+    /// Credentials a backend has, for the preparation checklist: the
+    /// identifier says what each grants, on which device, and where its
+    /// value comes from.
+    pub credentials: Vec<MaterialView>,
     /// Prose prerequisites for the preparation checklist.
     pub prerequisites: Vec<String>,
     /// Whether any preparation content exists (materials or prerequisites).
@@ -403,10 +407,21 @@ impl ScriptView {
                 MaterialKind::File { .. } | MaterialKind::Physical { .. } => None,
             })
             .collect::<Vec<_>>();
+        let credentials = resolved
+            .credentials
+            .iter()
+            .map(|(_, credential)| MaterialView {
+                name: credential.display_name().to_string(),
+                description: credential.description.clone(),
+                identifier: Some(credential.to_string()),
+                quantity: None,
+            })
+            .collect::<Vec<_>>();
         let prerequisites = resolved.prerequisites.clone();
         let has_preparation = !physical_materials.is_empty()
             || !digital_materials.is_empty()
             || !held_keys.is_empty()
+            || !credentials.is_empty()
             || !prerequisites.is_empty();
 
         let has_named_acts = !resolved.acts.is_empty();
@@ -481,6 +496,7 @@ impl ScriptView {
             physical_materials,
             digital_materials,
             held_keys,
+            credentials,
             prerequisites,
             has_preparation,
             has_named_acts,

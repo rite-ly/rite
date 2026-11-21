@@ -5,7 +5,9 @@
 //! parameter values merged with defaults.
 
 use super::SymbolTable;
-use super::ids::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};
+use super::ids::{
+    ActId, ArtifactId, CredentialId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId,
+};
 use crate::expression::ExprValue;
 use crate::material::MaterialSource;
 use crate::types::{ActionType, ArtifactKind, DutyType, FileKind, Metadata, ParameterType};
@@ -35,6 +37,9 @@ pub struct Ceremony {
 
     /// Resolved materials with their sources, keyed by material ID.
     pub materials: SymbolTable<MaterialId, Material>,
+
+    /// Credentials the backends have, keyed by credential ID.
+    pub credentials: SymbolTable<CredentialId, Credential>,
 
     /// Pre-ceremony conditions (prose-only checklist).
     pub prerequisites: Vec<String>,
@@ -264,6 +269,60 @@ impl MaterialKind {
     }
 }
 
+/// A credential a backend has, as the ceremony declares it.
+///
+/// It holds no secret: `source` says where the value comes from when a step
+/// needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Credential {
+    /// Credential identifier.
+    pub id: CredentialId,
+    /// Optional human-readable title for display (falls back to the ID).
+    pub title: Option<String>,
+    /// Human-readable description.
+    pub description: Option<String>,
+    /// The backend the credential belongs to, by its name in the ceremony.
+    pub backend: String,
+    /// What the credential is used for.
+    pub grants: crate::CredentialGrant,
+    /// Where its value comes from.
+    pub source: crate::CredentialSource,
+}
+
+impl Credential {
+    /// The display name: the title, or the ID.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.title.as_deref().unwrap_or(self.id.as_str())
+    }
+
+    /// What Rite cannot present yet: the grant, the source, or both. Rite
+    /// authenticates with a user credential its holder types.
+    #[must_use]
+    pub fn unsupported(
+        &self,
+    ) -> (
+        Option<crate::CredentialGrant>,
+        Option<crate::CredentialSource>,
+    ) {
+        (
+            (self.grants != crate::CredentialGrant::User).then_some(self.grants),
+            (self.source != crate::CredentialSource::Entered).then_some(self.source),
+        )
+    }
+}
+
+/// `user credential of token, entered`.
+impl std::fmt::Display for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} credential of {}, {}",
+            self.grants, self.backend, self.source
+        )
+    }
+}
+
 /// A resolved material with its source.
 #[derive(Debug, Clone)]
 pub struct Material {
@@ -353,6 +412,13 @@ pub enum ArtifactRef {
         /// Optional property accessor.
         property: Option<String>,
     },
+
+    /// References a credential a backend has. It holds no value: the step
+    /// reads its declaration.
+    Credential {
+        /// Credential ID.
+        id: CredentialId,
+    },
 }
 
 impl ArtifactRef {
@@ -369,14 +435,17 @@ impl ArtifactRef {
                 id,
                 property: Some(p),
             } => format!("{id}.{p}"),
+            ArtifactRef::Credential { id } => id.to_string(),
         }
     }
 
-    /// Get the artifact ID from this reference.
+    /// Get the artifact ID from this reference. A credential is no artifact:
+    /// its ID names nothing in the artifact store.
     pub fn artifact_id(&self) -> ArtifactId {
         match self {
             ArtifactRef::Material { id, .. } => ArtifactId::new(id.as_str()),
             ArtifactRef::Produced { id, .. } => id.clone(),
+            ArtifactRef::Credential { id } => ArtifactId::new(id.as_str()),
         }
     }
 
@@ -386,6 +455,7 @@ impl ArtifactRef {
             ArtifactRef::Material { property, .. } | ArtifactRef::Produced { property, .. } => {
                 property.as_deref()
             }
+            ArtifactRef::Credential { .. } => None,
         }
     }
 }

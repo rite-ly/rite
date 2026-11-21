@@ -7,10 +7,12 @@ use crate::diagnostic::{
 use crate::error::ResolveError;
 use crate::schema::Ceremony;
 use marked_yaml::Node;
-use marked_yaml::types::MarkedScalarNode;
+use marked_yaml::types::{MarkedMappingNode, MarkedScalarNode};
 use rite_model::expression::{Expression, RefType};
 use rite_model::validate::{Anchor, Keyword, Pointer};
-use rite_model::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};
+use rite_model::{
+    ActId, ArtifactId, CredentialId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -136,6 +138,16 @@ impl<'src> Lowerer<'src> {
         }
     }
 
+    /// The keys of the mapping under `field`, each with its span.
+    fn key_spans(&self, mapping: &MarkedMappingNode, field: &str) -> Vec<(String, Span)> {
+        mapping
+            .get_mapping(field)
+            .into_iter()
+            .flat_map(|map| map.iter())
+            .filter_map(|(key, _)| Some((key.as_str().to_string(), self.scalar_to_span(key)?)))
+            .collect()
+    }
+
     fn walk(mut self, node: &Node) -> SpanMap {
         let Some(mapping) = node.as_mapping() else {
             return self.span_map;
@@ -183,14 +195,8 @@ impl<'src> Lowerer<'src> {
         }
 
         // Roles: mapping where keys are role IDs.
-        if let Some(roles_map) = mapping.get_mapping("roles") {
-            for (key_scalar, _) in roles_map.iter() {
-                if let Some(span) = self.scalar_to_span(key_scalar) {
-                    self.span_map
-                        .roles
-                        .insert(RoleId::new(key_scalar.as_str()), span);
-                }
-            }
+        for (key, span) in self.key_spans(mapping, "roles") {
+            self.span_map.roles.insert(RoleId::new(&key), span);
         }
 
         // Acts: sequence of mappings, each with an "id" scalar.
@@ -207,26 +213,17 @@ impl<'src> Lowerer<'src> {
             }
         }
 
-        // Parameters: mapping where keys are param IDs.
-        if let Some(params_map) = mapping.get_mapping("parameters") {
-            for (key_scalar, _) in params_map.iter() {
-                if let Some(span) = self.scalar_to_span(key_scalar) {
-                    self.span_map
-                        .params
-                        .insert(ParamId::new(key_scalar.as_str()), span);
-                }
-            }
+        // Parameters, materials and credentials: mappings keyed by ID.
+        for (key, span) in self.key_spans(mapping, "parameters") {
+            self.span_map.params.insert(ParamId::new(&key), span);
         }
-
-        // Materials: mapping where keys are material IDs.
-        if let Some(materials_map) = mapping.get_mapping("materials") {
-            for (key_scalar, _) in materials_map.iter() {
-                if let Some(span) = self.scalar_to_span(key_scalar) {
-                    self.span_map
-                        .materials
-                        .insert(MaterialId::new(key_scalar.as_str()), span);
-                }
-            }
+        for (key, span) in self.key_spans(mapping, "materials") {
+            self.span_map.materials.insert(MaterialId::new(&key), span);
+        }
+        for (key, span) in self.key_spans(mapping, "credentials") {
+            self.span_map
+                .credentials
+                .insert(CredentialId::new(&key), span);
         }
 
         // Backends: mapping where keys are backend names.
@@ -343,15 +340,13 @@ impl<'src> Lowerer<'src> {
     fn walk_reads(&mut self, reads_node: &Node, step_context: &ReferenceContext) {
         if let Some(scalar) = reads_node.as_scalar() {
             // Single artifact reference: `reads: "${artifact.x}"`.
-            let id = ArtifactId::new(extract_artifact_name(scalar.as_str()));
-            self.push_reference(scalar, ReferenceTarget::Artifact(id), step_context);
+            self.push_reference(scalar, read_target(scalar.as_str()), step_context);
         } else if let Some(reads_map) = reads_node.as_mapping() {
             // Named inputs: `reads: { key_to_wrap: "...", wrapping_key: "..." }`,
             // where a value is one reference or a list of them.
             for (_, val_node) in reads_map.iter() {
                 let mut push = |scalar: &MarkedScalarNode| {
-                    let id = ArtifactId::new(extract_artifact_name(scalar.as_str()));
-                    self.push_reference(scalar, ReferenceTarget::Artifact(id), step_context);
+                    self.push_reference(scalar, read_target(scalar.as_str()), step_context);
                 };
                 if let Some(scalar) = val_node.as_scalar() {
                     push(scalar);
@@ -411,6 +406,7 @@ impl<'src> Lowerer<'src> {
                         RefType::Param => ReferenceTarget::Param(ParamId::new(name)),
                         RefType::Role => ReferenceTarget::Role(RoleId::new(name)),
                         RefType::Artifact => ReferenceTarget::Artifact(ArtifactId::new(name)),
+                        RefType::Credential => ReferenceTarget::Credential(CredentialId::new(name)),
                     };
                     self.span_map.references.push(ReferenceEntry {
                         span,
@@ -689,6 +685,20 @@ fn extract_role_id(raw: &str) -> &str {
     raw.strip_prefix("${role.")
         .and_then(|s| s.strip_suffix('}'))
         .unwrap_or(raw)
+}
+
+/// What a `reads:` value names: a credential for `${credential.x}`, an
+/// artifact otherwise. A property, as in `${credential.x.value}`, is left
+/// out: the reference is to `x`.
+fn read_target(raw: &str) -> ReferenceTarget {
+    if let Some(path) = raw
+        .strip_prefix("${credential.")
+        .and_then(|s| s.strip_suffix('}'))
+    {
+        let name = path.split_once('.').map_or(path, |(name, _)| name);
+        return ReferenceTarget::Credential(CredentialId::new(name));
+    }
+    ReferenceTarget::Artifact(ArtifactId::new(extract_artifact_name(raw)))
 }
 
 /// Extract a plain artifact name from either `"${artifact.name}"` syntax or a bare name.
@@ -1674,7 +1684,7 @@ sections:
                 (
                     "unknown_key".to_string(),
                     "the ceremony has no 'unknown_key' field. Accepted: acts, after, backends, \
-                     description, materials, name, output, parameters, prerequisites, roles, \
+                     credentials, description, materials, name, output, parameters, prerequisites, roles, \
                      sections, version"
                         .to_string()
                 ),

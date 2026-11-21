@@ -26,13 +26,13 @@ pub struct PivReadCertificateParams {
     pub message: Option<String>,
 }
 
-/// The `with` block of `enter_pin`.
+/// The `with` block of `authenticate`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
-pub struct EnterPinParams {
-    /// Shown to the operator before the PIN prompt, such as which key the
-    /// PIN unlocks.
+pub struct AuthenticateParams {
+    /// Shown to the operator before the credential is asked for, such as
+    /// which key it unlocks.
     #[serde(default)]
     pub message: Option<String>,
 }

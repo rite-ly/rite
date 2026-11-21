@@ -21,6 +21,11 @@ backends:
     provider: yubikey
   software:
     provider: openssl
+credentials:
+  card_pin:
+    backend: token
+    grants: user
+    source: entered
 materials:
   signing_key:
     type: backend_key
@@ -41,8 +46,10 @@ sections:
     role: ${{role.operator}}
     steps:
       unlock:
-        action: enter_pin
+        action: authenticate
         backend: token
+        reads:
+          credential: ${{credential.card_pin}}
       sign:
         action: sign_data
         backend: token
@@ -162,7 +169,8 @@ fn each_held_key_binds_at_the_first_step_that_reads_it() {
         |pred: &dyn Fn(&serde_json::Value) -> bool| run.facts.iter().position(pred).unwrap();
     let unlock_started = position(&|f| f["type"] == "step_started" && f["id"] == "unlock");
     let backend_bound = position(&|f| f["type"] == "backend_bound" && f["name"] == "token");
-    let pin_entered = position(&|f| f["type"] == "backend_operation" && f["kind"] == "verify_pin");
+    let pin_entered =
+        position(&|f| f["type"] == "backend_operation" && f["kind"] == "authenticate");
     let sign_started = position(&|f| f["type"] == "step_started" && f["id"] == "sign");
     let key_bound = position(&|f| f["type"] == "key_bound" && f["name"] == "signing_key");
     assert!(unlock_started < backend_bound && backend_bound < pin_entered);
@@ -229,6 +237,11 @@ backends:
     provider: yubikey
   software:
     provider: openssl
+credentials:
+  card_pin:
+    backend: token
+    grants: user
+    source: entered
 materials:
   decryption_key:
     type: backend_key
@@ -250,8 +263,10 @@ sections:
           data: ${artifact.manifest}
         creates: sealed
       unlock:
-        action: enter_pin
+        action: authenticate
         backend: token
+        reads:
+          credential: ${credential.card_pin}
       open:
         action: decrypt_data
         backend: token

@@ -149,6 +149,11 @@ backends:
     serial: "{serial}"
   software:
     provider: openssl
+credentials:
+  card_pin:
+    backend: token
+    grants: user
+    source: entered
 materials:
   rsa_key:
     type: backend_key
@@ -183,9 +188,12 @@ sections:
     )
 }
 
-/// An `enter_pin` step on the card, named `id`.
+/// An `authenticate` step on the card with its PIN, named `id`.
 fn unlock(id: &str) -> String {
-    format!("      {id}:\n        action: enter_pin\n        backend: token\n")
+    format!(
+        "      {id}:\n        action: authenticate\n        backend: token\n        reads:\n          \
+         credential: ${{credential.card_pin}}\n"
+    )
 }
 
 /// A `sign_data` step on the card, named `id`, signing the manifest with
@@ -267,6 +275,9 @@ fn run(yaml: &str, responses: Vec<Response>) -> Run {
             _ => runner.add_material(artifact, ArtifactValue::Bytes(MANIFEST.to_vec())),
         }
     }
+    for (_, credential) in ceremony.credentials.iter() {
+        runner.add_credential(credential.clone());
+    }
     for response in responses {
         runner.enqueue_response(response);
     }
@@ -323,7 +334,7 @@ fn one_pin_step_signs_with_keys_the_card_held() {
     let entered = run.facts_of("backend_operation");
     let entered: Vec<_> = entered
         .iter()
-        .filter(|fact| fact["kind"] == "verify_pin")
+        .filter(|fact| fact["kind"] == "authenticate")
         .collect();
     assert_eq!(entered.len(), 1, "{entered:#?}");
     assert_eq!(entered[0]["inputs"]["retries_before"], 3);
@@ -386,7 +397,7 @@ fn the_card_opens_what_was_sealed_to_its_key() {
 /// Slot 9C defaults to PIN policy `always`: the card clears the PIN after
 /// each signature, so a second signature after one PIN step fails with
 /// `PinRequired`, and a PIN step before each succeeds. The design of
-/// `enter_pin` rests on this.
+/// `authenticate` rests on this.
 #[test]
 #[ignore = "needs a YubiKey kept for testing; see the module documentation"]
 fn slot_9c_takes_the_pin_before_each_signature() {
@@ -436,7 +447,7 @@ fn slot_9c_takes_the_pin_before_each_signature() {
     let tries: Vec<_> = run_each
         .facts_of("backend_operation")
         .into_iter()
-        .filter(|fact| fact["kind"] == "verify_pin")
+        .filter(|fact| fact["kind"] == "authenticate")
         .map(|fact| fact["inputs"]["retries_before"].clone())
         .collect();
     assert_eq!(tries, [3, 3]);

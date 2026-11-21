@@ -12,8 +12,8 @@
 use crate::serde_utils;
 use indexmap::IndexMap;
 use rite_model::{
-    ActionType, BackendConfig, DutyType, FileKind, KeyAlgorithm, KeyFingerprint, ParameterType,
-    Sha256Digest,
+    ActionType, BackendConfig, CredentialGrant, CredentialSource, DutyType, FileKind, KeyAlgorithm,
+    KeyFingerprint, ParameterType, Sha256Digest,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,10 @@ pub(crate) struct Ceremony {
     /// available as `${artifact.<id>}`; physical items appear in the script.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub(crate) materials: HashMap<String, Material>,
+    /// Credentials the backends have, such as a PIN, keyed by ID. Steps read
+    /// a credential as `${credential.<id>}`.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub(crate) credentials: IndexMap<String, CredentialDeclaration>,
     /// Conditions met before the ceremony starts, printed as a checklist.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) prerequisites: Vec<String>,
@@ -73,6 +77,31 @@ pub(crate) struct Ceremony {
 
 fn unset_source_digest() -> Sha256Digest {
     Sha256Digest::of(b"")
+}
+
+/// A credential a backend has before the ceremony: a PIN, a PUK, a
+/// management key. It holds no value: `source` says where the value comes
+/// from when a step needs it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CredentialDeclaration {
+    /// The name shown for this credential in the script and at the prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) title: Option<String>,
+    /// A description of the credential, shown in the script.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) description: Option<String>,
+    /// The backend the credential belongs to, by its name under `backends`.
+    pub(crate) backend: String,
+    /// What the credential is used for: `user` for a PIN that unlocks the
+    /// device's keys, `admin` for a management key or security officer PIN,
+    /// `unblock` for a PUK. Rite supports `user` today.
+    pub(crate) grants: CredentialGrant,
+    /// Where its value comes from: `entered`, typed by the person in the
+    /// step's role; `factory_default`, the vendor's value; `held`, from an
+    /// artifact; `on_device`, presented to the device directly. Rite supports
+    /// `entered` today.
+    pub(crate) source: CredentialSource,
 }
 
 /// A role in the ceremony.

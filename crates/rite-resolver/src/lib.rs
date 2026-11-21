@@ -894,7 +894,7 @@ sections: {}
             messages,
             [
                 "line 5, column 1: the ceremony has no 'stray' field. Accepted: acts, after, \
-              backends, description, materials, name, output, parameters, prerequisites, roles, \
+              backends, credentials, description, materials, name, output, parameters, prerequisites, roles, \
               sections, version"
             ]
         );
@@ -1522,13 +1522,30 @@ sections:
             )
         }
 
-        /// `yaml` with an `enter_pin` step on `backend` just before `step`.
+        /// `yaml` with an `authenticate` step on `backend` just before
+        /// `step`, reading `{backend}_pin`, a user credential of `backend`
+        /// declared once.
         fn pin_before(yaml: &str, step: &str, backend: &str) -> String {
+            let credential = format!("  {backend}_pin:\n");
+            let declared = if yaml.contains(&credential) {
+                yaml.to_string()
+            } else {
+                replaced(
+                    yaml,
+                    "materials:\n",
+                    &format!(
+                        "credentials:\n{credential}    backend: {backend}\n    grants: user\n    \
+                         source: entered\nmaterials:\n"
+                    ),
+                )
+            };
             replaced(
-                yaml,
+                &declared,
                 &format!("      {step}:\n"),
                 &format!(
-                    "      unlock_{step}:\n        action: enter_pin\n        backend: {backend}\n      {step}:\n"
+                    "      unlock_{step}:\n        action: authenticate\n        backend: \
+                     {backend}\n        reads:\n          credential: \
+                     \"${{credential.{backend}_pin}}\"\n      {step}:\n"
                 ),
             )
         }
@@ -1539,7 +1556,7 @@ sections:
                 .warnings
                 .iter()
                 .map(ToString::to_string)
-                .filter(|w| w.contains("enter_pin"))
+                .filter(|w| w.contains("'authenticate'"))
                 .collect()
         }
 
@@ -1560,13 +1577,13 @@ sections:
         }
 
         /// A card refuses its key until the PIN is entered, so using one
-        /// with no `enter_pin` before it is worth a word, but not an error.
+        /// with no `authenticate` before it is worth a word, but not an error.
         #[test]
         fn a_card_key_used_before_any_pin_step_is_warned() {
             let yaml = on_card(DECLARED, "token");
             let warning = only_pin_warning(&yaml);
             assert!(
-                warning.contains("no earlier 'enter_pin'")
+                warning.contains("no earlier 'authenticate'")
                     && warning.contains("'signing_key'")
                     && warning.contains("'token'"),
                 "{warning}"
@@ -1725,7 +1742,156 @@ sections:
             assert!(
                 found
                     .iter()
-                    .any(|m| m.contains("'unlock_sign'") && m.contains("which takes none")),
+                    .any(|m| m.contains("'unlock_sign'") && m.contains("which takes no PIN")),
+                "{found:?}"
+            );
+        }
+
+        #[test]
+        fn a_credential_of_another_backend_is_refused() {
+            let yaml = replaced(
+                &pin_before(&on_card(DECLARED, "token"), "sign", "token"),
+                "        action: authenticate\n        backend: token\n",
+                "        action: authenticate\n        backend: software\n",
+            );
+            let found = messages(&yaml);
+            assert!(
+                found.iter().any(|m| m.contains("'unlock_sign'")
+                    && m.contains("reads 'token_pin', which belongs to backend 'token'")
+                    && m.contains("runs on backend 'software'")),
+                "{found:?}"
+            );
+        }
+
+        /// The model has every grant and source; Rite authenticates with a
+        /// user credential its holder types, and says so for the rest.
+        #[test]
+        fn a_credential_rite_cannot_present_yet_is_refused() {
+            let yaml = pin_before(&on_card(DECLARED, "token"), "sign", "token");
+            for (from, to, field) in [
+                ("grants: user", "grants: admin", "'grants: admin'"),
+                ("grants: user", "grants: unblock", "'grants: unblock'"),
+                (
+                    "source: entered",
+                    "source: factory_default",
+                    "'source: factory_default'",
+                ),
+                ("source: entered", "source: held", "'source: held'"),
+                (
+                    "source: entered",
+                    "source: on_device",
+                    "'source: on_device'",
+                ),
+            ] {
+                let found = messages(&replaced(&yaml, from, to));
+                assert!(
+                    found.iter().any(|m| m.contains("'token_pin'")
+                        && m.contains(field)
+                        && m.contains("not supported yet")),
+                    "{to}: {found:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_credential_of_an_undeclared_backend_is_refused() {
+            let yaml = replaced(
+                &pin_before(&on_card(DECLARED, "token"), "sign", "token"),
+                "  token_pin:\n    backend: token\n",
+                "  token_pin:\n    backend: spare\n",
+            );
+            let found = messages(&yaml);
+            assert!(
+                found.iter().any(|m| m.contains("Credential 'token_pin'")
+                    && m.contains("undeclared backend 'spare'")),
+                "{found:?}"
+            );
+        }
+
+        /// A software backend takes no PIN, so it has no credential, even
+        /// one no step reads.
+        #[test]
+        fn a_credential_of_a_backend_without_pin_is_refused() {
+            let yaml = replaced(
+                &on_card(DECLARED, "token"),
+                "materials:\n",
+                "credentials:\n  soft_pin:\n    backend: software\n    grants: user\n    \
+                 source: entered\nmaterials:\n",
+            );
+            let found = messages(&yaml);
+            assert!(
+                found.iter().any(|m| m.contains("Credential 'soft_pin'")
+                    && m.contains("backend 'software', which takes no PIN")),
+                "{found:?}"
+            );
+        }
+
+        /// A credential is declared once, under `credentials:`, and read
+        /// as `${credential.<id>}`.
+        #[test]
+        fn a_credential_is_read_by_its_own_reference() {
+            let yaml = pin_before(&on_card(DECLARED, "token"), "sign", "token");
+            let result = resolve(&yaml, None);
+            assert!(!result.is_err(), "unexpected errors: {:?}", result.errors);
+            let ceremony = result.into_result().unwrap();
+            let credential = ceremony
+                .credentials
+                .get(&rite_model::CredentialId::new("token_pin"))
+                .expect("the credential is declared");
+            assert_eq!(credential.backend, "token");
+            assert_eq!(credential.grants, rite_model::CredentialGrant::User);
+
+            let unknown = messages(&replaced(
+                &yaml,
+                "${credential.token_pin}",
+                "${credential.spare_pin}",
+            ));
+            assert!(
+                unknown
+                    .iter()
+                    .any(|m| m.contains("Unknown credential 'spare_pin'")),
+                "{unknown:?}"
+            );
+            let property = messages(&replaced(
+                &yaml,
+                "${credential.token_pin}",
+                "${credential.token_pin.value}",
+            ));
+            assert!(
+                property
+                    .iter()
+                    .any(|m| m.contains("a credential has no properties")),
+                "{property:?}"
+            );
+            // A credential is no artifact, and an artifact no credential.
+            let as_artifact = messages(&replaced(
+                &yaml,
+                "${credential.token_pin}",
+                "${artifact.manifest}",
+            ));
+            assert!(
+                as_artifact.iter().any(|m| m.contains("'unlock_sign'")),
+                "{as_artifact:?}"
+            );
+        }
+
+        /// Both fields Rite cannot present yet are named at once.
+        #[test]
+        fn every_unsupported_field_of_a_credential_is_named() {
+            let yaml = replaced(
+                &replaced(
+                    &pin_before(&on_card(DECLARED, "token"), "sign", "token"),
+                    "grants: user",
+                    "grants: admin",
+                ),
+                "source: entered",
+                "source: held",
+            );
+            let found = messages(&yaml);
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("'grants: admin' and 'source: held'")),
                 "{found:?}"
             );
         }
@@ -1847,7 +2013,7 @@ sections:
             let result = resolve(&yaml, None);
             assert!(result.errors.iter().any(|e| matches!(
                 e,
-                ResolveError::HeldKeyUndeclaredBackend { material, backend }
+                ResolveError::MaterialUndeclaredBackend { material, backend }
                     if material.as_str() == "signing_key" && backend == "hsm"
             )));
         }
@@ -1857,8 +2023,8 @@ sections:
             let elsewhere = messages(&ceremony(DECLARED, "        backend: software"));
             assert!(
                 elsewhere.iter().any(|m| m
-                    == "Step 'sign' reads 'signing_key', a key held by backend 'token', but runs \
-                        on backend 'software'"),
+                    == "Step 'sign' reads 'signing_key', which belongs to backend 'token', but \
+                        runs on backend 'software'"),
                 "{elsewhere:?}"
             );
 

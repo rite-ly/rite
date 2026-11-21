@@ -101,6 +101,15 @@ define_id!(
 );
 
 define_id!(
+    /// Unique identifier for a credential in the ceremony.
+    #[cfg_attr(
+        test,
+        schemars(description = "A credential's identifier, as written in the ceremony.")
+    )]
+    CredentialId
+);
+
+define_id!(
     /// Unique identifier for a material in the ceremony.
     #[cfg_attr(
         test,

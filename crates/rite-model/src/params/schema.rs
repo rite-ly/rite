@@ -16,8 +16,8 @@ use schemars::{Schema, SchemaGenerator, json_schema};
 use serde_json::Value;
 
 use super::{
-    AttestParams, AttestSlotParams, CheckValueParams, ClockCheckParams, ConfirmParams,
-    EncryptDataParams, EnterPinParams, EnterShareParams, EntryParams, GatherEntropyParams,
+    AttestParams, AttestSlotParams, AuthenticateParams, CheckValueParams, ClockCheckParams,
+    ConfirmParams, EncryptDataParams, EnterShareParams, EntryParams, GatherEntropyParams,
     GenerateCsrParams, GenerateKeyParams, ImportKeyParams, IssueCertificateParams,
     MachineInfoParams, OralReadbackParams, PivReadCertificateParams, RevealParams, SignDataParams,
     SplitSecretParams, UnwrapKeyParams, VerifySignatureParams, WrapKeyParams,
@@ -107,7 +107,7 @@ impl ActionType {
             ActionType::Attest => generator.subschema_for::<AttestParams>(),
             ActionType::GatherEntropy => generator.subschema_for::<GatherEntropyParams>(),
             ActionType::PivReadCertificate => generator.subschema_for::<PivReadCertificateParams>(),
-            ActionType::EnterPin => generator.subschema_for::<EnterPinParams>(),
+            ActionType::Authenticate => generator.subschema_for::<AuthenticateParams>(),
             ActionType::YubikeyAttestSlot => generator.subschema_for::<AttestSlotParams>(),
             ActionType::IssueCertificate => generator.subschema_for::<IssueCertificateParams>(),
             ActionType::GenerateCsr => generator.subschema_for::<GenerateCsrParams>(),

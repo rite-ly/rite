@@ -85,6 +85,15 @@
 {%- endfor %}
     </ul>
 {%- endif %}
+{%- if script.credentials %}
+    <h3>Credentials</h3>
+    <p><em>Verify each holder knows their credential before the ceremony</em></p>
+    <ul class="checklist">
+{%- for m in script.credentials %}
+      <li><strong>{{ m.name }}</strong> <span class="item-id">{{ m.identifier }}</span>{% if m.description %}<span class="item-desc">{{ m.description }}</span>{% endif %}</li>
+{%- endfor %}
+    </ul>
+{%- endif %}
   </section>
 {%- endif %}
 

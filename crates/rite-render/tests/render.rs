@@ -160,7 +160,7 @@ fn a_share_s_sheet_counts_its_header() {
 #[test]
 fn report_snapshot() {
     let data = rite_render::report::build_report_data(
-        std::iter::empty::<(chrono::DateTime<chrono::Utc>, &rite_model::StepFact)>(),
+        std::iter::empty::<(rite_model::EventTime, &rite_model::StepFact)>(),
         "sha256:deadbeef",
     );
     let html = render_report(&data, &Branding::default(), Theme::Formal).unwrap();

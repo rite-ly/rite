@@ -39,7 +39,7 @@ rite-yubikey = { workspace = true, optional = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }
-chrono     = { workspace = true }
+jiff       = { workspace = true, features = ["tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
 zeroize    = { workspace = true }
 secrecy    = { workspace = true }
 

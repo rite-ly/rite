@@ -15,8 +15,8 @@
 use crate::html::{capitalize_words, json_value_to_string};
 use crate::structure::build_script_structure;
 use base64ct::{Base64, Encoding};
-use chrono::{DateTime, Duration, Utc};
 use minijinja::HtmlEscape;
+use rite_model::EventTime;
 use rite_model::expression::ExprValue;
 use rite_model::{ActionType, Ceremony, MaterialKind, ParamId, RevealFormat, RoleId, Step};
 use serde::Serialize;
@@ -1050,7 +1050,7 @@ impl ReportView {
             completed: data.completed_at.as_ref().map(format_datetime),
             duration: data
                 .duration_seconds
-                .map(|secs| crate::report::data::format_duration(Duration::seconds(secs))),
+                .map(crate::report::data::format_duration),
             transcript_fingerprint: data.transcript_fingerprint.clone(),
             withheld: data.withheld.as_ref().map(withheld_notice),
             platform: data.platform.as_ref().map(ToString::to_string),
@@ -1093,8 +1093,8 @@ fn error_class_label(class: rite_model::ErrorClass) -> &'static str {
     }
 }
 
-fn format_datetime(dt: &DateTime<Utc>) -> String {
-    dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+fn format_datetime(dt: &EventTime) -> String {
+    dt.timestamp().strftime("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
 
 #[cfg(test)]
@@ -1121,7 +1121,7 @@ mod tests {
         };
         let measurement = |moment, interfaces| ReportMeasurement {
             moment,
-            recorded_at: chrono::Utc::now(),
+            recorded_at: rite_model::EventTime::UNIX_EPOCH,
             state: NetworkState {
                 interfaces: Some(interfaces),
                 default_route: DefaultRoute::default(),

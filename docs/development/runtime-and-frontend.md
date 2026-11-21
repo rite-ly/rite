@@ -128,7 +128,7 @@ trait is small:
 ```rust
 pub trait TranscriptSink: Send {
     fn begin(&mut self, header: &TranscriptHeader) -> io::Result<()>;
-    fn record(&mut self, at: DateTime<Utc>, level: Level, fact: &StepFact) -> io::Result<()>;
+    fn record(&mut self, at: EventTime, level: Level, fact: &StepFact) -> io::Result<()>;
     fn finalize(&mut self) -> io::Result<TranscriptFingerprint>;
 }
 ```

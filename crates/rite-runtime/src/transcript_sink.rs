@@ -55,14 +55,13 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Deserialize;
 use thiserror::Error;
 
 use rite_model::bundle::TRANSCRIPT_FILE;
 use rite_model::commitment::{SALT_LEN, chain_node, fact_leaf, header_node};
 use rite_model::{
-    FACT_TYPES, Level, Sha256Digest, StepFact, TRANSCRIPT_FORMAT, TRANSCRIPT_SCHEMA,
+    EventTime, FACT_TYPES, Level, Sha256Digest, StepFact, TRANSCRIPT_FORMAT, TRANSCRIPT_SCHEMA,
     TranscriptHeader, canonical_json,
 };
 
@@ -98,7 +97,7 @@ pub trait TranscriptSink: Send {
     /// is finalized, if the header does not declare `level`, if the fact holds
     /// a value the canonical form does not cover, or the underlying I/O error
     /// if the sink cannot persist the fact.
-    fn record(&mut self, at: DateTime<Utc>, level: Level, fact: &StepFact) -> io::Result<()>;
+    fn record(&mut self, at: EventTime, level: Level, fact: &StepFact) -> io::Result<()>;
 
     /// Finalize the transcript and return its fingerprint.
     ///
@@ -192,7 +191,7 @@ impl Chain {
         })
     }
 
-    fn fact(&self, at: DateTime<Utc>, level: Level, fact: &StepFact) -> io::Result<Committed> {
+    fn fact(&self, at: EventTime, level: Level, fact: &StepFact) -> io::Result<Committed> {
         let previous = self
             .node
             .ok_or_else(|| io::Error::other("transcript header not written"))?;
@@ -210,7 +209,7 @@ impl Chain {
         let canonical = canonical_json(&value).map_err(io::Error::other)?;
         let salt: [u8; SALT_LEN] = crate::os_random::os_random()?;
         let leaf = fact_leaf(&salt, &canonical);
-        let at = at.to_rfc3339_opts(SecondsFormat::Micros, true);
+        let at = at.to_string();
         let node = chain_node(&previous, &at, level, &leaf);
         Ok(Committed::Fact {
             at,
@@ -299,7 +298,7 @@ impl TranscriptSink for JsonlFileSink {
         Ok(())
     }
 
-    fn record(&mut self, at: DateTime<Utc>, level: Level, fact: &StepFact) -> io::Result<()> {
+    fn record(&mut self, at: EventTime, level: Level, fact: &StepFact) -> io::Result<()> {
         let committed = self.chain.fact(at, level, fact)?;
         self.append(&committed.line())?;
         self.chain.advance(&committed);
@@ -363,7 +362,7 @@ impl TranscriptSink for InMemorySink {
         Ok(())
     }
 
-    fn record(&mut self, at: DateTime<Utc>, level: Level, fact: &StepFact) -> io::Result<()> {
+    fn record(&mut self, at: EventTime, level: Level, fact: &StepFact) -> io::Result<()> {
         let committed = self.chain.fact(at, level, fact)?;
         self.chain.advance(&committed);
         self.facts.push(fact.clone());
@@ -419,7 +418,7 @@ pub struct TimedFact {
     /// 1-based line number in the transcript.
     pub line: usize,
     /// Wall-clock time the fact was recorded.
-    pub at: DateTime<Utc>,
+    pub at: EventTime,
     /// Confidentiality level the line was recorded at.
     pub level: Level,
     /// The recorded fact.
@@ -785,9 +784,7 @@ fn read_fact_line(
             ),
         ));
     }
-    let at: DateTime<Utc> = DateTime::parse_from_rfc3339(&parsed.at)
-        .map_err(|e| invalid(line_no, &e))?
-        .with_timezone(&Utc);
+    let at = EventTime::parse(&parsed.at).map_err(|e| invalid(line_no, &e))?;
 
     let leaf = match (parsed.salt, parsed.fact) {
         (Some(salt), Some(fact)) => {
@@ -842,7 +839,7 @@ fn read_fact_line(
 /// read; a known type that does not parse is an error.
 fn add_fact(
     fact: serde_json::Value,
-    at: DateTime<Utc>,
+    at: EventTime,
     level: Level,
     line_no: usize,
     loaded: &mut LoadedTranscript,

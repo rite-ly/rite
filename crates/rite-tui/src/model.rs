@@ -2,7 +2,9 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use chrono::{DateTime, Local, Timelike};
+use jiff::civil::DateTime;
+use jiff::tz::{Offset, TimeZone};
+use rite_model::EventTime;
 use rite_model::network::{NetworkMoment, NetworkState};
 use rite_model::platform::Platform;
 use rite_model::{Prompt, RoleId, StepId};
@@ -61,7 +63,10 @@ pub struct Model {
     /// Wall-clock snapshot, refreshed on every `Tick`. Rendered in the
     /// header bar; kept in the model so `view` stays pure and snapshot
     /// tests can pin a deterministic time.
-    pub now: DateTime<Local>,
+    pub now: EventTime,
+    /// The operator's time zone, resolved once when the model is made, so
+    /// every time the session shows is in the same zone.
+    pub time_zone: TimeZone,
     /// Log-tab scroll offset, counted in lines *up from the tail*.
     /// `0` = following the tail; positive = scrolled into history.
     /// Clamped to `log.len()` whenever the feed is pushed or evicted.
@@ -98,7 +103,10 @@ impl Default for Model {
             pending_prompt: None,
             running: RunningState::Active,
             tick: 0,
-            now: Local::now(),
+            // Shown in the header only; a host clock with no usable time shows
+            // the epoch until it has one.
+            now: EventTime::now().unwrap_or(EventTime::UNIX_EPOCH),
+            time_zone: TimeZone::system(),
             log_scroll: 0,
             system_scroll: 0,
             pending_events: VecDeque::new(),
@@ -150,7 +158,7 @@ impl Model {
     /// the Ceremony tab's timestamp column shows when the event actually
     /// happened, not when the drip queue drained it. `push_entry` (for signals,
     /// which have no event time) delegates here with the live `now`.
-    pub(crate) fn push_entry_at(&mut self, icon: Icon, text: String, at: DateTime<Local>) {
+    pub(crate) fn push_entry_at(&mut self, icon: Icon, text: String, at: EventTime) {
         let step = self.current_step.as_ref().map(|s| s.label.clone());
         self.push_log(LogLine::Entry {
             icon,
@@ -193,10 +201,13 @@ impl Model {
 
     /// Equivalence key for the visible header clock. The colon blinks
     /// on second parity and the minute is the smallest displayed unit,
-    /// so the rendered header changes iff this key changes.
+    /// so the rendered header changes iff this key changes. Offsets in use
+    /// are whole minutes, so both change at the same instants in UTC as in
+    /// local time, and the key needs no time zone.
     #[must_use]
-    pub fn clock_display_key(&self) -> (u32, u32) {
-        (self.now.minute(), self.now.second() % 2)
+    pub fn clock_display_key(&self) -> (i64, i64) {
+        let second = self.now.timestamp().as_second();
+        (second.div_euclid(60), second.rem_euclid(2))
     }
 }
 
@@ -300,7 +311,7 @@ pub enum LogLine {
         step: Option<String>,
         /// Wall-clock instant at push time; rendered as `HH:MM:SS` in
         /// the Ceremony tab's timestamp column.
-        at: DateTime<Local>,
+        at: EventTime,
     },
     /// Visual marker pushed at every `StepStarted`. Replaces the old
     /// role-transition modal, operators see the boundary inline.
@@ -319,6 +330,14 @@ pub enum LogLine {
     },
 }
 
+/// `at` in `time_zone`: the local date and time, and the offset in force
+/// then. The one conversion the UI uses to show an event time.
+#[must_use]
+pub fn local_time(time_zone: &TimeZone, at: EventTime) -> (DateTime, Offset) {
+    let offset = time_zone.to_offset(at.timestamp());
+    (offset.to_datetime(at.timestamp()), offset)
+}
+
 /// Deviation as recorded in the live UI.
 #[derive(Debug, Clone)]
 pub struct DeviationView {
@@ -328,14 +347,14 @@ pub struct DeviationView {
     pub text: String,
     /// Wall-clock instant from the fact's timestamp, rendered as
     /// `HH:MM:SS` in the Deviations tab.
-    pub at: DateTime<Local>,
+    pub at: EventTime,
 }
 
 /// The platform from the transcript's `PlatformRecorded` fact.
 #[derive(Debug, Clone)]
 pub struct RecordedPlatform {
     /// When the fact was recorded.
-    pub at: DateTime<Local>,
+    pub at: EventTime,
     /// The recorded platform.
     pub platform: Platform,
 }
@@ -344,7 +363,7 @@ pub struct RecordedPlatform {
 #[derive(Debug, Clone)]
 pub struct RecordedNetwork {
     /// When the fact was recorded.
-    pub at: DateTime<Local>,
+    pub at: EventTime,
     /// Which measurement it is.
     pub moment: NetworkMoment,
     /// The recorded state.

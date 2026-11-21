@@ -24,12 +24,12 @@ use schemars::{JsonSchema, Schema};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::Sha256Digest;
 use crate::bundle::{BUNDLE_FORMAT, BUNDLE_SCHEMA, BundleIndex};
 use crate::transcript::{
     FACT_TYPES, FACT_VOCABULARY, Level, StepFact, TRANSCRIPT_FORMAT, TRANSCRIPT_SCHEMA,
     TranscriptHeader,
 };
+use crate::{EventTime, Sha256Digest};
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(untagged)]
@@ -77,7 +77,7 @@ struct HeaderLine {
     that commit to both."
 )]
 struct CompleteLine {
-    at: At,
+    at: EventTime,
     level: Level,
     #[schemars(
         description = "The commitment to the fact: SHA-256 over the byte 0x00, the 16 salt bytes, \
@@ -109,25 +109,13 @@ struct CompleteLine {
     does, and the transcript keeps its fingerprint."
 )]
 struct WithheldLine {
-    at: At,
+    at: EventTime,
     level: Level,
     #[schemars(description = "The commitment to the withheld fact.")]
     leaf: Sha256Digest,
     #[schemars(description = "The chain value after this line.")]
     chain: Sha256Digest,
 }
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(extend(
-    "format" = "date-time",
-    "pattern" = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$"
-))]
-#[allow(dead_code)]
-#[schemars(
-    description = "When the fact was recorded: an RFC 3339 time in UTC with six fractional digits. \
-    The chain commits to this exact string."
-)]
-struct At(String);
 
 /// Bounds every integer to `±(2^53 - 1)`, the range the canonical form
 /// writes, or to its Rust type's range where that is narrower. Covers an

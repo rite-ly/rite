@@ -1,12 +1,14 @@
 //! Pure `view(model, frame)`. Renders the current model into a ratatui
 //! frame. Never mutates the model, never touches I/O.
 
-use chrono::{DateTime, Local, Timelike};
+use jiff::fmt::strtime::BrokenDownTime;
+use jiff::tz::TimeZone;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
+use rite_model::EventTime;
 
 use rite_model::Prompt;
 use rite_model::network::{InterfaceKind, InterfaceState, Radio};
@@ -14,7 +16,7 @@ use rite_runtime::{Icon, MaterialOverview, MaterialOverviewKind};
 
 use crate::model::{
     LogLine, Model, PendingPrompt, RecordedNetwork, RecordedPlatform, RevealPhase, RowNotice,
-    Screen, StepTab,
+    Screen, StepTab, local_time,
 };
 
 /// Shared color palette. Three muted tones plus the terminal-default
@@ -207,7 +209,7 @@ fn render_step_screen(
 /// blinking colon (off on odd seconds) so the operator sees a heartbeat
 /// even when the executor is idle.
 fn render_tabs_row(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: Rect) {
-    let clock = clock_text(&model.now);
+    let clock = clock_text(model.now, &model.time_zone);
     let clock_width = u16::try_from(clock.chars().count()).unwrap_or(0);
 
     // Tabs left-aligned under the ceremony title; the clock sits on the
@@ -244,18 +246,24 @@ fn render_tabs_row(model: &Model, tab: StepTab, frame: &mut Frame<'_>, area: Rec
 }
 
 /// We use ISO 8601 and a numeric offset rather than a locale-formatted
-/// date and time-zone name to stay deterministic and portable;
-/// `chrono`'s `unstable-locales` feature (or `sys-locale`) is the route
-/// if locale-aware formatting becomes a real requirement.
-fn clock_text(now: &DateTime<Local>) -> String {
-    let sep = if now.second().is_multiple_of(2) {
-        ':'
-    } else {
-        ' '
-    };
-    let date = now.format("%Y-%m-%d");
-    let offset = now.format("%:z");
-    format!("{date} {:02}{sep}{:02} {offset}", now.hour(), now.minute())
+/// date and time-zone name to stay deterministic and portable; `jiff-icu`
+/// (or `sys-locale`) is the route if locale-aware formatting becomes a real
+/// requirement.
+fn clock_text(now: EventTime, time_zone: &TimeZone) -> String {
+    let (local, offset) = local_time(time_zone, now);
+    let sep = if local.second() % 2 == 0 { ':' } else { ' ' };
+    let mut shown = BrokenDownTime::from(local);
+    shown.set_offset(Some(offset));
+    // Every field the format names is set, so formatting does not fail.
+    shown
+        .to_string(format!("%Y-%m-%d %H{sep}%M %:z"))
+        .unwrap_or_default()
+}
+
+/// `at` as `HH:MM:SS` in `time_zone`.
+fn clock_time(time_zone: &TimeZone, at: EventTime) -> String {
+    let (local, _) = local_time(time_zone, at);
+    local.strftime("%H:%M:%S").to_string()
 }
 
 fn render_deviation_modal(input: &str, frame: &mut Frame<'_>, area: Rect) {
@@ -701,14 +709,20 @@ fn prompt_title(pending: &PendingPrompt) -> Line<'_> {
 ///
 /// `current` selects active vs. muted styling: current-section content
 /// keeps its full color; past content drops to footer gray.
-fn log_table_row(line: &LogLine, tick: u64, current: bool, inner_width: u16) -> Line<'_> {
+fn log_table_row<'a>(
+    line: &'a LogLine,
+    time_zone: &TimeZone,
+    tick: u64,
+    current: bool,
+    inner_width: u16,
+) -> Line<'a> {
     match line {
         LogLine::Entry { icon, text, at, .. } => {
             let prefix = match icon {
                 Icon::Spinner => spinner_glyph(tick),
                 other => icon_glyph(*other),
             };
-            let time_col = at.format("%H:%M:%S").to_string();
+            let time_col = clock_time(time_zone, *at);
             let message_style = if current {
                 theme::text()
             } else {
@@ -797,7 +811,7 @@ fn render_ceremony_table(model: &Model, frame: &mut Frame<'_>, area: Rect) -> us
                 LogLine::StepDivider { .. } => Some(i) == last_step,
                 LogLine::Entry { .. } => i >= entry_boundary,
             };
-            log_table_row(line, model.tick, current, inner_width)
+            log_table_row(line, &model.time_zone, model.tick, current, inner_width)
         })
         .collect();
     let (paragraph, applied_scroll) =
@@ -883,12 +897,12 @@ fn render_system(model: &Model, frame: &mut Frame<'_>, area: Rect) -> usize {
 
 fn system_lines(model: &Model) -> Vec<Line<'static>> {
     let mut lines = match &model.platform {
-        Some(recorded) => platform_lines(recorded),
+        Some(recorded) => platform_lines(recorded, &model.time_zone),
         None => vec![section_heading("Platform"), dim_line("(not yet recorded)")],
     };
     lines.push(Line::from(""));
     if let Some(recorded) = &model.network {
-        lines.extend(network_lines(recorded));
+        lines.extend(network_lines(recorded, &model.time_zone));
     } else {
         lines.push(section_heading("Network"));
         lines.push(dim_line("(not yet recorded)"));
@@ -937,11 +951,11 @@ fn system_lines(model: &Model) -> Vec<Line<'static>> {
     lines
 }
 
-fn platform_lines(recorded: &RecordedPlatform) -> Vec<Line<'static>> {
+fn platform_lines(recorded: &RecordedPlatform, time_zone: &TimeZone) -> Vec<Line<'static>> {
     let platform = &recorded.platform;
     let mut lines = vec![
         section_heading("Platform"),
-        kv_line("recorded", &recorded.at.format("%H:%M:%S").to_string()),
+        kv_line("recorded", &clock_time(time_zone, recorded.at)),
     ];
     let os_text = platform
         .os
@@ -989,13 +1003,17 @@ fn with_details<const N: usize>(value: &str, details: [Option<&str>; N]) -> Stri
     }
 }
 
-fn network_lines(recorded: &RecordedNetwork) -> Vec<Line<'static>> {
+fn network_lines(recorded: &RecordedNetwork, time_zone: &TimeZone) -> Vec<Line<'static>> {
     let state = &recorded.state;
     let mut lines = vec![
         section_heading("Network"),
         kv_line(
             "recorded",
-            &format!("at {}, {}", recorded.moment, recorded.at.format("%H:%M:%S")),
+            &format!(
+                "at {}, {}",
+                recorded.moment,
+                clock_time(time_zone, recorded.at)
+            ),
         ),
     ];
     let route = |route: Option<bool>| match route {
@@ -1290,7 +1308,7 @@ fn render_deviations(model: &Model, frame: &mut Frame<'_>, area: Rect) {
             .deviations
             .iter()
             .map(|d| {
-                let time = d.at.format("%H:%M:%S").to_string();
+                let time = clock_time(&model.time_zone, d.at);
                 let warn = icon_glyph(Icon::Warning);
                 let body = match &d.step {
                     Some(step) => format!("{warn} ({step}) {}", d.text),
@@ -1478,12 +1496,20 @@ mod tests {
             .collect()
     }
 
-    fn noon() -> DateTime<Local> {
-        Local::now()
-            .with_hour(12)
-            .and_then(|t| t.with_minute(0))
-            .and_then(|t| t.with_second(0))
-            .expect("noon exists")
+    fn noon() -> EventTime {
+        EventTime::parse("2026-05-25T12:00:00.000000Z").expect("noon")
+    }
+
+    #[test]
+    fn the_clock_shows_local_time_with_its_offset_and_blinks() {
+        let india = TimeZone::fixed(jiff::tz::Offset::from_seconds(19_800).expect("offset"));
+        assert_eq!(clock_text(noon(), &india), "2026-05-25 17:30 +05:30");
+        let odd = EventTime::parse("2026-05-25T12:00:01.000000Z").expect("time");
+        assert_eq!(clock_text(odd, &india), "2026-05-25 17 30 +05:30");
+        assert_eq!(
+            clock_text(noon(), &TimeZone::UTC),
+            "2026-05-25 12:00 +00:00"
+        );
     }
 
     #[test]
@@ -1510,7 +1536,7 @@ mod tests {
             },
         };
         assert_eq!(
-            texts(&platform_lines(&recorded)),
+            texts(&platform_lines(&recorded, &TimeZone::UTC)),
             [
                 "Platform",
                 "recorded    12:00:00",
@@ -1538,7 +1564,7 @@ mod tests {
             },
         };
         assert_eq!(
-            texts(&network_lines(&recorded)),
+            texts(&network_lines(&recorded, &TimeZone::UTC)),
             [
                 "Network",
                 "recorded    at closing, 12:00:00",

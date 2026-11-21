@@ -1,4 +1,4 @@
-use chrono::Utc;
+use jiff::Timestamp;
 use std::process::Command;
 
 const UNKNOWN: &str = "unknown";
@@ -27,7 +27,7 @@ fn main() {
     );
     println!(
         "cargo:rustc-env=RITE_BUILD_DATE={}",
-        Utc::now().format("%Y-%m-%d")
+        Timestamp::now().strftime("%Y-%m-%d")
     );
     println!("cargo:rustc-env=RITE_BUILD_RUSTC={}", rustc_version());
 }

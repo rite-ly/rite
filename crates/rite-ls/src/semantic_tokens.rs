@@ -11,7 +11,7 @@
 //!     a declared identifier; the resolver records their spans in
 //!     `SpanMap.enum_values`.
 
-use crate::convert::span_to_position;
+use crate::convert::{span_to_position, to_u32};
 use rite_resolver::{Span, SpanMap};
 use tower_lsp_server::ls_types::{SemanticToken, SemanticTokenType};
 
@@ -38,8 +38,7 @@ pub const LEGEND: &[SemanticTokenType] = &[
 
 /// Build a delta-encoded semantic-token stream from the document's span map.
 pub fn tokens_for(span_map: &SpanMap) -> Vec<SemanticToken> {
-    let mut entries: Vec<TokenEntry> =
-        Vec::with_capacity(span_map.references.len() * 3 + span_map.enum_values.len());
+    let mut entries: Vec<TokenEntry> = Vec::new();
 
     for e in &span_map.references {
         if e.span.length.is_some() {
@@ -77,7 +76,7 @@ fn push_reference_tokens(out: &mut Vec<TokenEntry>, value: &str, span: Span) {
     let at = |col_delta: usize, length: usize, kind: Kind| TokenEntry {
         span: Span {
             line: span.line,
-            column: span.column + col_delta,
+            column: span.column.saturating_add(col_delta),
             length: Some(length),
         },
         kind,
@@ -85,7 +84,7 @@ fn push_reference_tokens(out: &mut Vec<TokenEntry>, value: &str, span: Span) {
     if let Some(inside_len) = expression_inside_len(value) {
         out.push(at(0, 2, Kind::Wrapper));
         out.push(at(2, inside_len, Kind::Ident));
-        out.push(at(2 + inside_len, 1, Kind::Wrapper));
+        out.push(at(inside_len.saturating_add(2), 1, Kind::Wrapper));
     } else {
         out.push(at(0, len, Kind::Ident));
     }
@@ -110,7 +109,7 @@ fn encode(entries: &[TokenEntry]) -> Vec<SemanticToken> {
 
     for e in entries {
         let pos = span_to_position(e.span);
-        let length = u32::try_from(e.span.length.unwrap_or(0)).unwrap_or(u32::MAX);
+        let length = to_u32(e.span.length.unwrap_or(0));
 
         let delta_line = pos.line.saturating_sub(prev_line);
         let delta_start = if delta_line == 0 {
@@ -135,6 +134,7 @@ fn encode(entries: &[TokenEntry]) -> Vec<SemanticToken> {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::{Kind, LEGEND, expression_inside_len, tokens_for};
     use rite_resolver::analyze_str;

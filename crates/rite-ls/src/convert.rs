@@ -5,11 +5,17 @@ use tower_lsp_server::ls_types::{
     Diagnostic as LspDiagnostic, DiagnosticSeverity, Position, Range,
 };
 
+/// A count as an LSP `u32`, saturating: no document reaches 4 G lines or
+/// columns.
+pub fn to_u32(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
 /// Convert a rite-resolver span (1-indexed) to an LSP position (0-indexed).
 pub fn span_to_position(span: Span) -> Position {
     Position {
-        line: span.line.saturating_sub(1) as u32,
-        character: span.column.saturating_sub(1) as u32,
+        line: to_u32(span.line.saturating_sub(1)),
+        character: to_u32(span.column.saturating_sub(1)),
     }
 }
 
@@ -32,7 +38,7 @@ pub fn span_to_range(span: Span) -> Range {
     let start = span_to_position(span);
     let end = span.length.map_or(start, |len| Position {
         line: start.line,
-        character: start.character + len as u32,
+        character: start.character.saturating_add(to_u32(len)),
     });
     Range { start, end }
 }
@@ -44,21 +50,13 @@ pub fn word_at_position(text: &str, pos: Position) -> Option<String> {
     let line = text.lines().nth(pos.line as usize)?;
     let char_idx = pos.character as usize;
     let chars: Vec<char> = line.chars().collect();
-    if char_idx > chars.len() {
-        return None;
-    }
-    let is_word = |c: char| c.is_alphanumeric() || c == '_';
-    let start = (0..char_idx)
-        .rev()
-        .find(|&i| !is_word(chars[i]))
-        .map_or(0, |i| i + 1);
-    let end = (char_idx..chars.len())
-        .find(|&i| !is_word(chars[i]))
-        .unwrap_or(chars.len());
-    if start == end {
-        return None;
-    }
-    Some(chars[start..end].iter().collect())
+    let (before, after) = chars.split_at_checked(char_idx)?;
+    let not_word = |c: &char| !(c.is_alphanumeric() || *c == '_');
+    // Each split yields at least one run, possibly empty.
+    let head = before.rsplit(not_word).next().unwrap_or_default();
+    let tail = after.split(not_word).next().unwrap_or_default();
+    let word: String = head.iter().chain(tail).collect();
+    (!word.is_empty()).then_some(word)
 }
 
 /// Convert a rite-resolver diagnostic to an LSP diagnostic.
@@ -125,5 +123,38 @@ sections:
             found.range.end > found.range.start,
             "an empty range gives the editor nothing to underline"
         );
+    }
+}
+
+#[cfg(test)]
+mod word_tests {
+    use super::word_at_position;
+    use tower_lsp_server::ls_types::Position;
+
+    fn word(text: &str, line: u32, character: u32) -> Option<String> {
+        word_at_position(text, Position { line, character })
+    }
+
+    #[test]
+    fn the_word_around_the_cursor_is_found_from_either_edge() {
+        let text = "first\nrole: key_officer here";
+        assert_eq!(word(text, 1, 8).as_deref(), Some("key_officer"));
+        assert_eq!(word(text, 1, 6).as_deref(), Some("key_officer"));
+        assert_eq!(word(text, 1, 17).as_deref(), Some("key_officer"));
+        assert_eq!(word(text, 1, 22).as_deref(), Some("here"));
+        assert_eq!(word(text, 0, 0).as_deref(), Some("first"));
+    }
+
+    #[test]
+    fn nothing_is_found_between_words_or_past_the_text() {
+        let text = "a :  b";
+        assert_eq!(word(text, 0, 3), None);
+        assert_eq!(word(text, 0, 7), None);
+        assert_eq!(word(text, 1, 0), None);
+    }
+
+    #[test]
+    fn the_cursor_counts_characters_not_bytes() {
+        assert_eq!(word("é clé", 0, 3).as_deref(), Some("clé"));
     }
 }

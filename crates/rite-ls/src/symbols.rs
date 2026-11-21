@@ -70,10 +70,10 @@ pub fn document_symbols(span_map: &SpanMap, resolved: &Ceremony) -> Vec<Document
             .get(role_id)
             .map(|s| convert::point_range(convert::span_to_position(*s)))
             .unwrap_or_default();
-        let detail = if role.name != role_id.as_str() {
-            Some(role.name.as_str())
-        } else {
+        let detail = if role.name == role_id.as_str() {
             None
+        } else {
+            Some(role.name.as_str())
         };
         symbols.push(make_symbol(
             role_id.as_str(),

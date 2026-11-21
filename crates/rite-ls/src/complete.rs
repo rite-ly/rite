@@ -1,14 +1,14 @@
 //! Completion logic for ceremony YAML.
 //!
 //! Implemented here:
-//! - `${...}` expression completions (roles, params, materials from SpanMap)
+//! - `${...}` expression completions (roles, params, materials from `SpanMap`)
 //! - `section:`, `role:`, `act:`, `backend:` field value completions from declarations
 //! - `retry:` field value completions (the `never` keyword and the `{ attempts: N }` form)
 //!
 //! Field names, and the values of a field that takes one from a list, such
 //! as `action:`, come from the schema: see [`crate::fields`].
 
-use rite_model::Ceremony;
+use rite_model::{ActId, Ceremony, RoleId, SectionId};
 use rite_resolver::SpanMap;
 use tower_lsp_server::ls_types::{
     CompletionItem, CompletionItemKind, CompletionTextEdit, Position, Range, TextEdit,
@@ -43,15 +43,14 @@ pub enum CompletionContext {
 /// Detect what completion context applies on the given line.
 ///
 /// `col` is the 0-indexed cursor column (LSP convention).
-/// `cursor_line` is the 0-indexed line number (for building TextEdits).
+/// `cursor_line` is the 0-indexed line number (for building `TextEdits`).
 pub fn detect_context(line: &str, col: usize, cursor_line: u32) -> Option<CompletionContext> {
     // Look for the last `${` before the cursor.
     let before = &line[..col.min(line.len())];
-    if let Some(dollar_pos) = before.rfind("${") {
-        let typed = before[dollar_pos + 2..].to_string();
+    if let Some((head, typed)) = before.rsplit_once("${") {
         return Some(CompletionContext::Expression {
-            typed,
-            dollar_col: dollar_pos,
+            typed: typed.to_string(),
+            dollar_col: head.len(),
             cursor_col: col,
             cursor_line,
         });
@@ -103,19 +102,19 @@ pub fn completions_for(
             cursor_line,
         } => expression_completions(&typed, dollar_col, cursor_col, cursor_line, span_map),
         CompletionContext::SectionRef { typed } => {
-            declaration_completions(span_map.sections.keys().map(|id| id.as_str()), &typed)
+            declaration_completions(span_map.sections.keys().map(SectionId::as_str), &typed)
         }
         CompletionContext::RoleRef { typed } => {
-            declaration_completions(span_map.roles.keys().map(|id| id.as_str()), &typed)
+            declaration_completions(span_map.roles.keys().map(RoleId::as_str), &typed)
         }
         CompletionContext::ActRef { typed } => {
-            declaration_completions(span_map.acts.keys().map(|id| id.as_str()), &typed)
+            declaration_completions(span_map.acts.keys().map(ActId::as_str), &typed)
         }
         CompletionContext::BackendRef { typed } => {
             if let Some(res) = resolved {
-                declaration_completions(res.backends.keys().map(|s| s.as_str()), &typed)
+                declaration_completions(res.backends.keys().map(String::as_str), &typed)
             } else {
-                declaration_completions(span_map.backends.keys().map(|s| s.as_str()), &typed)
+                declaration_completions(span_map.backends.keys().map(String::as_str), &typed)
             }
         }
         CompletionContext::RetryRef { typed } => retry_completions(&typed),
@@ -186,11 +185,11 @@ fn expression_completions(
     let replace_range = Range {
         start: Position {
             line: cursor_line,
-            character: (dollar_col + 2) as u32,
+            character: crate::convert::to_u32(dollar_col.saturating_add(2)),
         },
         end: Position {
             line: cursor_line,
-            character: cursor_col as u32,
+            character: crate::convert::to_u32(cursor_col),
         },
     };
 
@@ -214,6 +213,7 @@ fn expression_completions(
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use rite_model::{MaterialId, ParamId, RoleId};
@@ -227,7 +227,7 @@ mod tests {
         }
     }
 
-    /// Build a SpanMap with only the given role IDs.
+    /// Build a `SpanMap` with only the given role IDs.
     fn span_map_roles(roles: &[&str]) -> SpanMap {
         let mut map = SpanMap::default();
         for &r in roles {
@@ -236,7 +236,7 @@ mod tests {
         map
     }
 
-    /// Mixed SpanMap: two roles, one param, one material.
+    /// Mixed `SpanMap`: two roles, one param, one material.
     fn span_map_mixed() -> SpanMap {
         let mut map = SpanMap::default();
         map.roles.insert(RoleId::new("operator"), dummy_span());
@@ -255,7 +255,7 @@ mod tests {
     fn get_text_edit(item: &CompletionItem) -> &TextEdit {
         match item.text_edit.as_ref().expect("text_edit should be set") {
             CompletionTextEdit::Edit(e) => e,
-            _ => panic!("expected Edit variant"),
+            CompletionTextEdit::InsertAndReplace(_) => panic!("expected Edit variant"),
         }
     }
 
@@ -347,7 +347,7 @@ mod tests {
     fn empty_typed_returns_all_entities() {
         let map = span_map_mixed();
         let ctx = CompletionContext::Expression {
-            typed: "".into(),
+            typed: String::new(),
             dollar_col: 8,
             cursor_col: 10,
             cursor_line: 0,
@@ -441,7 +441,7 @@ mod tests {
         // new_text should be "role.operator}"; `${` is already in the doc.
         let map = span_map_roles(&["operator"]);
         let ctx = CompletionContext::Expression {
-            typed: "".into(),
+            typed: String::new(),
             dollar_col: 8,
             cursor_col: 10,
             cursor_line: 0,
@@ -455,7 +455,7 @@ mod tests {
     fn all_items_have_reference_kind() {
         let map = span_map_mixed();
         let ctx = CompletionContext::Expression {
-            typed: "".into(),
+            typed: String::new(),
             dollar_col: 0,
             cursor_col: 2,
             cursor_line: 0,

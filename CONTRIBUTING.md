@@ -22,7 +22,7 @@ datapoint for any contribution, not as a compliance step.
 
 ## Development setup
 
-Requires Rust 1.88+ and OpenSSL 3.5+ headers (`libssl-dev`). On a distribution with an older
+Requires Rust 1.89+ and OpenSSL 3.5+ headers (`libssl-dev`). On a distribution with an older
 OpenSSL, `--features openssl-vendored` bundles a current one.
 
 Wrapping to an ML-KEM key needs OpenSSL **3.6**. Built against 3.5, ML-KEM generation and

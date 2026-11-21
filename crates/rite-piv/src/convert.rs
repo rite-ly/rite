@@ -59,10 +59,16 @@ pub fn from_yubikey_slot(slot: yubikey::piv::SlotId) -> PivSlot {
 /// Convert a `yubikey::piv::AlgorithmId` to a Rite `KeyAlgorithm`, if supported.
 pub fn from_yubikey_algorithm(algo: yubikey::piv::AlgorithmId) -> Option<KeyAlgorithm> {
     match algo {
-        yubikey::piv::AlgorithmId::Rsa1024 => None, // Not supported by Rite
         yubikey::piv::AlgorithmId::Rsa2048 => Some(KeyAlgorithm::Rsa2048),
         yubikey::piv::AlgorithmId::EccP256 => Some(KeyAlgorithm::EcdsaP256),
         yubikey::piv::AlgorithmId::EccP384 => Some(KeyAlgorithm::EcdsaP384),
+        // RSA-1024 is too weak for Rite. Firmware 5.7 adds the others; Rite
+        // does not use them on a card yet.
+        yubikey::piv::AlgorithmId::Rsa1024
+        | yubikey::piv::AlgorithmId::Rsa3072
+        | yubikey::piv::AlgorithmId::Rsa4096
+        | yubikey::piv::AlgorithmId::Ed25519
+        | yubikey::piv::AlgorithmId::X25519 => None,
     }
 }
 

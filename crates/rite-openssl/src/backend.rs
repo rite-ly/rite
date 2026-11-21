@@ -24,9 +24,9 @@ use openssl::x509::{X509Builder, X509Extension, X509NameBuilder};
 use rite_sdk::cms;
 use rite_sdk::{
     AgreedSecret, Backend, BackendError, DataKey, KeyAgreementBackend, KeyAlgorithm, KeyCheckValue,
-    KeyFingerprint, KeyId, KeyMetadata, KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend,
-    KeyTransportBackend, KeyUsages, PublicKeyDer, RandomBackend, SecretKeyValue, SignAlgorithm,
-    SignBackend, VerifyBackend, WrapScheme, WrappedKey,
+    KeyDecryptBackend, KeyFingerprint, KeyId, KeyMetadata, KeyPolicy, KeyProtection, KeySpec,
+    KeyStoreBackend, KeyTransportBackend, KeyUsages, PublicKeyDer, RandomBackend, SecretKeyValue,
+    SignAlgorithm, SignBackend, VerifyBackend, WrapScheme, WrappedKey,
 };
 use std::collections::HashMap;
 use zeroize::Zeroizing;
@@ -295,6 +295,9 @@ impl Backend for OpenSslBackend {
         /// Agrees an ECDH secret under a P-256 or P-384 key, the device half of
         /// opening content sealed to it.
         as_agreement_mut: KeyAgreementBackend,
+        /// Decrypts a key encrypted to an RSA key with RSAES-OAEP-SHA256, the
+        /// device half of opening content sealed to it.
+        as_key_decrypt_mut: KeyDecryptBackend,
         /// Provides cryptographically secure random bytes via the OpenSSL CSPRNG.
         as_random_mut: RandomBackend,
     );
@@ -895,6 +898,38 @@ impl RandomBackend for OpenSslBackend {
     }
 }
 
+impl KeyDecryptBackend for OpenSslBackend {
+    fn decrypt_key(
+        &mut self,
+        key_id: &KeyId,
+        encrypted: &[u8],
+        protection: KeyProtection,
+    ) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+        if protection != KeyProtection::RsaOaepSha256 {
+            return Err(BackendError::UnsupportedAlgorithm(format!(
+                "this backend decrypts a key protected with RSA-OAEP-SHA256, not {protection}"
+            )));
+        }
+        let key = self.get_key(key_id)?;
+        key.policy.require(KeyUsages::UNWRAP, "open a data key")?;
+        let private = key.pkey()?;
+        if private.id() != Id::RSA {
+            return Err(BackendError::UnsupportedAlgorithm(format!(
+                "a key protected with {protection} decrypts under an RSA key, and '{}' is {}",
+                key.label, key.algorithm
+            )));
+        }
+        // OpenSSL's error names the check that failed, which is what the trait
+        // says not to reveal: every failure gets one message.
+        rsa_oaep_decrypt(private, encrypted).map_err(|_| {
+            BackendError::InvalidData(format!(
+                "the ciphertext does not decrypt under '{}'",
+                key.label
+            ))
+        })
+    }
+}
+
 impl KeyAgreementBackend for OpenSslBackend {
     fn agree(&mut self, key_id: &KeyId, peer: &PublicKeyDer) -> Result<AgreedSecret, BackendError> {
         let key = self.get_key(key_id)?;
@@ -1336,7 +1371,7 @@ fn rsa_oaep_decrypt(
 /// Protect a content-encryption key for a public-key recipient.
 ///
 /// An RSA-2048 or RSA-4096 recipient uses RSAES-OAEP with SHA-256, opened by
-/// [`KeyTransportBackend::open_data_key`]. A P-256 or P-384 recipient uses
+/// [`KeyDecryptBackend::decrypt_key`]. A P-256 or P-384 recipient uses
 /// ECDH, the X9.63 KDF, and AES-256 Key Wrap, opened with
 /// [`KeyAgreementBackend::agree`] and [`open_key_agreement`]. Both forms name
 /// the recipient by its fingerprint.
@@ -2160,37 +2195,25 @@ impl KeyTransportBackend for OpenSslBackend {
         wrapped: &[u8],
         protection: KeyProtection,
     ) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+        // Nothing is attempted under an assumption: one protection's bytes are
+        // indistinguishable from another's. A key encrypted to a public key
+        // has no key-encryption key and opens through `decrypt_key`.
+        if protection != KeyProtection::AesKeyWrap {
+            return Err(BackendError::UnsupportedAlgorithm(format!(
+                "open_data_key opens a data key wrapped under a key-encryption key, and \
+                 {protection} is not a key wrap"
+            )));
+        }
         let kek = self.get_key(kek)?;
         kek.policy.require(KeyUsages::UNWRAP, "open a data key")?;
-        // The protection says which key the opening needs, and a key of the
-        // other kind is refused by the accessor, which names it. Nothing is
-        // attempted under an assumption: one protection's bytes are
-        // indistinguishable from another's.
-        match protection {
-            KeyProtection::AesKeyWrap => {
-                let (secret, _) = kek.secret()?;
-                Ok(Zeroizing::new(aes_key_wrap(
-                    secret,
-                    wrapped,
-                    KeyWrap::Plain,
-                    false,
-                )?))
-            }
-            KeyProtection::RsaOaepSha256 => {
-                let pkey = kek.pkey()?;
-                if pkey.id() != Id::RSA {
-                    return Err(BackendError::UnsupportedAlgorithm(format!(
-                        "a data key protected with {protection} opens under an RSA key, and \
-                         '{}' is {}",
-                        kek.label, kek.algorithm
-                    )));
-                }
-                rsa_oaep_decrypt(pkey, wrapped)
-            }
-            _ => Err(BackendError::UnsupportedAlgorithm(format!(
-                "this backend does not open a data key protected with {protection}"
-            ))),
-        }
+        // A key of the other kind is refused by the accessor, which names it.
+        let (secret, _) = kek.secret()?;
+        Ok(Zeroizing::new(aes_key_wrap(
+            secret,
+            wrapped,
+            KeyWrap::Plain,
+            false,
+        )?))
     }
 
     fn wrap_to_public(
@@ -2394,7 +2417,7 @@ mod tests {
         assert_eq!(encrypted.len(), 256, "one RSA-2048 block");
 
         let opened = backend
-            .open_data_key(&recipient.key_id, &encrypted, KeyProtection::RsaOaepSha256)
+            .decrypt_key(&recipient.key_id, &encrypted, KeyProtection::RsaOaepSha256)
             .unwrap();
         assert_eq!(opened, cek);
     }
@@ -2572,6 +2595,33 @@ mod tests {
         assert!(message.contains("1024"), "{message}");
     }
 
+    /// A tampered ciphertext fails with `InvalidData` and one message,
+    /// whichever OAEP check OpenSSL failed it on.
+    #[test]
+    fn a_key_that_does_not_decrypt_fails_with_one_message() {
+        let mut backend = OpenSslBackend::try_new("software").unwrap();
+        let recipient = backend
+            .generate_key(kek(KeyAlgorithm::Rsa2048, "recipient"))
+            .unwrap();
+        let public = backend.export_public_key(&recipient.key_id).unwrap();
+        let encrypted = transported(
+            recipient_info_for(&public, &random_bytes(32).unwrap(), &mut host_random()).unwrap(),
+        );
+
+        let mut messages = std::collections::BTreeSet::new();
+        for at in [0, 1, 100, 255] {
+            let mut tampered = encrypted.clone();
+            tampered[at] ^= 0x01;
+            match backend.decrypt_key(&recipient.key_id, &tampered, KeyProtection::RsaOaepSha256) {
+                Err(BackendError::InvalidData(message)) => {
+                    messages.insert(message);
+                }
+                other => panic!("byte {at}: {other:?}"),
+            }
+        }
+        assert_eq!(messages.len(), 1, "{messages:?}");
+    }
+
     /// Opening follows the protection the container names, and a key of the
     /// other kind, or one whose policy does not allow it, is refused.
     #[test]
@@ -2601,18 +2651,23 @@ mod tests {
         ] {
             assert!(
                 backend
-                    .open_data_key(key, &encrypted, KeyProtection::RsaOaepSha256)
+                    .decrypt_key(key, &encrypted, KeyProtection::RsaOaepSha256)
                     .is_err(),
                 "{case} must not open it"
             );
         }
 
         // The right key under the wrong protection is refused too.
-        assert!(
-            backend
-                .open_data_key(&recipient.key_id, &encrypted, KeyProtection::AesKeyWrap)
-                .is_err()
-        );
+        assert!(matches!(
+            backend.decrypt_key(&recipient.key_id, &encrypted, KeyProtection::AesKeyWrap),
+            Err(BackendError::UnsupportedAlgorithm(_))
+        ));
+        // And `open_data_key` no longer opens a key encrypted to a public key:
+        // there is no key-encryption key to unwrap under.
+        assert!(matches!(
+            backend.open_data_key(&recipient.key_id, &encrypted, KeyProtection::RsaOaepSha256),
+            Err(BackendError::UnsupportedAlgorithm(_))
+        ));
     }
 
     /// Check a signature against the key's exported public half.

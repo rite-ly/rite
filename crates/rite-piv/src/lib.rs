@@ -14,6 +14,9 @@
 //! - [`SignBackend`](rite_sdk::SignBackend): on-card signing
 //! - [`KeyAgreementBackend`](rite_sdk::KeyAgreementBackend): ECDH in slot 9D and
 //!   the retired key-management slots
+//! - [`KeyDecryptBackend`](rite_sdk::KeyDecryptBackend): RSA-OAEP-SHA256 in the
+//!   same slots, the raw RSA operation on the card and the OAEP decoding on
+//!   the host
 //! - [`CertStoreBackend`](rite_sdk::CertStoreBackend): slot certificate storage
 //! - [`PivBackend`](rite_sdk::PivBackend): slot management, PIN lifecycle
 //!
@@ -35,6 +38,7 @@
 
 mod backend;
 pub mod convert;
+mod oaep;
 pub mod ops;
 
 pub use backend::PivCardBackend;

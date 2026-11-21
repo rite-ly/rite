@@ -25,6 +25,13 @@ sha2       = { workspace = true }
 p256       = { version = "0.14", default-features = false, features = ["arithmetic"] }
 p384       = { version = "0.14", default-features = false, features = ["arithmetic"] }
 serde_json = { workspace = true }
+# Constant-time checks in the OAEP decoding the host runs after the card's raw
+# RSA operation (`oaep::decode`).
+subtle     = { workspace = true }
+zeroize    = { workspace = true }
+
+[dev-dependencies]
+openssl = { workspace = true }
 
 [lints]
 workspace = true

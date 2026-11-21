@@ -11,14 +11,15 @@ use sha2::{Digest, Sha256, Sha384};
 use yubikey::certificate::CertInfo;
 use yubikey::piv::{self, SlotId};
 use yubikey::{Certificate, YubiKey};
+use zeroize::Zeroizing;
 
 use rite_sdk::{
-    AgreedSecret, BackendError, EcCurve, EcPoint, KeyAlgorithm, KeyId, KeyMetadata, PivDeviceInfo,
-    PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy, PublicKeyDer, SignAlgorithm,
-    YubikeySlotMetadata,
+    AgreedSecret, BackendError, EcCurve, EcPoint, KeyAlgorithm, KeyId, KeyMetadata, KeyProtection,
+    PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy, PublicKeyDer,
+    SignAlgorithm, YubikeySlotMetadata,
 };
 
-use crate::convert;
+use crate::{convert, oaep};
 
 // ============================================================================
 // Error mapping
@@ -459,7 +460,7 @@ pub fn agree(
     peer: &PublicKeyDer,
 ) -> Result<AgreedSecret, BackendError> {
     let piv_slot = slot_from_key_id(key_id)?;
-    permits_agreement(piv_slot, key_id)?;
+    permits_key_management(piv_slot, key_id, "key agreement")?;
     let slot = convert::to_yubikey_slot(piv_slot)?;
     let point = peer_point(peer)?;
     let curve = point.curve();
@@ -469,25 +470,19 @@ pub fn agree(
 
     match piv::decrypt_data(yk, point.sec1_uncompressed(), card_algorithm, slot) {
         Ok(z) => agreed_secret(z, curve),
-        Err(yubikey::Error::GenericError) => {
-            let held = match piv::metadata(yk, slot) {
-                Ok(meta) => match meta.algorithm {
-                    piv::SlotAlgorithmId::Asymmetric(a) => {
-                        SlotKey::Held(convert::from_yubikey_algorithm(a))
-                    }
-                    _ => SlotKey::Held(None),
-                },
-                Err(yubikey::Error::GenericError) => SlotKey::Empty,
-                Err(_) => SlotKey::Unknown,
-            };
-            Err(refusal(held, key_id, curve))
-        }
+        Err(yubikey::Error::GenericError) => Err(refusal(slot_key(yk, slot), key_id, curve)),
         Err(other) => Err(map_error(other)),
     }
 }
 
 /// Returns an error unless `slot` is a key-management slot.
-fn permits_agreement(slot: PivSlot, key_id: &KeyId) -> Result<(), BackendError> {
+///
+/// `operation` completes "... is permitted only in slot 9d".
+fn permits_key_management(
+    slot: PivSlot,
+    key_id: &KeyId,
+    operation: &str,
+) -> Result<(), BackendError> {
     let purpose = match slot {
         PivSlot::KeyManagement | PivSlot::Retired(_) => return Ok(()),
         PivSlot::Authentication => "the authentication slot",
@@ -495,9 +490,27 @@ fn permits_agreement(slot: PivSlot, key_id: &KeyId) -> Result<(), BackendError> 
         PivSlot::CardAuthentication => "the card authentication slot, which needs no PIN",
     };
     Err(BackendError::OperationNotPermitted(format!(
-        "{key_id} is {purpose}; key agreement is permitted only in slot 9d or retired \
+        "{key_id} is {purpose}; {operation} is permitted only in slot 9d or retired \
          key-management slots 82 to 95"
     )))
+}
+
+/// What the card reports holding in `slot`, asked after it refused an
+/// operation there.
+///
+/// GET METADATA is a Yubico extension (firmware 5.2.3 and later). Another
+/// card answers [`SlotKey::Unknown`].
+fn slot_key(yk: &mut YubiKey, slot: SlotId) -> SlotKey {
+    match piv::metadata(yk, slot) {
+        Ok(meta) => match meta.algorithm {
+            piv::SlotAlgorithmId::Asymmetric(a) => {
+                SlotKey::Held(convert::from_yubikey_algorithm(a))
+            }
+            _ => SlotKey::Held(None),
+        },
+        Err(yubikey::Error::GenericError) => SlotKey::Empty,
+        Err(_) => SlotKey::Unknown,
+    }
 }
 
 /// Parses the peer's EC point and checks that it lies on its curve.
@@ -577,6 +590,136 @@ fn agreed_secret(z: yubikey::Buffer, curve: EcCurve) -> Result<AgreedSecret, Bac
         )));
     }
     Ok(AgreedSecret::new(z))
+}
+
+// ============================================================================
+// Key decryption
+// ============================================================================
+
+/// Decrypt a key encrypted to the RSA key in a slot with RSAES-OAEP-SHA256,
+/// and return it.
+///
+/// The card runs the raw RSA private-key operation through GENERAL
+/// AUTHENTICATE, with the ciphertext under tag `0x81` (SP 800-73-5 Part 2,
+/// §3.2.4). The host removes the OAEP encoding from the returned block with
+/// `oaep::decode`. The PIN must have been verified in this session if the
+/// slot's policy asks for it, and the card waits for a touch if its touch
+/// policy does.
+///
+/// Only the key-management slots decrypt, for the reason [`agree`] gives.
+/// Rite supports RSA-2048 on PIV only.
+///
+/// # Errors
+///
+/// - [`BackendError::UnsupportedAlgorithm`] for a protection other than
+///   RSA-OAEP-SHA256, or if the slot key is not RSA-2048;
+/// - [`BackendError::OperationNotPermitted`] if the slot is not a
+///   key-management slot;
+/// - [`BackendError::InvalidData`] if the ciphertext is not 256 bytes, if the
+///   card refuses it under an RSA-2048 key, or if the decrypted block is not
+///   an OAEP encoding. The latter two have the same message;
+/// - [`BackendError::Other`] if the card returns more than 256 bytes;
+/// - [`BackendError::SlotEmpty`], [`BackendError::PinRequired`] and
+///   [`BackendError::HardwareFailure`] as for [`agree`].
+pub fn decrypt_key(
+    yk: &mut YubiKey,
+    key_id: &KeyId,
+    encrypted: &[u8],
+    protection: KeyProtection,
+) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+    let slot = decryption_slot(key_id, encrypted, protection)?;
+    let card_algorithm = convert::to_yubikey_algorithm(KeyAlgorithm::Rsa2048)
+        .ok_or_else(|| BackendError::UnsupportedAlgorithm("RSA-2048 on PIV".to_string()))?;
+
+    let block = match piv::decrypt_data(yk, encrypted, card_algorithm, slot) {
+        Ok(block) => block,
+        Err(yubikey::Error::GenericError) => {
+            return Err(decryption_refusal(slot_key(yk, slot), key_id));
+        }
+        Err(other) => return Err(map_error(other)),
+    };
+    let block = full_length_block(&block)?;
+    oaep::decode(&block).map_err(|oaep::DecodingError| does_not_decrypt(key_id))
+}
+
+/// The shared error for a card refusal under RSA-2048 or an OAEP decoding
+/// failure.
+fn does_not_decrypt(key_id: &KeyId) -> BackendError {
+    BackendError::InvalidData(format!(
+        "the ciphertext does not decrypt under the key in slot {key_id}"
+    ))
+}
+
+/// The slot [`decrypt_key`] sends `encrypted` to, once the checks that need
+/// no card pass.
+fn decryption_slot(
+    key_id: &KeyId,
+    encrypted: &[u8],
+    protection: KeyProtection,
+) -> Result<SlotId, BackendError> {
+    if protection != KeyProtection::RsaOaepSha256 {
+        return Err(BackendError::UnsupportedAlgorithm(format!(
+            "a PIV card decrypts a key protected with RSA-OAEP-SHA256, not {protection}"
+        )));
+    }
+    let piv_slot = slot_from_key_id(key_id)?;
+    permits_key_management(piv_slot, key_id, "key decryption")?;
+    // The length is public: refused before the card sees it.
+    if encrypted.len() != RSA_2048_LEN {
+        return Err(BackendError::InvalidData(format!(
+            "an RSA-2048 ciphertext is {RSA_2048_LEN} bytes and this one is {}; PIV holds \
+             RSA-2048 keys only",
+            encrypted.len()
+        )));
+    }
+    convert::to_yubikey_slot(piv_slot)
+}
+
+/// The card's result at the full modulus length, the form OAEP decoding
+/// reads (I2OSP, RFC 8017 §4.1).
+///
+/// A card may drop the block's leading zero byte. The length says only how
+/// many leading zeros the block has, which a valid block fixes at one.
+fn full_length_block(block: &[u8]) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+    let too_long = || {
+        BackendError::Other(format!(
+            "the card returned a {}-byte block; RSA-2048 gives {RSA_2048_LEN}",
+            block.len()
+        ))
+    };
+    let pad = RSA_2048_LEN.checked_sub(block.len()).ok_or_else(too_long)?;
+    let mut full = Zeroizing::new(vec![0u8; RSA_2048_LEN]);
+    full.get_mut(pad..)
+        .ok_or_else(too_long)?
+        .copy_from_slice(block);
+    Ok(full)
+}
+
+/// Maps a card refusal to decrypt to an error using the slot contents, when
+/// known.
+///
+/// A missing PIN reaches the caller as `PinRequired` before this (the card's
+/// security status error). When a `GenericError` occurs and the slot is
+/// reported to hold an RSA-2048 key, the refusal is typically a ciphertext at
+/// or above the modulus, which a retry does not change. It is reported as a
+/// decryption failure rather than a transient hardware failure. Whether a
+/// ciphertext is below the modulus is public, so this mapping gives away
+/// nothing.
+fn decryption_refusal(held: SlotKey, key_id: &KeyId) -> BackendError {
+    match held {
+        SlotKey::Held(Some(KeyAlgorithm::Rsa2048)) => does_not_decrypt(key_id),
+        SlotKey::Held(Some(algorithm)) => BackendError::UnsupportedAlgorithm(format!(
+            "slot {key_id} holds {algorithm}; decrypting a key requires an RSA-2048 key"
+        )),
+        SlotKey::Held(None) => BackendError::UnsupportedAlgorithm(format!(
+            "slot {key_id} holds a key with an unsupported algorithm"
+        )),
+        SlotKey::Empty => BackendError::SlotEmpty(key_id.to_string()),
+        SlotKey::Unknown => BackendError::HardwareFailure(format!(
+            "the card refused to decrypt in slot {key_id}; it cannot report whether the slot \
+             is empty or holds a key other than RSA-2048"
+        )),
+    }
 }
 
 // ============================================================================
@@ -793,31 +936,121 @@ mod tests {
     }
 
     #[test]
-    fn agreement_runs_in_the_key_management_slots() {
+    fn key_management_runs_in_the_key_management_slots() {
         for slot in [
             PivSlot::KeyManagement,
             PivSlot::Retired(0),
             PivSlot::Retired(19),
         ] {
             let key_id = key_id_for_slot(convert::to_yubikey_slot(slot).unwrap());
-            assert!(permits_agreement(slot, &key_id).is_ok(), "{key_id}");
+            assert!(
+                permits_key_management(slot, &key_id, "key agreement").is_ok(),
+                "{key_id}"
+            );
         }
     }
 
     #[test]
-    fn agreement_is_refused_in_the_other_slots_by_name() {
+    fn key_management_is_refused_in_the_other_slots_by_name() {
         for (slot, named) in [
             (PivSlot::Authentication, "authentication slot"),
             (PivSlot::Signature, "signature slot"),
             (PivSlot::CardAuthentication, "needs no PIN"),
         ] {
             let key_id = key_id_for_slot(convert::to_yubikey_slot(slot).unwrap());
-            let error = permits_agreement(slot, &key_id).unwrap_err();
-            assert!(
-                matches!(&error, BackendError::OperationNotPermitted(m)
-                    if m.contains(named) && m.contains(key_id.as_str())),
-                "{error:?}"
-            );
+            for operation in ["key agreement", "key decryption"] {
+                let error = permits_key_management(slot, &key_id, operation).unwrap_err();
+                assert!(
+                    matches!(&error, BackendError::OperationNotPermitted(m)
+                        if m.contains(named) && m.contains(key_id.as_str())
+                            && m.contains(operation)),
+                    "{error:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decryption_goes_to_slot_9d_with_one_rsa_2048_block() {
+        let slot = decryption_slot(
+            &KeyId::new("piv:9d"),
+            &[0; RSA_2048_LEN],
+            KeyProtection::RsaOaepSha256,
+        )
+        .unwrap();
+        assert_eq!(slot, SlotId::KeyManagement);
+    }
+
+    /// Everything the host can refuse is refused before the card is asked.
+    #[test]
+    fn decryption_is_refused_before_the_card_by_name() {
+        let block = [0u8; RSA_2048_LEN];
+        let cases: [(&str, &[u8], KeyProtection, &str); 4] = [
+            ("piv:9d", &block, KeyProtection::AesKeyWrap, "AES-KW"),
+            (
+                "piv:9c",
+                &block,
+                KeyProtection::RsaOaepSha256,
+                "signature slot",
+            ),
+            ("piv:9d", &[0; 512], KeyProtection::RsaOaepSha256, "512"),
+            ("piv:9d", &[], KeyProtection::RsaOaepSha256, "RSA-2048"),
+        ];
+        for (key_id, encrypted, protection, named) in cases {
+            let error = decryption_slot(&KeyId::new(key_id), encrypted, protection).unwrap_err();
+            assert!(error.to_string().contains(named), "{named}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_block_without_its_leading_zero_still_decodes() {
+        let key = oaep::tests::key();
+        let message = [0x5a; 32];
+        let block = oaep::tests::encoded(&key, &message);
+        let (&leading, shortened) = block.split_first().unwrap();
+        assert_eq!(leading, 0);
+
+        let full = full_length_block(shortened).unwrap();
+        assert_eq!(&oaep::decode(&full).unwrap()[..], &message[..]);
+    }
+
+    #[test]
+    fn a_block_the_card_shortened_is_restored_to_full_length() {
+        let full = full_length_block(&[0xab; RSA_2048_LEN - 1]).unwrap();
+        assert_eq!(full.len(), RSA_2048_LEN);
+        assert_eq!(full.first(), Some(&0));
+        assert_eq!(full.last(), Some(&0xab));
+
+        assert_eq!(
+            &full_length_block(&[7; RSA_2048_LEN]).unwrap()[..],
+            &[7; RSA_2048_LEN][..]
+        );
+        assert!(matches!(
+            full_length_block(&[0; RSA_2048_LEN + 1]),
+            Err(BackendError::Other(_))
+        ));
+    }
+
+    #[test]
+    fn a_refused_decryption_names_what_the_slot_holds() {
+        let key_id = KeyId::new("piv:9d");
+        for (held, check) in [
+            (
+                SlotKey::Held(Some(KeyAlgorithm::Rsa2048)),
+                (|e: &BackendError| matches!(e, BackendError::InvalidData(_)))
+                    as fn(&BackendError) -> bool,
+            ),
+            (
+                SlotKey::Held(Some(KeyAlgorithm::EcdsaP256)),
+                |e| matches!(e, BackendError::UnsupportedAlgorithm(m) if m.contains("ECDSA-P256")),
+            ),
+            (SlotKey::Empty, |e| matches!(e, BackendError::SlotEmpty(_))),
+            (SlotKey::Unknown, |e| {
+                matches!(e, BackendError::HardwareFailure(_))
+            }),
+        ] {
+            let error = decryption_refusal(held, &key_id);
+            assert!(check(&error), "{held:?}: {error:?}");
         }
     }
 

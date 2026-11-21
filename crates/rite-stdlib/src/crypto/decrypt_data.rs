@@ -165,12 +165,23 @@ fn open_content_key(
     key_backend: &str,
     key_id: &rite_sdk::KeyId,
 ) -> Result<Zeroizing<Vec<u8>>, ActionError> {
-    let (protected, protection) = match (recipient, own) {
+    match (recipient, own) {
+        // The KEK is a symmetric key the backend holds and unwraps under.
         (cms::RecipientInfo::Kek { wrapped_key, .. }, _) => {
-            (wrapped_key, KeyProtection::AesKeyWrap)
+            let (transport, _) =
+                crate::crypto::transport_backend(backend, key_backend, "open a data key")?;
+            Ok(transport.open_data_key(key_id, wrapped_key, KeyProtection::AesKeyWrap)?)
         }
+        // No KEK: the content key itself was encrypted to the public key, so
+        // the backend decrypts it, and a device that can do nothing else with
+        // the key opens this.
         (cms::RecipientInfo::KeyTransport { encrypted_key, .. }, _) => {
-            (encrypted_key, KeyProtection::RsaOaepSha256)
+            let decrypt = crate::crypto::key_decrypt_backend(
+                backend,
+                key_backend,
+                "decrypt a key to open a data key",
+            )?;
+            Ok(decrypt.decrypt_key(key_id, encrypted_key, KeyProtection::RsaOaepSha256)?)
         }
         // The backend agrees the secret, and the host derives the wrap key from
         // it and unwraps, so a device that only does ECDH opens this.
@@ -184,20 +195,16 @@ fn open_content_key(
                 "agree a key to open a data key",
             )?;
             let secret = agreement.agree(key_id, &ephemeral)?;
-            return Ok(content::open_key_agreement(agreed, &secret)?);
+            Ok(content::open_key_agreement(agreed, &secret)?)
         }
         // `KeyName::of` takes its form from the recipient, so a key agreement
         // always has a public key to agree under. The remaining forms are the
         // ones this crate does not open.
-        (other, _) => {
-            return Err(ActionError::Failed(format!(
-                "This container's recipient is a {}, which decrypt_data does not open",
-                other.kind()
-            )));
-        }
-    };
-    let (transport, _) = crate::crypto::transport_backend(backend, key_backend, "open a data key")?;
-    Ok(transport.open_data_key(key_id, protected, protection)?)
+        (other, _) => Err(ActionError::Failed(format!(
+            "This container's recipient is a {}, which decrypt_data does not open",
+            other.kind()
+        ))),
+    }
 }
 
 /// The content a step opens: one a step sealed, or a material's bytes read as

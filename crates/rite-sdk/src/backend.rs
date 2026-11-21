@@ -18,8 +18,8 @@
 //! requirements: traits are composable based on backend capabilities.
 //!
 //! Example trait support matrix:
-//! - Software: `KeyStore + Sign + KeyTransport`
-//! - `YubiKey` PIV: `KeyStore + Sign + Piv + Yubikey`
+//! - Software: `KeyStore + Sign + KeyTransport + KeyAgreement + KeyDecrypt`
+//! - `YubiKey` PIV: `KeyStore + Sign + KeyAgreement + KeyDecrypt + Piv + Yubikey`
 //! - PKCS#11 HSM: `KeyStore + Sign + KeyTransport + Pkcs11`
 //! - Mock: All traits (for testing)
 
@@ -167,6 +167,11 @@ pub trait Backend: Send + Sync {
 
     /// Not supported by this backend, always returns `None`.
     fn as_agreement_mut(&mut self) -> Option<&mut dyn KeyAgreementBackend> {
+        None
+    }
+
+    /// Not supported by this backend, always returns `None`.
+    fn as_key_decrypt_mut(&mut self) -> Option<&mut dyn KeyDecryptBackend> {
         None
     }
 
@@ -327,6 +332,11 @@ pub trait RandomBackend: Backend {
 /// to use. `wrap`, `unwrap`, `wrap_to_public`, and `export_secret_key` move
 /// keys held by the backend out of or into it.
 ///
+/// Despite the name, this trait does not open what RFC 5652 calls key
+/// transport, a key encrypted to a public key (`KeyTransRecipientInfo`).
+/// That opens through [`KeyDecryptBackend::decrypt_key`], which a device that
+/// can only decrypt under a private key can implement on its own.
+///
 /// A wrap returns a [`WrappedKey`] carrying the scheme it was asked for and a
 /// [`WrapDescription`](crate::types::WrapDescription) of what it did, so the
 /// caller records an observation rather than a request.
@@ -402,10 +412,13 @@ pub trait KeyTransportBackend: Backend {
 
     /// Recover a data key from the protected copy a container carries.
     ///
-    /// The counterpart of [`generate_data_key`](Self::generate_data_key), and
-    /// the half of the pair almost every backend implements: protecting a data
-    /// key needs only a public key or a symmetric key, while opening one always
-    /// needs the device that holds the other half.
+    /// The counterpart of [`generate_data_key`](Self::generate_data_key): the
+    /// data key was protected under a key-encryption key this backend holds,
+    /// such as an AES key for AES Key Wrap.
+    ///
+    /// A data key encrypted to a public key involves no key-encryption key and
+    /// opens through [`KeyDecryptBackend::decrypt_key`] instead, which a device
+    /// that implements nothing else in this trait can implement.
     ///
     /// `protection` says how `wrapped` was protected, taken from the container
     /// rather than assumed, because the bytes say nothing about themselves and
@@ -511,6 +524,78 @@ pub trait KeyAgreementBackend: Backend {
     /// - a peer that is invalid or on a different curve from the private key,
     ///   with [`BackendError::InvalidData`].
     fn agree(&mut self, key_id: &KeyId, peer: &PublicKeyDer) -> Result<AgreedSecret, BackendError>;
+}
+
+/// Backends implementing this trait decrypt a key that was encrypted to a
+/// public key whose private half they hold.
+///
+/// This is the device step of opening a key encrypted directly to a public
+/// key, as a CMS key transport recipient carries one. No key-encryption key
+/// is involved: the decrypted bytes are the key itself, a content key the
+/// caller decrypts the content with.
+///
+/// The scheme is a [`KeyProtection`], read from the container. Today that is
+/// [`KeyProtection::RsaOaepSha256`], the scheme Rite writes:
+///
+/// | Device | Operation | Encoding removed by |
+/// |---|---|---|
+/// | OpenSSL | `EVP_PKEY_decrypt` with OAEP | OpenSSL |
+/// | PIV | GENERAL AUTHENTICATE, a raw RSA operation in slot 9d | the host |
+///
+/// A PKCS#11 token that supports `CKM_RSA_PKCS_OAEP` can implement the trait
+/// with `C_Decrypt`, removing the encoding on the token.
+///
+/// The trait is scheme-generic. A future public-key encryption scheme can use
+/// this method if decryption returns the key itself. A KEM does not fit:
+/// decapsulation returns a shared secret for a KDF, as in
+/// [`KeyAgreementBackend::agree`].
+///
+/// The trait returns the key with the scheme's encoding removed, so a backend
+/// whose device implements the whole scheme implements it directly. Many HSMs
+/// disable raw RSA (`CKM_RSA_X_509`), and a trait taking the raw result would
+/// exclude them. A device that only runs the raw private-key operation
+/// removes the encoding on the host, in the backend.
+///
+/// RFC 5652 calls this operation key transport, but it is separate from
+/// [`KeyTransportBackend`], which also requires `wrap`, `unwrap`, and
+/// `generate_data_key`. A smart card or a `NetHSM` can decrypt under a private
+/// key and do none of those. It is also separate from
+/// [`KeyTransportBackend::unwrap`]: `unwrap` keeps the recovered key in the
+/// backend, as PKCS#11 `C_UnwrapKey` and a cloud KMS `UnwrapKey` do, while
+/// this returns a short-lived content key to the host.
+///
+/// The policy usage is [`KeyUsages::UNWRAP`](crate::KeyUsages::UNWRAP): for a
+/// key that does not use agreement, this is the usage
+/// [`KeyUsages::to_open`](crate::KeyUsages::to_open) assigns.
+pub trait KeyDecryptBackend: Backend {
+    /// Decrypts `encrypted` under `key_id` and returns the key it carries.
+    ///
+    /// `protection` says how `encrypted` was produced. It is read from the
+    /// container rather than assumed, for the reason
+    /// [`KeyTransportBackend::open_data_key`] gives.
+    ///
+    /// When a backend removes the encoding, it must check the encoding in
+    /// constant time. Every backend returns the same error for every decoding
+    /// failure, and does not pass on a provider's message that names the
+    /// check. Distinguishing failures can expose an OAEP oracle, as in
+    /// Manger's attack.
+    ///
+    /// # Errors
+    ///
+    /// A backend refuses:
+    /// - a protection it does not implement, or a key of the wrong
+    ///   algorithm for it, with [`BackendError::UnsupportedAlgorithm`];
+    /// - a key whose policy does not permit
+    ///   [`KeyUsages::UNWRAP`](crate::KeyUsages::UNWRAP), with
+    ///   [`BackendError::OperationNotPermitted`];
+    /// - input that does not decrypt, with [`BackendError::InvalidData`] and
+    ///   one message whatever the cause.
+    fn decrypt_key(
+        &mut self,
+        key_id: &KeyId,
+        encrypted: &[u8],
+        protection: KeyProtection,
+    ) -> Result<Zeroizing<Vec<u8>>, BackendError>;
 }
 
 /// PKCS#11 token operations.

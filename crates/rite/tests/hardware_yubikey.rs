@@ -83,7 +83,12 @@ fn provision() -> Option<Card> {
     ykman(&["piv", "reset", "--force"], Some(&serial));
     let keys = std::env::temp_dir().join(format!("rite-hw-yubikey-{serial}"));
     std::fs::create_dir_all(&keys).unwrap();
-    for (slot, algorithm) in [("9a", "RSA2048"), ("9c", "ECCP256"), ("9d", "ECCP384")] {
+    for (slot, algorithm) in [
+        ("9a", "RSA2048"),
+        ("9c", "ECCP256"),
+        ("9d", "ECCP384"),
+        ("82", "RSA2048"),
+    ] {
         let public = keys.join(format!("{slot}.pem"));
         ykman(
             &[
@@ -129,7 +134,7 @@ fn pin_tries(card: &Card) -> u32 {
     tries.parse().unwrap()
 }
 
-/// A ceremony on the card with `steps`. It declares the three provisioned
+/// A ceremony on the card with `steps`. It declares the four provisioned
 /// keys, with `pin` as the 9D key's optional `fingerprint:` line.
 fn ceremony(card: &Card, pin: &str, steps: &str) -> String {
     format!(
@@ -161,6 +166,11 @@ materials:
     id: "piv:9d"
     algorithm: ECDSA-P384
 {pin}
+  rsa_decryption_key:
+    type: backend_key
+    backend: token
+    id: "piv:82"
+    algorithm: RSA-2048
   manifest:
     type: bytes
     path: "manifest.txt"
@@ -334,37 +344,43 @@ fn one_pin_step_signs_with_keys_the_card_held() {
     );
 }
 
-/// Sealed in software to the card's 9D key, opened by the card through key
-/// agreement: rite#315 on hardware.
+/// Sealed in software to a key-management key on the card, opened by the
+/// card: the P-384 key in 9D through key agreement (rite#315), and the
+/// RSA-2048 key in retired slot 82 through key decryption, the raw RSA
+/// operation on the card and the OAEP decoding on the host.
 #[test]
 #[ignore = "needs a YubiKey kept for testing; see the module documentation"]
 fn the_card_opens_what_was_sealed_to_its_key() {
     let Some((_turn, card)) = card() else { return };
-    let steps = [
-        r"      seal:
+    for key in ["decryption_key", "rsa_decryption_key"] {
+        let steps = [
+            format!(
+                r"      seal:
         action: encrypt_data
         backend: software
         reads:
-          recipient: ${artifact.decryption_key}
-          data: ${artifact.manifest}
+          recipient: ${{artifact.{key}}}
+          data: ${{artifact.manifest}}
         creates: sealed
 "
-        .to_string(),
-        unlock("unlock"),
-        r"      open:
+            ),
+            unlock("unlock"),
+            format!(
+                r"      open:
         action: decrypt_data
         backend: token
         reads:
-          encrypted_data: ${artifact.sealed}
-          decryption_key: ${artifact.decryption_key}
+          encrypted_data: ${{artifact.sealed}}
+          decryption_key: ${{artifact.{key}}}
         creates: opened
 "
-        .to_string(),
-    ]
-    .concat();
-    let run = run(&ceremony(card, "", &steps), vec![pin()]);
-    run.completed();
-    assert_eq!(run.bytes("opened"), MANIFEST);
+            ),
+        ]
+        .concat();
+        let run = run(&ceremony(card, "", &steps), vec![pin()]);
+        run.completed();
+        assert_eq!(run.bytes("opened"), MANIFEST, "{key}");
+    }
 }
 
 /// Slot 9C defaults to PIN policy `always`: the card clears the PIN after

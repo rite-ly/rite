@@ -177,8 +177,13 @@ recipient, in one of three forms:
   usage;
 - a `KeyAgreeRecipientInfo` under ECDH with the X9.63 KDF and
   `id-aes256-wrap`, for a P-256 or P-384 key the backend holds with the
-  `derive` usage. Of Rite's backends, `openssl` opens this form; a key on a
-  hardware device does not.
+  `derive` usage.
+
+The `openssl` backend opens all three forms. A PIV card (`piv` or `yubikey`)
+opens `KeyTransRecipientInfo` and `KeyAgreeRecipientInfo` with a key in slot
+9D or a retired key-management slot (`82`..`95`), declared as a held key in
+the ceremony. RSA keys on PIV are RSA-2048 only. A card holds no symmetric
+key, so it cannot open `KEKRecipientInfo`.
 
 A public-key recipient is named by subject key identifier: either the SHA-256
 of the key's SPKI, which is how Rite names a key, or the SHA-1 of RFC 5280

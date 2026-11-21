@@ -17,6 +17,7 @@ rite-piv = { workspace = true }
 
 yubikey    = { workspace = true }
 serde_json = { workspace = true }
+zeroize    = { workspace = true }
 
 [lints]
 workspace = true

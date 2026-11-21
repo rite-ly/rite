@@ -36,9 +36,9 @@ pub use key_material::{CertificateDer, EcCurve, EcPoint, PublicKeyDer, csr_from_
 
 pub use backend::{
     AttestationBackend, Backend, BackendError, CertStoreBackend, KeyAgreementBackend,
-    KeyStoreBackend, KeyTransportBackend, PivBackend, Pkcs11AdminBackend, Pkcs11Backend,
-    RandomBackend, Retriability, SignBackend, TpmBackend, VerifyBackend, YubikeyBackend,
-    lock_device,
+    KeyDecryptBackend, KeyStoreBackend, KeyTransportBackend, PivBackend, Pkcs11AdminBackend,
+    Pkcs11Backend, RandomBackend, Retriability, SignBackend, TpmBackend, VerifyBackend,
+    YubikeyBackend, lock_device,
 };
 
 pub use types::{

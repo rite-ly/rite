@@ -108,6 +108,34 @@ there. `rite-piv` uses `p256` and `p384` for nothing else: no signing,
 verification, or ECDH in software. Their types do not cross the `rite-piv`
 API, so these crates' versions need not match the versions used by `yubikey`.
 
+## Removing OAEP after a card
+
+`rite-piv/src/oaep.rs` decodes EME-OAEP (RFC 8017 §7.1.2, SHA-256, MGF1 with
+SHA-256, empty label). A PIV card runs only the raw RSA operation, so opening
+a key encrypted to a card's RSA key needs the host to remove the encoding.
+OAEP decoding is a cryptographic primitive because it processes the secret
+content key. The decoder is implemented in `rite-piv` rather than taken from
+a provider for three reasons:
+
+- `rite-piv` cannot call OpenSSL, as the section above notes.
+- The `rsa` crate decodes OAEP only inside its own private-key decryption.
+  Its decoder is not public, so it cannot decode a block that a card
+  produced. Making `rsa` a direct dependency would also bring in the
+  RUSTSEC-2023-0071 entry in `deny.toml`.
+- The decoder is about a hundred lines including its documentation: two MGF1
+  passes over SHA-256 and a scan of the padding.
+
+The decoder uses `subtle` to check the block contents without data-dependent
+branches or early returns, then makes one decision on validity. Every decoding
+failure returns the same value. The tests decode blocks produced by OpenSSL
+encryption followed by a software raw RSA operation, and check representative
+malformed blocks. RFC 8017's OAEP examples use SHA-1, so OpenSSL supplies the
+interoperability check for this SHA-256 decoder. `rite-piv` uses `subtle` for
+nothing else.
+
+`rite-openssl` performs OAEP encoding on the host when it encrypts to a public
+key.
+
 ## Where the seam is
 
 `rite-stdlib/src/signatures.rs`.

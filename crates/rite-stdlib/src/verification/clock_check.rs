@@ -1,6 +1,5 @@
 //! `clock_check` action, record the system clock at ceremony start.
 
-use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rite_model::{ActionType, Prompt};
 use rite_runtime::{
@@ -37,7 +36,8 @@ impl Action for ClockCheckAction {
             reporter.log(Icon::Info, message.as_str())?;
         }
 
-        let utc_time = Timestamp::now();
+        // Read from the same clock that stamps the facts.
+        let utc_time = reporter.now()?.timestamp();
         let local_time = utc_time.to_zoned_datetime(TimeZone::system());
 
         let utc_formatted = utc_time.strftime("%Y-%m-%d %H:%M:%S UTC").to_string();

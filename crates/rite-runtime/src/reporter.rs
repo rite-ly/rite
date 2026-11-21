@@ -345,6 +345,18 @@ impl<'a> Reporter<'a> {
         Ok(())
     }
 
+    /// The current time from the run clock, the clock that stamps every fact.
+    /// An action that shows or uses the time reads it here, so it reads the
+    /// same clock as the transcript and a test can fix it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReporterError::Clock`] if the clock reads a time the
+    /// transcript cannot record.
+    pub fn now(&self) -> Result<rite_model::EventTime, ReporterError> {
+        Ok(self.clock.now()?)
+    }
+
     /// Emit a UI-only narration line. Never recorded to the transcript.
     ///
     /// # Errors

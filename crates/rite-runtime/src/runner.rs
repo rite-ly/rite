@@ -36,8 +36,8 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use rite_model::{
-    ActId, ActionType, ArtifactId, Ceremony, FileKind, HeldKey, Level, MaterialId, MaterialKind,
-    MaterialSource, OutputId, ParamId, RoleId, Step, TranscriptHeader,
+    ActId, ActionType, ArtifactId, Ceremony, EventTime, FileKind, HeldKey, Level, MaterialId,
+    MaterialKind, MaterialSource, OutputId, ParamId, RoleId, Step, TranscriptHeader,
 };
 use rite_sdk::{Backend, BackendError, Retriability};
 use thiserror::Error;
@@ -121,7 +121,8 @@ impl From<ReporterError> for ActionError {
             ReporterError::Aborted => ActionError::Aborted,
             ReporterError::Disconnected => ActionError::Disconnected,
             ReporterError::Transcript(e) => ActionError::Transcript(e),
-            ReporterError::NoCurrentStep(_)
+            ReporterError::Clock(_)
+            | ReporterError::NoCurrentStep(_)
             | ReporterError::DuplicateDraw { .. }
             | ReporterError::Unseeded
             | ReporterError::DrawTooLong { .. } => ActionError::Failed(value.to_string()),
@@ -174,7 +175,9 @@ impl From<ReporterError> for ExecutionError {
                 ExecutionError::TranscriptError("frontend channel disconnected".to_string())
             }
             ReporterError::Transcript(e) => ExecutionError::TranscriptError(e.to_string()),
-            ReporterError::NoCurrentStep(_) => ExecutionError::TranscriptError(value.to_string()),
+            ReporterError::Clock(_) | ReporterError::NoCurrentStep(_) => {
+                ExecutionError::TranscriptError(value.to_string())
+            }
             ReporterError::DuplicateDraw { .. }
             | ReporterError::Unseeded
             | ReporterError::DrawTooLong { .. } => ExecutionError::EntropyError(value.to_string()),
@@ -458,14 +461,15 @@ impl Executor {
         // no closing measurement.
         let mut closing_recorded = Ok(());
         if opened {
-            let at = clock.now();
             let closing = StepFact::NetworkStateRecorded {
                 moment: NetworkMoment::Closing,
                 network: network.snapshot().recorded(),
             };
-            closing_recorded = transcript_sink.record(at, closing.default_level(), &closing);
-            if closing_recorded.is_ok() {
-                let _ = event_tx.send(ExecEvent::Fact { at, fact: closing });
+            match record_now(&*clock, &mut *transcript_sink, &closing) {
+                Ok(at) => {
+                    let _ = event_tx.send(ExecEvent::Fact { at, fact: closing });
+                }
+                Err(e) => closing_recorded = Err(e),
             }
         }
 
@@ -476,10 +480,8 @@ impl Executor {
         match outcome {
             Ok(counts) => {
                 closing_recorded.map_err(|e| ExecutionError::TranscriptError(e.to_string()))?;
-                let at = clock.now();
                 let completed = StepFact::CeremonyCompleted {};
-                transcript_sink
-                    .record(at, completed.default_level(), &completed)
+                let at = record_now(&*clock, &mut *transcript_sink, &completed)
                     .map_err(|e| ExecutionError::TranscriptError(e.to_string()))?;
                 let _ = event_tx.send(ExecEvent::Fact {
                     at,
@@ -498,11 +500,15 @@ impl Executor {
                 })
             }
             Err(err) => {
-                let at = clock.now();
                 let record = err.to_error_record();
                 let failed = StepFact::CeremonyFailed { error: record };
-                let _ = transcript_sink.record(at, failed.default_level(), &failed);
-                let _ = event_tx.send(ExecEvent::Fact { at, fact: failed });
+                // Best effort: the run has already failed. The UI still hears
+                // of it when only the write fails; a clock with no usable time
+                // leaves no time to show it at.
+                if let Ok(at) = clock.now() {
+                    let _ = transcript_sink.record(at, failed.default_level(), &failed);
+                    let _ = event_tx.send(ExecEvent::Fact { at, fact: failed });
+                }
                 if let Ok(fingerprint) = transcript_sink.finalize() {
                     let _ = event_tx.send(ExecEvent::Finalized {
                         fingerprint: fingerprint.as_str().to_string(),
@@ -782,6 +788,18 @@ impl Executor {
 #[derive(Default, Debug, Clone, Copy)]
 struct StepCounts {
     completed: usize,
+}
+
+/// Stamp `fact` from the run clock and record it at its default level.
+/// Returns the time it was recorded at.
+fn record_now(
+    clock: &dyn Clock,
+    sink: &mut dyn TranscriptSink,
+    fact: &StepFact,
+) -> std::io::Result<EventTime> {
+    let at = clock.now().map_err(std::io::Error::other)?;
+    sink.record(at, fact.default_level(), fact)?;
+    Ok(at)
 }
 
 /// The level a file is recorded at, which decides whether a disclosure

@@ -7,7 +7,8 @@
 //! cargo test -p rite-tui preview:: -- --nocapture
 //! ```
 
-use chrono::{DateTime, Local, TimeZone};
+use jiff::civil::date;
+use jiff::tz::TimeZone;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -16,7 +17,7 @@ use rite_model::network::{
     Counters, DefaultRoute, InterfaceKind, InterfaceState, NetworkMoment, NetworkState, Radio,
 };
 use rite_model::platform::{FeatureCheck, FeatureStatus, OsIdentity, Platform, RiteLive};
-use rite_model::{MaterialId, Prompt, StepId, ValidatorSpec};
+use rite_model::{EventTime, MaterialId, Prompt, StepId, ValidatorSpec};
 use rite_runtime::{
     BackendVersion, BuildInfo, Disk, Environment, HostInfo, Icon, MaterialOverview,
     MaterialOverviewKind, PromptId, SystemInfo,
@@ -28,18 +29,20 @@ use crate::model::{
 };
 use crate::view::view;
 
-/// Build a `DateTime<Local>` on the canonical preview date.
-fn at(h: u32, m: u32, s: u32) -> DateTime<Local> {
-    Local
-        .with_ymd_and_hms(2026, 5, 25, h, m, s)
-        .single()
-        .expect("valid local time")
+/// Build a time on the canonical preview date. Previews show UTC, so they
+/// read the same on every machine.
+fn at(h: i8, m: i8, s: i8) -> EventTime {
+    let local = date(2026, 5, 25)
+        .at(h, m, s, 0)
+        .to_zoned_datetime(TimeZone::UTC)
+        .expect("valid time");
+    EventTime::from_timestamp(local.timestamp()).expect("2026 is in range")
 }
 
 /// Construct an entry with explicit step and timestamp, bypassing
 /// `Model::push_entry` so fixtures stay decoupled from the live clock
 /// and the `current_step` field on the model.
-fn entry(icon: Icon, text: &str, step: &str, at: DateTime<Local>) -> LogLine {
+fn entry(icon: Icon, text: &str, step: &str, at: EventTime) -> LogLine {
     LogLine::Entry {
         icon,
         text: text.to_string(),
@@ -54,6 +57,7 @@ fn entry(icon: Icon, text: &str, step: &str, at: DateTime<Local>) -> LogLine {
 fn sample_overview() -> Model {
     let mut m = Model::new();
     m.now = at(14, 32, 10);
+    m.time_zone = TimeZone::UTC;
     m.ceremony_name = Some("Root CA Key Generation".to_string());
     // Mirror what a YAML `description: |` literal block produces: a
     // multi-line string where authors break lines for source readability
@@ -119,6 +123,7 @@ fn sample_running() -> Model {
     // visible; switch to an odd second in a dedicated test if you want
     // to inspect the blink-off state.
     m.now = at(14, 32, 10);
+    m.time_zone = TimeZone::UTC;
     m.ceremony_name = Some("Root CA Key Generation".to_string());
     m.current_step = Some(StepView {
         id: StepId::new("verify_time"),

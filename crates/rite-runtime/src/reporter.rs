@@ -46,6 +46,9 @@ pub enum ReporterError {
     /// treats this as a fatal failure (the operator is no longer reachable).
     #[error("frontend channel disconnected")]
     Disconnected,
+    /// The run clock read a time the transcript cannot record.
+    #[error("run clock: {0}")]
+    Clock(#[from] rite_model::EventTimeRangeError),
     /// Failed to persist a fact to the transcript sink.
     #[error("transcript write failed: {0}")]
     Transcript(#[from] std::io::Error),
@@ -88,6 +91,7 @@ impl ReporterError {
         let (class, kind) = match self {
             ReporterError::Aborted => (ErrorClass::Abort, "aborted"),
             ReporterError::Disconnected => (ErrorClass::Integrity, "frontend_disconnected"),
+            ReporterError::Clock(_) => (ErrorClass::Integrity, "clock_out_of_range"),
             ReporterError::Transcript(_) => (ErrorClass::Integrity, "transcript_io"),
             ReporterError::NoCurrentStep(_) => (ErrorClass::Integrity, "internal_no_current_step"),
             ReporterError::DuplicateDraw { .. } => {
@@ -214,7 +218,7 @@ impl<'a> Reporter<'a> {
     pub fn fact_at(&mut self, level: Level, fact: StepFact) -> Result<(), ReporterError> {
         // Stamp the event time once, from the run clock, and use it for both
         // the durable record and the live UI event so they never disagree.
-        let at = self.clock.now();
+        let at = self.clock.now()?;
         self.transcript.record(at, level, &fact)?;
         if fact.is_side_effect() {
             self.side_effects_emitted = self.side_effects_emitted.saturating_add(1);
@@ -339,6 +343,18 @@ impl<'a> Reporter<'a> {
             .send(ExecEvent::Signal(signal))
             .map_err(|_| ReporterError::Disconnected)?;
         Ok(())
+    }
+
+    /// The current time from the run clock, the clock that stamps every fact.
+    /// An action that shows or uses the time reads it here, so it reads the
+    /// same clock as the transcript and a test can fix it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReporterError::Clock`] if the clock reads a time the
+    /// transcript cannot record.
+    pub fn now(&self) -> Result<rite_model::EventTime, ReporterError> {
+        Ok(self.clock.now()?)
     }
 
     /// Emit a UI-only narration line. Never recorded to the transcript.
@@ -597,7 +613,7 @@ mod tests {
 
     use super::*;
     use crate::clock::SystemClock;
-    use rite_model::ValidatorSpec;
+    use rite_model::{EventTime, ValidatorSpec};
 
     fn ids(step: &str) -> StepId {
         StepId::new(step)
@@ -626,6 +642,30 @@ mod tests {
             ExecEvent::Fact { at, .. } => assert_eq!(at, fixed),
             other => panic!("expected Fact, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_clock_with_no_recordable_time_fails_the_fact_and_records_nothing() {
+        struct BeforeYearZero;
+        impl Clock for BeforeYearZero {
+            fn now(&self) -> Result<EventTime, rite_model::EventTimeRangeError> {
+                EventTime::from_timestamp(jiff::Timestamp::MIN)
+            }
+        }
+
+        let (event_tx, event_rx) = unbounded();
+        let (_cmd_tx, cmd_rx) = unbounded::<UiCommand>();
+        let mut sink = crate::test_support::begun_sink();
+        let mut reporter = Reporter::new(&event_tx, &cmd_rx, &mut sink, Arc::new(BeforeYearZero));
+
+        let err = reporter
+            .fact(crate::test_support::ceremony_started("T"))
+            .expect_err("a time before the year 0000 cannot be recorded");
+        assert!(matches!(err, ReporterError::Clock(_)));
+        assert_eq!(err.to_error_record().kind, "clock_out_of_range");
+        assert!(event_rx.try_recv().is_err());
+        drop(reporter);
+        assert!(sink.is_empty());
     }
 
     #[test]

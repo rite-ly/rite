@@ -24,6 +24,7 @@ mod canonical;
 pub mod commitment;
 mod digest;
 pub mod display;
+mod event_time;
 pub mod expression;
 pub mod ir;
 pub mod network;
@@ -43,6 +44,7 @@ pub use rite_sdk::{BackendConfig, KeyAlgorithm, KeyFingerprint, KeyId, Provider}
 
 pub use canonical::{CanonicalJsonError, canonical_json, check_numbers};
 pub use digest::{DigestFormatError, Sha256Digest};
+pub use event_time::{EventTime, EventTimeFormatError, EventTimeRangeError};
 pub use material::MaterialSource;
 
 pub use safe_path::{PathSafetyError, confine, is_safe_component, safe_join, validate_component};

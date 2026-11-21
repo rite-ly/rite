@@ -1,6 +1,6 @@
 //! Configuration for ceremony output directory structure.
 
-use chrono::Utc;
+use jiff::Timestamp;
 use rite_model::{PathSafetyError, safe_join};
 use std::path::PathBuf;
 
@@ -41,7 +41,7 @@ impl OutputConfig {
     #[must_use]
     pub fn for_ceremony(parent: Option<PathBuf>, ceremony_name: &str) -> Self {
         let parent = parent.unwrap_or_else(|| PathBuf::from("."));
-        let timestamp = Utc::now().format("%Y%m%dT%H%M%S");
+        let timestamp = Timestamp::now().strftime("%Y%m%dT%H%M%S");
         let slug = slugify(ceremony_name);
         Self {
             base_dir: parent.join(format!("{slug}-{timestamp}")),

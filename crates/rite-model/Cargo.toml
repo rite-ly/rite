@@ -21,6 +21,7 @@ base16ct = { workspace = true }
 base64ct = { workspace = true }
 zeroize = { workspace = true }
 sha2 = { workspace = true }
+jiff = { workspace = true }
 # The DSL vocabulary types describe themselves as JSON Schema, for the schema
 # of a step's `with:` block.
 schemars = { workspace = true }

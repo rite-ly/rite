@@ -663,7 +663,8 @@ fn first_timestamp_regression(facts: &[TimedFact]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, TimeZone, Utc};
+    use jiff::Timestamp;
+    use rite_model::EventTime;
     use rite_model::StepId;
 
     fn artifact_fact(file: &str, bytes: &[u8]) -> StepFact {
@@ -773,8 +774,9 @@ mod tests {
             .collect()
     }
 
-    fn ts(seconds: i64) -> DateTime<Utc> {
-        Utc.timestamp_opt(seconds, 0).single().expect("valid time")
+    fn ts(seconds: i64) -> EventTime {
+        EventTime::from_timestamp(Timestamp::from_second(seconds).expect("valid time"))
+            .expect("in range")
     }
 
     #[test]

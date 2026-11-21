@@ -68,6 +68,32 @@ fn clock_check_completes_when_clock_confirmed() {
 }
 
 #[test]
+fn clock_check_shows_the_run_clock() {
+    let fixed = rite_runtime::test_support::fixed_test_time();
+    let mut harness = ReporterHarness::new().with_clock(std::sync::Arc::new(
+        rite_runtime::test_support::FixedClock(fixed),
+    ));
+    harness.enqueue_response(Response::Bool(true));
+    let state = make_state();
+    let step = bare_step("clock");
+
+    {
+        let ctx = state.handler_context();
+        let mut reporter = harness.reporter(step.id.clone());
+        ClockCheckAction
+            .execute(&step, &ctx, &serde_json::json!({}), &mut reporter, None)
+            .expect("confirming the clock completes the step");
+    }
+
+    assert!(
+        harness
+            .logged()
+            .contains(&"UTC time:    2023-11-14 22:13:20 UTC".to_string()),
+        "clock_check must show the run clock's time"
+    );
+}
+
+#[test]
 fn attest_records_an_attestation_fact() {
     let mut harness = ReporterHarness::new();
     harness.enqueue_response(Response::Text("attest".to_string()));

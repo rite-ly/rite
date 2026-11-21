@@ -8,15 +8,16 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use crossbeam_channel::{Receiver, Sender, unbounded};
+use jiff::Timestamp;
 use rite_model::{ArtifactId, Step, StepId};
+use rite_model::{EventTime, EventTimeRangeError};
 
 use crate::actions::ArtifactValue;
 use crate::backend::BackendRegistry;
 use crate::clock::{Clock, SystemClock};
 use crate::executor::ExecutionError;
-use crate::protocol::{ExecEvent, PromptId, Response, UiCommand};
+use crate::protocol::{ExecEvent, PromptId, Response, UiCommand, UiSignal};
 use crate::reporter::Reporter;
 use crate::runner::{ActionRegistry, RunBackends, merge_step_result, run_step};
 use crate::state::ExecutionState;
@@ -33,17 +34,19 @@ use rite_model::{Sha256Digest, StepFact, TranscriptHeader};
 pub struct ReporterHarness {
     sink: InMemorySink,
     event_tx: Sender<ExecEvent>,
-    _event_rx: Receiver<ExecEvent>,
+    event_rx: Receiver<ExecEvent>,
     cmd_tx: Sender<UiCommand>,
     cmd_rx: Receiver<UiCommand>,
     /// The queued commands a reporter reads, from a channel whose sender
     /// is already dropped.
     step_rx: Receiver<UiCommand>,
     next_response_id: u64,
+    clock: Arc<dyn Clock>,
 }
 
 impl ReporterHarness {
-    /// Build a harness with empty channels and an empty sink.
+    /// Build a harness with empty channels, an empty sink and the system
+    /// clock.
     #[must_use]
     pub fn new() -> Self {
         let (event_tx, event_rx) = unbounded();
@@ -51,12 +54,34 @@ impl ReporterHarness {
         Self {
             sink: begun_sink(),
             event_tx,
-            _event_rx: event_rx,
+            event_rx,
             cmd_tx,
             cmd_rx,
             step_rx: unbounded().1,
             next_response_id: 0,
+            clock: Arc::new(SystemClock),
         }
+    }
+
+    /// Use `clock` as the run clock of the reporters this harness builds.
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// The narration lines logged since the last call, in order.
+    ///
+    /// Reading them drains the reporter's event channel: the facts, prompts
+    /// and other signals sent since the last call are discarded.
+    pub fn logged(&self) -> Vec<String> {
+        self.event_rx
+            .try_iter()
+            .filter_map(|event| match event {
+                ExecEvent::Signal(UiSignal::LogLine { text, .. }) => Some(text),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Pre-queue a response to the next prompt the action under test will issue.
@@ -110,7 +135,7 @@ impl ReporterHarness {
             &self.event_tx,
             &self.step_rx,
             &mut self.sink,
-            Arc::new(SystemClock),
+            Arc::clone(&self.clock),
         );
         reporter.set_current_step(Some(step));
         reporter.seed_entropy(b"rite-test-harness-seed");
@@ -274,10 +299,10 @@ pub fn ceremony_started(name: &str) -> StepFact {
 /// A fixed instant for tests that need a deterministic event time. Arbitrary
 /// but stable, so recorded `at` values and snapshots stay reproducible.
 #[must_use]
-pub fn fixed_test_time() -> DateTime<Utc> {
-    // `from_timestamp_nanos` is infallible, unlike the seconds-based
-    // constructor, so this needs no `expect` in non-test library code.
-    DateTime::from_timestamp_nanos(1_700_000_000_000_000_000)
+#[allow(clippy::expect_used)]
+pub fn fixed_test_time() -> EventTime {
+    EventTime::from_timestamp(Timestamp::constant(1_700_000_000, 0))
+        .expect("2023 is inside the years 0000 to 9999")
 }
 
 /// Wrap a fact into an [`ExecEvent::Fact`] stamped with [`fixed_test_time`],
@@ -292,10 +317,10 @@ pub fn fact_event(fact: StepFact) -> ExecEvent {
 
 /// A [`Clock`] frozen at a caller-chosen instant, for asserting
 /// that event times come from the injected clock rather than the wall clock.
-pub struct FixedClock(pub DateTime<Utc>);
+pub struct FixedClock(pub EventTime);
 
 impl Clock for FixedClock {
-    fn now(&self) -> DateTime<Utc> {
-        self.0
+    fn now(&self) -> Result<EventTime, EventTimeRangeError> {
+        Ok(self.0)
     }
 }

@@ -3,10 +3,9 @@
 //! The output is a `serde::Serialize` snapshot consumed by the built-in
 //! HTML renderer and, in the future, by template engines.
 
-use chrono::{DateTime, Duration, Utc};
 use rite_model::network::{NetworkMoment, NetworkState};
 use rite_model::platform::Platform;
-use rite_model::{ErrorClass, StepFact, StepOutcome};
+use rite_model::{ErrorClass, EventTime, StepFact, StepOutcome};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -24,9 +23,9 @@ pub struct ReportData {
     /// Final ceremony status.
     pub status: ReportStatus,
     /// UTC timestamp of ceremony start.
-    pub started_at: DateTime<Utc>,
+    pub started_at: EventTime,
     /// UTC timestamp of ceremony completion or failure, if reached.
-    pub completed_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<EventTime>,
     /// Wall-clock duration in seconds, when both ends are known.
     pub duration_seconds: Option<i64>,
     /// Failure summary, populated when `status == Failed`.
@@ -52,7 +51,7 @@ pub struct ReportMeasurement {
     /// When the measurement was taken in the run.
     pub moment: NetworkMoment,
     /// UTC timestamp of the measurement.
-    pub recorded_at: DateTime<Utc>,
+    pub recorded_at: EventTime,
     /// What was measured.
     pub state: NetworkState,
 }
@@ -103,7 +102,7 @@ pub struct ReportAttempt {
     /// Human-readable message.
     pub message: String,
     /// UTC timestamp when the attempt failed.
-    pub failed_at: DateTime<Utc>,
+    pub failed_at: EventTime,
 }
 
 /// Execution record for a single ceremony step.
@@ -116,10 +115,10 @@ pub struct ReportStep {
     /// Human-readable role name, as recorded in the transcript.
     pub role: String,
     /// UTC timestamp when the step started.
-    pub started_at: DateTime<Utc>,
+    pub started_at: EventTime,
     /// UTC timestamp when the step completed, when a `StepCompleted`
     /// fact was recorded.
-    pub completed_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<EventTime>,
     /// Step outcome status: `"completed"`, `"skipped"`, or `"in_progress"`.
     pub outcome_status: String,
     /// Message attached to the outcome, if any.
@@ -150,7 +149,7 @@ pub struct ReportDeviation {
     /// Verbatim deviation text.
     pub text: String,
     /// UTC timestamp when the deviation was recorded.
-    pub recorded_at: DateTime<Utc>,
+    pub recorded_at: EventTime,
 }
 
 /// Build a [`ReportData`] from a verified `StepFact` stream and the
@@ -160,7 +159,7 @@ pub struct ReportDeviation {
 /// the runtime's `read_verified_transcript` that produced `facts`.
 #[must_use]
 pub fn build_report_data<'a>(
-    facts: impl IntoIterator<Item = (DateTime<Utc>, &'a StepFact)>,
+    facts: impl IntoIterator<Item = (EventTime, &'a StepFact)>,
     transcript_fingerprint: &str,
 ) -> ReportData {
     let mut builder = Builder::new(transcript_fingerprint.to_string());
@@ -173,8 +172,8 @@ pub fn build_report_data<'a>(
 struct Builder {
     transcript_fingerprint: String,
     ceremony_name: String,
-    started_at: Option<DateTime<Utc>>,
-    completed_at: Option<DateTime<Utc>>,
+    started_at: Option<EventTime>,
+    completed_at: Option<EventTime>,
     status: ReportStatus,
     failure: Option<ReportFailure>,
     steps: Vec<ReportStep>,
@@ -207,7 +206,7 @@ impl Builder {
 
     // One arm per fact type the report reads.
     #[allow(clippy::too_many_lines)]
-    fn ingest(&mut self, at: DateTime<Utc>, fact: &StepFact) {
+    fn ingest(&mut self, at: EventTime, fact: &StepFact) {
         match fact {
             StepFact::CeremonyStarted { name, .. } => {
                 self.ceremony_name.clone_from(name);
@@ -327,14 +326,21 @@ impl Builder {
 
     fn finish(self) -> ReportData {
         let duration_seconds = match (self.started_at, self.completed_at) {
-            (Some(start), Some(end)) => Some(end.signed_duration_since(start).num_seconds()),
+            (Some(start), Some(end)) => {
+                Some(end.timestamp().duration_since(start.timestamp()).as_secs())
+            }
             _ => None,
         };
         ReportData {
             ceremony_name: self.ceremony_name,
             transcript_fingerprint: self.transcript_fingerprint,
             status: self.status,
-            started_at: self.started_at.unwrap_or_else(Utc::now),
+            // A report of a transcript with no facts has no start; it shows when
+            // it was made, or the epoch if the host clock has no usable time.
+            started_at: self
+                .started_at
+                .or_else(|| EventTime::now().ok())
+                .unwrap_or(EventTime::UNIX_EPOCH),
             completed_at: self.completed_at,
             duration_seconds,
             failure: self.failure,
@@ -355,12 +361,12 @@ fn describe_outcome(outcome: &StepOutcome) -> (String, Option<String>) {
     }
 }
 
-/// Format a `chrono::Duration` as a short human string (e.g. `2m 7s`).
+/// Format a duration in seconds as a short human string (e.g. `2m 7s`).
 ///
 /// Exposed for renderer reuse; not part of the public report data.
 #[must_use]
-pub(crate) fn format_duration(duration: Duration) -> String {
-    let total = duration.num_seconds().max(0);
+pub(crate) fn format_duration(seconds: i64) -> String {
+    let total = seconds.max(0);
     let hours = total / 3600;
     let minutes = (total % 3600) / 60;
     let seconds = total % 60;

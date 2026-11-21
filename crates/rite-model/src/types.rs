@@ -742,13 +742,13 @@ const BYTES: Accepts = Accepts::view(View::Bytes);
 const PUBLIC_KEY: Accepts = Accepts::view(View::PublicKey);
 /// A share, or a secret or bytes that hold one in its layout.
 const SHARE_LAYOUT: Accepts = Accepts::kinds(&[
-    ArtifactKind::Shares,
+    ArtifactKind::Share,
     ArtifactKind::File(FileKind::Secret),
     ArtifactKind::File(FileKind::Bytes),
 ]);
 /// One share, or any artifact's bytes.
 const SHARE_OR_BYTES: Accepts = Accepts {
-    kinds: &[ArtifactKind::Shares],
+    kinds: &[ArtifactKind::Share],
     view: Some(View::Bytes),
 };
 
@@ -1070,7 +1070,7 @@ impl ActionType {
             ActionType::EnterShare => ActionSpec {
                 backend: BackendUsage::Unused,
                 reads: ReadsContract::NONE,
-                creates: &[ArtifactKind::Shares],
+                creates: &[ArtifactKind::Share],
             },
             ActionType::ExportPublic => ActionSpec {
                 backend: BackendUsage::Required,
@@ -1322,17 +1322,20 @@ impl fmt::Display for FileKind {
 
 /// What an artifact is.
 ///
-/// Most kinds exist as a file ([`FileKind`]). Two do not: a key held by a
-/// backend, which lives in a device and is written as its public half, and
-/// the shares of a split, which leave only on paper, one at a time.
+/// Most kinds exist as a file ([`FileKind`]). Shares and backend keys do
+/// not: a key held by a backend lives in a device and is written as its
+/// public half, and shares leave one at a time, shown or sealed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArtifactKind {
     /// A kind that exists as a file.
     File(FileKind),
     /// A key held by a backend.
     BackendKey,
-    /// The shares of a split secret.
+    /// The shares of a split secret, a set that is read one share at a
+    /// time, by its `share_N`.
     Shares,
+    /// One share: a set's `share_N`, or one a custodian typed back.
+    Share,
 }
 
 impl ArtifactKind {
@@ -1345,7 +1348,7 @@ impl ArtifactKind {
             (ArtifactKind::BackendKey, "public") => Some(ArtifactKind::File(FileKind::PublicKey)),
             (ArtifactKind::BackendKey, "kcv") => Some(ArtifactKind::File(FileKind::Bytes)),
             (ArtifactKind::Shares, share) if share_index(share).is_some() => {
-                Some(ArtifactKind::Shares)
+                Some(ArtifactKind::Share)
             }
             _ => None,
         }
@@ -1358,7 +1361,7 @@ impl ArtifactKind {
         match self {
             ArtifactKind::File(kind) => Some(kind),
             ArtifactKind::BackendKey => Some(FileKind::PublicKey),
-            ArtifactKind::Shares => None,
+            ArtifactKind::Shares | ArtifactKind::Share => None,
         }
     }
 }
@@ -1369,6 +1372,7 @@ impl fmt::Display for ArtifactKind {
             ArtifactKind::File(kind) => f.write_str(kind.as_str()),
             ArtifactKind::BackendKey => f.write_str("backend_key"),
             ArtifactKind::Shares => f.write_str("shares"),
+            ArtifactKind::Share => f.write_str("share"),
         }
     }
 }

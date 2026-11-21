@@ -40,6 +40,11 @@ room, or a secret a person typed into an earlier step. `threshold` is how
 many shares recover the secret and `shares` how many are made, each from 2
 to 100, with at least as many shares as the threshold.
 
+A step reads one share at a time, named `share_1` through `share_N`.
+`rite check` refuses `${artifact.shares}` where one share is read, so a
+mistake is caught before the first share leaves the room. A share typed back
+with `enter_share` is one share already and is named alone.
+
 ## Splitting a key
 
 Use `key:` to split a symmetric key held by the backend. The example

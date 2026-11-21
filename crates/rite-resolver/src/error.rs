@@ -731,8 +731,14 @@ fn input_kind_mismatch(
         None => format!("Step '{step}' ('{action}') reads '{artifact}'"),
         Some(input) => format!("Step '{step}' ('{action}') reads '{artifact}' as '{input}'"),
     };
+    // A set read where one share is taken: the fix is to name one.
+    let hint = if kinds.contains(&ArtifactKind::Shares) && accepts.may_take(ArtifactKind::Share) {
+        format!("; name one share, as '{artifact}.share_1'")
+    } else {
+        String::new()
+    };
     format!(
-        "{at}, which takes {accepts}, but '{artifact}' is {}",
+        "{at}, which takes {accepts}, but '{artifact}' is {}{hint}",
         quoted(kinds)
     )
 }

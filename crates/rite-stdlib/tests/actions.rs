@@ -2441,16 +2441,15 @@ fn shares_that_left_as_bytes_come_back_and_combine() {
         "version, threshold, index"
     );
 
-    // What comes back: each decoded into a set of one, as a typed-back share
+    // What comes back: each decoded into one share, as a typed-back share
     // will arrive.
     let arrive = |bytes: &[u8]| {
         let wire::Decoded { scheme, share } = wire::decode(bytes).unwrap();
         let (threshold, index, y) = share.into_parts();
-        ArtifactValue::Shares(ShareSet::new(
+        ArtifactValue::Share {
             scheme,
-            threshold,
-            [Share::new(threshold, index, y)],
-        ))
+            share: Share::new(threshold, index, y),
+        }
     };
     let a = ArtifactId::new("custodian_a");
     let b = ArtifactId::new("custodian_b");
@@ -2983,8 +2982,10 @@ fn rows_that_are_not_the_share_are_asked_for_again() {
     )
     .expect("the third answer is the share");
     match produced(&result.artifacts, "typed") {
-        ArtifactValue::Shares(set) => assert_eq!((set.threshold(), set.count()), (2, 1)),
-        other => panic!("enter_share must produce Shares, got {other:?}"),
+        ArtifactValue::Share { share, .. } => {
+            assert_eq!((share.threshold(), share.index()), (2, 1));
+        }
+        other => panic!("enter_share must produce one share, got {other:?}"),
     }
     let answers = harness
         .facts()

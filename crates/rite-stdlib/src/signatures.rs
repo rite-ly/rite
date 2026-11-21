@@ -137,9 +137,11 @@ pub fn resolve_public_key<S: BuildHasher>(
         ArtifactValue::Signature(_) => Err(BackendError::InvalidKeyFormat(format!(
             "artifact '{artifact_id}' is a signature, not a public key"
         ))),
-        ArtifactValue::Shares(_) => Err(BackendError::InvalidKeyFormat(format!(
-            "artifact '{artifact_id}' holds shares of a secret, not a public key"
-        ))),
+        ArtifactValue::Shares(_) | ArtifactValue::Share { .. } => {
+            Err(BackendError::InvalidKeyFormat(format!(
+                "artifact '{artifact_id}' holds shares of a secret, not a public key"
+            )))
+        }
         ArtifactValue::PrivateKey(_) => Err(BackendError::InvalidKeyFormat(format!(
             "artifact '{artifact_id}' is a private key: declare its public half as a \
              'public_key' material"
@@ -197,9 +199,11 @@ pub fn resolve_certificate<S: BuildHasher>(
         ArtifactValue::Signature(_) => Err(BackendError::InvalidKeyFormat(format!(
             "artifact '{artifact_id}' is a signature, not a certificate"
         ))),
-        ArtifactValue::Shares(_) => Err(BackendError::InvalidKeyFormat(format!(
-            "artifact '{artifact_id}' holds shares of a secret, not a certificate"
-        ))),
+        ArtifactValue::Shares(_) | ArtifactValue::Share { .. } => {
+            Err(BackendError::InvalidKeyFormat(format!(
+                "artifact '{artifact_id}' holds shares of a secret, not a certificate"
+            )))
+        }
         ArtifactValue::PrivateKey(_) => Err(BackendError::InvalidKeyFormat(format!(
             "artifact '{artifact_id}' is a private key, not a certificate"
         ))),

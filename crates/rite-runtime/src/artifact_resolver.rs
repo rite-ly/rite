@@ -125,10 +125,12 @@ pub fn resolve_artifact_bytes<'a, S: BuildHasher>(
 
         // A share has no byte form to borrow; laying one out is a container's
         // job. A step that reads a share asks for the share.
-        (ArtifactValue::Shares(_), _) => Err(ExecutionError::InvalidParams(format!(
-            "'{artifact_id}' holds shares of a secret, which are read as shares and not as \
+        (ArtifactValue::Shares(_) | ArtifactValue::Share { .. }, _) => {
+            Err(ExecutionError::InvalidParams(format!(
+                "'{artifact_id}' holds shares of a secret, which are read as shares and not as \
              bytes; only a step that shows, seals or combines shares can name one"
-        ))),
+            )))
+        }
 
         // X.509 certificate: the whole certificate, not the key inside it.
         // `issue_certificate` reads an issuer certificate through here.
@@ -144,49 +146,51 @@ pub fn resolve_artifact_bytes<'a, S: BuildHasher>(
 /// Resolve a reference to one share.
 ///
 /// `shares.share_N` names the share evaluated at `N` in a set a split made.
-/// A set holding exactly one share, as a typed-back share arrives, is named
-/// without a property. Borrowed, like every read, and returned with the
-/// scheme of its set, which says how the share is laid out as bytes.
+/// A share typed back is one share already and is named without a property.
+/// Borrowed, like every read, and returned with its scheme, which says how
+/// the share is laid out as bytes.
 pub fn resolve_share<'a, S: BuildHasher>(
     artifacts: &'a HashMap<ArtifactId, ArtifactValue, S>,
     artifact_id: &ArtifactId,
     property: Option<&str>,
 ) -> Result<(SharingScheme, &'a Share), ExecutionError> {
+    let refuse = |message: String| Err(ExecutionError::InvalidParams(message));
     let artifact = artifacts.get(artifact_id).ok_or_else(|| {
         ExecutionError::InvalidParams(format!("Artifact '{artifact_id}' not found"))
     })?;
-    let ArtifactValue::Shares(set) = artifact else {
-        return Err(ExecutionError::InvalidParams(format!(
-            "'{artifact_id}' is not a share; a share is one of a set 'split_secret' made, or \
-             one a custodian typed back"
-        )));
-    };
-    let share = match property {
-        Some(property) => {
-            let index = share_index(property).ok_or_else(|| {
-                ExecutionError::InvalidParams(format!(
+    match (artifact, property) {
+        (ArtifactValue::Share { scheme, share }, None) => Ok((*scheme, share)),
+        (ArtifactValue::Share { .. }, Some(property)) => refuse(format!(
+            "'{artifact_id}' is one share, not a set; name it alone, not as \
+             '{artifact_id}.{property}'"
+        )),
+        (ArtifactValue::Shares(set), Some(property)) => {
+            let Some(index) = share_index(property) else {
+                return refuse(format!(
                     "'{property}' is not a share of '{artifact_id}'; a share is named \
                      'share_1' through 'share_{}'",
                     set.count()
-                ))
-            })?;
-            set.share(index).ok_or_else(|| {
-                ExecutionError::InvalidParams(format!(
+                ));
+            };
+            match set.share(index) {
+                Some(share) => Ok((set.scheme(), share)),
+                None => refuse(format!(
                     "'{artifact_id}' has shares 1 through {}, and share_{index} is not one of them",
                     set.count()
-                ))
-            })
+                )),
+            }
         }
-        None => set.only().ok_or_else(|| {
-            ExecutionError::InvalidParams(format!(
-                "'{artifact_id}' is a set of {} shares; name one as '{artifact_id}.share_1' \
-                 through '{artifact_id}.share_{}'",
-                set.count(),
-                set.count()
-            ))
-        }),
-    }?;
-    Ok((set.scheme(), share))
+        (ArtifactValue::Shares(set), None) => refuse(format!(
+            "'{artifact_id}' is a set of {} shares; name one as '{artifact_id}.share_1' \
+             through '{artifact_id}.share_{}'",
+            set.count(),
+            set.count()
+        )),
+        _ => refuse(format!(
+            "'{artifact_id}' is not a share; a share is one of a set 'split_secret' made, or \
+             one a custodian typed back"
+        )),
+    }
 }
 
 /// What an action needs to know about a backend-managed key.
@@ -304,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn a_share_is_named_by_index_and_a_set_of_one_needs_no_name() {
+    fn a_share_of_a_set_is_named_by_index_and_a_typed_share_alone() {
         let artifacts = two_shares();
         let id = ArtifactId::new("shares");
         assert_eq!(
@@ -332,13 +336,16 @@ mod tests {
         let mut artifacts = artifacts;
         artifacts.insert(
             one.clone(),
-            ArtifactValue::Shares(ShareSet::new(
-                SharingScheme::RiteSssV1,
-                2,
-                [Share::new(2, 3, vec![0x33; 4])],
-            )),
+            ArtifactValue::Share {
+                scheme: SharingScheme::RiteSssV1,
+                share: Share::new(2, 3, vec![0x33; 4]),
+            },
         );
         assert_eq!(resolve_share(&artifacts, &one, None).unwrap().1.index(), 3);
+        let selected = resolve_share(&artifacts, &one, Some("share_3"))
+            .unwrap_err()
+            .to_string();
+        assert!(selected.contains("is one share, not a set"), "{selected}");
 
         let bytes = ArtifactId::new("bytes");
         artifacts.insert(bytes.clone(), ArtifactValue::Bytes(vec![1]));

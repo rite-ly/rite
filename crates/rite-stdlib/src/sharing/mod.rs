@@ -39,7 +39,8 @@ impl<'a> ShareOrBytes<'a> {
     /// Says why the reference names neither.
     pub(crate) fn read(ctx: &'a HandlerContext, input: &ArtifactRef) -> Result<Self, String> {
         let id = input.artifact_id();
-        if let Some(ArtifactValue::Shares(_)) = ctx.artifacts.get(&id) {
+        if let Some(ArtifactValue::Shares(_) | ArtifactValue::Share { .. }) = ctx.artifacts.get(&id)
+        {
             resolve_share(ctx.artifacts, &id, input.property())
                 .map(|(scheme, share)| Self::Share(scheme, share))
                 .map_err(|e| e.to_string())

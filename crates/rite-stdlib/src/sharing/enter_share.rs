@@ -9,8 +9,8 @@
 
 use rite_model::{ActionType, Prompt, RevealFormat};
 use rite_runtime::{
-    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, Response, Share, ShareSet,
-    StepInfo, StepResult, parse_params,
+    Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, Response, Share, StepInfo,
+    StepResult, parse_params,
 };
 use rite_sdk::Backend;
 use secrecy::ExposeSecret;
@@ -115,12 +115,12 @@ impl Action for EnterShareAction {
         let (threshold, index, y) = share.into_parts();
         // The scheme is the one the version byte names, so a share typed
         // back is laid out again as it was written.
-        let set = ShareSet::new(scheme, threshold, [Share::new(threshold, index, y)]);
+        let share = Share::new(threshold, index, y);
         reporter.log(Icon::Info, format!("Share stored as artifact '{produces}'"))?;
         Ok(StepResult::completed_with_artifact(
             format!("Share {index} typed back"),
             produces,
-            ArtifactValue::Shares(set),
+            ArtifactValue::Share { scheme, share },
         ))
     }
 }

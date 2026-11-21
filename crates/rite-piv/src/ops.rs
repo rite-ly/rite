@@ -140,8 +140,11 @@ pub fn pin_retries(yk: &mut YubiKey) -> Result<u32, BackendError> {
 /// `ManagementKeyRequired` if the card refuses it: [`map_error`] reads an
 /// authentication failure as a missing PIN, which here it is not.
 pub fn authenticate_management(yk: &mut YubiKey, mgm_key: &[u8]) -> Result<(), BackendError> {
-    let key = yubikey::MgmKey::from_bytes(mgm_key).map_err(map_error)?;
-    yk.authenticate(key).map_err(|error| match error {
+    // `None` reads 24 bytes as a 3DES key. An AES-192 key, the default from
+    // firmware 5.7, has the same length; telling them apart needs the card's
+    // management-key algorithm, which this function does not read yet.
+    let key = yubikey::MgmKey::from_bytes(mgm_key, None).map_err(map_error)?;
+    yk.authenticate(&key).map_err(|error| match error {
         yubikey::Error::AuthenticationError => BackendError::ManagementKeyRequired,
         other => map_error(other),
     })
@@ -165,7 +168,7 @@ pub fn list_slots(yk: &mut YubiKey) -> Result<Vec<PivSlotInfo>, BackendError> {
         let (algorithm, origin) = match piv::metadata(yk, slot_id) {
             Ok(meta) => {
                 let algo = match meta.algorithm {
-                    piv::ManagementAlgorithmId::Asymmetric(a) => convert::from_yubikey_algorithm(a),
+                    piv::SlotAlgorithmId::Asymmetric(a) => convert::from_yubikey_algorithm(a),
                     _ => None,
                 };
                 let origin = meta
@@ -276,12 +279,6 @@ pub fn export_public_key(yk: &mut YubiKey, key_id: &KeyId) -> Result<PublicKeyDe
 }
 
 /// Encode a card-reported `SubjectPublicKeyInfo` as a typed public key.
-///
-/// Every caller passes `x509_cert::spki::SubjectPublicKeyInfoOwned`, but from
-/// the `yubikey` crate's `der` 0.7 rather than the `der` 0.8 that `rite-sdk`
-/// parses with. Naming the type would mean depending on both majors at once,
-/// so the bound is on `der::Encode` (0.7, per this crate's `Cargo.toml`) and
-/// only the DER bytes cross the boundary.
 fn encode_public_key<T: Encode>(spki: &T) -> Result<PublicKeyDer, BackendError> {
     let der = spki
         .to_der()
@@ -303,7 +300,7 @@ pub fn list_keys(yk: &mut YubiKey) -> Result<Vec<KeyMetadata>, BackendError> {
         let (algorithm, public_key) = match piv::metadata(yk, slot_id) {
             Ok(meta) => {
                 let algo = match meta.algorithm {
-                    piv::ManagementAlgorithmId::Asymmetric(a) => convert::from_yubikey_algorithm(a),
+                    piv::SlotAlgorithmId::Asymmetric(a) => convert::from_yubikey_algorithm(a),
                     _ => None,
                 };
                 // Enumeration reports every slot it can reach, so a slot whose
@@ -475,7 +472,7 @@ pub fn agree(
         Err(yubikey::Error::GenericError) => {
             let held = match piv::metadata(yk, slot) {
                 Ok(meta) => match meta.algorithm {
-                    piv::ManagementAlgorithmId::Asymmetric(a) => {
+                    piv::SlotAlgorithmId::Asymmetric(a) => {
                         SlotKey::Held(convert::from_yubikey_algorithm(a))
                     }
                     _ => SlotKey::Held(None),

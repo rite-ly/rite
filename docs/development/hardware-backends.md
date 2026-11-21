@@ -67,8 +67,7 @@ do the work.
 
 Both PIV backends implement `KeyAgreementBackend` for ECDH on P-256 and
 P-384, using GENERAL AUTHENTICATE with the peer's point under tag `0x85`.
-The `yubikey::piv::decrypt_data` function sends this command and is gated by
-the crate's `untested` feature, which `rite-piv` enables. The ceremony
+The `yubikey::piv::decrypt_data` function sends this command. The ceremony
 `decrypt_data` action uses key agreement to open a CMS `kari` container.
 
 - **Slots.** Agreement is permitted in slot 9D and retired key-management slots
@@ -206,9 +205,7 @@ its slot's default, and it is not known before the card is read. An
 
 These return a clear `UnsupportedOperation` error rather than a silent no-op:
 key import, change PIN, unblock PIN, change management key, and block PUK.
-The `yubikey` crate gates them behind its `untested` feature, which `rite-piv`
-enables for key agreement. Each operation still needs implementation and
-hardware testing.
+Each operation still needs implementation and hardware testing.
 
 ## Verification
 

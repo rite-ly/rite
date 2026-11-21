@@ -15,9 +15,7 @@ publish    = true
 rite-sdk = { workspace = true }
 rite-piv = { workspace = true }
 
-# The `untested` feature gates the on-device attestation call (slot F9), which
-# is the YubiKey demo path. Yubico flags it untested in their CI, not unsafe.
-yubikey    = { workspace = true, features = ["untested"] }
+yubikey    = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]

@@ -28,43 +28,20 @@ ignore = [
     #
     # Where it does appear, the attack still does not reach: Marvin targets RSA
     # *private-key* operations (PKCS#1 v1.5 decryption and signing), and
-    # `yubikey` performs none. It uses `rsa` only to rebuild an `RsaPublicKey`
+    # `yubikey` performs none. It uses `rsa` to rebuild an `RsaPublicKey`
     # from the modulus and exponent a card reports and re-encode it as SPKI
-    # (`yubikey::piv`). The private key never leaves the card, which is the
-    # reason for using one.
+    # (`yubikey::piv`). Its one `RsaPrivateKey`, in `piv::RsaKeyData::new`,
+    # derives the CRT parameters of a key imported onto a card; it neither
+    # decrypts nor signs, and Rite does not call it. The private key of a
+    # generated key never leaves the card, which is the reason for using one.
     #
     # Revisit if any of the following becomes true:
     #   - `rsa` returns as a direct dependency of a crate in this workspace;
-    #   - `yubikey` gains an RSA private-key code path (grep the dependency for
-    #     `RsaPrivateKey`, `decrypt`, and `sign`);
+    #   - Rite calls `piv::RsaKeyData::new` (an RSA key import onto a card);
+    #   - `yubikey` gains another RSA private-key code path (grep the
+    #     dependency for `RsaPrivateKey`, `decrypt`, and `sign`);
     #   - a fixed release of `rsa` ships (drop this entry and upgrade).
     { id = "RUSTSEC-2023-0071", reason = "rsa only rebuilds public keys inside yubikey" },
-
-    # RUSTSEC-2026-0387: timing variability in `crypto-bigint` operations
-    # intended to be constant-time. Fixed in 0.7.6; the affected 0.5 line has
-    # no fix.
-    #
-    # Why it does not apply here: `crypto-bigint` 0.5 is not a dependency of
-    # this workspace. It arrives only through `yubikey` 0.8, via
-    # `elliptic-curve` 0.13 and `p256`/`p384`, and so only in builds with the
-    # `piv` or `yubikey` feature enabled. The default build and the static
-    # musl release artifacts do not contain it.
-    #
-    # Where `yubikey` uses these crates, they decode EC public keys returned
-    # by a card (`yubikey::piv`) and verify ECDSA signatures on certificates
-    # (`yubikey::certificate`). `rite-piv` also uses `p256` and `p384` to
-    # check a peer's public point before key agreement. These paths operate on
-    # public values; EC private-key operations happen on the card.
-    #
-    # Revisit if:
-    #   - a workspace crate uses `p256`, `p384` or `elliptic-curve` with a
-    #     secret value (search for `SecretKey`, `NonZeroScalar`, and
-    #     `diffie_hellman`);
-    #   - `yubikey` gains a software EC private-key path (search the dependency
-    #     for `SigningKey`, `SecretKey`, and `diffie_hellman`);
-    #   - a stable `yubikey` release moves to `crypto-bigint` >= 0.7.6, so this
-    #     waiver can be removed.
-    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 only sees public values inside yubikey" },
 
     # RUSTSEC-2026-0543: `chrono` is unmaintained. Its maintainer is winding
     # down maintenance and recommends `jiff`. No vulnerability is reported.
@@ -112,9 +89,8 @@ exceptions = [
 
 [bans]
 wildcards = "deny"
-# Duplicates warn rather than fail: `yubikey` 0.8 pulls in the previous
-# RustCrypto generation (`der`, `digest`, `sha2`, `x509-cert` and others)
-# next to the one `rite-sdk` uses.
+# Duplicates warn rather than fail: a few build and hashing crates
+# (`hashbrown`, `foldhash`, `syn`) arrive in more than one version.
 multiple-versions = "warn"
 
 [sources]

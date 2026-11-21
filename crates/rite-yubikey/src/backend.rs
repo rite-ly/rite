@@ -109,7 +109,7 @@ impl KeyStoreBackend for YubikeyDevice {
         _passphrase: Option<&[u8]>,
     ) -> Result<KeyMetadata, BackendError> {
         Err(BackendError::UnsupportedOperation(
-            "YubiKey key import requires the 'untested' yubikey feature".to_string(),
+            "YubiKey key import is not supported yet".to_string(),
         ))
     }
 
@@ -209,7 +209,7 @@ impl PivBackend for YubikeyDevice {
 
     fn change_pin(&mut self, _current: &[u8], _new: &[u8]) -> Result<(), BackendError> {
         Err(BackendError::UnsupportedOperation(
-            "Changing PIN requires the 'untested' yubikey feature".to_string(),
+            "Changing PIN is not supported yet".to_string(),
         ))
     }
 
@@ -220,7 +220,7 @@ impl PivBackend for YubikeyDevice {
 
     fn unblock_pin(&mut self, _puk: &[u8], _new_pin: &[u8]) -> Result<(), BackendError> {
         Err(BackendError::UnsupportedOperation(
-            "PIN unblock requires the 'untested' yubikey feature".to_string(),
+            "PIN unblock is not supported yet".to_string(),
         ))
     }
 
@@ -244,7 +244,7 @@ impl YubikeyBackend for YubikeyDevice {
 
     fn change_management_key(&mut self, _current: &[u8], _new: &[u8]) -> Result<(), BackendError> {
         Err(BackendError::UnsupportedOperation(
-            "Changing the management key requires the 'untested' yubikey feature".to_string(),
+            "Changing the management key is not supported yet".to_string(),
         ))
     }
 
@@ -255,7 +255,7 @@ impl YubikeyBackend for YubikeyDevice {
 
     fn block_puk(&mut self) -> Result<(), BackendError> {
         Err(BackendError::UnsupportedOperation(
-            "PUK block requires the 'untested' yubikey feature".to_string(),
+            "PUK block is not supported yet".to_string(),
         ))
     }
 }

@@ -106,7 +106,7 @@ impl KeyStoreBackend for PivCardBackend {
         _passphrase: Option<&[u8]>,
     ) -> Result<KeyMetadata, BackendError> {
         Err(BackendError::UnsupportedOperation(
-            "PIV key import requires the 'untested' yubikey feature".to_string(),
+            "PIV key import is not supported yet".to_string(),
         ))
     }
 
@@ -193,7 +193,7 @@ impl PivBackend for PivCardBackend {
 
     fn change_pin(&mut self, _current: &[u8], _new: &[u8]) -> Result<(), BackendError> {
         Err(BackendError::UnsupportedOperation(
-            "Changing PIN requires the 'untested' yubikey feature".to_string(),
+            "Changing PIN is not supported yet".to_string(),
         ))
     }
 
@@ -204,7 +204,7 @@ impl PivBackend for PivCardBackend {
 
     fn unblock_pin(&mut self, _puk: &[u8], _new_pin: &[u8]) -> Result<(), BackendError> {
         Err(BackendError::UnsupportedOperation(
-            "PIN unblock requires the 'untested' yubikey feature".to_string(),
+            "PIN unblock is not supported yet".to_string(),
         ))
     }
 

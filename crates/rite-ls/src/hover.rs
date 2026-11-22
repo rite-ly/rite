@@ -11,6 +11,8 @@
 //!    value the field takes from a list, such as an action. Only fires when
 //!    the cursor is not on a known reference value. See [`crate::fields`].
 
+use std::fmt::Write as _;
+
 use rite_model::{ArtifactId, Ceremony, MaterialId};
 use rite_resolver::{ReferenceTarget, SpanMap};
 use tower_lsp_server::ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
@@ -51,61 +53,50 @@ fn hover_for_target(
     match target {
         ReferenceTarget::Section(id) => {
             let section = resolved.sections.get(id)?;
-            let mut md = format!("**Section** `{}`", id);
-            if let Some(name) = &section.name {
-                md.push_str(&format!("\n\n{name}"));
-            }
-            if let Some(desc) = &section.description {
-                md.push_str(&format!("\n\n{desc}"));
-            }
+            let mut md = format!("**Section** `{id}`");
+            paragraphs(
+                &mut md,
+                [section.name.as_deref(), section.description.as_deref()],
+            );
             if let Some(act_id) = &section.act {
-                md.push_str(&format!("\n\n*Act: `{act_id}`*"));
+                let _ = write!(md, "\n\n*Act: `{act_id}`*");
             }
             Some(md)
         }
         ReferenceTarget::Role(id) => {
             let role = resolved.roles.get(id)?;
-            let mut md = format!("**Role** `{}`", id);
+            let mut md = format!("**Role** `{id}`");
             if role.name != id.as_str() {
-                md.push_str(&format!(", {}", role.name));
+                let _ = write!(md, ", {}", role.name);
             }
             if role.role_type != id.as_str() {
-                md.push_str(&format!("\n\nType: `{}`", role.role_type));
+                let _ = write!(md, "\n\nType: `{}`", role.role_type);
             }
             if let Some(person) = &role.person {
-                md.push_str(&format!("\n\nPerson: {person}"));
+                let _ = write!(md, "\n\nPerson: {person}");
             }
             Some(md)
         }
         ReferenceTarget::Act(id) => {
             let act = resolved.acts.get(id)?;
-            let mut md = format!("**Act** `{}`", id);
-            if let Some(name) = &act.name {
-                md.push_str(&format!("\n\n{name}"));
-            }
-            if let Some(desc) = &act.description {
-                md.push_str(&format!("\n\n{desc}"));
-            }
+            let mut md = format!("**Act** `{id}`");
+            paragraphs(&mut md, [act.name.as_deref(), act.description.as_deref()]);
             Some(md)
         }
         ReferenceTarget::Param(id) => {
             let param = resolved.parameters.get(id)?;
             let mut md = format!("**param** · `{}`", param.declared_type);
-            if let Some(desc) = &param.description {
-                md.push_str(&format!("\n\n{desc}"));
-            }
+            paragraphs(&mut md, [param.description.as_deref()]);
             Some(md)
         }
         ReferenceTarget::Material(id) => {
             let material = resolved.materials.get(id)?;
             let kind_str = material.kind.type_name();
             let mut md = format!("**material** · `{kind_str}`");
-            if let Some(title) = &material.title {
-                md.push_str(&format!("\n\n{title}"));
-            }
-            if let Some(desc) = &material.description {
-                md.push_str(&format!("\n\n{desc}"));
-            }
+            paragraphs(
+                &mut md,
+                [material.title.as_deref(), material.description.as_deref()],
+            );
             Some(md)
         }
         ReferenceTarget::Backend(name) => {
@@ -115,9 +106,8 @@ fn hover_for_target(
                 backend.provider
             ))
         }
-        // ReferenceTarget is `#[non_exhaustive]`; Artifact is handled by the
-        // early-return above, so no other variant currently reaches this arm.
-        _ => None,
+        // Handled by the early return above.
+        ReferenceTarget::Artifact(_) => None,
     }
 }
 
@@ -137,15 +127,21 @@ fn artifact_hover(id: &ArtifactId, span_map: &SpanMap, resolved: Option<&Ceremon
     {
         let kind_str = material.kind.type_name();
         let mut md = format!("**artifact** `{id}` · material · `{kind_str}`");
-        if let Some(title) = &material.title {
-            md.push_str(&format!("\n\n{title}"));
-        }
-        if let Some(desc) = &material.description {
-            md.push_str(&format!("\n\n{desc}"));
-        }
+        paragraphs(
+            &mut md,
+            [material.title.as_deref(), material.description.as_deref()],
+        );
         return md;
     }
     format!("**artifact** `{id}`")
+}
+
+/// Append each present part to `md` as its own paragraph.
+fn paragraphs<'a>(md: &mut String, parts: impl IntoIterator<Item = Option<&'a str>>) {
+    for part in parts.into_iter().flatten() {
+        md.push_str("\n\n");
+        md.push_str(part);
+    }
 }
 
 fn markdown_hover(value: String) -> Hover {

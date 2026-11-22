@@ -68,7 +68,7 @@ mod tests {
             .into_iter()
             .map(|h| match h.label {
                 InlayHintLabel::String(s) => s,
-                _ => panic!("expected string label"),
+                InlayHintLabel::LabelParts(_) => panic!("expected string label"),
             })
             .collect()
     }

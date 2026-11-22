@@ -64,6 +64,7 @@ pub fn find_references_at(
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use rite_model::{ArtifactId, SectionId, StepId};

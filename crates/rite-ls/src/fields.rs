@@ -62,12 +62,12 @@ fn read_line(text: &str) -> Option<Line<'_>> {
     if rest.is_empty() || rest.starts_with('#') {
         return None;
     }
-    let start = text.len() - rest.len();
+    let start = text.len().saturating_sub(rest.len());
     let (item, body) = match rest.strip_prefix('-') {
         Some(after) if after.is_empty() || after.starts_with(' ') => (true, after.trim_start()),
         _ => (false, rest),
     };
-    let indent = text.len() - body.len();
+    let indent = text.len().saturating_sub(body.len());
     let body = without_comment(body);
     let (key, value) = match body.split_once(':') {
         Some((key, value)) if is_key(key) && (value.is_empty() || value.starts_with(' ')) => {
@@ -136,7 +136,7 @@ fn place(lines: &[Option<Line<'_>>], below: usize, indent: usize, item: bool) ->
             .get(below)
             .copied()
             .flatten()
-            .map_or(indent + 2, |line| line.indent);
+            .map_or(indent.saturating_add(2), |line| line.indent);
         chain.push((Segment::Item, below, key_indent));
     }
     for (index, line) in lines.iter().enumerate().take(below).rev() {
@@ -165,7 +165,7 @@ fn place(lines: &[Option<Line<'_>>], below: usize, indent: usize, item: bool) ->
     let mut maps = vec![members(lines, 0, 0)];
     let mut path = Vec::new();
     for (segment, after, indent) in chain {
-        let mut map = members(lines, after + 1, indent);
+        let mut map = members(lines, after.saturating_add(1), indent);
         if segment == Segment::Item
             && let Some(Some(line)) = lines.get(after)
             && let Some(key) = line.key
@@ -405,7 +405,7 @@ pub fn completions(text: &str, pos: Position) -> Vec<CompletionItem> {
         .nth(pos.character as usize)
         .map_or(current, |(end, _)| current.get(..end).unwrap_or(current));
     let typed = before.trim_start();
-    let start = before.len() - typed.len();
+    let start = before.len().saturating_sub(typed.len());
     let (item, typed) = match typed.strip_prefix("- ") {
         Some(rest) => (true, rest),
         None => (false, typed),
@@ -452,7 +452,7 @@ pub fn hover(text: &str, pos: Position) -> Option<String> {
     let map = place.maps.last().cloned().unwrap_or_default();
     let node = field(&node_at(&place), key, &map);
 
-    let on_key = (line.indent..=line.indent + key.len()).contains(&column);
+    let on_key = (line.indent..=line.indent.saturating_add(key.len())).contains(&column);
     let markdown = if on_key {
         format!("**`{key}`**\n\n{}", description(&node)?)
     } else {
@@ -574,7 +574,7 @@ acts:
         );
         let offered = labels(&completions(&text, at(&text, 18, 12)));
         assert!(offered.iter().any(|name| name == "slot"), "{offered:?}");
-        assert!(without_comment("'a # b' # c").trim() == "'a # b'");
+        assert_eq!(without_comment("'a # b' # c").trim(), "'a # b'");
     }
 
     /// A list written in its key's column is still that key's list.

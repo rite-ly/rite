@@ -65,6 +65,8 @@ impl RiteLanguageServer {
     }
 }
 
+// The protocol's handlers are async by trait; most answer without waiting.
+#[allow(clippy::unused_async_trait_impl)]
 impl LanguageServer for RiteLanguageServer {
     async fn initialize(&self, _params: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {

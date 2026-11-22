@@ -23,7 +23,10 @@ pub use wrap_key::WrapKeyAction;
 
 use rite_model::{ArtifactRef, StepFact};
 use rite_runtime::{ActionError, HandlerContext, Reporter, StepInfo};
-use rite_sdk::{Backend, KeyAgreementBackend, KeyFingerprint, KeyTransportBackend, PublicKeyDer};
+use rite_sdk::{
+    Backend, KeyAgreementBackend, KeyDecryptBackend, KeyFingerprint, KeyTransportBackend,
+    PublicKeyDer,
+};
 
 /// The backend a step names, as the capability the step needs, once it is known
 /// to be the backend that holds the key.
@@ -56,7 +59,8 @@ pub(crate) fn transport_backend<'a>(
 ///
 /// # Errors
 ///
-/// As [`transport_backend`], with "does not agree keys" for the last.
+/// As [`transport_backend`], and the same "Backend '<name>' cannot <operation>"
+/// when the backend does not agree keys.
 pub(crate) fn agreement_backend<'a>(
     backend: Option<&'a mut dyn Backend>,
     key_backend: &str,
@@ -65,6 +69,24 @@ pub(crate) fn agreement_backend<'a>(
     let (backend, name) = holding_backend(backend, key_backend, operation)?;
     backend
         .as_agreement_mut()
+        .ok_or_else(|| ActionError::Failed(format!("Backend '{name}' cannot {operation}")))
+}
+
+/// [`transport_backend`] for a step that needs the backend to decrypt a key
+/// encrypted to a public key it holds.
+///
+/// # Errors
+///
+/// As [`transport_backend`], and the same "Backend '<name>' cannot <operation>"
+/// when the backend does not decrypt keys.
+pub(crate) fn key_decrypt_backend<'a>(
+    backend: Option<&'a mut dyn Backend>,
+    key_backend: &str,
+    operation: &str,
+) -> Result<&'a mut dyn KeyDecryptBackend, ActionError> {
+    let (backend, name) = holding_backend(backend, key_backend, operation)?;
+    backend
+        .as_key_decrypt_mut()
         .ok_or_else(|| ActionError::Failed(format!("Backend '{name}' cannot {operation}")))
 }
 

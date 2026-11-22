@@ -211,3 +211,69 @@ fn a_key_that_is_not_the_pinned_one_fails_the_step() {
         "{failed:#?}"
     );
 }
+
+/// An RSA-2048 key held in a retired key-management slot opens a container
+/// sealed to it: the key transport form, through key decryption.
+///
+/// The step records the key's fingerprint, the one its `key_bound` fact
+/// already made public, so naming it again discloses nothing new.
+#[test]
+fn a_held_rsa_key_opens_what_was_sealed_to_it() {
+    let yaml = r#"version: "0.3"
+name: "An RSA key a card already holds"
+roles:
+  operator:
+    name: "Operator"
+backends:
+  token:
+    provider: yubikey
+  software:
+    provider: openssl
+materials:
+  decryption_key:
+    type: backend_key
+    backend: token
+    id: "piv:82"
+    algorithm: RSA-2048
+  manifest:
+    type: bytes
+    path: "manifest.txt"
+sections:
+  main:
+    role: ${role.operator}
+    steps:
+      seal:
+        action: encrypt_data
+        backend: software
+        reads:
+          recipient: ${artifact.decryption_key}
+          data: ${artifact.manifest}
+        creates: sealed
+      unlock:
+        action: enter_pin
+        backend: token
+      open:
+        action: decrypt_data
+        backend: token
+        reads:
+          encrypted_data: ${artifact.sealed}
+          decryption_key: ${artifact.decryption_key}
+        creates: opened
+"#;
+    let run = dry_run(yaml);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+
+    let bound = of_type(&run.facts, "key_bound");
+    let [bound] = bound.as_slice() else {
+        panic!("{bound:#?}")
+    };
+    let opened = of_type(&run.facts, "backend_operation")
+        .into_iter()
+        .find(|fact| fact["kind"] == "decrypt_data")
+        .expect("a decrypt_data operation");
+    assert_eq!(
+        opened.pointer("/inputs/decryption_key_fingerprint"),
+        Some(&bound["fingerprint"]),
+        "{opened:#?}"
+    );
+}

@@ -31,9 +31,9 @@ use rite_sdk::{
 use rite_openssl::OpenSslBackend;
 #[cfg(feature = "openssl")]
 use rite_sdk::{
-    DataKey, KeyAgreementBackend, KeyMetadata, KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend,
-    KeyTransportBackend, KeyUsages, RandomBackend, SecretKeyValue, SignAlgorithm, SignBackend,
-    VerifyBackend, WrapScheme, WrappedKey,
+    DataKey, KeyAgreementBackend, KeyDecryptBackend, KeyMetadata, KeyPolicy, KeyProtection,
+    KeySpec, KeyStoreBackend, KeyTransportBackend, KeyUsages, RandomBackend, SecretKeyValue,
+    SignAlgorithm, SignBackend, VerifyBackend, WrapScheme, WrappedKey,
 };
 #[cfg(feature = "openssl")]
 use zeroize::Zeroizing;
@@ -266,6 +266,8 @@ impl Backend for MockBackend {
         #[cfg(feature = "openssl")]
         as_agreement_mut: KeyAgreementBackend,
         #[cfg(feature = "openssl")]
+        as_key_decrypt_mut: KeyDecryptBackend,
+        #[cfg(feature = "openssl")]
         as_random_mut: RandomBackend,
         as_attest_mut: AttestationBackend,
         as_certstore_mut: CertStoreBackend,
@@ -406,6 +408,19 @@ impl KeyAgreementBackend for MockBackend {
         peer: &PublicKeyDer,
     ) -> Result<rite_sdk::AgreedSecret, BackendError> {
         self.crypto.agree(&self.backing(key_id), peer)
+    }
+}
+
+#[cfg(feature = "openssl")]
+impl KeyDecryptBackend for MockBackend {
+    fn decrypt_key(
+        &mut self,
+        key_id: &KeyId,
+        encrypted: &[u8],
+        protection: KeyProtection,
+    ) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+        self.crypto
+            .decrypt_key(&self.backing(key_id), encrypted, protection)
     }
 }
 

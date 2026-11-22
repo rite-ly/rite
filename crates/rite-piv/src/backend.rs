@@ -7,9 +7,11 @@ use std::sync::{Mutex, MutexGuard};
 
 use rite_sdk::{
     AgreedSecret, Backend, BackendConfig, BackendError, CertRef, CertStoreBackend,
-    KeyAgreementBackend, KeyId, KeyMetadata, KeySpec, KeyStoreBackend, PivBackend, PivDeviceInfo,
-    PivSlotInfo, PublicKeyDer, SignAlgorithm, SignBackend,
+    KeyAgreementBackend, KeyDecryptBackend, KeyId, KeyMetadata, KeyProtection, KeySpec,
+    KeyStoreBackend, PivBackend, PivDeviceInfo, PivSlotInfo, PublicKeyDer, SignAlgorithm,
+    SignBackend,
 };
+use zeroize::Zeroizing;
 
 use crate::ops;
 
@@ -83,6 +85,7 @@ impl Backend for PivCardBackend {
         as_keystore_mut: KeyStoreBackend,
         as_sign_mut: SignBackend,
         as_agreement_mut: KeyAgreementBackend,
+        as_key_decrypt_mut: KeyDecryptBackend,
         as_certstore_mut: CertStoreBackend,
         as_piv_mut: PivBackend,
     );
@@ -143,6 +146,18 @@ impl KeyAgreementBackend for PivCardBackend {
     fn agree(&mut self, key_id: &KeyId, peer: &PublicKeyDer) -> Result<AgreedSecret, BackendError> {
         let mut yk = self.device()?;
         ops::agree(&mut yk, key_id, peer)
+    }
+}
+
+impl KeyDecryptBackend for PivCardBackend {
+    fn decrypt_key(
+        &mut self,
+        key_id: &KeyId,
+        encrypted: &[u8],
+        protection: KeyProtection,
+    ) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+        let mut yk = self.device()?;
+        ops::decrypt_key(&mut yk, key_id, encrypted, protection)
     }
 }
 

@@ -89,12 +89,46 @@ The `yubikey::piv::decrypt_data` function sends this command. The ceremony
 - **Secret length.** The backend accepts a shared secret only at the full field
   length: 32 bytes for P-256 or 48 bytes for P-384.
 
-No ceremony can reach agreement on hardware yet: the `decrypt_data` action
-takes its key as a `BackendKey` artifact, which a slot provisioned beforehand
-does not have, and it does not prompt for the PIN required by slot 9D's
-default policy. The mock backend performs agreement in software and does not
-call `rite_piv::ops::agree`. Unit tests cover host-side checks; the manual
-check below describes the hardware test.
+A ceremony reaches the card's key by declaring it as a held key (see [Keys
+provisioned before the ceremony](#keys-provisioned-before-the-ceremony)) and
+unlocking the card with `enter_pin`. The mock backend performs agreement in
+software and does not call `rite_piv::ops::agree`. Unit tests cover the
+host-side checks, and the hardware suite under [Verification](#verification)
+covers the card.
+
+## Key decryption
+
+Both PIV backends implement `KeyDecryptBackend` for a key encrypted to an
+RSA-2048 key with RSAES-OAEP-SHA256. The `decrypt_data` action uses it to open
+a CMS `ktri` container.
+
+A PIV card does no OAEP. It runs the raw RSA private-key operation through
+GENERAL AUTHENTICATE with the ciphertext under tag `0x81`, and returns the
+encoded block. The backend removes the OAEP encoding on
+the host (`rite-piv/src/oaep.rs`). Signing is the mirror image: the backend
+encodes the PKCS#1 block on the host and the card applies the private key to
+it.
+
+- **Slots.** As for key agreement: slot 9D and retired slots `82`..`95`,
+  refused elsewhere with `OperationNotPermitted`.
+- **Size.** RSA-2048 only. The backend refuses a ciphertext that is not 256 bytes with `InvalidData` before
+  sending it to the card. RSA-3072 and RSA-4096 wait on the `yubikey` 0.9
+  upgrade.
+- **Decoding.** The block holds the content key, so the decoder checks its
+  contents without data-dependent branches or early returns, then makes one
+  decision on validity. Every OAEP decoding failure returns the same
+  `InvalidData` message. Distinguishing failures or content-dependent timing
+  can expose an OAEP oracle, as in Manger's attack. See
+  [`cryptographic-dependencies.md`](cryptographic-dependencies.md) for why
+  this code is written in `rite-piv` rather than taken from a library.
+- **Slot contents.** On a card refusal, the backend reads GET METADATA, as for
+  key agreement, to name an empty slot or a key that is not RSA-2048. A
+  refusal under an RSA-2048 key is a ciphertext the key does not decrypt, and
+  returns the decoding failure's `InvalidData`, so the runtime does not offer
+  a retry.
+
+A device that implements OAEP itself, such as a PKCS#11 token with
+`CKM_RSA_PKCS_OAEP`, can implement the same trait without host-side decoding.
 
 A ceremony selects a backend by its provider:
 
@@ -212,7 +246,7 @@ Each operation still needs implementation and hardware testing.
 CI cannot touch a physical device, so:
 
 - **Unit tests** cover the pure logic (slot parsing, type conversion, error
-  mapping, PKCS#1 encoding) and each action's `execute` against the
+  mapping, PKCS#1 encoding, and OAEP decoding against OpenSSL) and each action's `execute` against the
   `MockBackend`, using the `ReporterHarness` to assert the produced artifact and
   the emitted `BackendOperation` fact. The `enter_pin` tests answer the PIN
   prompt via `ReporterHarness::enqueue_response`. These run in CI behind the
@@ -230,13 +264,13 @@ CI cannot touch a physical device, so:
   For each `backend_key` material, `rite run` gives the mock a `held_keys`
   config naming the id and algorithm, and the mock stands in for the key from
   the start: the slot key for P-256, a fresh key otherwise. Reading,
-  signing with and agreeing with the declared id all reach the stand-in, which
+  signing, agreeing, and decrypting with the declared id all reach the stand-in, which
   permits every usage, as a slot does. The mock accepts any PIN, reports three
   tries, and models no PIN policy, so a rehearsal never stops at `PinRequired`;
   the `rite check` warning above is what catches a missing `enter_pin`.
 - **Hardware suite** (`crates/rite/tests/hardware_yubikey.rs`), run by hand
   on a YubiKey kept for testing, since it resets the PIV application and
-  provisions its own keys in 9A, 9C and 9D:
+  provisions its own keys in 9A, 9C, 9D and 82:
 
   ```sh
   RITE_HW_YUBIKEY_SERIAL=<serial> cargo test -p rite --features piv,yubikey \
@@ -246,7 +280,8 @@ CI cannot touch a physical device, so:
   It needs `ykman`, and does nothing unless the inserted YubiKey is the one
   named. It covers `enter_pin`, signing with keys the card held (RSA and
   P-384, each checked by OpenSSL against the key `ykman` exported), opening
-  what was sealed to 9D, slot 9C needing the PIN before each signature, a
+  what was sealed to 9D (P-384, by agreement) and 82 (RSA-2048, by
+  decryption), slot 9C needing the PIN before each signature, a
   wrong PIN retried, pinned fingerprints, and a refused management key.
   Unplugging the card mid-run and the attestation chain stay manual, below.
 - **Manual hardware check** with a real YubiKey, run before a release that
@@ -270,3 +305,9 @@ CI cannot touch a physical device, so:
      certificate with `openssl cms -encrypt` using an ECDH recipient, then open
      it with `decrypt_data` and compare the content. Repeat with P-256 and
      P-384.
+  6. Test key decryption as described in [Key decryption](#key-decryption):
+     provision an RSA-2048 key and certificate in slot 9D, encrypt content to
+     the certificate with `openssl cms -encrypt -keyid -keyopt
+     rsa_padding_mode:oaep -keyopt rsa_oaep_md:sha256 -keyopt
+     rsa_mgf1_md:sha256`, then open it with `decrypt_data` and compare the
+     content.

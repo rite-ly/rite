@@ -2138,12 +2138,15 @@ name = "rite-piv"
 version = "0.9.0"
 dependencies = [
  "der",
+ "openssl",
  "p256",
  "p384",
  "rite-sdk",
  "serde_json",
  "sha2",
+ "subtle",
  "yubikey",
+ "zeroize",
 ]
 
 [[package]]
@@ -2272,6 +2275,7 @@ dependencies = [
  "rite-sdk",
  "serde_json",
  "yubikey",
+ "zeroize",
 ]
 
 [[package]]

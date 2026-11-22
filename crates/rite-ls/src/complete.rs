@@ -42,16 +42,18 @@ pub enum CompletionContext {
 
 /// Detect what completion context applies on the given line.
 ///
-/// `col` is the 0-indexed cursor column (LSP convention).
+/// `col` is the 0-indexed cursor column, counted in characters as
+/// [`crate::convert::line_prefix`] does.
 /// `cursor_line` is the 0-indexed line number (for building `TextEdits`).
 pub fn detect_context(line: &str, col: usize, cursor_line: u32) -> Option<CompletionContext> {
     // Look for the last `${` before the cursor.
-    let before = &line[..col.min(line.len())];
+    let before = crate::convert::line_prefix(line, col);
     if let Some((head, typed)) = before.rsplit_once("${") {
         return Some(CompletionContext::Expression {
             typed: typed.to_string(),
-            dollar_col: head.len(),
-            cursor_col: col,
+            dollar_col: head.chars().count(),
+            // Past the end of the line, the cursor is at its end.
+            cursor_col: before.chars().count(),
             cursor_line,
         });
     }
@@ -265,6 +267,41 @@ mod tests {
     }
 
     // ── detect_context ────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_non_ascii_character_before_the_cursor_is_one_column() {
+        // `é` is two bytes; column 1 falls inside it as a byte offset.
+        assert!(detect_context("é", 1, 0).is_none());
+        assert!(detect_context("é${", 1, 0).is_none());
+        match detect_context("é${r", 10, 0) {
+            Some(CompletionContext::Expression { cursor_col, .. }) => assert_eq!(cursor_col, 4),
+            _ => panic!("expected an expression context"),
+        }
+        match detect_context("é${", 3, 0) {
+            Some(CompletionContext::Expression {
+                typed, dollar_col, ..
+            }) => assert_eq!((typed.as_str(), dollar_col), ("", 1)),
+            _ => panic!("expected an expression context"),
+        }
+    }
+
+    #[test]
+    fn expression_columns_count_characters_after_non_ascii_text() {
+        let line = r#"  label: "Hélène ${role.op"#;
+        let col = line.chars().count();
+        let Some(CompletionContext::Expression {
+            typed,
+            dollar_col,
+            cursor_col,
+            ..
+        }) = detect_context(line, col, 0)
+        else {
+            panic!("expected an expression context");
+        };
+        assert_eq!(typed, "role.op");
+        assert_eq!(dollar_col, 17);
+        assert_eq!(cursor_col, col);
+    }
 
     #[test]
     fn action_is_left_to_the_schema() {

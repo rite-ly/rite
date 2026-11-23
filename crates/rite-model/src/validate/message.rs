@@ -892,9 +892,9 @@ mod tests {
                 json!({"value": "v", "format": "nato"}),
             ),
             (ActionType::PivReadCertificate, json!({"slot": "8a"})),
-            (ActionType::EnterPin, json!({})),
+            (ActionType::Authenticate, json!({})),
             (
-                ActionType::EnterPin,
+                ActionType::Authenticate,
                 json!({"message": "Unlock the signing card"}),
             ),
         ] {

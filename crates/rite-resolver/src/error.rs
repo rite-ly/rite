@@ -4,8 +4,8 @@ use crate::diagnostic::ReferenceContext;
 use rite_model::expression::{ExprError, RefType};
 use rite_model::validate::{Anchor, Pointer};
 use rite_model::{
-    Accepts, ActId, ActionType, ArtifactId, ArtifactKind, FileKind, MaterialId, OutputId, ParamId,
-    ParameterType, RoleId, SectionId, StepId,
+    Accepts, ActId, ActionType, ArtifactId, ArtifactKind, CredentialId, FileKind, MaterialId,
+    OutputId, ParamId, ParameterType, RoleId, SectionId, StepId,
 };
 use rite_sdk::KeyAlgorithm;
 use std::path::PathBuf;
@@ -190,24 +190,83 @@ pub enum ResolveError {
 
     /// A key a backend holds names a backend the ceremony does not declare.
     #[error("Material '{material}' is held by undeclared backend '{backend}'")]
-    HeldKeyUndeclaredBackend {
+    MaterialUndeclaredBackend {
         /// The material.
         material: MaterialId,
         /// The backend name that is not declared.
         backend: String,
     },
 
-    /// A step reads a key a backend holds without running on that backend.
+    /// A credential names a backend the ceremony does not declare.
+    #[error("Credential '{credential}' belongs to undeclared backend '{backend}'")]
+    CredentialUndeclaredBackend {
+        /// The credential.
+        credential: CredentialId,
+        /// The backend name that is not declared.
+        backend: String,
+    },
+
+    /// A credential belongs to a software backend, which takes no PIN.
+    #[error("Credential '{credential}' belongs to backend '{backend}', which takes no PIN")]
+    CredentialOnBackendWithoutPin {
+        /// The credential.
+        credential: CredentialId,
+        /// The backend it names.
+        backend: String,
+    },
+
+    /// A step reads a credential the ceremony does not declare.
+    #[error("Unknown credential '{credential}' in {context}")]
+    UnknownCredential {
+        /// The unknown credential ID.
+        credential: CredentialId,
+        /// Where the reference appears.
+        context: ReferenceContext,
+    },
+
+    /// A step reads a property of a credential, which has none.
     #[error(
-        "Step '{step}' reads '{material}', a key held by backend '{holder}', {}",
-        runs_on(.used.as_deref(), .holder)
+        "Step '{step}' reads '{credential}.{property}': a credential has no properties; read \
+         it as '${{credential.{credential}}}'"
     )]
-    HeldKeyOnOtherBackend {
+    CredentialProperty {
         /// The step.
         step: StepId,
-        /// The key it reads.
-        material: MaterialId,
-        /// The backend that holds the key.
+        /// The credential.
+        credential: CredentialId,
+        /// The property written.
+        property: String,
+    },
+
+    /// A credential Rite cannot authenticate with yet.
+    #[error(
+        "Credential '{credential}' declares {}, not supported yet: Rite \
+         authenticates with a user credential its holder types ('grants: user', \
+         'source: entered'). Prepare the device with its vendor's tool before the ceremony",
+        rite_model::unsupported_fields(*.grants, *.value_source)
+    )]
+    UnsupportedCredential {
+        /// The credential.
+        credential: CredentialId,
+        /// The grant written, when Rite cannot present it.
+        grants: Option<rite_model::CredentialGrant>,
+        /// The source written, when Rite cannot present it. Not `source`,
+        /// which `thiserror` reads as the error's cause.
+        value_source: Option<rite_model::CredentialSource>,
+    },
+
+    /// A step reads a key or a credential of a backend without running on
+    /// that backend.
+    #[error(
+        "Step '{step}' reads '{read}', which belongs to backend '{holder}', {}",
+        runs_on(.used.as_deref(), .holder)
+    )]
+    ReadOnOtherBackend {
+        /// The step.
+        step: StepId,
+        /// The key or credential it reads, as written.
+        read: String,
+        /// The backend it belongs to.
         holder: String,
         /// The backend the step runs on, if any.
         used: Option<String>,
@@ -223,8 +282,8 @@ pub enum ResolveError {
         artifact: ArtifactId,
     },
 
-    /// An `enter_pin` step names a software backend, which takes no PIN.
-    #[error("Step '{step}' enters a PIN on backend '{backend}', which takes none")]
+    /// An `authenticate` step names a software backend, which takes no PIN.
+    #[error("Step '{step}' authenticates on backend '{backend}', which takes no PIN")]
     PinOnBackendWithoutPin {
         /// The step.
         step: StepId,
@@ -561,7 +620,7 @@ pub enum ResolveWarning {
         step: StepId,
     },
     /// A step uses the private half of a key on a PIV device, and no
-    /// earlier `enter_pin` step unlocks that device.
+    /// earlier `authenticate` step unlocks that device.
     ///
     /// A warning, not an error: a slot whose PIN policy is `never` needs no
     /// PIN, and the policy is not known until the card is read.
@@ -573,7 +632,7 @@ pub enum ResolveWarning {
         /// The backend holding it.
         backend: String,
     },
-    /// A step uses a key in slot 9C again with no `enter_pin` since its last
+    /// A step uses a key in slot 9C again with no `authenticate` since its last
     /// use. Slot 9C's default PIN policy is `always`, which clears the PIN
     /// after each use; a warning, since the slot may have another policy.
     PinSpentBySlot {
@@ -615,14 +674,14 @@ impl std::fmt::Display for ResolveWarning {
             ResolveWarning::HeldKeyWithoutPin { step, key, backend } => write!(
                 f,
                 "step '{step}' uses key '{key}' on backend '{backend}', and no earlier \
-                 'enter_pin' step unlocks it; the card refuses the key until its PIN is \
+                 'authenticate' step unlocks it; the card refuses the key until its PIN is \
                  entered, unless the slot's PIN policy is 'never'"
             ),
             ResolveWarning::PinSpentBySlot { step, key, backend } => write!(
                 f,
                 "step '{step}' uses key '{key}' in slot 9C on backend '{backend}' again with \
-                 no 'enter_pin' since its last use; slot 9C clears the PIN after each use \
-                 unless it was provisioned with another PIN policy, so add an 'enter_pin' \
+                 no 'authenticate' since its last use; slot 9C clears the PIN after each use \
+                 unless it was provisioned with another PIN policy, so add an 'authenticate' \
                  step right before this one"
             ),
         }
@@ -790,7 +849,7 @@ fn quoted<K: std::fmt::Display>(kinds: &[K]) -> String {
         .join(" or ")
 }
 
-/// The end of [`ResolveError::HeldKeyOnOtherBackend`]'s message: the backend
+/// The end of [`ResolveError::ReadOnOtherBackend`]'s message: the backend
 /// the step runs on, or the field to add.
 fn runs_on(used: Option<&str>, holder: &str) -> String {
     match used {

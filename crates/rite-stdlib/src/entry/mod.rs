@@ -8,9 +8,9 @@
 //! flag that could be left off is not what stands between a secret and the
 //! transcript.
 
-mod pin;
+mod authenticate;
 
-pub use pin::EnterPinAction;
+pub use authenticate::AuthenticateAction;
 
 use rite_model::params::EntryShape;
 use rite_model::{ActionType, Prompt, RevealFormat, ValidatorSpec};

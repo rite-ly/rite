@@ -41,6 +41,13 @@
         ]
       }
     },
+    "credentials": {
+      "description": "Credentials the backends have, such as a PIN, keyed by ID. Steps read a credential as `${credential.<id>}`.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/CredentialDeclaration"
+      }
+    },
     "description": {
       "description": "What the ceremony is for, shown in the script and the report.",
       "type": [
@@ -278,9 +285,9 @@
           "const": "piv_read_certificate"
         },
         {
-          "description": "Ask for a device's PIN and have the device verify it.\n\nLater steps on the same backend use the unlocked device. A key whose PIN policy is `always` needs this step right before each use. The PIN is never recorded.",
+          "description": "Open a session on a backend with one of its credentials.\n\nReads a credential, as `${credential.<id>}`. Later steps on the same backend use the open session. A key whose PIN policy is `always` needs this step right before each use. Rite authenticates with a user credential typed by its holder; other credentials are not supported yet. The value is never recorded.",
           "type": "string",
-          "const": "enter_pin"
+          "const": "authenticate"
         },
         {
           "description": "Produce a YubiKey attestation for a PIV key.\n\nThe YubiKey attestation key in slot F9 signs a certificate for the key in the named slot.",
@@ -361,6 +368,31 @@
           "required": [
             "slot"
           ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "AuthenticateParams": {
+      "description": "The `with` block of `authenticate`.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Shown to the operator before the credential is asked for, such as which key it unlocks.",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
         },
         {
           "$ref": "#/$defs/Expression"
@@ -498,6 +530,95 @@
         }
       ]
     },
+    "CredentialDeclaration": {
+      "description": "A credential a backend has before the ceremony: a PIN, a PUK, a management key. It holds no value: `source` says where the value comes from when a step needs it.",
+      "type": "object",
+      "properties": {
+        "backend": {
+          "description": "The backend the credential belongs to, by its name under `backends`.",
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "description": {
+          "description": "A description of the credential, shown in the script.",
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "grants": {
+          "description": "What the credential is used for: `user` for a PIN that unlocks the device's keys, `admin` for a management key or security officer PIN, `unblock` for a PUK. Rite supports `user` today.",
+          "$ref": "#/$defs/CredentialGrant"
+        },
+        "source": {
+          "description": "Where its value comes from: `entered`, typed by the person in the step's role; `factory_default`, the vendor's value; `held`, from an artifact; `on_device`, presented to the device directly. Rite supports `entered` today.",
+          "$ref": "#/$defs/CredentialSource"
+        },
+        "title": {
+          "description": "The name shown for this credential in the script and at the prompt.",
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "backend",
+        "grants",
+        "source"
+      ]
+    },
+    "CredentialGrant": {
+      "description": "What a credential is used for in the ceremony.\n\nEach provider maps it to its own roles. The field is `grants`, not `role`, which names a person everywhere else in the definition.",
+      "oneOf": [
+        {
+          "description": "Administers the device: a PIV management key, a PKCS#11 security officer PIN.",
+          "type": "string",
+          "const": "admin"
+        },
+        {
+          "description": "Uses the keys on the device: a PIV PIN, a PKCS#11 user PIN.",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "Unblocks the user credential: a PIV PUK.",
+          "type": "string",
+          "const": "unblock"
+        }
+      ]
+    },
+    "CredentialSource": {
+      "description": "Where a credential's value comes from when a step needs it.",
+      "oneOf": [
+        {
+          "description": "The vendor's well-known value.",
+          "type": "string",
+          "const": "factory_default"
+        },
+        {
+          "description": "Typed, masked, by the person in the step's role.",
+          "type": "string",
+          "const": "entered"
+        },
+        {
+          "description": "Kept outside the device; a step gives it from an artifact.",
+          "type": "string",
+          "const": "held"
+        },
+        {
+          "description": "Presented to the device directly, on a PIN pad or a PED. Rite never sees it.",
+          "type": "string",
+          "const": "on_device"
+        }
+      ]
+    },
     "DutyType": {
       "description": "What kind of duty is done after the run.\n\nEach kind gives the duty a text for the script, used when it has no `description`. Use `custom` for any other duty, with a `description`.",
       "oneOf": [
@@ -572,31 +693,6 @@
                   "enum": [
                     "CMS-AES-256-GCM"
                   ]
-                },
-                {
-                  "$ref": "#/$defs/Expression"
-                }
-              ]
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "$ref": "#/$defs/Expression"
-        }
-      ]
-    },
-    "EnterPinParams": {
-      "description": "The `with` block of `enter_pin`.",
-      "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "Shown to the operator before the PIN prompt, such as which key the PIN unlocks.",
-              "anyOf": [
-                {
-                  "type": "string"
                 },
                 {
                   "$ref": "#/$defs/Expression"
@@ -3326,7 +3422,7 @@
           "if": {
             "properties": {
               "action": {
-                "const": "enter_pin"
+                "const": "authenticate"
               }
             },
             "required": [
@@ -3336,16 +3432,36 @@
           "then": {
             "allOf": [
               {
-                "errorMessage": "action 'enter_pin' requires a backend; add a 'backend:' field",
+                "errorMessage": "action 'authenticate' requires a backend; add a 'backend:' field",
                 "required": [
                   "backend"
                 ],
-                "x-message": "action 'enter_pin' requires a backend; add a 'backend:' field"
+                "x-message": "action 'authenticate' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "credential": {
+                        "description": "Takes credential.",
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "credential"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
               },
               {
                 "properties": {
                   "with": {
-                    "$ref": "#/$defs/EnterPinParams"
+                    "$ref": "#/$defs/AuthenticateParams"
                   }
                 }
               }

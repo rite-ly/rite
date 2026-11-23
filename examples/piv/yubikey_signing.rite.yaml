@@ -13,6 +13,15 @@ backends:
   software:
     provider: openssl
 
+# The card's PIN. It holds no value: the signer types it when a step
+# authenticates with it.
+credentials:
+  card_pin:
+    backend: token
+    grants: user
+    source: entered
+    description: "PIV PIN of the signing YubiKey, known to the release signer."
+
 materials:
   # A key provisioned on the card before the ceremony. Nothing reads the card
   # when the run starts: the first step that uses the key asks the card for
@@ -106,10 +115,12 @@ sections:
       # Entering the PIN is its own step, the signer's act of authorizing
       # the signature. The transcript records it, never the PIN. Slot 9C
       # clears the PIN after each use, so it comes right before the one
-      # signature; a second signature would take a second `enter_pin`.
+      # signature; a second signature would take a second `authenticate`.
       unlock_card:
-        action: enter_pin
+        action: authenticate
         backend: token
+        reads:
+          credential: "${credential.card_pin}"
         with:
           message: "Enter the PIV PIN to authorize signing the release manifest."
       sign_manifest:

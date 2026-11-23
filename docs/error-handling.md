@@ -48,6 +48,12 @@ By default a transient failure prompts the operator with no limit. The `retry`
 field constrains that, per step:
 
 ```yaml
+credentials:
+  card_pin:
+    backend: yubikey
+    grants: user
+    source: entered
+
 steps:
   # If the token is absent or a cable is loose, the operator can reseat it and
   # retry, up to a hard cap. Exhausting the cap fails the ceremony.
@@ -59,8 +65,10 @@ steps:
   # Forbid retries where repeated attempts are themselves security-relevant
   # (for example PIN entry against a hardware token).
   unlock_token:
-    action: enter_pin
+    action: authenticate
     backend: yubikey
+    reads:
+      credential: ${credential.card_pin}
     retry: never
 ```
 

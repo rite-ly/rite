@@ -2,7 +2,9 @@
 
 use crate::error::{ResolveError, ResolveWarning};
 use rite_model::validate::{Anchor, Pointer};
-use rite_model::{ActId, ArtifactId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId};
+use rite_model::{
+    ActId, ArtifactId, CredentialId, MaterialId, OutputId, ParamId, RoleId, SectionId, StepId,
+};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -102,6 +104,8 @@ pub enum ReferenceTarget {
     Param(ParamId),
     /// A material declaration.
     Material(MaterialId),
+    /// A credential declaration.
+    Credential(CredentialId),
     /// A backend declaration.
     Backend(String),
     /// An artifact reference (resolves to either a `materials:` declaration or
@@ -180,6 +184,8 @@ pub struct SpanMap {
     pub params: HashMap<ParamId, Span>,
     /// Material declaration spans.
     pub materials: HashMap<MaterialId, Span>,
+    /// Credential declaration spans.
+    pub credentials: HashMap<CredentialId, Span>,
     /// Declaration spans for `backends:` map keys.
     pub backends: HashMap<String, Span>,
     /// Output declaration spans (top-level `output:` map keys).
@@ -233,6 +239,7 @@ impl SpanMap {
             ReferenceTarget::Act(id) => self.acts.get(id).copied(),
             ReferenceTarget::Param(id) => self.params.get(id).copied(),
             ReferenceTarget::Material(id) => self.materials.get(id).copied(),
+            ReferenceTarget::Credential(id) => self.credentials.get(id).copied(),
             ReferenceTarget::Backend(name) => self.backends.get(name.as_str()).copied(),
             ReferenceTarget::Artifact(id) => self
                 .artifacts
@@ -267,6 +274,10 @@ impl SpanMap {
         let material_id = MaterialId::new(word);
         if self.materials.contains_key(&material_id) {
             return Some(ReferenceTarget::Material(material_id));
+        }
+        let credential_id = CredentialId::new(word);
+        if self.credentials.contains_key(&credential_id) {
+            return Some(ReferenceTarget::Credential(credential_id));
         }
         let artifact_id = ArtifactId::new(word);
         if self.artifacts.contains_key(&artifact_id) {
@@ -370,7 +381,8 @@ impl SpanMap {
             | ResolveError::InvalidWithValue { step, .. }
             | ResolveError::InvalidRetryAttempts { step }
             | ResolveError::CreatesNothing { step, .. }
-            | ResolveError::HeldKeyOnOtherBackend { step, .. }
+            | ResolveError::ReadOnOtherBackend { step, .. }
+            | ResolveError::CredentialProperty { step, .. }
             | ResolveError::PinOnBackendWithoutPin { step, .. }
             | ResolveError::ArtifactNamesMaterial { step, .. }
             | ResolveError::InputKindMismatch { step, .. }
@@ -421,12 +433,23 @@ impl SpanMap {
             | ResolveError::ParamOutOfRange { param, .. }
             | ResolveError::InvalidDateFormat { param, .. } => self.params.get(param).copied(),
             ResolveError::UnknownMaterial { material, .. }
-            | ResolveError::HeldKeyUndeclaredBackend { material, .. }
+            | ResolveError::MaterialUndeclaredBackend { material, .. }
             | ResolveError::RequiredMaterialMissing(material)
             | ResolveError::MaterialPathNotFound { material, .. }
             | ResolveError::MaterialSourceMismatch { material, .. } => {
                 self.materials.get(material).copied()
             }
+            ResolveError::CredentialUndeclaredBackend { credential, .. }
+            | ResolveError::CredentialOnBackendWithoutPin { credential, .. }
+            | ResolveError::UnsupportedCredential { credential, .. } => {
+                self.credentials.get(credential).copied()
+            }
+            ResolveError::UnknownCredential {
+                credential,
+                context,
+            } => self
+                .span_for_reference(&ReferenceTarget::Credential(credential.clone()), context)
+                .or_else(|| self.span_for_context(context)),
         }
     }
 

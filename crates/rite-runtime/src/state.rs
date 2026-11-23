@@ -17,7 +17,9 @@
 
 use std::collections::HashMap;
 
-use rite_model::{ArtifactId, HeldKey, MaterialId, ParamId, RoleId, StepOutcome};
+use rite_model::{
+    ArtifactId, Credential, CredentialId, HeldKey, MaterialId, ParamId, RoleId, StepOutcome,
+};
 
 use crate::actions::ArtifactValue;
 
@@ -42,6 +44,8 @@ pub struct ExecutionState {
     /// Keys a backend already holds that no step has read yet. The first step
     /// that reads one binds it, and it moves to `artifacts`.
     pub held_keys: HashMap<ArtifactId, HeldKey>,
+    /// Credentials the backends have, as the ceremony declares them.
+    pub credentials: HashMap<CredentialId, Credential>,
 }
 
 fn resolve_role_in(roles: &HashMap<RoleId, String>, role_id: &RoleId) -> String {
@@ -67,6 +71,7 @@ impl ExecutionState {
             dry_run,
             artifacts: HashMap::new(),
             held_keys: HashMap::new(),
+            credentials: HashMap::new(),
         }
     }
 
@@ -78,6 +83,7 @@ impl ExecutionState {
             artifacts: &self.artifacts,
             roles: &self.roles,
             materials: &self.materials,
+            credentials: &self.credentials,
         }
     }
 
@@ -109,6 +115,8 @@ pub struct HandlerContext<'a> {
     pub roles: &'a HashMap<RoleId, String>,
     /// Material ID → display name mapping (for showing material titles in expressions).
     pub materials: &'a HashMap<MaterialId, String>,
+    /// Credentials the backends have, as the ceremony declares them.
+    pub credentials: &'a HashMap<CredentialId, Credential>,
 }
 
 impl HandlerContext<'_> {
@@ -205,6 +213,7 @@ mod tests {
             dry_run: true,
             artifacts,
             held_keys: HashMap::new(),
+            credentials: HashMap::new(),
         };
 
         let ctx = state.handler_context();

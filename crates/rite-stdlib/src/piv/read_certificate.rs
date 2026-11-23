@@ -124,6 +124,7 @@ mod tests {
             artifacts: &artifacts,
             roles: &roles,
             materials: &materials,
+            credentials: &HashMap::new(),
         };
         let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
 
@@ -170,6 +171,7 @@ mod tests {
             artifacts: &artifacts,
             roles: &roles,
             materials: &materials,
+            credentials: &HashMap::new(),
         };
         let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
 

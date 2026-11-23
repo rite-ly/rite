@@ -22,6 +22,7 @@ pub mod bip39;
 pub mod bundle;
 mod canonical;
 pub mod commitment;
+mod credential;
 mod digest;
 pub mod display;
 mod event_time;
@@ -43,6 +44,7 @@ pub mod validate;
 pub use rite_sdk::{BackendConfig, KeyAlgorithm, KeyFingerprint, KeyId, Provider};
 
 pub use canonical::{CanonicalJsonError, canonical_json, check_numbers};
+pub use credential::{CredentialGrant, CredentialSource, unsupported_fields};
 pub use digest::{DigestFormatError, Sha256Digest};
 pub use event_time::{EventTime, EventTimeFormatError, EventTimeRangeError};
 pub use material::MaterialSource;
@@ -57,9 +59,9 @@ pub use types::{
 };
 
 pub use ir::{
-    Act, ActId, ArtifactId, ArtifactRef, Ceremony, HeldKey, Material, MaterialId, MaterialKind,
-    NamedInput, Output, OutputId, ParamId, Parameter, PostCeremonyDuty, RetryPolicy, Role, RoleId,
-    Section, SectionId, Step, StepId, StepInputs, SymbolTable,
+    Act, ActId, ArtifactId, ArtifactRef, Ceremony, Credential, CredentialId, HeldKey, Material,
+    MaterialId, MaterialKind, NamedInput, Output, OutputId, ParamId, Parameter, PostCeremonyDuty,
+    RetryPolicy, Role, RoleId, Section, SectionId, Step, StepId, StepInputs, SymbolTable,
 };
 
 pub use display::{Layout, RevealFormat, TypedRow, TypedValue, UnknownRevealFormat};

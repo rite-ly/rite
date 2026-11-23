@@ -48,7 +48,29 @@ fn evaluate_reference(ref_: &Reference, ctx: &HandlerContext) -> Result<Value, E
         // Role references evaluate to their ID as a string
         // This allows ${role.name} to be used in role-related fields
         RefType::Role => Ok(Value::String(ref_.name.clone())),
+        RefType::Credential => evaluate_credential_ref(ref_, ctx),
     }
+}
+
+/// Evaluate a credential reference. A credential holds no value Rite can
+/// show, so it reads as its title, or its ID; it has no property.
+fn evaluate_credential_ref(
+    ref_: &Reference,
+    ctx: &HandlerContext,
+) -> Result<Value, ExecutionError> {
+    let credential = ctx
+        .credentials
+        .get(&rite_model::CredentialId::new(&ref_.name))
+        .ok_or_else(|| {
+            ExecutionError::InvalidParams(format!("Unknown credential: {}", ref_.name))
+        })?;
+    if let Some(property) = &ref_.property {
+        return Err(ExecutionError::InvalidParams(format!(
+            "Credential '{}' has no property '{property}'",
+            ref_.name
+        )));
+    }
+    Ok(Value::String(credential.display_name().to_string()))
 }
 
 /// Evaluate a parameter reference.
@@ -478,11 +500,15 @@ mod tests {
             std::sync::LazyLock::new(HashMap::new);
         static EMPTY_MATERIALS: std::sync::LazyLock<HashMap<MaterialId, String>> =
             std::sync::LazyLock::new(HashMap::new);
+        static EMPTY_CREDENTIALS: std::sync::LazyLock<
+            HashMap<rite_model::CredentialId, rite_model::Credential>,
+        > = std::sync::LazyLock::new(HashMap::new);
         HandlerContext {
             params: &EMPTY_PARAMS,
             artifacts: &EMPTY_ARTIFACTS,
             roles: &EMPTY_ROLES,
             materials: &EMPTY_MATERIALS,
+            credentials: &EMPTY_CREDENTIALS,
         }
     }
 
@@ -496,6 +522,9 @@ mod tests {
             std::sync::LazyLock::new(HashMap::new);
         static EMPTY_MATERIALS: std::sync::LazyLock<HashMap<MaterialId, String>> =
             std::sync::LazyLock::new(HashMap::new);
+        static EMPTY_CREDENTIALS: std::sync::LazyLock<
+            HashMap<rite_model::CredentialId, rite_model::Credential>,
+        > = std::sync::LazyLock::new(HashMap::new);
         let params_box = Box::leak(Box::new(params));
         let artifacts_box = Box::leak(Box::new(artifacts));
         HandlerContext {
@@ -503,7 +532,48 @@ mod tests {
             artifacts: artifacts_box,
             roles: &EMPTY_ROLES,
             materials: &EMPTY_MATERIALS,
+            credentials: &EMPTY_CREDENTIALS,
         }
+    }
+
+    /// A credential reads as its title. A credential the ceremony does not
+    /// declare, or a property of one, is an error, as an unknown parameter
+    /// is: a prose field would otherwise show the typo.
+    #[test]
+    fn a_credential_reads_as_its_title_and_nothing_else() {
+        let id = rite_model::CredentialId::new("card_pin");
+        let credentials = Box::leak(Box::new(HashMap::from([(
+            id.clone(),
+            rite_model::Credential {
+                id,
+                title: Some("Card PIN".to_string()),
+                description: None,
+                backend: "token".to_string(),
+                grants: rite_model::CredentialGrant::User,
+                source: rite_model::CredentialSource::Entered,
+            },
+        )])));
+        let ctx = HandlerContext {
+            credentials,
+            ..empty_context()
+        };
+        let read = |name: &str, property: Option<&str>| {
+            let mut reference = Reference::new(RefType::Credential, name);
+            reference.property = property.map(str::to_string);
+            evaluate(&Expression::Reference(reference), &ctx)
+        };
+
+        assert_eq!(
+            read("card_pin", None).unwrap(),
+            Value::String("Card PIN".to_string())
+        );
+        let unknown = read("card_pn", None).unwrap_err().to_string();
+        assert!(unknown.contains("Unknown credential: card_pn"), "{unknown}");
+        let property = read("card_pin", Some("value")).unwrap_err().to_string();
+        assert!(
+            property.contains("Credential 'card_pin' has no property 'value'"),
+            "{property}"
+        );
     }
 
     /// A share reaches a step only through `reads:`; an expression would

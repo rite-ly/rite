@@ -210,13 +210,15 @@ pub enum ActionType {
     /// Reading a certificate from a PIV slot does not require a PIN.
     // Requires a PIV backend.
     PivReadCertificate,
-    /// Ask for a device's PIN and have the device verify it.
+    /// Open a session on a backend with one of its credentials.
     ///
-    /// Later steps on the same backend use the unlocked device. A key whose
-    /// PIN policy is `always` needs this step right before each use. The PIN
-    /// is never recorded.
+    /// Reads a credential, as `${credential.<id>}`. Later steps on the same backend
+    /// use the open session. A key whose PIN policy is `always` needs this
+    /// step right before each use. Rite authenticates with a user credential
+    /// typed by its holder; other credentials are not supported yet. The
+    /// value is never recorded.
     // Reaches the device through `PivBackend`.
-    EnterPin,
+    Authenticate,
     /// Produce a YubiKey attestation for a PIV key.
     ///
     /// The YubiKey attestation key in slot F9 signs a certificate for the key
@@ -736,6 +738,8 @@ impl fmt::Display for View {
 
 /// A key held by a backend, and nothing else.
 const BACKEND_KEY: Accepts = Accepts::kinds(&[ArtifactKind::BackendKey]);
+/// A credential a backend has, and nothing else.
+const BACKEND_CREDENTIAL: Accepts = Accepts::kinds(&[ArtifactKind::Credential]);
 /// Any artifact that is bytes once written.
 const BYTES: Accepts = Accepts::view(View::Bytes);
 /// Anything a public key is read from.
@@ -847,7 +851,7 @@ impl ActionType {
         ActionType::GatherEntropy,
         ActionType::TpmAttest,
         ActionType::PivReadCertificate,
-        ActionType::EnterPin,
+        ActionType::Authenticate,
         ActionType::YubikeyAttestSlot,
         ActionType::IssueCertificate,
         ActionType::GenerateCsr,
@@ -1115,10 +1119,18 @@ impl ActionType {
                 ]),
                 creates: &[],
             },
-            // A PIN unlocks the device and makes nothing.
-            ActionType::TpmAttest | ActionType::EnterPin => ActionSpec {
+            ActionType::TpmAttest => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract::NONE,
+                creates: &[],
+            },
+            // A credential opens a session and makes nothing.
+            ActionType::Authenticate => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract::required(&[ReadInput {
+                    name: "credential",
+                    accepts: BACKEND_CREDENTIAL,
+                }]),
                 creates: &[],
             },
             ActionType::PivReadCertificate | ActionType::YubikeyAttestSlot => ActionSpec {
@@ -1235,7 +1247,7 @@ impl std::fmt::Display for ActionType {
             ActionType::GatherEntropy => write!(f, "gather_entropy"),
             ActionType::TpmAttest => write!(f, "tpm_attest"),
             ActionType::PivReadCertificate => write!(f, "piv_read_certificate"),
-            ActionType::EnterPin => write!(f, "enter_pin"),
+            ActionType::Authenticate => write!(f, "authenticate"),
             ActionType::YubikeyAttestSlot => write!(f, "yubikey_attest_slot"),
             ActionType::IssueCertificate => write!(f, "issue_certificate"),
             ActionType::GenerateCsr => write!(f, "generate_csr"),
@@ -1336,6 +1348,8 @@ pub enum ArtifactKind {
     Shares,
     /// One share: a set's `share_N`, or one a custodian typed back.
     Share,
+    /// A credential a backend has. It holds no value, so it is never written.
+    Credential,
 }
 
 impl ArtifactKind {
@@ -1361,7 +1375,7 @@ impl ArtifactKind {
         match self {
             ArtifactKind::File(kind) => Some(kind),
             ArtifactKind::BackendKey => Some(FileKind::PublicKey),
-            ArtifactKind::Shares | ArtifactKind::Share => None,
+            ArtifactKind::Shares | ArtifactKind::Share | ArtifactKind::Credential => None,
         }
     }
 }
@@ -1373,6 +1387,7 @@ impl fmt::Display for ArtifactKind {
             ArtifactKind::BackendKey => f.write_str("backend_key"),
             ArtifactKind::Shares => f.write_str("shares"),
             ArtifactKind::Share => f.write_str("share"),
+            ArtifactKind::Credential => f.write_str("credential"),
         }
     }
 }
@@ -1546,7 +1561,7 @@ mod tests {
             (ActionType::Attest, "\"attest\""),
             (ActionType::TpmAttest, "\"tpm_attest\""),
             (ActionType::PivReadCertificate, "\"piv_read_certificate\""),
-            (ActionType::EnterPin, "\"enter_pin\""),
+            (ActionType::Authenticate, "\"authenticate\""),
             (ActionType::YubikeyAttestSlot, "\"yubikey_attest_slot\""),
             (ActionType::IssueCertificate, "\"issue_certificate\""),
             (ActionType::GenerateCsr, "\"generate_csr\""),
@@ -1578,7 +1593,7 @@ mod tests {
             ActionType::Attest,
             ActionType::TpmAttest,
             ActionType::PivReadCertificate,
-            ActionType::EnterPin,
+            ActionType::Authenticate,
             ActionType::YubikeyAttestSlot,
             ActionType::IssueCertificate,
             ActionType::GenerateCsr,
@@ -1778,7 +1793,7 @@ mod tests {
                 | ActionType::GatherEntropy
                 | ActionType::TpmAttest
                 | ActionType::PivReadCertificate
-                | ActionType::EnterPin
+                | ActionType::Authenticate
                 | ActionType::YubikeyAttestSlot
                 | ActionType::IssueCertificate
                 | ActionType::GenerateCsr => {}

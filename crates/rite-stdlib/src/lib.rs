@@ -75,7 +75,7 @@ pub use crypto::{
     SignDataAction, UnwrapKeyAction, VerifySignatureAction, WrapKeyAction,
 };
 pub use entropy::GatherEntropyAction;
-pub use entry::{EnterPinAction, EnterSecretAction, EnterValueAction};
+pub use entry::{AuthenticateAction, EnterSecretAction, EnterValueAction};
 #[cfg(feature = "piv")]
 pub use piv::PivReadCertificateAction;
 #[cfg(feature = "yubikey")]
@@ -122,7 +122,7 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
     registry.register(Arc::new(EnterSecretAction));
     // The PIN goes to whichever backend the step names, through a trait the
     // SDK defines, so it needs no device crate.
-    registry.register(Arc::new(EnterPinAction));
+    registry.register(Arc::new(AuthenticateAction));
 
     // The arithmetic is dependency-free and the randomness comes from
     // whichever backend the step names, so sharing needs no feature either.

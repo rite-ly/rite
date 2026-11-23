@@ -99,6 +99,18 @@ fn hover_for_target(
             );
             Some(md)
         }
+        ReferenceTarget::Credential(id) => {
+            let credential = resolved.credentials.get(id)?;
+            let mut md = format!("**credential** · {credential}");
+            paragraphs(
+                &mut md,
+                [
+                    credential.title.as_deref(),
+                    credential.description.as_deref(),
+                ],
+            );
+            Some(md)
+        }
         ReferenceTarget::Backend(name) => {
             let backend = resolved.backends.get(name.as_str())?;
             Some(format!(

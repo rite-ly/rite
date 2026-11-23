@@ -18,9 +18,10 @@ use rite_model::{
     ReadsContract, RevealFormat, SharingScheme,
 };
 use rite_model::{
-    Act, ActId, ArtifactId, ArtifactRef, Ceremony, Material, MaterialId, MaterialKind,
-    MaterialSource, Metadata, NamedInput, Output, OutputId, ParamId, Parameter, PostCeremonyDuty,
-    RetryPolicy, Role, RoleId, Section, SectionId, Step, StepId, StepInputs, SymbolTable,
+    Act, ActId, ArtifactId, ArtifactRef, Ceremony, Credential, CredentialId, Material, MaterialId,
+    MaterialKind, MaterialSource, Metadata, NamedInput, Output, OutputId, ParamId, Parameter,
+    PostCeremonyDuty, RetryPolicy, Role, RoleId, Section, SectionId, Step, StepId, StepInputs,
+    SymbolTable,
 };
 use rite_sdk::KeyAlgorithm;
 use std::collections::{HashMap, HashSet};
@@ -57,6 +58,7 @@ pub(crate) fn resolve_ceremony(
     ctx.register_parameters(&ceremony.parameters);
     ctx.register_materials(&ceremony.materials);
     ctx.validate_held_key_backends(&ceremony.backends);
+    ctx.register_credentials(&ceremony.credentials, &ceremony.backends);
     ctx.register_outputs(&ceremony.output);
 
     // Phase 2: Resolve external inputs
@@ -100,6 +102,7 @@ pub(crate) fn resolve_ceremony(
         sections: ctx.sections,
         parameters: ctx.parameters,
         materials: ctx.materials,
+        credentials: ctx.credentials,
         prerequisites: ceremony.prerequisites,
         outputs: ctx.outputs,
         backends,
@@ -121,6 +124,7 @@ struct ResolveContext {
     sections: SymbolTable<SectionId, Section>,
     parameters: SymbolTable<ParamId, Parameter>,
     materials: SymbolTable<MaterialId, Material>,
+    credentials: SymbolTable<CredentialId, Credential>,
     outputs: SymbolTable<OutputId, Output>,
 
     // For artifact tracking
@@ -139,6 +143,7 @@ impl ResolveContext {
             sections: SymbolTable::new(),
             parameters: SymbolTable::new(),
             materials: SymbolTable::new(),
+            credentials: SymbolTable::new(),
             outputs: SymbolTable::new(),
             produced_artifacts: HashMap::new(),
             errors: Vec::new(),
@@ -297,18 +302,63 @@ impl ResolveContext {
 
     /// A key a backend holds names a backend the ceremony declares.
     fn validate_held_key_backends<V>(&mut self, backends: &HashMap<String, V>) {
-        let undeclared: Vec<(MaterialId, String)> = self
-            .materials
-            .iter()
-            .filter_map(|(id, material)| match &material.kind {
-                MaterialKind::BackendKey(key) if !backends.contains_key(&key.backend) => {
-                    Some((id.clone(), key.backend.clone()))
+        for (id, material) in self.materials.iter() {
+            if let MaterialKind::BackendKey(key) = &material.kind
+                && !backends.contains_key(&key.backend)
+            {
+                self.errors.push(ResolveError::MaterialUndeclaredBackend {
+                    material: id.clone(),
+                    backend: key.backend.clone(),
+                });
+            }
+        }
+    }
+
+    /// Registers each credential, refusing one of an undeclared backend or
+    /// one Rite cannot present yet.
+    fn register_credentials(
+        &mut self,
+        credentials: &IndexMap<String, schema::CredentialDeclaration>,
+        backends: &HashMap<String, rite_sdk::BackendConfig>,
+    ) {
+        for (name, declared) in credentials {
+            let credential = Credential {
+                id: CredentialId::new(name),
+                title: declared.title.clone(),
+                description: declared.description.clone(),
+                backend: declared.backend.clone(),
+                grants: declared.grants,
+                source: declared.source,
+            };
+            match backends
+                .get(&credential.backend)
+                .map(|config| config.provider)
+            {
+                None => self.errors.push(ResolveError::CredentialUndeclaredBackend {
+                    credential: credential.id.clone(),
+                    backend: credential.backend.clone(),
+                }),
+                // The mock answers the prompt, so a rehearsal can walk it.
+                Some(provider) if !provider.takes_pin() && provider != rite_sdk::Provider::Mock => {
+                    self.errors
+                        .push(ResolveError::CredentialOnBackendWithoutPin {
+                            credential: credential.id.clone(),
+                            backend: credential.backend.clone(),
+                        });
                 }
-                _ => None,
-            })
-            .collect();
-        for (material, backend) in undeclared {
-            self.add_error(ResolveError::HeldKeyUndeclaredBackend { material, backend });
+                Some(_) => {}
+            }
+            if let (grants, source) = credential.unsupported()
+                && (grants.is_some() || source.is_some())
+            {
+                self.errors.push(ResolveError::UnsupportedCredential {
+                    credential: credential.id.clone(),
+                    grants,
+                    value_source: source,
+                });
+            }
+            // The keys of a map are distinct, so the insert always succeeds.
+            let _ = self.credentials.insert(credential.id.clone(), credential);
         }
     }
 
@@ -743,6 +793,7 @@ impl ResolveContext {
                 _ => None,
             },
             ArtifactRef::Produced { id, .. } => made.get(id)?.algorithm,
+            ArtifactRef::Credential { .. } => None,
         }
     }
 
@@ -759,6 +810,7 @@ impl ResolveContext {
         let kinds = match reference {
             ArtifactRef::Material { id, .. } => vec![self.materials.get(id)?.kind.artifact_kind()],
             ArtifactRef::Produced { id, .. } => made.get(id)?.kinds.clone(),
+            ArtifactRef::Credential { .. } => vec![ArtifactKind::Credential],
         };
         (!kinds.is_empty()).then_some(kinds)
     }
@@ -1165,6 +1217,25 @@ impl ResolveContext {
             }
         };
 
+        if reference.ref_type == RefType::Credential {
+            let id = CredentialId::new(&reference.name);
+            if !self.credentials.contains(&id) {
+                self.add_error(ResolveError::UnknownCredential {
+                    credential: id,
+                    context: ReferenceContext::Step(step_id.clone()),
+                });
+                return None;
+            }
+            if let Some(property) = reference.property {
+                self.add_error(ResolveError::CredentialProperty {
+                    step: step_id.clone(),
+                    credential: id,
+                    property,
+                });
+                return None;
+            }
+            return Some(ArtifactRef::Credential { id });
+        }
         if reference.ref_type != RefType::Artifact {
             self.add_error(ResolveError::ReferenceTypeMismatch {
                 context: ReferenceContext::Step(step_id.clone()),
@@ -1190,12 +1261,13 @@ impl ResolveContext {
         })
     }
 
-    /// Check the PIN steps against the keys they unlock.
+    /// Check the `authenticate` steps against the backends they run on and
+    /// the keys they unlock.
     ///
-    /// Refuses an `enter_pin` on a backend that takes no PIN, and warns
-    /// where a step uses the private half of a key on a device that does
-    /// before any `enter_pin` on it, or uses a key in a slot whose default
-    /// policy is `always` (9C) a second time after one. A key is one the
+    /// Refuses an `authenticate` on a backend that takes no PIN, and warns where a step uses the private
+    /// half of a key on a device that does before any `authenticate` on it,
+    /// or uses a key in a slot whose default policy is `always` (9C) a second
+    /// time after one. A key is one the
     /// device held before the run or one a step made on it. A held key's
     /// policy may differ from its slot's default, so these are warnings; a
     /// key `generate_key` made has its slot's default.
@@ -1214,7 +1286,7 @@ impl ResolveContext {
         let mut spent: HashSet<(&str, &str)> = HashSet::new();
         for step in execution_plan {
             let on = step.backend.as_deref();
-            if step.action == ActionType::EnterPin
+            if step.action == ActionType::Authenticate
                 && let Some(backend) = on
             {
                 // The mock locks nothing but answers the prompt, so a
@@ -1243,7 +1315,7 @@ impl ResolveContext {
             let made = reads_privately(step)
                 .filter_map(|reference| match reference {
                     ArtifactRef::Produced { id, .. } => made_on.get_key_value(id.as_str()),
-                    ArtifactRef::Material { .. } => None,
+                    ArtifactRef::Material { .. } | ArtifactRef::Credential { .. } => None,
                 })
                 .filter(|(_, (holder, _))| on == Some(*holder))
                 .map(|(id, (holder, policy))| (*id, *holder, *policy));
@@ -1308,12 +1380,28 @@ impl ResolveContext {
                 let declared = literal_length(step).map(|n| (n, step.id.clone()));
                 shares.insert(created.clone(), declared);
             }
-            for (id, key) in held_keys_used_privately(&self.materials, step) {
-                if step.backend.as_deref() != Some(key.backend.as_str()) {
-                    self.errors.push(ResolveError::HeldKeyOnOtherBackend {
+            for reference in reads_privately(step) {
+                let holder = match reference {
+                    ArtifactRef::Material { id, .. } => match self.materials.get(id) {
+                        Some(Material {
+                            kind: MaterialKind::BackendKey(key),
+                            ..
+                        }) => Some(&key.backend),
+                        _ => None,
+                    },
+                    ArtifactRef::Credential { id } => self
+                        .credentials
+                        .get(id)
+                        .map(|credential| &credential.backend),
+                    ArtifactRef::Produced { .. } => None,
+                };
+                if let Some(holder) = holder
+                    && step.backend.as_ref() != Some(holder)
+                {
+                    self.errors.push(ResolveError::ReadOnOtherBackend {
                         step: step.id.clone(),
-                        material: id.clone(),
-                        holder: key.backend.clone(),
+                        read: reference.display_name(),
+                        holder: holder.clone(),
                         used: step.backend.clone(),
                     });
                 }
@@ -1467,7 +1555,7 @@ fn held_keys_used_privately<'a>(
                 }) => Some((id, key)),
                 _ => None,
             },
-            ArtifactRef::Produced { .. } => None,
+            ArtifactRef::Produced { .. } | ArtifactRef::Credential { .. } => None,
         })
         .collect()
 }
@@ -1750,6 +1838,7 @@ mod tests {
             sections,
             parameters: HashMap::new(),
             materials: HashMap::new(),
+            credentials: IndexMap::new(),
             prerequisites: vec![],
             output: HashMap::new(),
             after: IndexMap::new(),

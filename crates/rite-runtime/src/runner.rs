@@ -620,6 +620,12 @@ impl Executor {
         *opened = true;
 
         let mut state = ExecutionState::new(resolved_params, roles, materials_map, dry_run);
+        state.credentials = self
+            .ceremony
+            .credentials
+            .iter()
+            .map(|(id, credential)| (id.clone(), credential.clone()))
+            .collect();
 
         // Load materials. The digest of a file is its own fact, so an
         // audience can learn that an input was loaded without being able to
@@ -1116,7 +1122,7 @@ fn execute_step_with_retry(
 /// Retrying does not ask for the PIN, so the hint says where it belongs.
 fn pin_hint(backend: &str) -> String {
     format!(
-        "Backend '{backend}' asks for its PIN. It is locked until an `enter_pin` step \
+        "Backend '{backend}' asks for its PIN. It is locked until an `authenticate` step \
          on it runs: one before this step, or right before it if the key's PIN \
          policy is `always`. A device reset or removed since its PIN was entered is \
          locked again. Retrying this step does not ask for the PIN."

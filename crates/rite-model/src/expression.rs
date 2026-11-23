@@ -44,6 +44,8 @@ pub enum RefType {
     Role,
     /// Artifact reference (materials, outputs, intermediate values)
     Artifact,
+    /// Credential reference (a PIN, a PUK, a management key a backend has)
+    Credential,
 }
 
 impl RefType {
@@ -51,7 +53,7 @@ impl RefType {
     ///
     /// A test matches exhaustively over `RefType` against this list, so a new
     /// variant fails to compile until it is added here.
-    pub const ALL: &'static [Self] = &[Self::Param, Self::Role, Self::Artifact];
+    pub const ALL: &'static [Self] = &[Self::Param, Self::Role, Self::Artifact, Self::Credential];
 
     /// The namespace as it is written in a ceremony.
     #[must_use]
@@ -60,6 +62,7 @@ impl RefType {
             Self::Param => "param",
             Self::Role => "role",
             Self::Artifact => "artifact",
+            Self::Credential => "credential",
         }
     }
 }
@@ -1792,11 +1795,11 @@ mod tests {
         fn all_lists_every_namespace() {
             for ref_type in RefType::ALL {
                 match ref_type {
-                    RefType::Param | RefType::Role | RefType::Artifact => {}
+                    RefType::Param | RefType::Role | RefType::Artifact | RefType::Credential => {}
                 }
             }
-            assert_eq!(RefType::ALL.len(), 3);
-            assert_eq!(namespace_list(), "param, role, artifact");
+            assert_eq!(RefType::ALL.len(), 4);
+            assert_eq!(namespace_list(), "param, role, artifact, credential");
         }
 
         #[test]
@@ -1830,7 +1833,7 @@ mod tests {
             );
             assert_eq!(
                 found[0].reason.to_string(),
-                "unknown namespace 'nonsense': expected one of param, role, artifact"
+                "unknown namespace 'nonsense': expected one of param, role, artifact, credential"
             );
         }
 
@@ -1902,7 +1905,7 @@ mod tests {
                 (
                     "${artifact}",
                     "'artifact' names no namespace: write '<namespace>.<name>', \
-                     where <namespace> is one of param, role, artifact",
+                     where <namespace> is one of param, role, artifact, credential",
                 ),
                 (
                     "${artifact.}",
@@ -1941,7 +1944,7 @@ mod tests {
             assert_eq!(
                 error.to_string(),
                 "write it as an expression, '${<namespace>.<name>}', \
-                 where <namespace> is one of param, role, artifact"
+                 where <namespace> is one of param, role, artifact, credential"
             );
         }
 
@@ -1992,7 +1995,7 @@ mod tests {
             assert_eq!(
                 error.to_string(),
                 "argument 2 to 'concat' is not a usable expression: \
-                 unknown namespace 'nonsense': expected one of param, role, artifact"
+                 unknown namespace 'nonsense': expected one of param, role, artifact, credential"
             );
         }
 

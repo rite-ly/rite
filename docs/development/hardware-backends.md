@@ -99,7 +99,7 @@ covers the card.
 ## Key decryption
 
 Both PIV backends implement `KeyDecryptBackend` for a key encrypted to an
-RSA-2048 key with RSAES-OAEP-SHA256. The `decrypt_data` action uses it to open
+RSA-2048 or RSA-4096 key with RSAES-OAEP-SHA256. The `decrypt_data` action uses it to open
 a CMS `ktri` container.
 
 A PIV card does no OAEP. It runs the raw RSA private-key operation through
@@ -107,13 +107,24 @@ GENERAL AUTHENTICATE with the ciphertext under tag `0x81`, and returns the
 encoded block. The backend removes the OAEP encoding on
 the host (`rite-piv/src/oaep.rs`). Signing is the mirror image: the backend
 encodes the PKCS#1 block on the host and the card applies the private key to
-it.
+it. The block is the modulus length, so before an RSA signature the backend
+reads the slot's key size through GET METADATA. A card that cannot answer is
+taken to hold RSA-2048, the only RSA size standard PIV defines for Rite: a
+YubiKey that holds RSA-4096 answers GET METADATA.
+
+Both backends accept RSA-4096, since the `piv` backend also drives
+YubiKeys. Generating an RSA-4096 key or decrypting a 512-byte ciphertext on
+a card that reports a version older than 5.7 is refused with
+`UnsupportedAlgorithm` naming the version, before the card is asked.
 
 - **Slots.** As for key agreement: slot 9D and retired slots `82`..`95`,
   refused elsewhere with `OperationNotPermitted`.
-- **Size.** RSA-2048 only. The backend refuses a ciphertext that is not 256 bytes with `InvalidData` before
-  sending it to the card. RSA-3072 and RSA-4096 wait on the `yubikey` 0.9
-  upgrade.
+- **Size.** RSA-2048 or RSA-4096. A ciphertext is exactly the modulus
+  length, so its length names the size sent to the card: 256 bytes for
+  RSA-2048, 512 for RSA-4096. The backend refuses any other length with
+  `InvalidData` before sending it to the card. RSA-4096 is a YubiKey
+  extension, from firmware 5.7. Rite has no RSA-3072 algorithm, and refuses
+  RSA-1024 as too weak.
 - **Decoding.** The block holds the content key, so the decoder checks its
   contents without data-dependent branches or early returns, then makes one
   decision on validity. Every OAEP decoding failure returns the same
@@ -122,10 +133,10 @@ it.
   [`cryptographic-dependencies.md`](cryptographic-dependencies.md) for why
   this code is written in `rite-piv` rather than taken from a library.
 - **Slot contents.** On a card refusal, the backend reads GET METADATA, as for
-  key agreement, to name an empty slot or a key that is not RSA-2048. A
-  refusal under an RSA-2048 key is a ciphertext the key does not decrypt, and
-  returns the decoding failure's `InvalidData`, so the runtime does not offer
-  a retry.
+  key agreement, to name an empty slot, a key that is not RSA, or an RSA key
+  of the other size. A refusal under a key of the ciphertext's size is a
+  ciphertext the key does not decrypt, and returns the decoding failure's
+  `InvalidData`, so the runtime does not offer a retry.
 
 A device that implements OAEP itself, such as a PKCS#11 token with
 `CKM_RSA_PKCS_OAEP`, can implement the same trait without host-side decoding.
@@ -288,7 +299,8 @@ CI cannot touch a physical device, so:
   the `rite check` warning above is what catches a missing `authenticate`.
 - **Hardware suite** (`crates/rite/tests/hardware_yubikey.rs`), run by hand
   on a YubiKey kept for testing, since it resets the PIV application and
-  provisions its own keys in 9A, 9C, 9D and 82:
+  provisions its own keys in 9A, 9C, 9D and 82 to 84 (83 is RSA-4096, so
+  it needs firmware 5.7 or later):
 
   ```sh
   RITE_HW_YUBIKEY_SERIAL=<serial> cargo test -p rite --features piv,yubikey \
@@ -296,11 +308,12 @@ CI cannot touch a physical device, so:
   ```
 
   It needs `ykman`, and does nothing unless the inserted YubiKey is the one
-  named. It covers `authenticate`, signing with keys the card held (RSA and
-  P-384, each checked by OpenSSL against the key `ykman` exported), opening
-  what was sealed to 9D (P-384, by agreement) and 82 (RSA-2048, by
-  decryption), slot 9C needing the PIN before each signature, a
-  wrong PIN retried, pinned fingerprints, and a refused management key.
+  named. It covers `authenticate`, signing with keys the card held (RSA-2048,
+  RSA-4096 and P-384, each checked by OpenSSL against the key `ykman`
+  exported), opening what was sealed to 9D (P-384, by agreement), 82
+  (RSA-2048, by decryption) and 83 (RSA-4096, by decryption), slot 9C
+  needing the PIN before each signature, an RSA key with PIN policy
+  `always` in 84 signing after one `authenticate`, a wrong PIN retried, pinned fingerprints, and a refused management key.
   Unplugging the card mid-run and the attestation chain stay manual, below.
 - **Manual hardware check** with a real YubiKey, run before a release that
   touches this code:
@@ -314,7 +327,7 @@ CI cannot touch a physical device, so:
   4. Cover the full algorithm matrix, not just the example's default: repeat
      `sign_data` for each supported algorithm (`ECDSA-SHA256`, `ECDSA-SHA384`,
      `RSA-PKCS1-SHA256`, each against a slot provisioned with the matching key
-     type) and verify every signature off-card against the slot certificate
+     type, RSA under both RSA-2048 and RSA-4096) and verify every signature off-card against the slot certificate
      (`openssl dgst -sha256 -verify`). Cargo tests exercise these paths only
      against test doubles; the encoding the card actually accepts (bare digest
      for ECDSA, padded PKCS#1 block for RSA) is proven here or nowhere.
@@ -328,4 +341,4 @@ CI cannot touch a physical device, so:
      the certificate with `openssl cms -encrypt -keyid -keyopt
      rsa_padding_mode:oaep -keyopt rsa_oaep_md:sha256 -keyopt
      rsa_mgf1_md:sha256`, then open it with `decrypt_data` and compare the
-     content.
+     content. Repeat with RSA-2048 and RSA-4096.

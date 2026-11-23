@@ -9,7 +9,8 @@
 //!     --test hardware_yubikey -- --ignored --test-threads=1
 //! ```
 //!
-//! It needs `ykman` on the `PATH`. Without the variable, or with another
+//! It needs firmware 5.7 or later, for the RSA-4096 key in slot 83, and
+//! `ykman` on the `PATH`. Without the variable, or with another
 //! YubiKey inserted, each test returns without touching anything. The tests
 //! take turns on the one device; the PIV application is reset once, at the
 //! first test, and left provisioned (`ykman piv reset` clears it).
@@ -83,11 +84,13 @@ fn provision() -> Option<Card> {
     ykman(&["piv", "reset", "--force"], Some(&serial));
     let keys = std::env::temp_dir().join(format!("rite-hw-yubikey-{serial}"));
     std::fs::create_dir_all(&keys).unwrap();
-    for (slot, algorithm) in [
-        ("9a", "RSA2048"),
-        ("9c", "ECCP256"),
-        ("9d", "ECCP384"),
-        ("82", "RSA2048"),
+    for (slot, algorithm, pin_policy) in [
+        ("9a", "RSA2048", "DEFAULT"),
+        ("9c", "ECCP256", "DEFAULT"),
+        ("9d", "ECCP384", "DEFAULT"),
+        ("82", "RSA2048", "DEFAULT"),
+        ("83", "RSA4096", "DEFAULT"),
+        ("84", "RSA2048", "ALWAYS"),
     ] {
         let public = keys.join(format!("{slot}.pem"));
         ykman(
@@ -99,6 +102,8 @@ fn provision() -> Option<Card> {
                 MANAGEMENT_KEY,
                 "--algorithm",
                 algorithm,
+                "--pin-policy",
+                pin_policy,
                 slot,
                 public.to_str().unwrap(),
             ],
@@ -134,7 +139,7 @@ fn pin_tries(card: &Card) -> u32 {
     tries.parse().unwrap()
 }
 
-/// A ceremony on the card with `steps`. It declares the four provisioned
+/// A ceremony on the card with `steps`. It declares the six provisioned
 /// keys, with `pin` as the 9D key's optional `fingerprint:` line.
 fn ceremony(card: &Card, pin: &str, steps: &str) -> String {
     format!(
@@ -175,6 +180,16 @@ materials:
     type: backend_key
     backend: token
     id: "piv:82"
+    algorithm: RSA-2048
+  rsa_4096_key:
+    type: backend_key
+    backend: token
+    id: "piv:83"
+    algorithm: RSA-4096
+  rsa_pin_always_key:
+    type: backend_key
+    backend: token
+    id: "piv:84"
     algorithm: RSA-2048
   manifest:
     type: bytes
@@ -309,8 +324,9 @@ fn verify_off_card(card: &Card, slot: &str, digest: MessageDigest, signature: &[
 }
 
 /// One PIN step unlocks the card for signing with a key it already held, in
-/// a slot whose default PIN policy is `once`, for RSA and for P-384. Each
-/// signature verifies in software and against what `ykman` exported.
+/// a slot whose default PIN policy is `once`, for RSA-2048, RSA-4096 and
+/// P-384. Each signature verifies in software and against what `ykman`
+/// exported.
 #[test]
 #[ignore = "needs a YubiKey kept for testing; see the module documentation"]
 fn one_pin_step_signs_with_keys_the_card_held() {
@@ -319,12 +335,19 @@ fn one_pin_step_signs_with_keys_the_card_held() {
         unlock("unlock"),
         sign("sign_rsa", "rsa_key", "RSA-PKCS1-SHA256", "rsa_signature"),
         sign(
+            "sign_rsa_4096",
+            "rsa_4096_key",
+            "RSA-PKCS1-SHA256",
+            "rsa_4096_signature",
+        ),
+        sign(
             "sign_p384",
             "decryption_key",
             "ECDSA-SHA384",
             "p384_signature",
         ),
         verify("check_rsa", "rsa_key", "rsa_signature"),
+        verify("check_rsa_4096", "rsa_4096_key", "rsa_4096_signature"),
         verify("check_p384", "decryption_key", "p384_signature"),
     ]
     .concat();
@@ -339,13 +362,19 @@ fn one_pin_step_signs_with_keys_the_card_held() {
     assert_eq!(entered.len(), 1, "{entered:#?}");
     assert_eq!(entered[0]["inputs"]["retries_before"], 3);
     let bound = run.facts_of("key_bound");
-    assert_eq!(bound.len(), 2, "{bound:#?}");
+    assert_eq!(bound.len(), 3, "{bound:#?}");
 
     verify_off_card(
         card,
         "9a",
         MessageDigest::sha256(),
         run.bytes("rsa_signature"),
+    );
+    verify_off_card(
+        card,
+        "83",
+        MessageDigest::sha256(),
+        run.bytes("rsa_4096_signature"),
     );
     verify_off_card(
         card,
@@ -357,13 +386,14 @@ fn one_pin_step_signs_with_keys_the_card_held() {
 
 /// Sealed in software to a key-management key on the card, opened by the
 /// card: the P-384 key in 9D through key agreement (rite#315), and the
-/// RSA-2048 key in retired slot 82 through key decryption, the raw RSA
-/// operation on the card and the OAEP decoding on the host.
+/// RSA-2048 key in retired slot 82 and the RSA-4096 key in 83 through key
+/// decryption, the raw RSA operation on the card and the OAEP decoding on
+/// the host.
 #[test]
 #[ignore = "needs a YubiKey kept for testing; see the module documentation"]
 fn the_card_opens_what_was_sealed_to_its_key() {
     let Some((_turn, card)) = card() else { return };
-    for key in ["decryption_key", "rsa_decryption_key"] {
+    for key in ["decryption_key", "rsa_decryption_key", "rsa_4096_key"] {
         let steps = [
             format!(
                 r"      seal:
@@ -392,6 +422,28 @@ fn the_card_opens_what_was_sealed_to_its_key() {
         run.completed();
         assert_eq!(run.bytes("opened"), MANIFEST, "{key}");
     }
+}
+
+/// An RSA signature reads the slot's key size through GET METADATA between
+/// the PIN step and the signature. Under PIN policy `always`, that command
+/// must not use up the verification the signature needs.
+#[test]
+#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
+fn an_rsa_key_with_pin_policy_always_signs_after_one_pin_step() {
+    let Some((_turn, card)) = card() else { return };
+    let steps = [
+        unlock("unlock"),
+        sign(
+            "sign",
+            "rsa_pin_always_key",
+            "RSA-PKCS1-SHA256",
+            "signature",
+        ),
+    ]
+    .concat();
+    let run = run(&ceremony(card, "", &steps), vec![pin()]);
+    run.completed();
+    verify_off_card(card, "84", MessageDigest::sha256(), run.bytes("signature"));
 }
 
 /// Slot 9C defaults to PIN policy `always`: the card clears the PIN after

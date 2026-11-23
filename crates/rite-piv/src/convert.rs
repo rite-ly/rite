@@ -60,13 +60,14 @@ pub fn from_yubikey_slot(slot: yubikey::piv::SlotId) -> PivSlot {
 pub fn from_yubikey_algorithm(algo: yubikey::piv::AlgorithmId) -> Option<KeyAlgorithm> {
     match algo {
         yubikey::piv::AlgorithmId::Rsa2048 => Some(KeyAlgorithm::Rsa2048),
+        yubikey::piv::AlgorithmId::Rsa4096 => Some(KeyAlgorithm::Rsa4096),
         yubikey::piv::AlgorithmId::EccP256 => Some(KeyAlgorithm::EcdsaP256),
         yubikey::piv::AlgorithmId::EccP384 => Some(KeyAlgorithm::EcdsaP384),
-        // RSA-1024 is too weak for Rite. Firmware 5.7 adds the others; Rite
-        // does not use them on a card yet.
+        // RSA-1024 is too weak for Rite, and Rite has no RSA-3072 algorithm.
+        // Firmware 5.7 adds Ed25519 and X25519; Rite does not use them on a
+        // card yet.
         yubikey::piv::AlgorithmId::Rsa1024
         | yubikey::piv::AlgorithmId::Rsa3072
-        | yubikey::piv::AlgorithmId::Rsa4096
         | yubikey::piv::AlgorithmId::Ed25519
         | yubikey::piv::AlgorithmId::X25519 => None,
     }
@@ -78,9 +79,11 @@ pub fn from_yubikey_algorithm(algo: yubikey::piv::AlgorithmId) -> Option<KeyAlgo
 pub fn to_yubikey_algorithm(algo: KeyAlgorithm) -> Option<yubikey::piv::AlgorithmId> {
     match algo {
         KeyAlgorithm::Rsa2048 => Some(yubikey::piv::AlgorithmId::Rsa2048),
+        // A YubiKey extension, from firmware 5.7.
+        KeyAlgorithm::Rsa4096 => Some(yubikey::piv::AlgorithmId::Rsa4096),
         KeyAlgorithm::EcdsaP256 => Some(yubikey::piv::AlgorithmId::EccP256),
         KeyAlgorithm::EcdsaP384 => Some(yubikey::piv::AlgorithmId::EccP384),
-        // RSA-4096, Ed25519, and symmetric algorithms not supported by standard PIV.
+        // Ed25519, post-quantum and symmetric algorithms.
         _ => None,
     }
 }
@@ -170,43 +173,39 @@ mod tests {
 
     // --- Algorithm conversions ---
 
+    /// The algorithms Rite uses on a card, each with the card's name for it.
+    const ON_CARD: [(KeyAlgorithm, AlgorithmId); 4] = [
+        (KeyAlgorithm::Rsa2048, AlgorithmId::Rsa2048),
+        (KeyAlgorithm::Rsa4096, AlgorithmId::Rsa4096),
+        (KeyAlgorithm::EcdsaP256, AlgorithmId::EccP256),
+        (KeyAlgorithm::EcdsaP384, AlgorithmId::EccP384),
+    ];
+
     #[test]
-    fn algorithm_from_yubikey_maps_all_variants() {
-        assert_eq!(from_yubikey_algorithm(AlgorithmId::Rsa1024), None);
-        assert_eq!(
-            from_yubikey_algorithm(AlgorithmId::Rsa2048),
-            Some(KeyAlgorithm::Rsa2048)
-        );
-        assert_eq!(
-            from_yubikey_algorithm(AlgorithmId::EccP256),
-            Some(KeyAlgorithm::EcdsaP256)
-        );
-        assert_eq!(
-            from_yubikey_algorithm(AlgorithmId::EccP384),
-            Some(KeyAlgorithm::EcdsaP384)
-        );
+    fn algorithms_on_a_card_convert_both_ways() {
+        for (algorithm, card) in ON_CARD {
+            assert_eq!(to_yubikey_algorithm(algorithm), Some(card));
+            assert_eq!(from_yubikey_algorithm(card), Some(algorithm));
+        }
     }
 
     #[test]
-    fn algorithm_to_yubikey_maps_supported_variants() {
-        assert_eq!(
-            to_yubikey_algorithm(KeyAlgorithm::Rsa2048),
-            Some(AlgorithmId::Rsa2048)
-        );
-        assert_eq!(
-            to_yubikey_algorithm(KeyAlgorithm::EcdsaP256),
-            Some(AlgorithmId::EccP256)
-        );
-        assert_eq!(
-            to_yubikey_algorithm(KeyAlgorithm::EcdsaP384),
-            Some(AlgorithmId::EccP384)
-        );
+    fn card_algorithms_rite_does_not_use_convert_to_none() {
+        for card in [
+            AlgorithmId::Rsa1024,
+            AlgorithmId::Rsa3072,
+            AlgorithmId::Ed25519,
+            AlgorithmId::X25519,
+        ] {
+            assert_eq!(from_yubikey_algorithm(card), None, "{card:?}");
+        }
     }
 
     #[test]
     fn algorithm_to_yubikey_rejects_unsupported() {
-        assert_eq!(to_yubikey_algorithm(KeyAlgorithm::Rsa4096), None);
         assert_eq!(to_yubikey_algorithm(KeyAlgorithm::Ed25519), None);
+        assert_eq!(to_yubikey_algorithm(KeyAlgorithm::MlDsa65), None);
+        assert_eq!(to_yubikey_algorithm(KeyAlgorithm::Aes256), None);
     }
 
     // --- Origin conversion ---

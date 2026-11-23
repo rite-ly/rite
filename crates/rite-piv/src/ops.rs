@@ -241,6 +241,7 @@ pub fn generate_key(
     let yk_algo = convert::to_yubikey_algorithm(algorithm).ok_or_else(|| {
         BackendError::UnsupportedAlgorithm(format!("{algorithm} is not supported by PIV"))
     })?;
+    runs_on_firmware(algorithm, yk.version())?;
     let piv_slot = slot_hint
         .map(slot_from_hint)
         .transpose()?
@@ -263,6 +264,25 @@ pub fn generate_key(
         check_value: None,
         attestation: None,
     })
+}
+
+/// Refuses an algorithm the card's firmware does not implement, so that the
+/// error names the firmware rather than a card refusal.
+///
+/// RSA-4096 needs firmware 5.7 or later, as the card reports it through GET
+/// VERSION. The others Rite uses are standard PIV, which every YubiKey with
+/// PIV supports. Signing needs no check: it uses RSA-4096 only when the card
+/// reported an RSA-4096 key in the slot.
+fn runs_on_firmware(
+    algorithm: KeyAlgorithm,
+    firmware: yubikey::Version,
+) -> Result<(), BackendError> {
+    if algorithm == KeyAlgorithm::Rsa4096 && (firmware.major, firmware.minor) < (5, 7) {
+        return Err(BackendError::UnsupportedAlgorithm(format!(
+            "RSA-4096 on a YubiKey needs firmware 5.7 or later, and this card runs {firmware}"
+        )));
+    }
+    Ok(())
 }
 
 /// Export the public key from a slot.
@@ -330,12 +350,55 @@ pub fn list_keys(yk: &mut YubiKey) -> Result<Vec<KeyMetadata>, BackendError> {
 // Signing
 // ============================================================================
 
-/// RSA-2048 modulus length in bytes.
+/// An RSA key size Rite uses on a PIV card.
 ///
-/// RSA-2048 is the only RSA size Rite supports on PIV cards (see
-/// [`convert::to_yubikey_algorithm`]), so the PKCS#1 encoding below can fix
-/// the block length instead of querying the slot.
-const RSA_2048_LEN: usize = 256;
+/// RSA-2048 is standard PIV (SP 800-78-5). RSA-4096 is a YubiKey extension,
+/// from firmware 5.7. Rite refuses RSA-1024 as too weak, and has no
+/// [`KeyAlgorithm`] for RSA-3072.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RsaSize {
+    Rsa2048,
+    Rsa4096,
+}
+
+impl RsaSize {
+    const ALL: [Self; 2] = [Self::Rsa2048, Self::Rsa4096];
+
+    /// The size of an RSA key algorithm, or `None` for any other algorithm.
+    fn of(algorithm: KeyAlgorithm) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|size| size.key_algorithm() == algorithm)
+    }
+
+    /// The size whose modulus is `len` bytes. An RSA ciphertext is exactly
+    /// the modulus length (RFC 8017, §7.1.1).
+    fn from_modulus_len(len: usize) -> Option<Self> {
+        Self::ALL.into_iter().find(|size| size.modulus_len() == len)
+    }
+
+    /// The modulus length `k`, in bytes.
+    const fn modulus_len(self) -> usize {
+        match self {
+            Self::Rsa2048 => 256,
+            Self::Rsa4096 => 512,
+        }
+    }
+
+    const fn key_algorithm(self) -> KeyAlgorithm {
+        match self {
+            Self::Rsa2048 => KeyAlgorithm::Rsa2048,
+            Self::Rsa4096 => KeyAlgorithm::Rsa4096,
+        }
+    }
+}
+
+/// The card's name for `algorithm`, from the one table in [`convert`].
+fn card_algorithm(algorithm: KeyAlgorithm) -> Result<piv::AlgorithmId, BackendError> {
+    convert::to_yubikey_algorithm(algorithm).ok_or_else(|| {
+        BackendError::UnsupportedAlgorithm(format!("{algorithm} is not supported by PIV cards"))
+    })
+}
 
 /// DER encoding of the PKCS#1 `DigestInfo` header for SHA-256
 /// (RFC 8017, §9.2, note 1).
@@ -344,27 +407,49 @@ const SHA256_DIGEST_INFO_PREFIX: [u8; 19] = [
     0x00, 0x04, 0x20,
 ];
 
-/// Offset one past the `0xff` padding string PS: the leading `0x00 0x01` plus
-/// PS itself. PS fills whatever the fixed-size trailer (`0x00` separator,
-/// `DigestInfo` header, 32-byte digest) leaves of the modulus length.
-const EMSA_PS_END: usize = RSA_2048_LEN - SHA256_DIGEST_INFO_PREFIX.len() - 32 - 1;
+/// What follows the `0xff` padding string PS: the `0x00` separator, the
+/// `DigestInfo` header and the 32-byte digest. PS fills the rest of the
+/// modulus length after the leading `0x00 0x01`.
+const EMSA_TRAILER_LEN: usize = 1 + SHA256_DIGEST_INFO_PREFIX.len() + 32;
 
-/// EMSA-PKCS1-v1_5 encoding of a SHA-256 digest for an RSA-2048 key
+/// EMSA-PKCS1-v1_5 encoding of a SHA-256 digest for an RSA key of `size`
 /// (RFC 8017, §9.2): `0x00 0x01 PS 0x00 DigestInfo`, padded to the modulus
 /// length.
 ///
 /// The card performs a raw RSA private-key operation on its input, so the
 /// caller must supply the full padded block; sending the bare digest produces
 /// a card error or an invalid signature.
-fn emsa_pkcs1_v1_5_sha256(digest: [u8; 32]) -> Vec<u8> {
-    let mut em = Vec::with_capacity(RSA_2048_LEN);
+fn emsa_pkcs1_v1_5_sha256(digest: [u8; 32], size: RsaSize) -> Vec<u8> {
+    let k = size.modulus_len();
+    let mut em = Vec::with_capacity(k);
     em.push(0x00);
     em.push(0x01);
-    em.resize(EMSA_PS_END, 0xff);
+    em.resize(k.saturating_sub(EMSA_TRAILER_LEN), 0xff);
     em.push(0x00);
     em.extend_from_slice(&SHA256_DIGEST_INFO_PREFIX);
     em.extend_from_slice(&digest);
     em
+}
+
+/// The size of the RSA key a slot holds, as the card reported it through GET
+/// METADATA, which the PKCS#1 block must match.
+///
+/// A card that cannot report is taken to hold RSA-2048: RSA-4096 is a YubiKey
+/// extension, and a YubiKey that holds one (firmware 5.7 or later) answers GET
+/// METADATA.
+fn rsa_size_held(held: SlotKey, key_id: &KeyId) -> Result<RsaSize, BackendError> {
+    match held {
+        SlotKey::Held(Some(algorithm)) => RsaSize::of(algorithm).ok_or_else(|| {
+            BackendError::UnsupportedAlgorithm(format!(
+                "slot {key_id} holds {algorithm}; an RSA signature requires an RSA key"
+            ))
+        }),
+        SlotKey::Held(None) => Err(BackendError::UnsupportedAlgorithm(format!(
+            "slot {key_id} holds a key with an unsupported algorithm"
+        ))),
+        SlotKey::Empty => Err(BackendError::SlotEmpty(key_id.to_string())),
+        SlotKey::Unknown => Ok(RsaSize::Rsa2048),
+    }
 }
 
 /// Sign data using an on-device private key.
@@ -373,9 +458,17 @@ fn emsa_pkcs1_v1_5_sha256(digest: [u8; 32]) -> Vec<u8> {
 /// the bare digest, while RSA takes the full EMSA-PKCS1-v1_5 block, because
 /// the card applies a raw RSA private-key operation to whatever it receives.
 ///
+/// An RSA block is the modulus length, so an RSA signature first reads the
+/// slot's key size through GET METADATA (see [`rsa_size_held`]).
+///
 /// # Errors
 ///
-/// Returns a `BackendError` if the algorithm is unsupported or signing fails.
+/// - [`BackendError::UnsupportedAlgorithm`] if PIV cannot sign with
+///   `algorithm`, or, for an RSA signature, if the slot holds a key that is
+///   not RSA-2048 or RSA-4096;
+/// - [`BackendError::SlotEmpty`] if the card reports the slot empty before an
+///   RSA signature;
+/// - the mapped card error if signing fails.
 pub fn sign(
     yk: &mut YubiKey,
     key_id: &KeyId,
@@ -384,10 +477,16 @@ pub fn sign(
 ) -> Result<Vec<u8>, BackendError> {
     let slot = convert::to_yubikey_slot(slot_from_key_id(key_id)?)?;
 
-    let input = match algorithm {
-        SignAlgorithm::EcdsaSha256 => Sha256::digest(message).to_vec(),
-        SignAlgorithm::EcdsaSha384 => Sha384::digest(message).to_vec(),
-        SignAlgorithm::RsaPkcs1Sha256 => emsa_pkcs1_v1_5_sha256(Sha256::digest(message).into()),
+    // The key algorithm sent to the card: the slot's size for RSA, which a
+    // signature algorithm does not name, and the SDK's pairing for ECDSA.
+    let (input, key_algorithm) = match algorithm {
+        SignAlgorithm::EcdsaSha256 => (Sha256::digest(message).to_vec(), algorithm.key_algorithm()),
+        SignAlgorithm::EcdsaSha384 => (Sha384::digest(message).to_vec(), algorithm.key_algorithm()),
+        SignAlgorithm::RsaPkcs1Sha256 => {
+            let size = rsa_size_held(slot_key(yk, slot)?, key_id)?;
+            let em = emsa_pkcs1_v1_5_sha256(Sha256::digest(message).into(), size);
+            (em, size.key_algorithm())
+        }
         SignAlgorithm::RsaPssSha256 => {
             return Err(BackendError::UnsupportedAlgorithm(
                 "RSA-PSS requires client-side encoding that is not implemented; \
@@ -407,12 +506,8 @@ pub fn sign(
             )));
         }
     };
-    // The card algorithm comes from the shared SignAlgorithm -> KeyAlgorithm
-    // pairing so this table cannot drift from the SDK or the mock backend.
-    let yk_algo = convert::to_yubikey_algorithm(algorithm.key_algorithm()).ok_or_else(|| {
-        BackendError::UnsupportedAlgorithm(format!("{algorithm} is not supported by PIV cards"))
-    })?;
-    let sig = piv::sign_data(yk, &input, yk_algo, slot).map_err(map_error)?;
+    let sig =
+        piv::sign_data(yk, &input, card_algorithm(key_algorithm)?, slot).map_err(map_error)?;
     Ok(sig.to_vec())
 }
 
@@ -470,7 +565,7 @@ pub fn agree(
 
     match piv::decrypt_data(yk, point.sec1_uncompressed(), card_algorithm, slot) {
         Ok(z) => agreed_secret(z, curve),
-        Err(yubikey::Error::GenericError) => Err(refusal(slot_key(yk, slot), key_id, curve)),
+        Err(yubikey::Error::GenericError) => Err(refusal(slot_key(yk, slot)?, key_id, curve)),
         Err(other) => Err(map_error(other)),
     }
 }
@@ -495,21 +590,41 @@ fn permits_key_management(
     )))
 }
 
-/// What the card reports holding in `slot`, asked after it refused an
-/// operation there.
+/// What the card reports holding in `slot`, through GET METADATA.
 ///
-/// GET METADATA is a Yubico extension (firmware 5.2.3 and later). Another
-/// card answers [`SlotKey::Unknown`].
-fn slot_key(yk: &mut YubiKey, slot: SlotId) -> SlotKey {
+/// GET METADATA is a Yubico extension (firmware 5.2.3 and later). A card
+/// without it answers [`SlotKey::Unknown`].
+///
+/// # Errors
+///
+/// Returns the mapped error if the card cannot be reached, as opposed to a
+/// card that answers without the slot contents.
+fn slot_key(yk: &mut YubiKey, slot: SlotId) -> Result<SlotKey, BackendError> {
     match piv::metadata(yk, slot) {
-        Ok(meta) => match meta.algorithm {
+        Ok(meta) => Ok(match meta.algorithm {
             piv::SlotAlgorithmId::Asymmetric(a) => {
                 SlotKey::Held(convert::from_yubikey_algorithm(a))
             }
             _ => SlotKey::Held(None),
-        },
-        Err(yubikey::Error::GenericError) => SlotKey::Empty,
-        Err(_) => SlotKey::Unknown,
+        }),
+        Err(error) => slot_key_unread(error),
+    }
+}
+
+/// [`slot_key`] when the card does not return the metadata.
+///
+/// The `yubikey` crate maps an empty slot (`6A88`) to `NotFound`. A card
+/// that cannot be reached is an error. Anything else leaves the slot
+/// contents unknown: firmware before 5.2.3 (`NotSupported`), another status
+/// word, which a card without the command may answer (`GenericError`), or a
+/// reply the crate cannot parse, such as a public key it does not rebuild.
+fn slot_key_unread(error: yubikey::Error) -> Result<SlotKey, BackendError> {
+    match error {
+        yubikey::Error::NotFound => Ok(SlotKey::Empty),
+        unreachable @ (yubikey::Error::PcscError { .. }
+        | yubikey::Error::AppletError
+        | yubikey::Error::AppletNotFound { .. }) => Err(map_error(unreachable)),
+        _ => Ok(SlotKey::Unknown),
     }
 }
 
@@ -607,18 +722,22 @@ fn agreed_secret(z: yubikey::Buffer, curve: EcCurve) -> Result<AgreedSecret, Bac
 /// policy does.
 ///
 /// Only the key-management slots decrypt, for the reason [`agree`] gives.
-/// Rite supports RSA-2048 on PIV only.
+/// The ciphertext length names the key size, RSA-2048 or RSA-4096: a
+/// ciphertext is exactly the modulus length, and the card refuses a size
+/// that does not match its key.
 ///
 /// # Errors
 ///
 /// - [`BackendError::UnsupportedAlgorithm`] for a protection other than
-///   RSA-OAEP-SHA256, or if the slot key is not RSA-2048;
+///   RSA-OAEP-SHA256, or if the slot key is not RSA;
 /// - [`BackendError::OperationNotPermitted`] if the slot is not a
 ///   key-management slot;
-/// - [`BackendError::InvalidData`] if the ciphertext is not 256 bytes, if the
-///   card refuses it under an RSA-2048 key, or if the decrypted block is not
-///   an OAEP encoding. The latter two have the same message;
-/// - [`BackendError::Other`] if the card returns more than 256 bytes;
+/// - [`BackendError::InvalidData`] if the ciphertext is neither 256 nor 512
+///   bytes, if it is for an RSA key of another size than the slot's, if the
+///   card refuses it under a key of its size, or if the decrypted block is
+///   not an OAEP encoding. The latter two have the same message;
+/// - [`BackendError::Other`] if the card returns a block longer than the
+///   modulus;
 /// - [`BackendError::SlotEmpty`], [`BackendError::PinRequired`] and
 ///   [`BackendError::HardwareFailure`] as for [`agree`].
 pub fn decrypt_key(
@@ -627,36 +746,36 @@ pub fn decrypt_key(
     encrypted: &[u8],
     protection: KeyProtection,
 ) -> Result<Zeroizing<Vec<u8>>, BackendError> {
-    let slot = decryption_slot(key_id, encrypted, protection)?;
-    let card_algorithm = convert::to_yubikey_algorithm(KeyAlgorithm::Rsa2048)
-        .ok_or_else(|| BackendError::UnsupportedAlgorithm("RSA-2048 on PIV".to_string()))?;
+    let (slot, size) = decryption_slot(key_id, encrypted, protection)?;
+    runs_on_firmware(size.key_algorithm(), yk.version())?;
 
-    let block = match piv::decrypt_data(yk, encrypted, card_algorithm, slot) {
+    let block = match piv::decrypt_data(yk, encrypted, card_algorithm(size.key_algorithm())?, slot)
+    {
         Ok(block) => block,
         Err(yubikey::Error::GenericError) => {
-            return Err(decryption_refusal(slot_key(yk, slot), key_id));
+            return Err(decryption_refusal(slot_key(yk, slot)?, key_id, size));
         }
         Err(other) => return Err(map_error(other)),
     };
-    let block = full_length_block(&block)?;
+    let block = full_length_block(&block, size)?;
     oaep::decode(&block).map_err(|oaep::DecodingError| does_not_decrypt(key_id))
 }
 
-/// The shared error for a card refusal under RSA-2048 or an OAEP decoding
-/// failure.
+/// The shared error for a card refusal under a key of the ciphertext's size
+/// or an OAEP decoding failure.
 fn does_not_decrypt(key_id: &KeyId) -> BackendError {
     BackendError::InvalidData(format!(
         "the ciphertext does not decrypt under the key in slot {key_id}"
     ))
 }
 
-/// The slot [`decrypt_key`] sends `encrypted` to, once the checks that need
-/// no card pass.
+/// The slot [`decrypt_key`] sends `encrypted` to and the key size its length
+/// names, once the checks that need no card pass.
 fn decryption_slot(
     key_id: &KeyId,
     encrypted: &[u8],
     protection: KeyProtection,
-) -> Result<SlotId, BackendError> {
+) -> Result<(SlotId, RsaSize), BackendError> {
     if protection != KeyProtection::RsaOaepSha256 {
         return Err(BackendError::UnsupportedAlgorithm(format!(
             "a PIV card decrypts a key protected with RSA-OAEP-SHA256, not {protection}"
@@ -665,14 +784,14 @@ fn decryption_slot(
     let piv_slot = slot_from_key_id(key_id)?;
     permits_key_management(piv_slot, key_id, "key decryption")?;
     // The length is public: refused before the card sees it.
-    if encrypted.len() != RSA_2048_LEN {
-        return Err(BackendError::InvalidData(format!(
-            "an RSA-2048 ciphertext is {RSA_2048_LEN} bytes and this one is {}; PIV holds \
-             RSA-2048 keys only",
+    let size = RsaSize::from_modulus_len(encrypted.len()).ok_or_else(|| {
+        BackendError::InvalidData(format!(
+            "a ciphertext under an RSA-2048 or RSA-4096 key is 256 or 512 bytes, and this \
+             one is {}",
             encrypted.len()
-        )));
-    }
-    convert::to_yubikey_slot(piv_slot)
+        ))
+    })?;
+    Ok((convert::to_yubikey_slot(piv_slot)?, size))
 }
 
 /// The card's result at the full modulus length, the form OAEP decoding
@@ -680,15 +799,17 @@ fn decryption_slot(
 ///
 /// A card may drop the block's leading zero byte. The length says only how
 /// many leading zeros the block has, which a valid block fixes at one.
-fn full_length_block(block: &[u8]) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+fn full_length_block(block: &[u8], size: RsaSize) -> Result<Zeroizing<Vec<u8>>, BackendError> {
+    let k = size.modulus_len();
     let too_long = || {
         BackendError::Other(format!(
-            "the card returned a {}-byte block; RSA-2048 gives {RSA_2048_LEN}",
-            block.len()
+            "the card returned a {}-byte block; {} gives {k}",
+            block.len(),
+            size.key_algorithm()
         ))
     };
-    let pad = RSA_2048_LEN.checked_sub(block.len()).ok_or_else(too_long)?;
-    let mut full = Zeroizing::new(vec![0u8; RSA_2048_LEN]);
+    let pad = k.checked_sub(block.len()).ok_or_else(too_long)?;
+    let mut full = Zeroizing::new(vec![0u8; k]);
     full.get_mut(pad..)
         .ok_or_else(too_long)?
         .copy_from_slice(block);
@@ -700,24 +821,31 @@ fn full_length_block(block: &[u8]) -> Result<Zeroizing<Vec<u8>>, BackendError> {
 ///
 /// A missing PIN reaches the caller as `PinRequired` before this (the card's
 /// security status error). When a `GenericError` occurs and the slot is
-/// reported to hold an RSA-2048 key, the refusal is typically a ciphertext at
-/// or above the modulus, which a retry does not change. It is reported as a
-/// decryption failure rather than a transient hardware failure. Whether a
-/// ciphertext is below the modulus is public, so this mapping gives away
-/// nothing.
-fn decryption_refusal(held: SlotKey, key_id: &KeyId) -> BackendError {
+/// reported to hold an RSA key of the ciphertext's `size`, the refusal is
+/// typically a ciphertext at or above the modulus, which a retry does not
+/// change. It is reported as a decryption failure rather than a transient
+/// hardware failure. Whether a ciphertext is below the modulus is public, and
+/// so are both key sizes, so this mapping gives away nothing.
+fn decryption_refusal(held: SlotKey, key_id: &KeyId, size: RsaSize) -> BackendError {
     match held {
-        SlotKey::Held(Some(KeyAlgorithm::Rsa2048)) => does_not_decrypt(key_id),
-        SlotKey::Held(Some(algorithm)) => BackendError::UnsupportedAlgorithm(format!(
-            "slot {key_id} holds {algorithm}; decrypting a key requires an RSA-2048 key"
-        )),
+        SlotKey::Held(Some(algorithm)) => match RsaSize::of(algorithm) {
+            Some(held) if held == size => does_not_decrypt(key_id),
+            Some(_) => BackendError::InvalidData(format!(
+                "the ciphertext is for an {} key and slot {key_id} holds {algorithm}",
+                size.key_algorithm()
+            )),
+            None => BackendError::UnsupportedAlgorithm(format!(
+                "slot {key_id} holds {algorithm}; decrypting a key requires an RSA key"
+            )),
+        },
         SlotKey::Held(None) => BackendError::UnsupportedAlgorithm(format!(
             "slot {key_id} holds a key with an unsupported algorithm"
         )),
         SlotKey::Empty => BackendError::SlotEmpty(key_id.to_string()),
         SlotKey::Unknown => BackendError::HardwareFailure(format!(
             "the card refused to decrypt in slot {key_id}; it cannot report whether the slot \
-             is empty or holds a key other than RSA-2048"
+             is empty or holds a key other than {}",
+            size.key_algorithm()
         )),
     }
 }
@@ -888,23 +1016,110 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         );
 
-        let em = emsa_pkcs1_v1_5_sha256(Sha256::digest(b"abc").into());
+        let em = emsa_pkcs1_v1_5_sha256(Sha256::digest(b"abc").into(), RsaSize::Rsa2048);
         assert_eq!(to_hex(&em), EXPECTED_EM);
     }
 
+    /// The block verifies under OpenSSL's PKCS#1 v1.5 once the raw RSA
+    /// private-key operation the card applies has run over it.
     #[test]
-    fn emsa_pkcs1_v1_5_sha256_produces_the_rfc8017_block() {
-        let digest: [u8; 32] = sha2::Sha256::digest(b"release manifest").into();
-        let em = emsa_pkcs1_v1_5_sha256(digest);
+    fn emsa_pkcs1_v1_5_sha256_signs_as_openssl_verifies() {
+        use openssl::hash::MessageDigest;
+        use openssl::pkey::PKey;
+        use openssl::rsa::Padding;
+        use openssl::sign::Verifier;
 
-        // Modulus-length block: 0x00 0x01 PS(0xff..) 0x00 DigestInfo digest.
-        let mut expected = vec![0x00, 0x01];
-        expected.resize(EMSA_PS_END, 0xff);
-        expected.push(0x00);
-        expected.extend_from_slice(&SHA256_DIGEST_INFO_PREFIX);
-        expected.extend_from_slice(&digest);
-        assert_eq!(expected.len(), RSA_2048_LEN);
-        assert_eq!(em, expected);
+        let message = b"release manifest";
+        for (size, key) in [
+            (RsaSize::Rsa2048, oaep::tests::key()),
+            (RsaSize::Rsa4096, oaep::tests::rsa_4096_key().clone()),
+        ] {
+            let rsa = key.rsa().unwrap();
+            let em = emsa_pkcs1_v1_5_sha256(Sha256::digest(message).into(), size);
+            assert_eq!(em.len(), size.modulus_len());
+            let mut signature = vec![0; size.modulus_len()];
+            rsa.private_encrypt(&em, &mut signature, Padding::NONE)
+                .unwrap();
+
+            let key = PKey::from_rsa(rsa).unwrap();
+            let mut verifier = Verifier::new(MessageDigest::sha256(), &key).unwrap();
+            verifier.update(message).unwrap();
+            assert!(verifier.verify(&signature).unwrap(), "{size:?}");
+        }
+    }
+
+    #[test]
+    fn rsa_sizes_name_their_algorithms_and_modulus_lengths() {
+        for size in RsaSize::ALL {
+            assert_eq!(RsaSize::of(size.key_algorithm()), Some(size));
+            assert_eq!(RsaSize::from_modulus_len(size.modulus_len()), Some(size));
+        }
+        assert_eq!(RsaSize::of(KeyAlgorithm::EcdsaP256), None);
+        assert_eq!(RsaSize::from_modulus_len(384), None);
+    }
+
+    #[test]
+    fn an_rsa_signature_takes_the_size_of_the_slot_key() {
+        let key_id = KeyId::new("piv:9c");
+        assert_eq!(
+            rsa_size_held(SlotKey::Held(Some(KeyAlgorithm::Rsa4096)), &key_id).unwrap(),
+            RsaSize::Rsa4096
+        );
+        assert_eq!(
+            rsa_size_held(SlotKey::Held(Some(KeyAlgorithm::Rsa2048)), &key_id).unwrap(),
+            RsaSize::Rsa2048
+        );
+        // A card without GET METADATA holds standard PIV's RSA-2048.
+        assert_eq!(
+            rsa_size_held(SlotKey::Unknown, &key_id).unwrap(),
+            RsaSize::Rsa2048
+        );
+        assert!(matches!(
+            rsa_size_held(SlotKey::Held(Some(KeyAlgorithm::EcdsaP256)), &key_id),
+            Err(BackendError::UnsupportedAlgorithm(m)) if m.contains("ECDSA-P256")
+        ));
+        assert!(matches!(
+            rsa_size_held(SlotKey::Held(None), &key_id),
+            Err(BackendError::UnsupportedAlgorithm(_))
+        ));
+        assert!(matches!(
+            rsa_size_held(SlotKey::Empty, &key_id),
+            Err(BackendError::SlotEmpty(_))
+        ));
+    }
+
+    #[test]
+    fn unread_metadata_maps_to_what_the_card_answered() {
+        assert_eq!(
+            slot_key_unread(yubikey::Error::NotFound).unwrap(),
+            SlotKey::Empty
+        );
+        for error in [
+            yubikey::Error::NotSupported,
+            yubikey::Error::GenericError,
+            yubikey::Error::ParseError,
+            yubikey::Error::InvalidObject,
+        ] {
+            assert_eq!(slot_key_unread(error).unwrap(), SlotKey::Unknown);
+        }
+        assert!(slot_key_unread(yubikey::Error::AppletError).is_err());
+    }
+
+    #[test]
+    fn rsa_4096_is_generated_from_firmware_5_7() {
+        let firmware = |major, minor, patch| yubikey::Version {
+            major,
+            minor,
+            patch,
+        };
+        assert!(runs_on_firmware(KeyAlgorithm::Rsa4096, firmware(5, 7, 0)).is_ok());
+        assert!(runs_on_firmware(KeyAlgorithm::Rsa4096, firmware(6, 0, 0)).is_ok());
+        let error = runs_on_firmware(KeyAlgorithm::Rsa4096, firmware(5, 4, 3)).unwrap_err();
+        assert!(
+            matches!(&error, BackendError::UnsupportedAlgorithm(m) if m.contains("5.4.3")),
+            "{error:?}"
+        );
+        assert!(runs_on_firmware(KeyAlgorithm::Rsa2048, firmware(4, 3, 5)).is_ok());
     }
 
     #[test]
@@ -971,20 +1186,23 @@ mod tests {
     }
 
     #[test]
-    fn decryption_goes_to_slot_9d_with_one_rsa_2048_block() {
-        let slot = decryption_slot(
-            &KeyId::new("piv:9d"),
-            &[0; RSA_2048_LEN],
-            KeyProtection::RsaOaepSha256,
-        )
-        .unwrap();
-        assert_eq!(slot, SlotId::KeyManagement);
+    fn decryption_goes_to_slot_9d_at_the_size_the_ciphertext_names() {
+        for size in RsaSize::ALL {
+            let (slot, named) = decryption_slot(
+                &KeyId::new("piv:9d"),
+                &vec![0; size.modulus_len()],
+                KeyProtection::RsaOaepSha256,
+            )
+            .unwrap();
+            assert_eq!(slot, SlotId::KeyManagement);
+            assert_eq!(named, size);
+        }
     }
 
     /// Everything the host can refuse is refused before the card is asked.
     #[test]
     fn decryption_is_refused_before_the_card_by_name() {
-        let block = [0u8; RSA_2048_LEN];
+        let block = [0u8; 256];
         let cases: [(&str, &[u8], KeyProtection, &str); 4] = [
             ("piv:9d", &block, KeyProtection::AesKeyWrap, "AES-KW"),
             (
@@ -993,8 +1211,8 @@ mod tests {
                 KeyProtection::RsaOaepSha256,
                 "signature slot",
             ),
-            ("piv:9d", &[0; 512], KeyProtection::RsaOaepSha256, "512"),
-            ("piv:9d", &[], KeyProtection::RsaOaepSha256, "RSA-2048"),
+            ("piv:9d", &[0; 384], KeyProtection::RsaOaepSha256, "384"),
+            ("piv:9d", &[], KeyProtection::RsaOaepSha256, "RSA-4096"),
         ];
         for (key_id, encrypted, protection, named) in cases {
             let error = decryption_slot(&KeyId::new(key_id), encrypted, protection).unwrap_err();
@@ -1010,25 +1228,28 @@ mod tests {
         let (&leading, shortened) = block.split_first().unwrap();
         assert_eq!(leading, 0);
 
-        let full = full_length_block(shortened).unwrap();
+        let full = full_length_block(shortened, RsaSize::Rsa2048).unwrap();
         assert_eq!(&oaep::decode(&full).unwrap()[..], &message[..]);
     }
 
     #[test]
     fn a_block_the_card_shortened_is_restored_to_full_length() {
-        let full = full_length_block(&[0xab; RSA_2048_LEN - 1]).unwrap();
-        assert_eq!(full.len(), RSA_2048_LEN);
-        assert_eq!(full.first(), Some(&0));
-        assert_eq!(full.last(), Some(&0xab));
+        for size in RsaSize::ALL {
+            let k = size.modulus_len();
+            let full = full_length_block(&vec![0xab; k - 1], size).unwrap();
+            assert_eq!(full.len(), k);
+            assert_eq!(full.first(), Some(&0));
+            assert_eq!(full.last(), Some(&0xab));
 
-        assert_eq!(
-            &full_length_block(&[7; RSA_2048_LEN]).unwrap()[..],
-            &[7; RSA_2048_LEN][..]
-        );
-        assert!(matches!(
-            full_length_block(&[0; RSA_2048_LEN + 1]),
-            Err(BackendError::Other(_))
-        ));
+            assert_eq!(
+                &full_length_block(&vec![7; k], size).unwrap()[..],
+                &vec![7; k][..]
+            );
+            assert!(matches!(
+                full_length_block(&vec![0; k + 1], size),
+                Err(BackendError::Other(_))
+            ));
+        }
     }
 
     #[test]
@@ -1040,6 +1261,10 @@ mod tests {
                 (|e: &BackendError| matches!(e, BackendError::InvalidData(_)))
                     as fn(&BackendError) -> bool,
             ),
+            (SlotKey::Held(Some(KeyAlgorithm::Rsa4096)), |e| {
+                matches!(e, BackendError::InvalidData(m)
+                    if m.contains("RSA-2048") && m.contains("RSA-4096"))
+            }),
             (
                 SlotKey::Held(Some(KeyAlgorithm::EcdsaP256)),
                 |e| matches!(e, BackendError::UnsupportedAlgorithm(m) if m.contains("ECDSA-P256")),
@@ -1049,7 +1274,7 @@ mod tests {
                 matches!(e, BackendError::HardwareFailure(_))
             }),
         ] {
-            let error = decryption_refusal(held, &key_id);
+            let error = decryption_refusal(held, &key_id, RsaSize::Rsa2048);
             assert!(check(&error), "{held:?}: {error:?}");
         }
     }

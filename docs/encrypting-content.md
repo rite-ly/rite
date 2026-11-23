@@ -182,7 +182,8 @@ recipient, in one of three forms:
 The `openssl` backend opens all three forms. A PIV card (`piv` or `yubikey`)
 opens `KeyTransRecipientInfo` and `KeyAgreeRecipientInfo` with a key in slot
 9D or a retired key-management slot (`82`..`95`), declared as a held key in
-the ceremony. RSA keys on PIV are RSA-2048 only. A card holds no symmetric
+the ceremony. An RSA key on a card is RSA-2048, or RSA-4096 on a YubiKey
+with firmware 5.7 or later. A card holds no symmetric
 key, so it cannot open `KEKRecipientInfo`.
 
 A public-key recipient is named by subject key identifier: either the SHA-256

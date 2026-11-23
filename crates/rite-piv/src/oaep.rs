@@ -114,6 +114,13 @@ pub(crate) mod tests {
         PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap()
     }
 
+    /// One RSA-4096 key for the crate's tests, since generating it takes
+    /// seconds.
+    pub(crate) fn rsa_4096_key() -> &'static PKey<Private> {
+        static KEY: std::sync::OnceLock<PKey<Private>> = std::sync::OnceLock::new();
+        KEY.get_or_init(|| PKey::from_rsa(Rsa::generate(4096).unwrap()).unwrap())
+    }
+
     /// RSAES-OAEP-ENCRYPT by OpenSSL, as `openssl pkeyutl -encrypt -pkeyopt
     /// rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt
     /// rsa_mgf1_md:sha256` does it.
@@ -131,11 +138,12 @@ pub(crate) mod tests {
     /// The raw RSA private-key operation a PIV card runs, in software.
     fn raw_decrypt(key: &PKey<Private>, ciphertext: &[u8]) -> Vec<u8> {
         let rsa = key.rsa().unwrap();
-        let mut em = vec![0; K];
+        let k = usize::try_from(rsa.size()).unwrap();
+        let mut em = vec![0; k];
         let len = rsa
             .private_decrypt(ciphertext, &mut em, Padding::NONE)
             .unwrap();
-        assert_eq!(len, K, "OpenSSL returns the full block, leading zero kept");
+        assert_eq!(len, k, "OpenSSL returns the full block, leading zero kept");
         em
     }
 
@@ -154,6 +162,18 @@ pub(crate) mod tests {
                 let decoded = decode(&encoded(&key, &message)).unwrap();
                 assert_eq!(&decoded[..], &message[..], "{len}-byte message");
             }
+        }
+    }
+
+    /// Under RSA-4096, a content key and the largest message it carries:
+    /// k - 2hLen - 2 = 446 bytes.
+    #[test]
+    fn decodes_what_openssl_encrypts_under_rsa_4096() {
+        let key = rsa_4096_key();
+        for len in [32, 445, 446] {
+            let message: Vec<u8> = (0u8..=u8::MAX).cycle().take(len).collect();
+            let decoded = decode(&encoded(key, &message)).unwrap();
+            assert_eq!(&decoded[..], &message[..], "{len}-byte message");
         }
     }
 

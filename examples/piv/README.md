@@ -66,5 +66,19 @@ cargo run -p rite --features piv,yubikey -- run --dry-run --frontend headless \
   examples/piv/yubikey_signing.rite.yaml
 ```
 
+## `yubikey_key_generation.rite.yaml`: Key generation on the card
+
+Generates a P-256 signing key in slot 9C, requests its attestation
+certificate, and outputs its public key. The card's management key is stored
+on it behind the PIN (`ykman piv access change-management-key --generate
+--protect`): the `authenticate` step asks for the PIN, the card releases the
+management key, and `generate_key` replaces whatever slot 9C holds. The card
+reports its management key's algorithm, so an AES key (the default from
+firmware 5.7) and a 3DES key both work.
+
+```sh
+cargo run -p rite --features piv,yubikey -- check examples/piv/yubikey_key_generation.rite.yaml
+```
+
 For manual verification of real on-card signing and the attestation root, see
 [hardware backends](../../docs/development/hardware-backends.md).

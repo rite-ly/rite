@@ -77,6 +77,7 @@ pub(crate) fn resolve_ceremony(
     // Phase 4: Validate artifact ordering
     ctx.validate_artifact_ordering(&execution_plan, &ceremony.materials);
     ctx.check_pin_steps(&execution_plan, &ceremony.backends);
+    ctx.check_admin_steps(&execution_plan, &ceremony.backends);
     ctx.validate_output_kinds(&execution_plan);
     ctx.validate_input_kinds(&execution_plan);
 
@@ -314,51 +315,109 @@ impl ResolveContext {
         }
     }
 
-    /// Registers each credential, refusing one of an undeclared backend or
-    /// one Rite cannot present yet.
+    /// Registers each credential, refusing one of an undeclared backend,
+    /// one Rite cannot present on its backend, or a protected one nothing
+    /// valid releases.
     fn register_credentials(
         &mut self,
         credentials: &IndexMap<String, schema::CredentialDeclaration>,
         backends: &HashMap<String, rite_sdk::BackendConfig>,
     ) {
+        // Protected credentials whose reference did not read.
+        let mut unread: HashSet<CredentialId> = HashSet::new();
         for (name, declared) in credentials {
+            let id = CredentialId::new(name);
+            // An unreadable reference is reported here and kept as written:
+            // with an error, no ceremony is built from it.
+            let source = declared.source.clone().map(|written| {
+                credential_reference(&written).unwrap_or_else(|reason| {
+                    self.errors.push(ResolveError::InvalidProtectedBy {
+                        credential: id.clone(),
+                        written: written.clone(),
+                        reason,
+                    });
+                    unread.insert(id.clone());
+                    CredentialId::new(&written)
+                })
+            });
             let credential = Credential {
-                id: CredentialId::new(name),
+                id,
                 title: declared.title.clone(),
                 description: declared.description.clone(),
                 backend: declared.backend.clone(),
                 grants: declared.grants,
-                source: declared.source,
+                source,
             };
-            match backends
-                .get(&credential.backend)
-                .map(|config| config.provider)
-            {
-                None => self.errors.push(ResolveError::CredentialUndeclaredBackend {
-                    credential: credential.id.clone(),
-                    backend: credential.backend.clone(),
-                }),
-                // The mock answers the prompt, so a rehearsal can walk it.
-                Some(provider) if !provider.takes_pin() && provider != rite_sdk::Provider::Mock => {
-                    self.errors
-                        .push(ResolveError::CredentialOnBackendWithoutPin {
-                            credential: credential.id.clone(),
-                            backend: credential.backend.clone(),
-                        });
+            self.check_credential_backend(&credential, backends);
+            // The keys of a map are distinct, so the insert always succeeds.
+            let _ = self.credentials.insert(credential.id.clone(), credential);
+        }
+        // Every credential is registered, so a protected one can name one
+        // declared after it.
+        let protected: Vec<(CredentialId, String, CredentialId)> = self
+            .credentials
+            .iter()
+            .filter(|(id, _)| !unread.contains(*id))
+            .filter_map(|(id, credential)| {
+                let by = credential.protected_by()?;
+                Some((id.clone(), credential.backend.clone(), by.clone()))
+            })
+            .collect();
+        for (id, backend, by) in protected {
+            let reason = match self.credentials.get(&by) {
+                None => "which the ceremony does not declare".to_string(),
+                Some(releasing) if releasing.backend != backend => format!(
+                    "a credential of backend '{}', not '{backend}'",
+                    releasing.backend
+                ),
+                Some(releasing) if releasing.grants != rite_model::CredentialGrant::User => {
+                    format!(
+                        "which grants {}: a protected credential is released by a user \
+                         credential",
+                        releasing.grants
+                    )
                 }
-                Some(_) => {}
-            }
-            if let (grants, source) = credential.unsupported()
-                && (grants.is_some() || source.is_some())
+                Some(_) => continue,
+            };
+            self.errors.push(ResolveError::InvalidProtectedBy {
+                credential: id,
+                written: format!("${{credential.{by}}}"),
+                reason,
+            });
+        }
+    }
+
+    /// A credential's backend is declared, and Rite can present the
+    /// credential on it.
+    fn check_credential_backend(
+        &mut self,
+        credential: &Credential,
+        backends: &HashMap<String, rite_sdk::BackendConfig>,
+    ) {
+        match backends
+            .get(&credential.backend)
+            .map(|config| config.provider)
+        {
+            None => self.errors.push(ResolveError::CredentialUndeclaredBackend {
+                credential: credential.id.clone(),
+                backend: credential.backend.clone(),
+            }),
+            Some(provider)
+                if !rite_model::supports_credential(
+                    provider,
+                    credential.grants,
+                    &credential.source,
+                ) =>
             {
                 self.errors.push(ResolveError::UnsupportedCredential {
                     credential: credential.id.clone(),
-                    grants,
-                    value_source: source,
+                    grants: credential.grants,
+                    value_source: credential.source.as_str(),
+                    backend: credential.backend.clone(),
+                    provider,
                 });
             }
-            // The keys of a map are distinct, so the insert always succeeds.
-            let _ = self.credentials.insert(credential.id.clone(), credential);
+            Some(_) => {}
         }
     }
 
@@ -1264,8 +1323,9 @@ impl ResolveContext {
     /// Check the `authenticate` steps against the backends they run on and
     /// the keys they unlock.
     ///
-    /// Refuses an `authenticate` on a backend that takes no PIN, and warns where a step uses the private
-    /// half of a key on a device that does before any `authenticate` on it,
+    /// Warns where a step uses the private half of a key on a device that
+    /// takes a PIN before any `authenticate` that unlocks it (a user
+    /// credential, or an admin one the PIN released),
     /// or uses a key in a slot whose default policy is `always` (9C) a second
     /// time after one. A key is one the
     /// device held before the run or one a step made on it. A held key's
@@ -1289,19 +1349,21 @@ impl ResolveContext {
             if step.action == ActionType::Authenticate
                 && let Some(backend) = on
             {
-                // The mock locks nothing but answers the prompt, so a
-                // rehearsal can walk the step.
-                if let Some(other) = provider(backend)
-                    && !other.takes_pin()
-                    && other != rite_sdk::Provider::Mock
+                // A backend that takes no credential is refused where the
+                // credential is declared, or where the step reads one of
+                // another backend.
+                // An admin credential unlocks no key, unless the PIN
+                // released it.
+                if self
+                    .authenticated_credential(step)
+                    .is_none_or(|credential| {
+                        credential.grants == rite_model::CredentialGrant::User
+                            || credential.protected_by().is_some()
+                    })
                 {
-                    self.errors.push(ResolveError::PinOnBackendWithoutPin {
-                        step: step.id.clone(),
-                        backend: backend.to_string(),
-                    });
+                    unlocked.insert(backend);
+                    spent.retain(|(holder, _)| *holder != backend);
                 }
-                unlocked.insert(backend);
-                spent.retain(|(holder, _)| *holder != backend);
                 continue;
             }
             let held = held_keys_used_privately(&self.materials, step)
@@ -1347,6 +1409,89 @@ impl ResolveContext {
             {
                 made_on.insert(created.as_str(), (backend, generated_pin_policy(step)));
             }
+        }
+    }
+
+    /// The credential an `authenticate` step reads, once resolved.
+    fn authenticated_credential(&self, step: &Step) -> Option<&Credential> {
+        match step.reads_resolved.as_ref()?.get("credential")? {
+            ArtifactRef::Credential { id } => self.credentials.get(id),
+            ArtifactRef::Material { .. } | ArtifactRef::Produced { .. } => None,
+        }
+    }
+
+    /// An `authenticate` step gives a value exactly when its credential is
+    /// held, and a key is generated on a card only after an admin session
+    /// opens on it.
+    fn check_admin_steps(
+        &mut self,
+        execution_plan: &[Step],
+        backends: &HashMap<String, rite_sdk::BackendConfig>,
+    ) {
+        let mut sessions: HashSet<&str> = HashSet::new();
+        for step in execution_plan {
+            let Some(backend) = step.backend.as_deref() else {
+                continue;
+            };
+            if step.action == ActionType::Authenticate {
+                let Some(credential) = self.authenticated_credential(step) else {
+                    continue;
+                };
+                if credential.grants == rite_model::CredentialGrant::Admin {
+                    sessions.insert(backend);
+                }
+                let gives_value = step
+                    .reads_resolved
+                    .as_ref()
+                    .is_some_and(|inputs| inputs.get("value").is_some());
+                match (
+                    credential.source == rite_model::CredentialSource::Held,
+                    gives_value,
+                ) {
+                    (true, false) => self.errors.push(ResolveError::HeldCredentialWithoutValue {
+                        step: step.id.clone(),
+                        credential: credential.id.clone(),
+                    }),
+                    (false, true) => self.errors.push(ResolveError::ValueForUnheldCredential {
+                        step: step.id.clone(),
+                        credential: credential.id.clone(),
+                        value_source: credential.source.as_str(),
+                    }),
+                    _ => {}
+                }
+                continue;
+            }
+            let Some(provider) = backends.get(backend).map(|config| config.provider) else {
+                continue;
+            };
+            if step.action != ActionType::GenerateKey
+                || !rite_model::generates_in_admin_session(provider)
+                || sessions.contains(backend)
+            {
+                continue;
+            }
+            if !rite_model::opens_admin_session(provider) {
+                self.errors.push(ResolveError::AdminSessionUnavailable {
+                    step: step.id.clone(),
+                    backend: backend.to_string(),
+                    provider,
+                });
+                continue;
+            }
+            // Named when the ceremony declares exactly one.
+            let mut declared = self.credentials.iter().filter(|(_, credential)| {
+                credential.backend == backend
+                    && credential.grants == rite_model::CredentialGrant::Admin
+            });
+            let named = match (declared.next(), declared.next()) {
+                (Some((only, _)), None) => Some(only.clone()),
+                _ => None,
+            };
+            self.errors.push(ResolveError::AdminSessionRequired {
+                step: step.id.clone(),
+                backend: backend.to_string(),
+                admin: named,
+            });
         }
     }
 
@@ -1538,6 +1683,25 @@ fn check_shown_share(step: &Step, shares: &mut ShareLengths) -> Vec<String> {
             Vec::new()
         }
     }
+}
+
+/// The credential a `${credential.<id>}` reference names, or why the text
+/// is not one.
+fn credential_reference(written: &str) -> Result<CredentialId, String> {
+    let reference = require_reference(written).map_err(|failure| match failure {
+        ReferenceFailure::Unparsed(error) => format!("which is not a reference: {error}"),
+        ReferenceFailure::Computed => "which computes a value: write '${credential.<id>}'".into(),
+    })?;
+    if reference.ref_type != RefType::Credential {
+        return Err(format!(
+            "which is a {} reference: write '${{credential.<id>}}'",
+            reference.ref_type
+        ));
+    }
+    if reference.property.is_some() {
+        return Err("a credential has no properties: write '${credential.<id>}'".to_string());
+    }
+    Ok(CredentialId::new(&reference.name))
 }
 
 /// The keys a backend held before the run whose private half `step` uses,

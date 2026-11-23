@@ -15,8 +15,9 @@ use zeroize::Zeroizing;
 
 use rite_sdk::{
     AgreedSecret, BackendError, EcCurve, EcPoint, KeyAlgorithm, KeyId, KeyMetadata, KeyProtection,
-    PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy, PublicKeyDer,
-    SignAlgorithm, YubikeySlotMetadata,
+    ManagementKey, ManagementKeyAlgorithm, ManagementSession, PivDeviceInfo, PivKeyOrigin,
+    PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy, PublicKeyDer, SignAlgorithm,
+    YubikeySlotMetadata,
 };
 
 use crate::{convert, oaep};
@@ -133,22 +134,112 @@ pub fn pin_retries(yk: &mut YubiKey) -> Result<u32, BackendError> {
     yk.get_pin_retries().map(u32::from).map_err(map_error)
 }
 
-/// Authenticate with the management key.
+/// The factory management key of every PIV card Yubico ships, in 3DES before
+/// firmware 5.7 and AES-192 from it.
+const DEFAULT_MANAGEMENT_KEY: [u8; 24] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8,
+];
+
+/// Authenticate with the management key, and report its algorithm and
+/// whether it is still the default.
+///
+/// The algorithm comes from the card's metadata, so a 24-byte key is read
+/// as AES-192 or 3DES as the card has it: the length alone cannot tell them
+/// apart. A protected key is read from the card, which releases it once
+/// the PIN is verified.
 ///
 /// # Errors
 ///
-/// Returns a `BackendError` if the key is malformed, and
-/// `ManagementKeyRequired` if the card refuses it: [`map_error`] reads an
-/// authentication failure as a missing PIN, which here it is not.
-pub fn authenticate_management(yk: &mut YubiKey, mgm_key: &[u8]) -> Result<(), BackendError> {
-    // `None` reads 24 bytes as a 3DES key. An AES-192 key, the default from
-    // firmware 5.7, has the same length; telling them apart needs the card's
-    // management-key algorithm, which this function does not read yet.
-    let key = yubikey::MgmKey::from_bytes(mgm_key, None).map_err(map_error)?;
-    yk.authenticate(&key).map_err(|error| match error {
+/// `InvalidData` for a held key of the wrong length or a stored protected
+/// key that does not fit the algorithm, `ObjectNotFound` when the card
+/// stores no protected key, `HardwareFailure` when it refuses to release
+/// one (the PIN no longer verified, or a protected object with no key), and `ManagementKeyRequired` if the card
+/// refuses the key, the factory key on a card re-keyed to another length
+/// included: [`map_error`] reads an authentication failure as a missing PIN,
+/// which here it is not.
+pub fn authenticate_management(
+    yk: &mut YubiKey,
+    key: ManagementKey<'_>,
+) -> Result<ManagementSession, BackendError> {
+    let (algorithm, is_default) = management_key_metadata(yk)?;
+    let yubikey_algorithm = Some(convert::to_yubikey_management_algorithm(algorithm));
+    let mgm = match key {
+        // A card re-keyed to AES-128 or AES-256 cannot hold the 24-byte
+        // factory key: refused as any other wrong key.
+        ManagementKey::FactoryDefault if algorithm.key_length() != DEFAULT_MANAGEMENT_KEY.len() => {
+            return Err(BackendError::ManagementKeyRequired);
+        }
+        ManagementKey::FactoryDefault => {
+            yubikey::MgmKey::from_bytes(DEFAULT_MANAGEMENT_KEY, yubikey_algorithm)
+                .map_err(map_error)?
+        }
+        ManagementKey::Value(bytes) => {
+            if bytes.len() != algorithm.key_length() {
+                return Err(BackendError::InvalidData(format!(
+                    "the card's management key is {algorithm:?}, which takes {} bytes, and the \
+                     value given is {}",
+                    algorithm.key_length(),
+                    bytes.len()
+                )));
+            }
+            yubikey::MgmKey::from_bytes(bytes, yubikey_algorithm).map_err(map_error)?
+        }
+        ManagementKey::Protected => {
+            // The crate reads any refusal of the protected object, the PIN
+            // no longer verified among them, as `GenericError`, and a
+            // stored key of the wrong size as `AuthenticationError`.
+            yubikey::MgmKey::get_protected(yk).map_err(|error| match error {
+                yubikey::Error::NotFound | yubikey::Error::InvalidObject => {
+                    BackendError::ObjectNotFound(
+                        "the card stores no PIN-protected management key".to_string(),
+                    )
+                }
+                yubikey::Error::GenericError => BackendError::HardwareFailure(
+                    "the card refused to release a PIN-protected management key, or stores \
+                     none: the PIN may no longer be verified, or the card needs its management \
+                     key protected again"
+                        .to_string(),
+                ),
+                yubikey::Error::AuthenticationError => BackendError::InvalidData(
+                    "the PIN-protected management key on the card does not fit the card's \
+                     management-key algorithm"
+                        .to_string(),
+                ),
+                other => map_error(other),
+            })?
+        }
+    };
+    yk.authenticate(&mgm).map_err(|error| match error {
         yubikey::Error::AuthenticationError => BackendError::ManagementKeyRequired,
         other => map_error(other),
+    })?;
+    Ok(ManagementSession {
+        algorithm,
+        is_default,
     })
+}
+
+/// The management key's algorithm, and whether it is still the default,
+/// from the card's metadata. A card too old to report metadata (`YubiKey`
+/// firmware before 5.3) has a 3DES key and does not say whether it is the
+/// default.
+fn management_key_metadata(
+    yk: &mut YubiKey,
+) -> Result<(ManagementKeyAlgorithm, Option<bool>), BackendError> {
+    let slot = SlotId::Management(piv::ManagementSlotId::Management);
+    match piv::metadata(yk, slot) {
+        Ok(meta) => match meta.algorithm {
+            piv::SlotAlgorithmId::Management(algorithm) => Ok((
+                convert::from_yubikey_management_algorithm(algorithm),
+                meta.default,
+            )),
+            other => Err(BackendError::HardwareFailure(format!(
+                "the card reports a {other:?} management key"
+            ))),
+        },
+        Err(yubikey::Error::NotSupported) => Ok((ManagementKeyAlgorithm::TripleDes, None)),
+        Err(error) => Err(map_error(error)),
+    }
 }
 
 // ============================================================================

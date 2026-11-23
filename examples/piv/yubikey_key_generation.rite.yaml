@@ -1,0 +1,86 @@
+version: "0.3"
+name: "Signing Key Generation on a YubiKey"
+description: |
+  Generate a signing key in PIV slot 9C of a prepared YubiKey, request a
+  YubiKey attestation certificate showing it was generated on the card, and
+  export its public key.
+
+backends:
+  token:
+    provider: yubikey
+
+credentials:
+  card_pin:
+    backend: token
+    grants: user
+    source: entered
+    description: "PIV PIN of the YubiKey, known to the key officer."
+  # Prepared with `ykman piv access change-management-key --generate --protect`:
+  # the card stores the management key and releases it after the PIN.
+  card_admin:
+    backend: token
+    grants: admin
+    source:
+      protected_by: "${credential.card_pin}"
+    description: "PIV management key, stored on the card behind the PIN."
+
+output:
+  signing_key:
+    type: public_key
+    description: "Public half of the signing key generated in slot 9C"
+  attestation_cert:
+    type: certificate
+    description: "YubiKey attestation certificate for slot 9C"
+
+roles:
+  officer:
+    name: "Key Officer"
+    person: "Alice Smith"
+  witness:
+    name: "Witness"
+    person: "Bob Jones"
+
+prerequisites:
+  - "A YubiKey with firmware 5.3 or later is inserted, its management key protected by the PIN"
+
+sections:
+  generate:
+    name: "Generate the Signing Key"
+    role: ${role.officer}
+    steps:
+      confirm_token:
+        action: confirm
+        with:
+          message: "Confirm the inserted YubiKey is assigned to this ceremony."
+      # Asks for the PIN, then has the card release its management key. The
+      # transcript records both authentications, never a value, and whether
+      # the management key is still the factory default.
+      admin_login:
+        action: authenticate
+        backend: token
+        reads:
+          credential: "${credential.card_admin}"
+      make_signing_key:
+        action: generate_key
+        backend: token
+        with:
+          algorithm: ECDSA-P256
+          slot: "9c"
+        creates: signing_key
+        description: "Generate the signing key in slot 9C, replacing any key there."
+      attest_signing_key:
+        action: yubikey_attest_slot
+        backend: token
+        with:
+          slot: "9c"
+        creates: attestation_cert
+        description: "Request the attestation certificate showing the key was generated on the card."
+
+  attestation:
+    name: "Witness Attestation"
+    steps:
+      witness_attest:
+        action: attest
+        role: ${role.witness}
+        with:
+          statement: "I witnessed the signing key being generated on the YubiKey."

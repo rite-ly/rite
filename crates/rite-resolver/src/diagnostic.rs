@@ -351,6 +351,8 @@ impl SpanMap {
     // TODO: pair this exhaustive match with a `#[cfg(test)] fn variant_name(&ResolveError)`
     // sentinel + a constructors-list test, so a new variant fails not only here but
     // also in the dispatch test table (`lib.rs`).
+    // One arm per kind of error, kept exhaustive so a new one is placed.
+    #[allow(clippy::too_many_lines)]
     fn span_for_error(&self, err: &ResolveError) -> Option<Span> {
         match err {
             ResolveError::Yaml { location, .. } | ResolveError::Definition { location, .. } => {
@@ -383,7 +385,10 @@ impl SpanMap {
             | ResolveError::CreatesNothing { step, .. }
             | ResolveError::ReadOnOtherBackend { step, .. }
             | ResolveError::CredentialProperty { step, .. }
-            | ResolveError::PinOnBackendWithoutPin { step, .. }
+            | ResolveError::HeldCredentialWithoutValue { step, .. }
+            | ResolveError::ValueForUnheldCredential { step, .. }
+            | ResolveError::AdminSessionRequired { step, .. }
+            | ResolveError::AdminSessionUnavailable { step, .. }
             | ResolveError::ArtifactNamesMaterial { step, .. }
             | ResolveError::InputKindMismatch { step, .. }
             | ResolveError::SymmetricKeyRead { step, .. }
@@ -440,8 +445,8 @@ impl SpanMap {
                 self.materials.get(material).copied()
             }
             ResolveError::CredentialUndeclaredBackend { credential, .. }
-            | ResolveError::CredentialOnBackendWithoutPin { credential, .. }
-            | ResolveError::UnsupportedCredential { credential, .. } => {
+            | ResolveError::UnsupportedCredential { credential, .. }
+            | ResolveError::InvalidProtectedBy { credential, .. } => {
                 self.credentials.get(credential).copied()
             }
             ResolveError::UnknownCredential {

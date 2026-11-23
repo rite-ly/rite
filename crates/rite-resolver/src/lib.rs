@@ -1527,16 +1527,22 @@ sections:
         /// declared once.
         fn pin_before(yaml: &str, step: &str, backend: &str) -> String {
             let credential = format!("  {backend}_pin:\n");
+            let entry = format!(
+                "{credential}    backend: {backend}\n    grants: user\n    source: entered\n"
+            );
             let declared = if yaml.contains(&credential) {
                 yaml.to_string()
+            } else if yaml.contains("\ncredentials:\n") {
+                replaced(
+                    yaml,
+                    "\ncredentials:\n",
+                    &format!("\ncredentials:\n{entry}"),
+                )
             } else {
                 replaced(
                     yaml,
                     "materials:\n",
-                    &format!(
-                        "credentials:\n{credential}    backend: {backend}\n    grants: user\n    \
-                         source: entered\nmaterials:\n"
-                    ),
+                    &format!("credentials:\n{entry}materials:\n"),
                 )
             };
             replaced(
@@ -1640,6 +1646,11 @@ roles: {}
 backends:
   token:
     provider: yubikey
+credentials:
+  token_admin:
+    backend: token
+    grants: admin
+    source: factory_default
 materials:
   manifest:
     type: bytes
@@ -1647,6 +1658,11 @@ materials:
 sections:
   main:
     steps:
+      admin:
+        action: authenticate
+        backend: token
+        reads:
+          credential: "${credential.token_admin}"
       make:
         action: generate_key
         backend: token
@@ -1661,6 +1677,172 @@ sections:
           data: "${artifact.manifest}"
         creates: signature
 "#;
+
+        /// [`MADE_ON_CARD`] with its management key from `source`, written
+        /// as YAML.
+        fn admin_from(source: &str) -> String {
+            replaced(MADE_ON_CARD, "source: factory_default", source)
+        }
+
+        /// A card generates a key only once a step opened an admin session
+        /// on it; `rite check` names the credential to authenticate with.
+        #[test]
+        fn a_key_is_generated_on_a_card_only_in_an_admin_session() {
+            assert_eq!(messages(MADE_ON_CARD), Vec::<String>::new());
+            let without_session = replaced(
+                MADE_ON_CARD,
+                "      admin:\n        action: authenticate\n        backend: token\n        \
+                 reads:\n          credential: \"${credential.token_admin}\"\n",
+                "",
+            );
+            let found = messages(&without_session);
+            assert!(
+                found.iter().any(
+                    |m| m.contains("Step 'make' generates a key on backend 'token'")
+                        && m.contains("'authenticate' step with 'token_admin'")
+                ),
+                "{found:?}"
+            );
+            let undeclared = replaced(
+                &without_session,
+                "credentials:\n  token_admin:\n    backend: token\n    grants: admin\n    \
+                 source: factory_default\n",
+                "",
+            );
+            let found = messages(&undeclared);
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("with an admin credential of 'token'")),
+                "{found:?}"
+            );
+        }
+
+        /// A protected management key is released by the PIN, so its
+        /// `authenticate` unlocks the card's keys too; the factory key does
+        /// not.
+        #[test]
+        fn a_protected_management_key_unlocks_the_card_too() {
+            let protected = replaced(
+                &admin_from("source:\n      protected_by: \"${credential.token_pin}\""),
+                "credentials:\n",
+                "credentials:\n  token_pin:\n    backend: token\n    grants: user\n    \
+                 source: entered\n",
+            );
+            assert_eq!(pin_warnings(&protected), Vec::<String>::new());
+            assert_eq!(pin_warnings(MADE_ON_CARD).len(), 1);
+        }
+
+        #[test]
+        fn a_protected_credential_is_released_by_a_user_credential_of_its_backend() {
+            let with_pin = |pin: &str| {
+                replaced(
+                    &admin_from("source:\n      protected_by: \"${credential.token_pin}\""),
+                    "credentials:\n",
+                    &format!("credentials:\n  token_pin:\n{pin}"),
+                )
+            };
+            for (yaml, reason) in [
+                (
+                    admin_from("source:\n      protected_by: token_pin"),
+                    "which is not a reference",
+                ),
+                (
+                    admin_from("source:\n      protected_by: \"${credential.token_pin}\""),
+                    "which the ceremony does not declare",
+                ),
+                (
+                    with_pin("    backend: spare\n    grants: user\n    source: entered\n"),
+                    "a credential of backend 'spare', not 'token'",
+                ),
+                (
+                    with_pin(
+                        "    backend: token\n    grants: admin\n    source: factory_default\n",
+                    ),
+                    "which grants admin",
+                ),
+            ] {
+                let found = messages(&yaml);
+                assert!(
+                    found
+                        .iter()
+                        .any(|m| m.contains("Credential 'token_admin' is protected by")
+                            && m.contains(reason)),
+                    "{reason}: {found:?}"
+                );
+            }
+        }
+
+        /// A held credential's value comes from an artifact the step reads;
+        /// no other credential takes one.
+        #[test]
+        fn a_held_credential_and_only_a_held_one_is_given_a_value() {
+            let read_value = |yaml: &str| {
+                replaced(
+                    &replaced(
+                        yaml,
+                        "      admin:\n",
+                        "      type_key:\n        action: enter_secret\n        with:\n          \
+                         message: \"Management key\"\n        creates: admin_key\n      admin:\n",
+                    ),
+                    "          credential: \"${credential.token_admin}\"\n",
+                    "          credential: \"${credential.token_admin}\"\n          \
+                     value: \"${artifact.admin_key}\"\n",
+                )
+            };
+            let held = admin_from("source: held");
+            assert_eq!(messages(&read_value(&held)), Vec::<String>::new());
+            let found = messages(&held);
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("'token_admin', which is held: give its value")),
+                "{found:?}"
+            );
+            let found = messages(&read_value(MADE_ON_CARD));
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("gives a value for 'token_admin'")
+                        && m.contains("'factory_default'")),
+                "{found:?}"
+            );
+        }
+
+        /// Rite authenticates as admin on a YubiKey only, so a `piv` card
+        /// generates no key in a ceremony.
+        #[test]
+        fn an_admin_credential_of_another_provider_is_refused() {
+            let on_piv = replaced(MADE_ON_CARD, "provider: yubikey", "provider: piv");
+            let found = messages(&on_piv);
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("'token_admin' declares 'grants: admin'")
+                        && m.contains("(provider 'piv')")),
+                "{found:?}"
+            );
+            let without_session = replaced(
+                &on_piv,
+                "      admin:\n        action: authenticate\n        backend: token\n        \
+                 reads:\n          credential: \"${credential.token_admin}\"\n",
+                "",
+            );
+            let found = messages(&without_session);
+            assert!(
+                found.iter().any(
+                    |m| m.contains("Step 'make' generates a key on backend 'token'")
+                        && m.contains("Rite opens none on a 'piv' backend")
+                ),
+                "{found:?}"
+            );
+            assert!(
+                !found
+                    .iter()
+                    .any(|m| m.contains("add an 'authenticate' step")),
+                "{found:?}"
+            );
+        }
 
         /// A key a step made on the card needs the PIN as much as one it
         /// held, but not to check a signature against its public half.
@@ -1740,9 +1922,8 @@ sections:
             );
             let found = messages(&yaml);
             assert!(
-                found
-                    .iter()
-                    .any(|m| m.contains("'unlock_sign'") && m.contains("which takes no PIN")),
+                found.iter().any(|m| m.contains("Credential 'software_pin'")
+                    && m.contains("(provider 'openssl')")),
                 "{found:?}"
             );
         }
@@ -1764,7 +1945,8 @@ sections:
         }
 
         /// The model has every grant and source; Rite authenticates with a
-        /// user credential its holder types, and says so for the rest.
+        /// user credential its holder types or an admin credential it can
+        /// reach, and says so for the rest.
         #[test]
         fn a_credential_rite_cannot_present_yet_is_refused() {
             let yaml = pin_before(&on_card(DECLARED, "token"), "sign", "token");
@@ -1787,7 +1969,7 @@ sections:
                 assert!(
                     found.iter().any(|m| m.contains("'token_pin'")
                         && m.contains(field)
-                        && m.contains("not supported yet")),
+                        && m.contains("does not support")),
                     "{to}: {found:?}"
                 );
             }
@@ -1821,7 +2003,7 @@ sections:
             let found = messages(&yaml);
             assert!(
                 found.iter().any(|m| m.contains("Credential 'soft_pin'")
-                    && m.contains("backend 'software', which takes no PIN")),
+                    && m.contains("on backend 'software' (provider 'openssl')")),
                 "{found:?}"
             );
         }
@@ -1877,21 +2059,17 @@ sections:
 
         /// Both fields Rite cannot present yet are named at once.
         #[test]
-        fn every_unsupported_field_of_a_credential_is_named() {
+        fn an_unsupported_credential_names_its_grant_and_source() {
             let yaml = replaced(
-                &replaced(
-                    &pin_before(&on_card(DECLARED, "token"), "sign", "token"),
-                    "grants: user",
-                    "grants: admin",
-                ),
-                "source: entered",
-                "source: held",
+                &pin_before(&on_card(DECLARED, "token"), "sign", "token"),
+                "grants: user",
+                "grants: admin",
             );
             let found = messages(&yaml);
             assert!(
                 found
                     .iter()
-                    .any(|m| m.contains("'grants: admin' and 'source: held'")),
+                    .any(|m| m.contains("'grants: admin' with 'source: entered'")),
                 "{found:?}"
             );
         }

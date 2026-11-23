@@ -95,13 +95,16 @@ pub(crate) struct CredentialDeclaration {
     pub(crate) backend: String,
     /// What the credential is used for: `user` for a PIN that unlocks the
     /// device's keys, `admin` for a management key or security officer PIN,
-    /// `unblock` for a PUK. Rite supports `user` today.
+    /// `unblock` for a PUK. Rite supports `user` and `admin` today.
     pub(crate) grants: CredentialGrant,
     /// Where its value comes from: `entered`, typed by the person in the
     /// step's role; `factory_default`, the vendor's value; `held`, from an
-    /// artifact; `on_device`, presented to the device directly. Rite supports
-    /// `entered` today.
-    pub(crate) source: CredentialSource,
+    /// artifact the step reads as `value`; `on_device`, presented to the
+    /// device directly; `{ protected_by: ${credential.<id>} }`, stored on the
+    /// device and released by a user credential of the same backend. Rite
+    /// supports `entered` for a user credential, and `factory_default`,
+    /// `held` and `protected_by` for an admin credential.
+    pub(crate) source: CredentialSource<String>,
 }
 
 /// A role in the ceremony.

@@ -12,12 +12,10 @@
 //! Distinguishing failures or content-dependent timing can expose an OAEP
 //! oracle, as in Manger's attack.
 
-use sha2::{Digest, Sha256};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
 use zeroize::Zeroizing;
 
-/// SHA-256 output length, `hLen` in RFC 8017.
-const H_LEN: usize = 32;
+use crate::mgf1::{self, H_LEN};
 
 /// SHA-256 of the empty label.
 const EMPTY_LABEL_HASH: [u8; H_LEN] = [
@@ -48,10 +46,10 @@ pub(crate) fn decode(em: &[u8]) -> Result<Zeroizing<Vec<u8>>, DecodingError> {
 
     let mut seed = Zeroizing::new([0u8; H_LEN]);
     seed.copy_from_slice(masked_seed);
-    xor_mgf1(masked_db, &mut seed[..]);
+    mgf1::xor(masked_db, &mut seed[..]);
 
     let mut db = Zeroizing::new(masked_db.to_vec());
-    xor_mgf1(&seed[..], &mut db);
+    mgf1::xor(&seed[..], &mut db);
 
     let (label_hash, padded) = db.split_at_checked(H_LEN).ok_or(DecodingError)?;
     let mut valid = y.ct_eq(&0) & label_hash.ct_eq(&EMPTY_LABEL_HASH[..]);
@@ -81,21 +79,6 @@ pub(crate) fn decode(em: &[u8]) -> Result<Zeroizing<Vec<u8>>, DecodingError> {
         .and_then(|start| padded.get(start..))
         .map(|message| Zeroizing::new(message.to_vec()))
         .ok_or(DecodingError)
-}
-
-/// XORs MGF1 with SHA-256 over `seed` into `out` (RFC 8017, §B.2.1).
-fn xor_mgf1(seed: &[u8], out: &mut [u8]) {
-    for (counter, chunk) in (0u32..).zip(out.chunks_mut(H_LEN)) {
-        let mask = Zeroizing::new(
-            Sha256::new()
-                .chain_update(seed)
-                .chain_update(counter.to_be_bytes())
-                .finalize(),
-        );
-        for (byte, m) in chunk.iter_mut().zip(mask.iter()) {
-            *byte ^= m;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -207,13 +190,13 @@ pub(crate) mod tests {
             let mut em = good.clone();
             let (_, rest) = em.split_at_mut(1);
             let (masked_seed, masked_db) = rest.split_at_mut(H_LEN);
-            xor_mgf1(masked_db, masked_seed);
+            mgf1::xor(masked_db, masked_seed);
             let seed: [u8; H_LEN] = (&*masked_seed).try_into().unwrap();
-            xor_mgf1(&seed, masked_db);
+            mgf1::xor(&seed, masked_db);
             edit(masked_db);
-            xor_mgf1(&seed, masked_db);
+            mgf1::xor(&seed, masked_db);
             masked_seed.copy_from_slice(&seed);
-            xor_mgf1(masked_db, masked_seed);
+            mgf1::xor(masked_db, masked_seed);
             em
         };
         let unedited = rebuild(&|_| {});
@@ -244,20 +227,9 @@ pub(crate) mod tests {
         }
     }
 
-    /// MGF1 masking is its own inverse, which the edited-field cases above
-    /// rely on.
-    #[test]
-    fn mgf1_masks_and_unmasks() {
-        let mut block = [0u8; 223];
-        let seed = [9u8; H_LEN];
-        xor_mgf1(&seed, &mut block);
-        assert_ne!(block, [0u8; 223]);
-        xor_mgf1(&seed, &mut block);
-        assert_eq!(block, [0u8; 223]);
-    }
-
     #[test]
     fn empty_label_hash_is_sha256_of_nothing() {
+        use sha2::{Digest, Sha256};
         assert_eq!(Sha256::digest([]).as_slice(), &EMPTY_LABEL_HASH[..]);
     }
 }

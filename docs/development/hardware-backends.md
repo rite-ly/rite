@@ -106,9 +106,12 @@ A PIV card does no OAEP. It runs the raw RSA private-key operation through
 GENERAL AUTHENTICATE with the ciphertext under tag `0x81`, and returns the
 encoded block. The backend removes the OAEP encoding on
 the host (`rite-piv/src/oaep.rs`). Signing is the mirror image: the backend
-encodes the PKCS#1 block on the host and the card applies the private key to
-it. The block is the modulus length, so before an RSA signature the backend
-reads the slot's key size through GET METADATA. A card that cannot answer is
+encodes the PKCS#1 v1.5 or PSS block on the host and the card applies the
+private key to it. A PSS block (`rite-piv/src/pss.rs`) uses SHA-256 for the
+hash and for MGF1, and a 32-byte salt from the operating system, the
+parameters `rite-openssl` signs with. The block is the modulus length, so
+before an RSA signature the backend reads the slot's key size through GET
+METADATA. A card that cannot answer is
 taken to hold RSA-2048, the only RSA size standard PIV defines for Rite: a
 YubiKey that holds RSA-4096 answers GET METADATA.
 
@@ -300,7 +303,7 @@ Each operation still needs implementation and hardware testing.
 CI cannot touch a physical device, so:
 
 - **Unit tests** cover the pure logic (slot parsing, type conversion, error
-  mapping, PKCS#1 encoding, and OAEP decoding against OpenSSL) and each action's `execute` against the
+  mapping, PKCS#1 and PSS encoding, and OAEP decoding against OpenSSL) and each action's `execute` against the
   `MockBackend`, using the `ReporterHarness` to assert the produced artifact and
   the emitted `BackendOperation` fact. The `authenticate` tests answer the PIN
   prompt via `ReporterHarness::enqueue_response`. These run in CI behind the
@@ -338,7 +341,7 @@ CI cannot touch a physical device, so:
   It needs `ykman`, and does nothing unless the inserted YubiKey is the one
   named. It covers `authenticate`, signing with keys the card held (RSA-2048,
   RSA-4096 and P-384, each checked by OpenSSL against the key `ykman`
-  exported), opening what was sealed to 9D (P-384, by agreement), 82
+  exported, and RSA-PSS under both RSA sizes), opening what was sealed to 9D (P-384, by agreement), 82
   (RSA-2048, by decryption) and 83 (RSA-4096, by decryption), slot 9C
   needing the PIN before each signature, an RSA key with PIN policy
   `always` in 84 signing after one `authenticate`, a wrong PIN retried,
@@ -358,11 +361,12 @@ CI cannot touch a physical device, so:
      an attestation certificate that chains to the Yubico attestation root.
   4. Cover the full algorithm matrix, not just the example's default: repeat
      `sign_data` for each supported algorithm (`ECDSA-SHA256`, `ECDSA-SHA384`,
-     `RSA-PKCS1-SHA256`, each against a slot provisioned with the matching key
+     `RSA-PKCS1-SHA256`, `RSA-PSS-SHA256`, each against a slot provisioned with the matching key
      type, RSA under both RSA-2048 and RSA-4096) and verify every signature off-card against the slot certificate
-     (`openssl dgst -sha256 -verify`). Cargo tests exercise these paths only
+     (`openssl dgst -sha256 -verify`, adding `-sigopt rsa_padding_mode:pss
+     -sigopt rsa_pss_saltlen:32` for PSS). Cargo tests exercise these paths only
      against test doubles; the encoding the card actually accepts (bare digest
-     for ECDSA, padded PKCS#1 block for RSA) is proven here or nowhere.
+     for ECDSA, padded PKCS#1 or PSS block for RSA) is proven here or nowhere.
   5. Test key agreement as described in [Key agreement](#key-agreement):
      provision an EC key and certificate in slot 9D, encrypt content to the
      certificate with `openssl cms -encrypt` using an ECDH recipient, then open

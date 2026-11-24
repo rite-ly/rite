@@ -31,7 +31,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use openssl::hash::MessageDigest;
 use openssl::pkey::PKey;
-use openssl::sign::Verifier;
+use openssl::rsa::Padding;
+use openssl::sign::{RsaPssSaltlen, Verifier};
 use rite_model::{ArtifactId, MaterialKind};
 use rite_runtime::test_support::StepRunner;
 use rite_runtime::{ArtifactValue, BackendRegistry, ExecutionError, Response};
@@ -233,12 +234,30 @@ fn sign(id: &str, key: &str, algorithm: &str, creates: &str) -> String {
     )
 }
 
-/// A `verify_signature` step in software, named `id`.
+/// A `verify_signature` step in software, named `id`, under the scheme the
+/// key implies.
 fn verify(id: &str, key: &str, signature: &str) -> String {
     format!(
         r"      {id}:
         action: verify_signature
         backend: software
+        reads:
+          key: ${{artifact.{key}}}
+          data: ${{artifact.manifest}}
+          signature: ${{artifact.{signature}}}
+"
+    )
+}
+
+/// A `verify_signature` step in software, named `id`, under `algorithm`,
+/// for a scheme the key does not imply, such as RSA-PSS.
+fn verify_as(id: &str, key: &str, signature: &str, algorithm: &str) -> String {
+    format!(
+        r"      {id}:
+        action: verify_signature
+        backend: software
+        with:
+          algorithm: {algorithm}
         reads:
           key: ${{artifact.{key}}}
           data: ${{artifact.manifest}}
@@ -325,6 +344,25 @@ fn verify_off_card(card: &Card, slot: &str, digest: MessageDigest, signature: &[
     assert!(
         verifier.verify(signature).unwrap(),
         "OpenSSL rejects the {slot} signature"
+    );
+}
+
+/// [`verify_off_card`] for an RSA-PSS signature with SHA-256, MGF1 over
+/// SHA-256 and the salt length fixed at 32 bytes, the parameters
+/// `rite-openssl` signs with.
+fn verify_pss_off_card(card: &Card, slot: &str, signature: &[u8]) {
+    let pem = std::fs::read(card.keys.join(format!("{slot}.pem"))).unwrap();
+    let key = PKey::public_key_from_pem(&pem).unwrap();
+    let mut verifier = Verifier::new(MessageDigest::sha256(), &key).unwrap();
+    verifier.set_rsa_padding(Padding::PKCS1_PSS).unwrap();
+    verifier.set_rsa_mgf1_md(MessageDigest::sha256()).unwrap();
+    verifier
+        .set_rsa_pss_saltlen(RsaPssSaltlen::custom(32))
+        .unwrap();
+    verifier.update(MANIFEST).unwrap();
+    assert!(
+        verifier.verify(signature).unwrap(),
+        "OpenSSL rejects the {slot} PSS signature"
     );
 }
 
@@ -427,6 +465,38 @@ fn the_card_opens_what_was_sealed_to_its_key() {
         run.completed();
         assert_eq!(run.bytes("opened"), MANIFEST, "{key}");
     }
+}
+
+/// RSA-PSS signatures from RSA-2048 and RSA-4096 keys the card held: the
+/// host builds the PSS block, the card applies the raw RSA operation, and
+/// both Rite's software verifier and OpenSSL with a fixed 32-byte salt
+/// accept the result.
+#[test]
+#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
+fn rsa_pss_signatures_from_the_card_verify_off_card() {
+    let Some((_turn, card)) = card() else { return };
+    let steps = [
+        unlock("unlock"),
+        sign("sign_rsa", "rsa_key", "RSA-PSS-SHA256", "rsa_signature"),
+        sign(
+            "sign_rsa_4096",
+            "rsa_4096_key",
+            "RSA-PSS-SHA256",
+            "rsa_4096_signature",
+        ),
+        verify_as("check_rsa", "rsa_key", "rsa_signature", "RSA-PSS-SHA256"),
+        verify_as(
+            "check_rsa_4096",
+            "rsa_4096_key",
+            "rsa_4096_signature",
+            "RSA-PSS-SHA256",
+        ),
+    ]
+    .concat();
+    let run = run(&ceremony(card, "", &steps), vec![pin()]);
+    run.completed();
+    verify_pss_off_card(card, "9a", run.bytes("rsa_signature"));
+    verify_pss_off_card(card, "83", run.bytes("rsa_4096_signature"));
 }
 
 /// An RSA signature reads the slot's key size through GET METADATA between

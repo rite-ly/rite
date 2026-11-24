@@ -20,7 +20,7 @@ use rite_sdk::{
     YubikeySlotMetadata,
 };
 
-use crate::{convert, oaep};
+use crate::{convert, oaep, pss};
 
 // ============================================================================
 // Error mapping
@@ -447,7 +447,7 @@ pub fn list_keys(yk: &mut YubiKey) -> Result<Vec<KeyMetadata>, BackendError> {
 /// from firmware 5.7. Rite refuses RSA-1024 as too weak, and has no
 /// [`KeyAlgorithm`] for RSA-3072.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RsaSize {
+pub(crate) enum RsaSize {
     Rsa2048,
     Rsa4096,
 }
@@ -468,8 +468,9 @@ impl RsaSize {
         Self::ALL.into_iter().find(|size| size.modulus_len() == len)
     }
 
-    /// The modulus length `k`, in bytes.
-    const fn modulus_len(self) -> usize {
+    /// The modulus length `k`, in bytes. The modulus fills them: 2048 or
+    /// 4096 bits.
+    pub(crate) const fn modulus_len(self) -> usize {
         match self {
             Self::Rsa2048 => 256,
             Self::Rsa4096 => 512,
@@ -523,7 +524,7 @@ fn emsa_pkcs1_v1_5_sha256(digest: [u8; 32], size: RsaSize) -> Vec<u8> {
 }
 
 /// The size of the RSA key a slot holds, as the card reported it through GET
-/// METADATA, which the PKCS#1 block must match.
+/// METADATA, which the PKCS#1 or PSS block must match.
 ///
 /// A card that cannot report is taken to hold RSA-2048: RSA-4096 is a YubiKey
 /// extension, and a YubiKey that holds one (firmware 5.7 or later) answers GET
@@ -546,8 +547,10 @@ fn rsa_size_held(held: SlotKey, key_id: &KeyId) -> Result<RsaSize, BackendError>
 /// Sign data using an on-device private key.
 ///
 /// Encodes the message per algorithm before it reaches the card: ECDSA takes
-/// the bare digest, while RSA takes the full EMSA-PKCS1-v1_5 block, because
-/// the card applies a raw RSA private-key operation to whatever it receives.
+/// the bare digest, while RSA takes the full EMSA-PKCS1-v1_5 or EMSA-PSS
+/// block, because the card applies a raw RSA private-key operation to
+/// whatever it receives. A PSS block carries a fresh 32-byte salt, as
+/// `rite-openssl` signs.
 ///
 /// An RSA block is the modulus length, so an RSA signature first reads the
 /// slot's key size through GET METADATA (see [`rsa_size_held`]).
@@ -559,6 +562,7 @@ fn rsa_size_held(held: SlotKey, key_id: &KeyId) -> Result<RsaSize, BackendError>
 ///   not RSA-2048 or RSA-4096;
 /// - [`BackendError::SlotEmpty`] if the card reports the slot empty before an
 ///   RSA signature;
+/// - [`BackendError::Other`] if the operating system supplies no PSS salt;
 /// - the mapped card error if signing fails.
 pub fn sign(
     yk: &mut YubiKey,
@@ -579,11 +583,9 @@ pub fn sign(
             (em, size.key_algorithm())
         }
         SignAlgorithm::RsaPssSha256 => {
-            return Err(BackendError::UnsupportedAlgorithm(
-                "RSA-PSS requires client-side encoding that is not implemented; \
-                 use RSA-PKCS1-SHA256"
-                    .to_string(),
-            ));
+            let size = rsa_size_held(slot_key(yk, slot)?, key_id)?;
+            let em = pss::encode_sha256(Sha256::digest(message).into(), &pss::random_salt()?, size);
+            (em, size.key_algorithm())
         }
         SignAlgorithm::Ed25519 => {
             return Err(BackendError::UnsupportedAlgorithm(

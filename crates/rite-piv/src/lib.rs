@@ -11,7 +11,8 @@
 //! ## Capabilities
 //!
 //! - [`KeyStoreBackend`](rite_sdk::KeyStoreBackend): slot-based key generation
-//! - [`SignBackend`](rite_sdk::SignBackend): on-card signing
+//! - [`SignBackend`](rite_sdk::SignBackend): on-card signing, with the
+//!   PKCS#1 v1.5 or PSS encoding of an RSA signature built on the host
 //! - [`KeyAgreementBackend`](rite_sdk::KeyAgreementBackend): ECDH in slot 9D and
 //!   the retired key-management slots
 //! - [`KeyDecryptBackend`](rite_sdk::KeyDecryptBackend): RSA-OAEP-SHA256 in the
@@ -38,7 +39,9 @@
 
 mod backend;
 pub mod convert;
+mod mgf1;
 mod oaep;
 pub mod ops;
+mod pss;
 
 pub use backend::PivCardBackend;

@@ -2141,6 +2141,7 @@ dependencies = [
  "openssl",
  "p256",
  "p384",
+ "rand",
  "rite-sdk",
  "serde_json",
  "sha2",

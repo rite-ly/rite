@@ -136,6 +136,28 @@ nothing else.
 `rite-openssl` performs OAEP encoding on the host when it encrypts to a public
 key.
 
+## Encoding PSS before a card
+
+`rite-piv/src/pss.rs` encodes EMSA-PSS (RFC 8017 §9.1.1, SHA-256, MGF1 with
+SHA-256, a 32-byte salt). A PIV card runs only the raw RSA operation, so an
+RSA-PSS signature on a card needs the host to build the block, as it builds
+the PKCS#1 v1.5 block. The encoding takes the message digest and a salt, and
+touches no key. It sits in `rite-piv` for the reasons OAEP decoding does:
+`rite-piv` cannot call OpenSSL, and the `rsa` crate encodes PSS only inside
+its own signing. Both encodings share MGF1 (`rite-piv/src/mgf1.rs`).
+
+The salt comes from the operating system's generator through `rand`, as
+`rite-runtime` draws its random bytes, rather than from a provider. It is not
+secret: anyone holding the public key recovers it from the signature. It
+makes two signatures of the same message differ, which the scheme's security
+proof uses, and standard PIV has no command to draw it from the card.
+
+The salt length is the one `rite-openssl` signs with, so a PSS signature
+carries the same parameters whichever backend made it. The tests run the raw
+RSA operation over the block in software and verify the result with OpenSSL,
+the salt length fixed at 32 bytes. RFC 8017's PSS examples use SHA-1, so
+OpenSSL supplies the interoperability check here too.
+
 ## Where the seam is
 
 `rite-stdlib/src/signatures.rs`.

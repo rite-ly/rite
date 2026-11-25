@@ -127,6 +127,38 @@
     "sections"
   ],
   "$defs": {
+    "AccessWhen": {
+      "description": "When a device asks again before it lets a key be used.\n\nOne value type for both axes of a key's access policy, authentication and presence. A backend refuses a value it cannot enforce, `never` included.",
+      "anyOf": [
+        {
+          "oneOf": [
+            {
+              "description": "Never: possession of the device is the authorisation.",
+              "type": "string",
+              "const": "never"
+            },
+            {
+              "description": "Once, until the device logs out or resets.",
+              "type": "string",
+              "const": "per_session"
+            },
+            {
+              "description": "Once for a time window: 15 seconds for a `YubiKey` touch.",
+              "type": "string",
+              "const": "cached"
+            },
+            {
+              "description": "Right before each operation.",
+              "type": "string",
+              "const": "per_use"
+            }
+          ]
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
     "Act": {
       "description": "An act, a group of sections in the script and the report.",
       "type": "object",
@@ -1131,13 +1163,93 @@
             },
             "policy": {
               "description": "The key's permitted operations and whether it can be exported from the backend. A key used by a later `wrap_key` step must be extractable.",
-              "$ref": "#/$defs/KeyPolicyParams"
+              "$ref": "#/$defs/GenerateKeyPolicyParams"
             },
             "slot": {
               "description": "A backend-specific location for the key, such as a PIV slot or PKCS#11 slot. The software backend ignores this field.",
               "anyOf": [
                 {
                   "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "GenerateKeyPolicyParams": {
+      "description": "What a generated key may do, and its access policy, which is fixed when the device makes the key.\n\nThe fields of [`KeyPolicyParams`], with the same defaults, and the two axes of the access policy. A key imported or unwrapped has no access policy here: its fields are refused there.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "authentication": {
+              "description": "When the device asks for the key's user (a PIN): `never`, `per_session`, `cached` or `per_use`, on a backend that can enforce the value; left out, the device's default. Written as a value, not an expression.",
+              "$ref": "#/$defs/AccessWhen"
+            },
+            "extractable": {
+              "description": "Whether the key may be exported from the backend.",
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "persistent": {
+              "description": "Whether the key remains available after the session ends.",
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "presence": {
+              "description": "When the device asks for a person to touch it: `never`, `cached` or `per_use` on a `YubiKey`; left out, the device's default. Written as a value, not an expression.",
+              "$ref": "#/$defs/AccessWhen"
+            },
+            "sensitive": {
+              "description": "Whether the backend marks the key as sensitive and prevents plaintext access.",
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "usages": {
+              "description": "The operations the key may perform, such as `sign` or `unwrap`.",
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/KeyUsage"
+                  }
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "wrap_with_trusted_only": {
+              "description": "Whether the key may be wrapped only by a trusted key.",
+              "anyOf": [
+                {
+                  "type": "boolean"
                 },
                 {
                   "$ref": "#/$defs/Expression"

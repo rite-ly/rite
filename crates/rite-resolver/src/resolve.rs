@@ -78,6 +78,7 @@ pub(crate) fn resolve_ceremony(
     ctx.validate_artifact_ordering(&execution_plan, &ceremony.materials);
     ctx.check_pin_steps(&execution_plan, &ceremony.backends);
     ctx.check_admin_steps(&execution_plan, &ceremony.backends);
+    ctx.check_access_policies(&execution_plan, &ceremony.backends);
     ctx.validate_output_kinds(&execution_plan);
     ctx.validate_input_kinds(&execution_plan);
 
@@ -1495,6 +1496,56 @@ impl ResolveContext {
         }
     }
 
+    /// A key's access policy is set by `generate_key`, to values its backend
+    /// enforces (D8): an explicit value is a promise, `never` included. The
+    /// other actions refuse the fields in their schema.
+    fn check_access_policies(
+        &mut self,
+        execution_plan: &[Step],
+        backends: &HashMap<String, rite_sdk::BackendConfig>,
+    ) {
+        for step in execution_plan {
+            if step.action != ActionType::GenerateKey {
+                continue;
+            }
+            if let Some(field) = access_by_expression(step) {
+                self.errors.push(ResolveError::AccessByExpression {
+                    step: step.id.clone(),
+                    field,
+                });
+            }
+            let Some((backend, provider)) = step
+                .backend
+                .as_deref()
+                .and_then(|name| backends.get(name).map(|config| (name, config.provider)))
+            else {
+                continue;
+            };
+            // A PIV device holds no symmetric key, so it gives one no policy.
+            let symmetric = step
+                .with
+                .get("algorithm")
+                .and_then(ExprValue::as_literal_string)
+                .and_then(|name| name.parse::<rite_sdk::KeyAlgorithm>().ok())
+                .is_some_and(rite_sdk::KeyAlgorithm::is_symmetric);
+            let declared = declared_access(step);
+            for axis in rite_sdk::AccessAxis::ALL {
+                let Some(value) = declared.get(axis) else {
+                    continue;
+                };
+                if symmetric || !rite_model::enforces_access(provider, axis, value) {
+                    self.errors.push(ResolveError::UnenforceableAccess {
+                        step: step.id.clone(),
+                        axis,
+                        value,
+                        backend: backend.to_string(),
+                        provider,
+                    });
+                }
+            }
+        }
+    }
+
     // Phase 4: Artifact Ordering Validation
     fn validate_artifact_ordering(
         &mut self,
@@ -1760,12 +1811,47 @@ fn through_property(
     }
 }
 
+/// The access policy a step's `with.policy` writes, from the values written
+/// as literals.
+fn declared_access(step: &Step) -> rite_sdk::AccessPolicy {
+    let written = |axis: rite_sdk::AccessAxis| {
+        let literal = step
+            .with
+            .get("policy")?
+            .get(axis.as_str())?
+            .as_literal_string()?;
+        serde_json::from_value(serde_json::Value::from(literal)).ok()
+    };
+    rite_sdk::AccessPolicy {
+        authentication: written(rite_sdk::AccessAxis::Authentication),
+        presence: written(rite_sdk::AccessAxis::Presence),
+    }
+}
+
+/// The field of a step's `with` that gives its access policy as an
+/// expression, if one does: `policy` itself, or one of its axes.
+fn access_by_expression(step: &Step) -> Option<&'static str> {
+    let expressed =
+        |value: &ExprValue| matches!(value, ExprValue::Expr(_) | ExprValue::Interpolated(_));
+    let policy = step.with.get("policy")?;
+    if expressed(policy) {
+        return Some("policy");
+    }
+    rite_sdk::AccessAxis::ALL
+        .into_iter()
+        .find(|axis| policy.get(axis.as_str()).is_some_and(expressed))
+        .map(rite_sdk::AccessAxis::as_str)
+}
+
 /// The PIN policy of the key a `generate_key` step makes on a PIV device:
-/// its slot's default, since the device generates with the default policy.
-/// `None` for another action, or a slot given by an expression.
+/// the declared `authentication`, or else its slot's default. `None` for
+/// another action, or a slot given by an expression.
 fn generated_pin_policy(step: &Step) -> Option<rite_sdk::PivPinPolicy> {
     if step.action != ActionType::GenerateKey {
         return None;
+    }
+    if let Some(declared) = declared_access(step).authentication {
+        return declared.to_pin_policy();
     }
     let slot = match step.with.get("slot") {
         None => rite_sdk::PivSlot::GENERATE_DEFAULT,

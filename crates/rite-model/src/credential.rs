@@ -142,3 +142,16 @@ pub fn opens_admin_session(provider: Provider) -> bool {
         &CredentialSource::<CredentialId>::FactoryDefault,
     )
 }
+
+/// Whether a backend of `provider` can enforce `value` on `axis` of a key's
+/// access policy: a `YubiKey` sets it as the key's PIN or touch policy, and
+/// the mock answers what a `YubiKey` does. A software key has no PIN and no
+/// touch, so it enforces no value, `never` included.
+#[must_use]
+pub fn enforces_access(
+    provider: Provider,
+    axis: rite_sdk::AccessAxis,
+    value: rite_sdk::AccessWhen,
+) -> bool {
+    matches!(provider, Provider::Yubikey | Provider::Mock) && axis.piv_enforces(value)
+}

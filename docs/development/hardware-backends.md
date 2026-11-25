@@ -264,9 +264,36 @@ retrying does not ask for the PIN.
 it earlier (except in slot 9E, which needs no PIN by default), and when a key
 in slot 9C is used again with no `authenticate` since its last use. The slot is
 the key id of a held key, or the `slot` of the `generate_key` step that made
-it (9A when absent). Warnings, not errors: a held key's policy may differ from
-its slot's default, and it is not known before the card is read. An
-`authenticate` on an `openssl` backend is an error.
+it (9A when absent), or the `authentication` that step declared. Warnings, not
+errors: a held key's policy may differ from its slot's default, and it is not
+known before the card is read. An `authenticate` on an `openssl` backend is an
+error.
+
+On a YubiKey, a user `authenticate` also reads whether the PIN and the PUK are
+still the factory values (firmware 5.3 and later), records each it reads as
+`pin_is_default` and `puk_is_default`, and warns for each that is. A card that
+cannot tell does not fail the step.
+
+## Access policy at generation
+
+`generate_key` takes `authentication` and `presence` under `policy`, each
+`never`, `per_session`, `cached` or `per_use`, the one value type of
+`rite_sdk::AccessWhen`. On a YubiKey, `authentication` is the PIN policy
+(`never`, `once`, `always`) and `presence` the touch policy (`never`, `cached`,
+`always`); `cached` authentication and `per_session` presence have no PIV
+equivalent. `rite check` refuses a value the step's backend cannot enforce,
+`never` on a software key included, any value on a symmetric key, and a value
+or a whole `policy` given by an expression, which it cannot check. Only `generate_key` has the fields: `import_key` and
+`unwrap_key` refuse them as unknown. The backends refuse the same at run time.
+
+After generation, `KeyStoreBackend::access_policy` reads the policy back from
+the device; on a YubiKey, from the slot metadata (firmware 5.3 and later). The
+`generate_key` record holds the declared axes under `inputs.policy` and the
+device's report under `outputs.access`, where an axis the step left out shows
+as the slot's default. A declared axis the device reports with another value
+fails the step, after the record is written. A device that cannot report the
+policy leaves `outputs.access` out with a warning. The mock accepts what a
+YubiKey does, on keypairs only, and reports it back the same way.
 
 ## Authenticating with the management key
 
@@ -331,7 +358,7 @@ CI cannot touch a physical device, so:
 - **Hardware suite** (`crates/rite/tests/hardware_yubikey.rs`), run by hand
   on a YubiKey kept for testing, since it resets the PIV application,
   provisions its own keys in 9A, 9C, 9D and 82 to 84 (83 is RSA-4096, so
-  it needs firmware 5.7 or later), and generates keys in 85 to 87:
+  it needs firmware 5.7 or later), and generates keys in 85 to 88:
 
   ```sh
   RITE_HW_YUBIKEY_SERIAL=<serial> cargo test -p rite --features piv,yubikey \
@@ -348,7 +375,8 @@ CI cannot touch a physical device, so:
   pinned fingerprints, a refused management key, and a key generated after
   the management key from each source: factory default, held (typed in hex),
   and protected by the PIN, which the test stores with `ykman --protect` and
-  resets afterwards.
+  resets afterwards. A key generated in 88 with a declared PIN and touch
+  policy is read back by Rite and checked with `ykman piv keys info`.
   Unplugging the card mid-run and the attestation chain stay manual, below.
 - **Manual hardware check** with a real YubiKey, run before a release that
   touches this code:

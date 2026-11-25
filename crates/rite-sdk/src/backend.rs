@@ -30,10 +30,10 @@ use zeroize::Zeroizing;
 
 use crate::key_material::PublicKeyDer;
 use crate::types::{
-    AgreedSecret, Attestation, CertRef, DataKey, KeyAlgorithm, KeyId, KeyMetadata, KeyPolicy,
-    KeyProtection, KeySecurityAttributes, KeySpec, ManagementKey, ManagementSession, PcrValue,
-    PivDeviceInfo, PivSlot, PivSlotInfo, Pkcs11Mechanism, Pkcs11TokenInfo, SecretKeyValue,
-    SignAlgorithm, TpmInfo, WrapScheme, WrappedKey, YubikeySlotMetadata,
+    AccessPolicy, AgreedSecret, Attestation, CertRef, DataKey, KeyAlgorithm, KeyId, KeyMetadata,
+    KeyPolicy, KeyProtection, KeySecurityAttributes, KeySpec, ManagementKey, ManagementSession,
+    PcrValue, PinDefaults, PivDeviceInfo, PivSlot, PivSlotInfo, Pkcs11Mechanism, Pkcs11TokenInfo,
+    SecretKeyValue, SignAlgorithm, TpmInfo, WrapScheme, WrappedKey, YubikeySlotMetadata,
 };
 
 /// Implement the `as_*_mut` upcasting helpers on a backend struct.
@@ -245,6 +245,17 @@ pub trait KeyStoreBackend: Backend {
 
     /// Delete a key permanently.
     fn delete_key(&mut self, key_id: &KeyId) -> Result<(), BackendError>;
+
+    /// The access policy the device reports for `key_id`, read from the
+    /// device rather than from what generation asked for. `None` where the
+    /// device reports none, or has no such policy: a software key.
+    ///
+    /// # Errors
+    ///
+    /// The device's errors reading the key's metadata.
+    fn access_policy(&self, _key_id: &KeyId) -> Result<Option<AccessPolicy>, BackendError> {
+        Ok(None)
+    }
 }
 
 /// Signing operations.
@@ -739,6 +750,14 @@ pub trait YubikeyBackend: PivBackend {
         &mut self,
         key: ManagementKey<'_>,
     ) -> Result<ManagementSession, BackendError>;
+
+    /// Whether the PIN and the PUK are still the factory values, from their
+    /// metadata. Each is `None` where the card does not say.
+    ///
+    /// # Errors
+    ///
+    /// The device's errors reading the metadata.
+    fn pin_defaults(&self) -> Result<PinDefaults, BackendError>;
 
     /// Change the management key.
     fn change_management_key(&mut self, current: &[u8], new: &[u8]) -> Result<(), BackendError>;

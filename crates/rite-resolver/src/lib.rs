@@ -1844,6 +1844,145 @@ sections:
             );
         }
 
+        /// [`MADE_ON_CARD`] with `policy` under the generation's `with`.
+        fn made_with_policy(policy: &str) -> String {
+            replaced(
+                MADE_ON_CARD,
+                "algorithm: ECDSA-P256\n",
+                &format!("algorithm: ECDSA-P256\n          policy:\n{policy}"),
+            )
+        }
+
+        /// An access value is a promise the backend keeps (D8): a YubiKey has
+        /// no time window for its PIN and no session for its touch, and a
+        /// software key keeps no value at all, `never` included.
+        #[test]
+        fn an_access_value_the_backend_cannot_enforce_is_refused() {
+            let accepted = made_with_policy(
+                "            authentication: per_use\n            presence: cached\n",
+            );
+            assert_eq!(messages(&accepted), Vec::<String>::new());
+            for (policy, refused) in [
+                (
+                    "            authentication: cached\n",
+                    "'authentication: cached'",
+                ),
+                (
+                    "            presence: per_session\n",
+                    "'presence: per_session'",
+                ),
+            ] {
+                let found = messages(&made_with_policy(policy));
+                assert!(
+                    found.iter().any(|m| m.contains("Step 'make' asks for")
+                        && m.contains(refused)
+                        && m.contains("(provider 'yubikey') cannot enforce")),
+                    "{refused}: {found:?}"
+                );
+            }
+            let software = replaced(
+                &made_with_policy("            authentication: never\n"),
+                "        action: generate_key\n        backend: token\n",
+                "        action: generate_key\n        backend: software\n",
+            );
+            let software = replaced(
+                &software,
+                "backends:\n",
+                "backends:\n  software:\n    provider: openssl\n",
+            );
+            let found = messages(&software);
+            assert!(
+                found.iter().any(|m| m.contains("'authentication: never'")
+                    && m.contains("(provider 'openssl') cannot enforce")),
+                "{found:?}"
+            );
+        }
+
+        /// Only `generate_key` sets a key's access policy, and to a value
+        /// `rite check` can hold to what the backend enforces.
+        #[test]
+        fn an_access_policy_outside_generation_or_by_expression_is_refused() {
+            let imported = replaced(
+                &made_with_policy("            authentication: per_use\n"),
+                "        action: generate_key\n",
+                "        action: import_key\n        reads:\n          key_material: \
+                 \"${artifact.manifest}\"\n",
+            );
+            let found = messages(&imported);
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("'with.policy' has no 'authentication' field")),
+                "{found:?}"
+            );
+            let expressed =
+                made_with_policy("            authentication: \"${artifact.manifest}\"\n");
+            let found = messages(&expressed);
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("Step 'make' gives 'authentication' as an expression")),
+                "{found:?}"
+            );
+            let whole = replaced(
+                MADE_ON_CARD,
+                "algorithm: ECDSA-P256\n",
+                "algorithm: ECDSA-P256\n          policy: \"${artifact.manifest}\"\n",
+            );
+            let found = messages(&whole);
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("Step 'make' gives 'policy' as an expression")),
+                "{found:?}"
+            );
+        }
+
+        /// A PIV device holds no symmetric key, so `rite check` refuses an
+        /// access policy on one, as the mock does at run time.
+        #[test]
+        fn an_access_policy_on_a_symmetric_key_is_refused() {
+            let aes = replaced(
+                &made_with_policy("            authentication: per_use\n"),
+                "algorithm: ECDSA-P256\n",
+                "algorithm: AES-256\n",
+            );
+            let found = messages(&aes);
+            assert!(
+                found.iter().any(
+                    |m| m.contains("'authentication: per_use'") && m.contains("cannot enforce")
+                ),
+                "{found:?}"
+            );
+        }
+
+        /// The PIN warnings follow the declared authentication, not the
+        /// slot's default: `per_use` spends the PIN at each use, `never`
+        /// needs none.
+        #[test]
+        fn the_declared_authentication_places_the_pin_steps() {
+            let twice = |policy: &str| {
+                pin_before(
+                    &(made_with_policy(policy)
+                        + "      sign_again:\n        action: sign_data\n        backend: token\n        \
+                           reads:\n          key: \"${artifact.key}\"\n          data: \
+                           \"${artifact.manifest}\"\n        creates: second_signature\n"),
+                    "sign",
+                    "token",
+                )
+            };
+            let warning = only_pin_warning(&twice("            authentication: per_use\n"));
+            assert!(warning.contains("'sign_again'"), "{warning}");
+            assert_eq!(
+                pin_warnings(&twice("            authentication: per_session\n")),
+                Vec::<String>::new()
+            );
+            assert_eq!(
+                pin_warnings(&made_with_policy("            authentication: never\n")),
+                Vec::<String>::new()
+            );
+        }
+
         /// A key a step made on the card needs the PIN as much as one it
         /// held, but not to check a signature against its public half.
         #[test]

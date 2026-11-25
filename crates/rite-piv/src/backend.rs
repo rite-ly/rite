@@ -6,7 +6,7 @@
 use std::sync::{Mutex, MutexGuard};
 
 use rite_sdk::{
-    AgreedSecret, Backend, BackendConfig, BackendError, CertRef, CertStoreBackend,
+    AccessPolicy, AgreedSecret, Backend, BackendConfig, BackendError, CertRef, CertStoreBackend,
     KeyAgreementBackend, KeyDecryptBackend, KeyId, KeyMetadata, KeyProtection, KeySpec,
     KeyStoreBackend, PivBackend, PivDeviceInfo, PivSlotInfo, PublicKeyDer, SignAlgorithm,
     SignBackend,
@@ -93,12 +93,20 @@ impl Backend for PivCardBackend {
 
 impl KeyStoreBackend for PivCardBackend {
     fn generate_key(&mut self, spec: KeySpec) -> Result<KeyMetadata, BackendError> {
+        // PIN and touch policies at generation are a Yubico extension.
+        if !spec.policy.access.is_empty() {
+            return Err(BackendError::OperationNotPermitted(
+                "a PIV card takes no access policy at generation: that is a YubiKey extension"
+                    .to_string(),
+            ));
+        }
         let mut yk = self.device()?;
         ops::generate_key(
             &mut yk,
             spec.algorithm,
             &spec.label,
             spec.location_hint.as_deref(),
+            AccessPolicy::default(),
         )
     }
 

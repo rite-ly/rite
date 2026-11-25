@@ -389,6 +389,8 @@ impl SpanMap {
             | ResolveError::ValueForUnheldCredential { step, .. }
             | ResolveError::AdminSessionRequired { step, .. }
             | ResolveError::AdminSessionUnavailable { step, .. }
+            | ResolveError::UnenforceableAccess { step, .. }
+            | ResolveError::AccessByExpression { step, .. }
             | ResolveError::ArtifactNamesMaterial { step, .. }
             | ResolveError::InputKindMismatch { step, .. }
             | ResolveError::SymmetricKeyRead { step, .. }

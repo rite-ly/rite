@@ -14,10 +14,10 @@ use yubikey::{Certificate, YubiKey};
 use zeroize::Zeroizing;
 
 use rite_sdk::{
-    AgreedSecret, BackendError, EcCurve, EcPoint, KeyAlgorithm, KeyId, KeyMetadata, KeyProtection,
-    ManagementKey, ManagementKeyAlgorithm, ManagementSession, PivDeviceInfo, PivKeyOrigin,
-    PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy, PublicKeyDer, SignAlgorithm,
-    YubikeySlotMetadata,
+    AccessPolicy, AccessWhen, AgreedSecret, BackendError, EcCurve, EcPoint, KeyAlgorithm, KeyId,
+    KeyMetadata, KeyProtection, ManagementKey, ManagementKeyAlgorithm, ManagementSession,
+    PinDefaults, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy,
+    PublicKeyDer, SignAlgorithm, YubikeySlotMetadata,
 };
 
 use crate::{convert, oaep, pss};
@@ -132,6 +132,61 @@ pub fn pin_retries(yk: &mut YubiKey) -> Result<u32, BackendError> {
         Ok(_) | Err(_) => {}
     }
     yk.get_pin_retries().map(u32::from).map_err(map_error)
+}
+
+/// The access policy the card reports for the key `key_id` names, from its
+/// slot metadata (`YubiKey` firmware 5.3 and later). `None` from a card too
+/// old to report it.
+///
+/// # Errors
+///
+/// Returns a `BackendError` if the key id names no slot, or the read fails.
+pub fn access_policy(
+    yk: &mut YubiKey,
+    key_id: &KeyId,
+) -> Result<Option<AccessPolicy>, BackendError> {
+    let slot = convert::to_yubikey_slot(slot_from_key_id(key_id)?)?;
+    Ok(metadata_if_reported(yk, slot)?
+        .and_then(|meta| meta.policy)
+        .map(|(pin, touch)| AccessPolicy {
+            authentication: AccessWhen::from_pin_policy(convert::from_yubikey_pin_policy(pin)),
+            presence: AccessWhen::from_touch_policy(convert::from_yubikey_touch_policy(touch)),
+        }))
+}
+
+/// Whether the PIN and the PUK are still the factory values, from their
+/// metadata. Both are `None` on a card too old to report it, and the PUK's
+/// when its read fails.
+///
+/// # Errors
+///
+/// Returns a `BackendError` if the PIN's metadata read fails otherwise.
+pub fn pin_defaults(yk: &mut YubiKey) -> Result<PinDefaults, BackendError> {
+    let Some(pin) = metadata_if_reported(yk, SlotId::Management(piv::ManagementSlotId::Pin))?
+    else {
+        return Ok(PinDefaults::default());
+    };
+    // A PUK that cannot be read leaves what the PIN told.
+    let puk = metadata_if_reported(yk, SlotId::Management(piv::ManagementSlotId::Puk))
+        .ok()
+        .flatten();
+    Ok(PinDefaults {
+        pin: pin.default,
+        puk: puk.and_then(|meta| meta.default),
+    })
+}
+
+/// A slot's metadata, or `None` on firmware before 5.3, which does not
+/// report it.
+fn metadata_if_reported(
+    yk: &mut YubiKey,
+    slot: SlotId,
+) -> Result<Option<piv::SlotMetadata>, BackendError> {
+    match piv::metadata(yk, slot) {
+        Ok(meta) => Ok(Some(meta)),
+        Err(yubikey::Error::NotSupported) => Ok(None),
+        Err(error) => Err(map_error(error)),
+    }
 }
 
 /// The factory management key of every PIV card Yubico ships, in 3DES before
@@ -318,17 +373,24 @@ pub fn write_certificate(
 ///
 /// Stores the key in the PIV slot indicated by `slot_hint` (e.g. `"9c"` or
 /// `"piv:9c"`). Defaults to the Authentication slot (9A) when no hint is given.
+/// Each axis of `access` sets the key's PIN or touch policy; one left out
+/// takes the slot's default.
 ///
 /// # Errors
 ///
-/// Returns a `BackendError` if the algorithm or slot is unsupported, or if
-/// generation fails on the device.
+/// Returns a `BackendError` if the algorithm or slot is unsupported, if
+/// `access` asks for a value a PIV key cannot have (`OperationNotPermitted`),
+/// or if generation fails on the device.
 pub fn generate_key(
     yk: &mut YubiKey,
     algorithm: KeyAlgorithm,
     label: &str,
     slot_hint: Option<&str>,
+    access: AccessPolicy,
 ) -> Result<KeyMetadata, BackendError> {
+    let (pin_policy, touch_policy) = access.to_piv()?;
+    let pin_policy = convert::to_yubikey_pin_policy(pin_policy);
+    let touch_policy = convert::to_yubikey_touch_policy(touch_policy);
     let yk_algo = convert::to_yubikey_algorithm(algorithm).ok_or_else(|| {
         BackendError::UnsupportedAlgorithm(format!("{algorithm} is not supported by PIV"))
     })?;
@@ -338,14 +400,7 @@ pub fn generate_key(
         .transpose()?
         .unwrap_or(PivSlot::GENERATE_DEFAULT);
     let slot = convert::to_yubikey_slot(piv_slot)?;
-    let spki = piv::generate(
-        yk,
-        slot,
-        yk_algo,
-        yubikey::PinPolicy::Default,
-        yubikey::TouchPolicy::Default,
-    )
-    .map_err(map_error)?;
+    let spki = piv::generate(yk, slot, yk_algo, pin_policy, touch_policy).map_err(map_error)?;
     let key_id = key_id_for_slot(slot);
     Ok(KeyMetadata {
         key_id,

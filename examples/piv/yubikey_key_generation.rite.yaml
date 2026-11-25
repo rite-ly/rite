@@ -66,6 +66,12 @@ sections:
         with:
           algorithm: ECDSA-P256
           slot: "9c"
+          # The PIN before each signature, and a touch within 15 seconds of
+          # it. Both are fixed once the key exists; the record shows what the
+          # card reports it set.
+          policy:
+            authentication: per_use
+            presence: cached
         creates: signing_key
         description: "Generate the signing key in slot 9C, replacing any key there."
       attest_signing_key:

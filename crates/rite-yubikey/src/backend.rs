@@ -9,11 +9,11 @@ use std::sync::{Mutex, MutexGuard};
 
 use rite_piv::{convert, ops};
 use rite_sdk::{
-    AgreedSecret, Attestation, AttestationBackend, AttestationKind, Backend, BackendConfig,
-    BackendError, CertRef, CertStoreBackend, KeyAgreementBackend, KeyDecryptBackend, KeyId,
-    KeyMetadata, KeyProtection, KeySpec, KeyStoreBackend, ManagementKey, ManagementSession,
-    PivBackend, PivDeviceInfo, PivSlot, PivSlotInfo, PublicKeyDer, SignAlgorithm, SignBackend,
-    YubikeyBackend, YubikeySlotMetadata,
+    AccessPolicy, AgreedSecret, Attestation, AttestationBackend, AttestationKind, Backend,
+    BackendConfig, BackendError, CertRef, CertStoreBackend, KeyAgreementBackend, KeyDecryptBackend,
+    KeyId, KeyMetadata, KeyProtection, KeySpec, KeyStoreBackend, ManagementKey, ManagementSession,
+    PinDefaults, PivBackend, PivDeviceInfo, PivSlot, PivSlotInfo, PublicKeyDer, SignAlgorithm,
+    SignBackend, YubikeyBackend, YubikeySlotMetadata,
 };
 use zeroize::Zeroizing;
 
@@ -102,7 +102,13 @@ impl KeyStoreBackend for YubikeyDevice {
             spec.algorithm,
             &spec.label,
             spec.location_hint.as_deref(),
+            spec.policy.access,
         )
+    }
+
+    fn access_policy(&self, key_id: &KeyId) -> Result<Option<AccessPolicy>, BackendError> {
+        let mut yk = self.device()?;
+        ops::access_policy(&mut yk, key_id)
     }
 
     fn import_key(
@@ -258,6 +264,11 @@ impl YubikeyBackend for YubikeyDevice {
     ) -> Result<ManagementSession, BackendError> {
         let mut yk = self.device()?;
         ops::authenticate_management(&mut yk, key)
+    }
+
+    fn pin_defaults(&self) -> Result<PinDefaults, BackendError> {
+        let mut yk = self.device()?;
+        ops::pin_defaults(&mut yk)
     }
 
     fn change_management_key(&mut self, _current: &[u8], _new: &[u8]) -> Result<(), BackendError> {

@@ -10,7 +10,7 @@ use rite_runtime::{
     Action, ActionError, HandlerContext, Icon, Reporter, Response, StepInfo, StepResult,
     parse_params, resolve_artifact_bytes,
 };
-use rite_sdk::{Backend, ManagementKey, PivBackend, YubikeyBackend};
+use rite_sdk::{Backend, ManagementKey, PinDefaults, PivBackend, YubikeyBackend};
 use secrecy::ExposeSecret;
 use serde_json::json;
 
@@ -180,7 +180,53 @@ fn unlock_with_pin(
     let retries_before = enter_and_verify_pin(piv, credential.display_name(), reporter)?;
     let mut inputs = recorded(credential);
     inputs.insert("retries_before".into(), json!(retries_before));
-    reporter.backend_operation("authenticate", inputs.into(), json!({}), None)?;
+    // The PIN is verified by now: a card that cannot say whether it is the
+    // factory value has not failed the step.
+    let defaults = match backend
+        .as_yubikey_mut()
+        .map(|yubikey| yubikey.pin_defaults())
+    {
+        None => PinDefaults::default(),
+        Some(Ok(defaults)) => defaults,
+        Some(Err(error)) => {
+            reporter.log(
+                Icon::Warning,
+                format!("The card did not say whether its PIN is the factory value: {error}"),
+            )?;
+            PinDefaults::default()
+        }
+    };
+    warn_of_defaults(defaults, credential.display_name(), reporter)?;
+    let mut outputs = serde_json::Map::new();
+    if let Some(pin) = defaults.pin {
+        outputs.insert("pin_is_default".into(), pin.into());
+    }
+    if let Some(puk) = defaults.puk {
+        outputs.insert("puk_is_default".into(), puk.into());
+    }
+    reporter.backend_operation("authenticate", inputs.into(), outputs.into(), None)?;
+    Ok(())
+}
+
+/// Warn that the PIN or the PUK is still the factory value, which anyone
+/// holding the card can enter.
+fn warn_of_defaults(
+    defaults: PinDefaults,
+    name: &str,
+    reporter: &mut Reporter<'_>,
+) -> Result<(), ActionError> {
+    if defaults.pin == Some(true) {
+        reporter.log(
+            Icon::Warning,
+            format!("'{name}' is still the factory PIN: anyone holding the card can use its keys"),
+        )?;
+    }
+    if defaults.puk == Some(true) {
+        reporter.log(
+            Icon::Warning,
+            "The card's PUK is still the factory value: anyone holding the card can reset its PIN",
+        )?;
+    }
     Ok(())
 }
 
@@ -351,6 +397,13 @@ mod tests {
             Ok(ManagementSession {
                 algorithm: ManagementKeyAlgorithm::Aes192,
                 is_default: Some(presented == "factory_default"),
+            })
+        }
+        /// A card whose PIN is still the factory one, and its PUK changed.
+        fn pin_defaults(&self) -> Result<PinDefaults, BackendError> {
+            Ok(PinDefaults {
+                pin: Some(true),
+                puk: Some(false),
             })
         }
         fn change_management_key(
@@ -625,6 +678,23 @@ mod tests {
         );
         let recorded = serde_json::to_string(harness.facts()).unwrap();
         assert!(!recorded.contains("123456"), "{recorded}");
+    }
+
+    /// A factory PIN is worth a warning: anyone holding the card knows it.
+    /// The transcript records what the card said of both.
+    #[test]
+    fn a_factory_pin_is_warned_and_recorded() {
+        let mut card = Card::new();
+        let mut harness = ReporterHarness::new();
+        run(&mut card, "123456", &mut harness).expect("the right PIN unlocks");
+        let logged = harness.logged().join("\n");
+        assert!(logged.contains("still the factory PIN"), "{logged}");
+        assert!(!logged.contains("PUK"), "{logged}");
+        let [(_, outputs)] = operations(&harness).try_into().expect("one operation");
+        assert_eq!(
+            outputs,
+            json!({"pin_is_default": true, "puk_is_default": false})
+        );
     }
 
     #[test]

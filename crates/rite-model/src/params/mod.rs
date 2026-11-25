@@ -26,8 +26,9 @@ mod verification;
 
 pub use attestation::AttestParams;
 pub use crypto::{
-    EncryptDataParams, GenerateKeyParams, ImportKeyParams, KeyPolicyParams, KeyUsage,
-    SignDataParams, UnwrapKeyParams, VerifySignatureParams, WrapKeyParams,
+    EncryptDataParams, GenerateKeyParams, GenerateKeyPolicyParams, ImportKeyParams,
+    KeyPolicyParams, KeyUsage, SignDataParams, UnwrapKeyParams, VerifySignatureParams,
+    WrapKeyParams,
 };
 pub use entropy::GatherEntropyParams;
 pub use entry::EntryParams;

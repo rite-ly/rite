@@ -10,8 +10,7 @@ lists what Rite does during a ceremony and what `ykman` does before it.
 |---|---|---|
 | Enter the PIN | `authenticate`, with a credential under `credentials:` | |
 | Authenticate with the management key | `authenticate`, with an admin credential | |
-| Generate a key in a slot, with the slot's default PIN and touch policies | `generate_key`, after the management key | `ykman piv keys generate` |
-| Generate a key with other PIN or touch policies | | `ykman piv keys generate` |
+| Generate a key in a slot, with its PIN and touch policies | `generate_key`, after the management key | `ykman piv keys generate` |
 | Sign, or open content sealed to a slot key | `sign_data`, `decrypt_data` | |
 | Read a slot's certificate | `piv_read_certificate` | |
 | Show whether a key was generated on the card | `yubikey_attest_slot` | |
@@ -96,8 +95,27 @@ steps:
     with:
       algorithm: ECDSA-P256
       slot: "9c"
+      policy:
+        authentication: per_use   # PIN policy ALWAYS
+        presence: cached          # touch policy CACHED
     creates: signing_key
 ```
+
+`authentication` sets the key's PIN policy and `presence` its touch policy, both fixed
+once the key exists:
+
+| Value | `authentication` (PIN) | `presence` (touch) |
+|---|---|---|
+| `never` | `NEVER` | `NEVER` |
+| `per_session` | `ONCE` | refused |
+| `cached` | refused | `CACHED`, 15 seconds |
+| `per_use` | `ALWAYS` | `ALWAYS` |
+
+A field left out takes the slot's default. Write each as a value, not an expression:
+`rite check` refuses a value the backend cannot enforce. The `generate_key` record holds
+both what the step asked for and what the card reports it set, and the step fails if
+the two differ. An `authenticate` step warns when the card's PIN or PUK
+is still the factory value.
 
 The card reports the management key's algorithm, 3DES or AES, and whether it is still
 the factory key; the transcript records both, never the key. `rite check` refuses a

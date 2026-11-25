@@ -31,9 +31,9 @@ use zeroize::Zeroizing;
 use crate::key_material::PublicKeyDer;
 use crate::types::{
     AgreedSecret, Attestation, CertRef, DataKey, KeyAlgorithm, KeyId, KeyMetadata, KeyPolicy,
-    KeyProtection, KeySecurityAttributes, KeySpec, PcrValue, PivDeviceInfo, PivSlot, PivSlotInfo,
-    Pkcs11Mechanism, Pkcs11TokenInfo, SecretKeyValue, SignAlgorithm, TpmInfo, WrapScheme,
-    WrappedKey, YubikeySlotMetadata,
+    KeyProtection, KeySecurityAttributes, KeySpec, ManagementKey, ManagementSession, PcrValue,
+    PivDeviceInfo, PivSlot, PivSlotInfo, Pkcs11Mechanism, Pkcs11TokenInfo, SecretKeyValue,
+    SignAlgorithm, TpmInfo, WrapScheme, WrappedKey, YubikeySlotMetadata,
 };
 
 /// Implement the `as_*_mut` upcasting helpers on a backend struct.
@@ -722,11 +722,23 @@ pub trait YubikeyBackend: PivBackend {
     /// This is a Yubico extension, not available on generic PIV cards.
     fn attest_slot(&self, slot: PivSlot) -> Result<Vec<u8>, BackendError>;
 
-    /// Authenticate with the management key (3DES or AES).
+    /// Authenticate with the management key (3DES or AES), and report what
+    /// the card says of it.
     ///
     /// Required before administrative operations: key generation,
-    /// certificate import, PIN/PUK retry configuration.
-    fn authenticate_management(&mut self, mgm_key: &[u8]) -> Result<(), BackendError>;
+    /// certificate import, PIN/PUK retry configuration. The card's own
+    /// metadata gives the key's algorithm, so a 24-byte key is read as
+    /// AES-192 or 3DES as the card has it. A protected key needs the PIN
+    /// verified first; the card refuses to release it otherwise.
+    ///
+    /// # Errors
+    ///
+    /// `ManagementKeyRequired` when the card refuses the key, and the
+    /// device's errors otherwise.
+    fn authenticate_management(
+        &mut self,
+        key: ManagementKey<'_>,
+    ) -> Result<ManagementSession, BackendError>;
 
     /// Change the management key.
     fn change_management_key(&mut self, current: &[u8], new: &[u8]) -> Result<(), BackendError>;

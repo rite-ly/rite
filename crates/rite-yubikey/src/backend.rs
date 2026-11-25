@@ -11,8 +11,9 @@ use rite_piv::{convert, ops};
 use rite_sdk::{
     AgreedSecret, Attestation, AttestationBackend, AttestationKind, Backend, BackendConfig,
     BackendError, CertRef, CertStoreBackend, KeyAgreementBackend, KeyDecryptBackend, KeyId,
-    KeyMetadata, KeyProtection, KeySpec, KeyStoreBackend, PivBackend, PivDeviceInfo, PivSlot,
-    PivSlotInfo, PublicKeyDer, SignAlgorithm, SignBackend, YubikeyBackend, YubikeySlotMetadata,
+    KeyMetadata, KeyProtection, KeySpec, KeyStoreBackend, ManagementKey, ManagementSession,
+    PivBackend, PivDeviceInfo, PivSlot, PivSlotInfo, PublicKeyDer, SignAlgorithm, SignBackend,
+    YubikeyBackend, YubikeySlotMetadata,
 };
 use zeroize::Zeroizing;
 
@@ -251,9 +252,12 @@ impl YubikeyBackend for YubikeyDevice {
         Ok(cert.to_vec())
     }
 
-    fn authenticate_management(&mut self, mgm_key: &[u8]) -> Result<(), BackendError> {
+    fn authenticate_management(
+        &mut self,
+        key: ManagementKey<'_>,
+    ) -> Result<ManagementSession, BackendError> {
         let mut yk = self.device()?;
-        ops::authenticate_management(&mut yk, mgm_key)
+        ops::authenticate_management(&mut yk, key)
     }
 
     fn change_management_key(&mut self, _current: &[u8], _new: &[u8]) -> Result<(), BackendError> {

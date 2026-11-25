@@ -1919,6 +1919,70 @@ pub struct YubikeySlotMetadata {
     pub public_key: Option<PublicKeyDer>,
 }
 
+/// Where a `YubiKey`'s management key comes from when a step authenticates
+/// with it.
+#[derive(Clone, Copy)]
+pub enum ManagementKey<'a> {
+    /// The vendor's default value, in the algorithm the card reports.
+    FactoryDefault,
+    /// Stored on the card and released by the PIN, which the session has
+    /// verified.
+    Protected,
+    /// A value held outside the card, in the algorithm the card reports.
+    Value(&'a [u8]),
+}
+
+/// Never shows a held value.
+impl std::fmt::Debug for ManagementKey<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ManagementKey::FactoryDefault => f.write_str("FactoryDefault"),
+            ManagementKey::Protected => f.write_str("Protected"),
+            ManagementKey::Value(_) => f.write_str("Value(..)"),
+        }
+    }
+}
+
+/// The algorithm of a PIV management key: the four SP 800-78 allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ManagementKeyAlgorithm {
+    /// Triple DES, the default before `YubiKey` firmware 5.7.
+    #[serde(rename = "3des")]
+    TripleDes,
+    /// AES-128.
+    #[serde(rename = "aes128")]
+    Aes128,
+    /// AES-192, the default from `YubiKey` firmware 5.7.
+    #[serde(rename = "aes192")]
+    Aes192,
+    /// AES-256.
+    #[serde(rename = "aes256")]
+    Aes256,
+}
+
+impl ManagementKeyAlgorithm {
+    /// The length of a key in this algorithm, in bytes.
+    #[must_use]
+    pub const fn key_length(self) -> usize {
+        match self {
+            ManagementKeyAlgorithm::Aes128 => 16,
+            ManagementKeyAlgorithm::TripleDes | ManagementKeyAlgorithm::Aes192 => 24,
+            ManagementKeyAlgorithm::Aes256 => 32,
+        }
+    }
+}
+
+/// What a card reports about its management key once a step authenticated
+/// with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagementSession {
+    /// The key's algorithm.
+    pub algorithm: ManagementKeyAlgorithm,
+    /// Whether the key is still the factory default, where the card reports
+    /// it (`YubiKey` firmware 5.3 and later).
+    pub is_default: Option<bool>,
+}
+
 bitflags::bitflags! {
     /// PKCS#11 token capability flags. Maps to the `CKF_*` constants in the PKCS#11 standard.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

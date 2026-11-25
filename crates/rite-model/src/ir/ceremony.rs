@@ -296,19 +296,14 @@ impl Credential {
         self.title.as_deref().unwrap_or(self.id.as_str())
     }
 
-    /// What Rite cannot present yet: the grant, the source, or both. Rite
-    /// authenticates with a user credential its holder types.
+    /// The user credential that releases this one, when its source is
+    /// protected.
     #[must_use]
-    pub fn unsupported(
-        &self,
-    ) -> (
-        Option<crate::CredentialGrant>,
-        Option<crate::CredentialSource>,
-    ) {
-        (
-            (self.grants != crate::CredentialGrant::User).then_some(self.grants),
-            (self.source != crate::CredentialSource::Entered).then_some(self.source),
-        )
+    pub fn protected_by(&self) -> Option<&CredentialId> {
+        match &self.source {
+            crate::CredentialSource::ProtectedBy(by) => Some(by),
+            _ => None,
+        }
     }
 }
 

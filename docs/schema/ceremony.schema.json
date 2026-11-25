@@ -551,11 +551,11 @@
           ]
         },
         "grants": {
-          "description": "What the credential is used for: `user` for a PIN that unlocks the device's keys, `admin` for a management key or security officer PIN, `unblock` for a PUK. Rite supports `user` today.",
+          "description": "What the credential is used for: `user` for a PIN that unlocks the device's keys, `admin` for a management key or security officer PIN, `unblock` for a PUK. Rite supports `user` and `admin` today.",
           "$ref": "#/$defs/CredentialGrant"
         },
         "source": {
-          "description": "Where its value comes from: `entered`, typed by the person in the step's role; `factory_default`, the vendor's value; `held`, from an artifact; `on_device`, presented to the device directly. Rite supports `entered` today.",
+          "description": "Where its value comes from: `entered`, typed by the person in the step's role; `factory_default`, the vendor's value; `held`, from an artifact the step reads as `value`; `on_device`, presented to the device directly; `{ protected_by: ${credential.<id>} }`, stored on the device and released by a user credential of the same backend. Rite supports `entered` for a user credential, and `factory_default`, `held` and `protected_by` for an admin credential.",
           "$ref": "#/$defs/CredentialSource"
         },
         "title": {
@@ -616,6 +616,24 @@
           "description": "Presented to the device directly, on a PIN pad or a PED. Rite never sees it.",
           "type": "string",
           "const": "on_device"
+        },
+        {
+          "description": "Stored on the device and released by another credential of the same backend, a user credential: a `YubiKey`'s PIN-protected management key.",
+          "type": "object",
+          "properties": {
+            "protected_by": {
+              "description": "The user credential that releases it, as `${credential.<id>}`.",
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "protected_by"
+          ]
         }
       ]
     },
@@ -3445,6 +3463,10 @@
                     "properties": {
                       "credential": {
                         "description": "Takes credential.",
+                        "type": "string"
+                      },
+                      "value": {
+                        "description": "Takes secret or bytes.",
                         "type": "string"
                       }
                     },

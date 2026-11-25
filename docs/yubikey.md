@@ -1,18 +1,20 @@
 # Preparing a YubiKey
 
-Prepare a YubiKey before the ceremony. Set its PIN, PUK and management key, and put
-required keys in their declared slots. This page lists what Rite does during a ceremony
-and what `ykman` does before it.
+Prepare a YubiKey before the ceremony: set its PIN, PUK and management key. A ceremony
+then generates its keys on the card, or uses keys put in their slots beforehand. This page
+lists what Rite does during a ceremony and what `ykman` does before it.
 
 ## What Rite does, and what `ykman` does
 
 | Operation | Rite, during a ceremony | `ykman`, before it |
 |---|---|---|
 | Enter the PIN | `authenticate`, with a credential under `credentials:` | |
+| Authenticate with the management key | `authenticate`, with an admin credential | |
+| Generate a key in a slot, with the slot's default PIN and touch policies | `generate_key`, after the management key | `ykman piv keys generate` |
+| Generate a key with other PIN or touch policies | | `ykman piv keys generate` |
 | Sign, or open content sealed to a slot key | `sign_data`, `decrypt_data` | |
 | Read a slot's certificate | `piv_read_certificate` | |
 | Show whether a key was generated on the card | `yubikey_attest_slot` | |
-| Generate a key in a slot | | `ykman piv keys generate` |
 | Write a certificate to a slot | | `ykman piv certificates import` |
 | Change the PIN, PUK or management key | | `ykman piv access` |
 | Set retries, unblock the PIN or reset the card | | `ykman piv access`, `ykman piv reset` |
@@ -34,7 +36,8 @@ ykman piv access change-management-key --generate --protect
 
 - Set retries first. This resets the PIN and PUK to their factory values.
 - `--protect` stores the new management key on the card, protected by the PIN. Later
-  `ykman` commands request the PIN instead of the key.
+  `ykman` commands request the PIN instead of the key, and so does Rite: see
+  [The management key in a ceremony](#the-management-key-in-a-ceremony).
 
 Generate a key and request a certificate:
 
@@ -53,6 +56,53 @@ The PIN and touch policies are fixed when the key is generated. The ceremony rea
 key as a `backend_key` material and checks its origin with `yubikey_attest_slot`. It
 declares the PIN under `credentials:` with `grants: user` and `source: entered`, and an
 `authenticate` step asks the holder for it.
+
+## The management key in a ceremony
+
+Generating a key on the card needs an admin session: an `authenticate` step with the
+management key, declared as a credential with `grants: admin`. Its `source` says where
+the key comes from:
+
+- `factory_default`: the card's factory key, on a card not yet prepared.
+- `protected_by: ${credential.<pin>}`: the key `--protect` stored on the card. The step
+  asks for that PIN, then reads the key from the card. The PIN stays verified for later
+  steps.
+- `held`: a key kept outside the card. The step reads it from an artifact as `value`, for
+  example one `combine_shares` recombined from custodians' shares, or one typed with
+  `enter_secret` and `format: hex`. The value is the key's bytes: typed without
+  `format: hex`, it is the hex text, twice the length, and the card refuses it.
+
+```yaml
+credentials:
+  card_pin:
+    backend: token
+    grants: user
+    source: entered
+  card_admin:
+    backend: token
+    grants: admin
+    source:
+      protected_by: ${credential.card_pin}
+
+steps:
+  admin_login:
+    action: authenticate
+    backend: token
+    reads:
+      credential: ${credential.card_admin}
+  make_key:
+    action: generate_key
+    backend: token
+    with:
+      algorithm: ECDSA-P256
+      slot: "9c"
+    creates: signing_key
+```
+
+The card reports the management key's algorithm, 3DES or AES, and whether it is still
+the factory key; the transcript records both, never the key. `rite check` refuses a
+`generate_key` on a card with no admin `authenticate` before it.
+`examples/piv/yubikey_key_generation.rite.yaml` is a complete ceremony.
 
 ## Certificates on a PIV card
 

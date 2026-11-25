@@ -736,6 +736,12 @@ impl fmt::Display for View {
     }
 }
 
+/// The value of a held credential: typed in, recombined or opened.
+const CREDENTIAL_VALUE: Accepts = Accepts::kinds(&[
+    ArtifactKind::File(FileKind::Secret),
+    ArtifactKind::File(FileKind::Bytes),
+]);
+
 /// A key held by a backend, and nothing else.
 const BACKEND_KEY: Accepts = Accepts::kinds(&[ArtifactKind::BackendKey]);
 /// A credential a backend has, and nothing else.
@@ -1124,13 +1130,21 @@ impl ActionType {
                 reads: ReadsContract::NONE,
                 creates: &[],
             },
-            // A credential opens a session and makes nothing.
+            // A credential opens a session and makes nothing. A held
+            // credential's value comes from an artifact, as `value`.
             ActionType::Authenticate => ActionSpec {
                 backend: BackendUsage::Required,
-                reads: ReadsContract::required(&[ReadInput {
-                    name: "credential",
-                    accepts: BACKEND_CREDENTIAL,
-                }]),
+                reads: ReadsContract {
+                    required: &[ReadInput {
+                        name: "credential",
+                        accepts: BACKEND_CREDENTIAL,
+                    }],
+                    optional: &[ReadInput {
+                        name: "value",
+                        accepts: CREDENTIAL_VALUE,
+                    }],
+                    ..ReadsContract::NONE
+                },
                 creates: &[],
             },
             ActionType::PivReadCertificate | ActionType::YubikeyAttestSlot => ActionSpec {

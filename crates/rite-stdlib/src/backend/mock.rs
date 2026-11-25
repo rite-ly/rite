@@ -23,8 +23,9 @@
 
 use rite_sdk::{
     Attestation, AttestationBackend, AttestationKind, Backend, BackendError, CertRef,
-    CertStoreBackend, KeyAlgorithm, KeyId, PivBackend, PivDeviceInfo, PivKeyOrigin, PivPinPolicy,
-    PivSlot, PivSlotInfo, PivTouchPolicy, PublicKeyDer, YubikeyBackend, YubikeySlotMetadata,
+    CertStoreBackend, KeyAlgorithm, KeyId, ManagementKey, ManagementKeyAlgorithm,
+    ManagementSession, PivBackend, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo,
+    PivTouchPolicy, PublicKeyDer, YubikeyBackend, YubikeySlotMetadata,
 };
 
 #[cfg(feature = "openssl")]
@@ -513,8 +514,17 @@ impl YubikeyBackend for MockBackend {
         Ok(MOCK_ATTESTATION_CERTIFICATE.to_vec())
     }
 
-    fn authenticate_management(&mut self, _mgm_key: &[u8]) -> Result<(), BackendError> {
-        Ok(())
+    /// Accepts any key, as a card of firmware 5.7 with an AES-192 key would
+    /// the right one, and reports it as the default only when the step
+    /// presents the default.
+    fn authenticate_management(
+        &mut self,
+        key: ManagementKey<'_>,
+    ) -> Result<ManagementSession, BackendError> {
+        Ok(ManagementSession {
+            algorithm: ManagementKeyAlgorithm::Aes192,
+            is_default: Some(matches!(key, ManagementKey::FactoryDefault)),
+        })
     }
 
     fn change_management_key(&mut self, _current: &[u8], _new: &[u8]) -> Result<(), BackendError> {

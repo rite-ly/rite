@@ -233,10 +233,11 @@ steps:
 ```
 
 Rite authenticates with a user credential its holder types (`grants: user`,
-`source: entered`). The other values are part of the model and `rite check`
-refuses them as not supported yet: the management key and the PUK are set with
-`ykman` before the ceremony (see [Preparing a YubiKey](../yubikey.md)). A
-credential of another backend than the step's is an error.
+`source: entered`), and with a YubiKey's management key (below). The other
+values are part of the model and `rite check` refuses them as not supported
+yet: the PUK is set with `ykman` before the ceremony (see
+[Preparing a YubiKey](../yubikey.md)). A credential of another backend than the
+step's is an error.
 
 The step reads the card's retry count first, warns at one try left, and
 asks again for a PIN outside 6 to 8 bytes before sending it, so a slip costs no
@@ -263,6 +264,30 @@ the key id of a held key, or the `slot` of the `generate_key` step that made
 it (9A when absent). Warnings, not errors: a held key's policy may differ from
 its slot's default, and it is not known before the card is read. An
 `authenticate` on an `openssl` backend is an error.
+
+## Authenticating with the management key
+
+A card generates a key only in an admin session. An `authenticate` step opens
+one with a credential that has `grants: admin`, on a `yubikey` backend (`rite
+check` refuses one on a `piv` backend). Its `source` is `factory_default`, `held`
+(the step reads the key from an artifact as `value`), or
+`protected_by: ${credential.<id>}` naming a user credential of the same backend.
+A protected key is stored on the card behind the PIN: the step asks for that
+PIN, records it as its own `authenticate` operation, then reads the key from
+the card and leaves both sessions open.
+
+The card's metadata gives the key's algorithm, so a 24-byte key is AES-192 or
+3DES as the card has it, not as its length suggests. The `authenticate`
+operation records the algorithm and whether the card reports the key as still
+the default (firmware 5.3 and later), never the key. A refused key fails with
+`ManagementKeyRequired`.
+
+`rite check` refuses a `generate_key` on a `yubikey` backend with no admin
+`authenticate` earlier on it, naming the backend's admin credential when the
+ceremony declares one; any `generate_key` on a `piv` backend; a held credential without `value`, or `value` for
+any other; and a protected credential whose `protected_by` does not name a
+user credential of its backend. An admin `authenticate` unlocks no key, unless
+it was protected by the PIN.
 
 ## Operations left unimplemented
 
@@ -297,10 +322,13 @@ CI cannot touch a physical device, so:
   permits every usage, as a slot does. The mock accepts any PIN, reports three
   tries, and models no PIN policy, so a rehearsal never stops at `PinRequired`;
   the `rite check` warning above is what catches a missing `authenticate`.
+  It accepts any management key and reports it as AES-192, the default only
+  when the step presents the factory key; `rite check` catches a missing admin
+  session.
 - **Hardware suite** (`crates/rite/tests/hardware_yubikey.rs`), run by hand
-  on a YubiKey kept for testing, since it resets the PIV application and
+  on a YubiKey kept for testing, since it resets the PIV application,
   provisions its own keys in 9A, 9C, 9D and 82 to 84 (83 is RSA-4096, so
-  it needs firmware 5.7 or later):
+  it needs firmware 5.7 or later), and generates keys in 85 to 87:
 
   ```sh
   RITE_HW_YUBIKEY_SERIAL=<serial> cargo test -p rite --features piv,yubikey \
@@ -313,7 +341,11 @@ CI cannot touch a physical device, so:
   exported), opening what was sealed to 9D (P-384, by agreement), 82
   (RSA-2048, by decryption) and 83 (RSA-4096, by decryption), slot 9C
   needing the PIN before each signature, an RSA key with PIN policy
-  `always` in 84 signing after one `authenticate`, a wrong PIN retried, pinned fingerprints, and a refused management key.
+  `always` in 84 signing after one `authenticate`, a wrong PIN retried,
+  pinned fingerprints, a refused management key, and a key generated after
+  the management key from each source: factory default, held (typed in hex),
+  and protected by the PIN, which the test stores with `ykman --protect` and
+  resets afterwards.
   Unplugging the card mid-run and the attestation chain stay manual, below.
 - **Manual hardware check** with a real YubiKey, run before a release that
   touches this code:

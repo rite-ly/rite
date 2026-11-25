@@ -206,15 +206,6 @@ pub enum ResolveError {
         backend: String,
     },
 
-    /// A credential belongs to a software backend, which takes no PIN.
-    #[error("Credential '{credential}' belongs to backend '{backend}', which takes no PIN")]
-    CredentialOnBackendWithoutPin {
-        /// The credential.
-        credential: CredentialId,
-        /// The backend it names.
-        backend: String,
-    },
-
     /// A step reads a credential the ceremony does not declare.
     #[error("Unknown credential '{credential}' in {context}")]
     UnknownCredential {
@@ -238,21 +229,94 @@ pub enum ResolveError {
         property: String,
     },
 
-    /// A credential Rite cannot authenticate with yet.
+    /// A credential Rite cannot authenticate with on its backend.
     #[error(
-        "Credential '{credential}' declares {}, not supported yet: Rite \
-         authenticates with a user credential its holder types ('grants: user', \
-         'source: entered'). Prepare the device with its vendor's tool before the ceremony",
-        rite_model::unsupported_fields(*.grants, *.value_source)
+        "Credential '{credential}' declares 'grants: {grants}' with 'source: {value_source}', \
+         which Rite does not support on backend '{backend}' (provider '{provider}'). Prepare \
+         the device with its vendor's tool before the ceremony"
     )]
     UnsupportedCredential {
         /// The credential.
         credential: CredentialId,
-        /// The grant written, when Rite cannot present it.
-        grants: Option<rite_model::CredentialGrant>,
-        /// The source written, when Rite cannot present it. Not `source`,
-        /// which `thiserror` reads as the error's cause.
-        value_source: Option<rite_model::CredentialSource>,
+        /// The grant written.
+        grants: rite_model::CredentialGrant,
+        /// The kind of source written. Not `source`, which `thiserror` reads
+        /// as the error's cause.
+        value_source: &'static str,
+        /// Its backend.
+        backend: String,
+        /// The backend's provider.
+        provider: rite_sdk::Provider,
+    },
+
+    /// A protected credential names something that cannot release it.
+    #[error("Credential '{credential}' is protected by '{written}', {reason}")]
+    InvalidProtectedBy {
+        /// The protected credential.
+        credential: CredentialId,
+        /// What `protected_by` names, as written.
+        written: String,
+        /// Why it cannot release the credential.
+        reason: String,
+    },
+
+    /// A step authenticates with a held credential and gives no value.
+    #[error(
+        "Step '{step}' authenticates with '{credential}', which is held: give its value from \
+         an artifact, as 'value' under 'reads'"
+    )]
+    HeldCredentialWithoutValue {
+        /// The step.
+        step: StepId,
+        /// The credential.
+        credential: CredentialId,
+    },
+
+    /// A step gives a value for a credential that takes none.
+    #[error(
+        "Step '{step}' gives a value for '{credential}', whose source is '{value_source}': only \
+         a held credential takes one"
+    )]
+    ValueForUnheldCredential {
+        /// The step.
+        step: StepId,
+        /// The credential.
+        credential: CredentialId,
+        /// The kind of source the credential declares.
+        value_source: &'static str,
+    },
+
+    /// A key is generated on a card where Rite opens no admin session.
+    #[error(
+        "Step '{step}' generates a key on backend '{backend}', which needs an admin session, \
+         and Rite opens none on a '{provider}' backend: generate the key with the card's \
+         vendor tool before the ceremony, or use 'provider: yubikey'"
+    )]
+    AdminSessionUnavailable {
+        /// The step.
+        step: StepId,
+        /// The backend.
+        backend: String,
+        /// The backend's provider.
+        provider: rite_sdk::Provider,
+    },
+
+    /// An operation that needs an admin session runs before any.
+    #[error(
+        "Step '{step}' generates a key on backend '{backend}', which needs an admin session: add \
+         an 'authenticate' step with {} before it",
+        admin.as_ref().map_or_else(
+            || format!("an admin credential of '{backend}'"),
+            |admin| format!("'{admin}'")
+        )
+    )]
+    AdminSessionRequired {
+        /// The step.
+        step: StepId,
+        /// The backend.
+        backend: String,
+        /// The backend's admin credential, when the ceremony declares one.
+        admin: Option<CredentialId>,
     },
 
     /// A step reads a key or a credential of a backend without running on
@@ -280,15 +344,6 @@ pub enum ResolveError {
         step: StepId,
         /// The artifact name it creates.
         artifact: ArtifactId,
-    },
-
-    /// An `authenticate` step names a software backend, which takes no PIN.
-    #[error("Step '{step}' authenticates on backend '{backend}', which takes no PIN")]
-    PinOnBackendWithoutPin {
-        /// The step.
-        step: StepId,
-        /// The backend it names.
-        backend: String,
     },
 
     /// Step references a backend not declared in the ceremony.

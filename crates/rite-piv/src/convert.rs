@@ -2,7 +2,10 @@
 //!
 //! These helpers are `pub` for reuse by `rite-yubikey`.
 
-use rite_sdk::{BackendError, KeyAlgorithm, PivKeyOrigin, PivPinPolicy, PivSlot, PivTouchPolicy};
+use rite_sdk::{
+    BackendError, KeyAlgorithm, ManagementKeyAlgorithm, PivKeyOrigin, PivPinPolicy, PivSlot,
+    PivTouchPolicy,
+};
 
 /// Convert a Rite `PivSlot` to a `yubikey::piv::SlotId`.
 ///
@@ -113,6 +116,30 @@ pub fn from_yubikey_touch_policy(policy: yubikey::TouchPolicy) -> PivTouchPolicy
         yubikey::TouchPolicy::Never => PivTouchPolicy::Never,
         yubikey::TouchPolicy::Always => PivTouchPolicy::Always,
         yubikey::TouchPolicy::Cached => PivTouchPolicy::Cached,
+    }
+}
+
+/// Convert a `yubikey::MgmAlgorithmId` to a Rite `ManagementKeyAlgorithm`.
+pub fn from_yubikey_management_algorithm(
+    algorithm: yubikey::MgmAlgorithmId,
+) -> ManagementKeyAlgorithm {
+    match algorithm {
+        yubikey::MgmAlgorithmId::ThreeDes => ManagementKeyAlgorithm::TripleDes,
+        yubikey::MgmAlgorithmId::Aes128 => ManagementKeyAlgorithm::Aes128,
+        yubikey::MgmAlgorithmId::Aes192 => ManagementKeyAlgorithm::Aes192,
+        yubikey::MgmAlgorithmId::Aes256 => ManagementKeyAlgorithm::Aes256,
+    }
+}
+
+/// Convert a Rite `ManagementKeyAlgorithm` to a `yubikey::MgmAlgorithmId`.
+pub fn to_yubikey_management_algorithm(
+    algorithm: ManagementKeyAlgorithm,
+) -> yubikey::MgmAlgorithmId {
+    match algorithm {
+        ManagementKeyAlgorithm::TripleDes => yubikey::MgmAlgorithmId::ThreeDes,
+        ManagementKeyAlgorithm::Aes128 => yubikey::MgmAlgorithmId::Aes128,
+        ManagementKeyAlgorithm::Aes192 => yubikey::MgmAlgorithmId::Aes192,
+        ManagementKeyAlgorithm::Aes256 => yubikey::MgmAlgorithmId::Aes256,
     }
 }
 

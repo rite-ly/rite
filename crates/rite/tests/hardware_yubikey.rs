@@ -205,9 +205,14 @@ sections:
 
 /// An `authenticate` step on the card with its PIN, named `id`.
 fn unlock(id: &str) -> String {
+    authenticate(id, "card_pin")
+}
+
+/// An `authenticate` step on the card with `credential`, named `id`.
+fn authenticate(id: &str, credential: &str) -> String {
     format!(
         "      {id}:\n        action: authenticate\n        backend: token\n        reads:\n          \
-         credential: ${{credential.card_pin}}\n"
+         credential: ${{credential.{credential}}}\n"
     )
 }
 
@@ -598,9 +603,191 @@ fn a_refused_management_key_is_not_a_pin_failure() {
     // Not the factory key, and not a weak 3DES key, which the `yubikey`
     // crate refuses before the card sees it.
     let wrong = b"rite-wrong-management-k!";
-    let error = device.authenticate_management(wrong).unwrap_err();
+    let error = device
+        .authenticate_management(rite_sdk::ManagementKey::Value(wrong))
+        .unwrap_err();
     assert!(
         matches!(error, BackendError::ManagementKeyRequired),
         "{error:?}"
     );
+}
+
+/// [`ceremony`] with the card's management key declared as `card_admin`,
+/// from `source`, as YAML.
+fn admin_ceremony(card: &Card, source: &str, steps: &str) -> String {
+    ceremony(card, "", steps).replace(
+        "credentials:\n",
+        &format!(
+            "credentials:\n  card_admin:\n    backend: token\n    grants: admin\n    {source}\n"
+        ),
+    )
+}
+
+/// An `authenticate` step with the management key, then a P-256 key
+/// generated in `slot` as `new_key`.
+fn admin_then_generate(slot: &str, value: &str) -> String {
+    let admin = authenticate("admin", "card_admin");
+    format!(
+        r#"{admin}{value}      generate:
+        action: generate_key
+        backend: token
+        with:
+          algorithm: ECDSA-P256
+          slot: "{slot}"
+        creates: new_key
+"#
+    )
+}
+
+/// The management key's record: what the card reported of it.
+fn admin_outputs(run: &Run) -> serde_json::Value {
+    run.facts_of("backend_operation")
+        .into_iter()
+        .find(|fact| fact["kind"] == "authenticate" && fact["inputs"]["grants"] == "admin")
+        .expect("an admin authentication")["outputs"]
+        .clone()
+}
+
+/// The key a step generated in `slot` is the one the card reports there.
+fn generated_in(card: &Card, run: &Run, slot: &str) {
+    let pem = ykman(&["piv", "keys", "export", slot, "-"], Some(&card.serial));
+    let reported = PKey::public_key_from_pem(pem.as_bytes()).unwrap();
+    let Some(ArtifactValue::BackendKey {
+        public_key: Some(public),
+        ..
+    }) = run.runner.artifact(&ArtifactId::new("new_key"))
+    else {
+        panic!("no generated key with its public half");
+    };
+    let generated = PKey::public_key_from_der(public.as_bytes()).unwrap();
+    assert!(
+        generated.public_eq(&reported),
+        "the key in {slot} is not the one generated"
+    );
+}
+
+/// The factory management key opens an admin session, and a key is
+/// generated in a slot. The card reports its key as AES-192 (firmware 5.7)
+/// and still the default.
+#[test]
+#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
+fn the_factory_management_key_generates_a_key_on_the_card() {
+    let Some((_turn, card)) = card() else { return };
+    let yaml = admin_ceremony(
+        card,
+        "source: factory_default",
+        &admin_then_generate("85", ""),
+    );
+    let run = run(&yaml, vec![]);
+    run.completed();
+    assert_eq!(
+        admin_outputs(&run),
+        serde_json::json!({"algorithm": "aes192", "is_default": true})
+    );
+    generated_in(card, &run, "85");
+}
+
+/// A held management key comes from the artifact a step reads as `value`:
+/// here typed in hex.
+#[test]
+#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
+fn a_held_management_key_generates_a_key_on_the_card() {
+    let Some((_turn, card)) = card() else { return };
+    let typed = r#"      type_key:
+        action: enter_secret
+        with:
+          message: "Management key"
+          format: hex
+        creates: admin_key
+"#;
+    let steps = admin_then_generate("86", "          value: ${artifact.admin_key}\n");
+    let yaml = admin_ceremony(card, "source: held", &format!("{typed}{steps}"));
+    let run = run(
+        &yaml,
+        vec![Response::Secret(SecretString::from(MANAGEMENT_KEY))],
+    );
+    run.completed();
+    let recorded = serde_json::to_string(run.runner.facts()).unwrap();
+    assert!(!recorded.contains(MANAGEMENT_KEY), "{recorded}");
+    generated_in(card, &run, "86");
+}
+
+/// Puts the factory management key back, unprotected, when a test that
+/// protected it ends, passed or not.
+struct Unprotect<'a>(&'a Card);
+
+impl Drop for Unprotect<'_> {
+    fn drop(&mut self) {
+        // A failure here while the test is already failing would abort the
+        // run and hide why it failed: it is reported instead.
+        if std::thread::panicking() {
+            let restored = Command::new("ykman")
+                .args([
+                    "--device",
+                    &self.0.serial,
+                    "piv",
+                    "access",
+                    "change-management-key",
+                ])
+                .args(["--pin", PIN, "--algorithm", "AES192"])
+                .args(["--new-management-key", MANAGEMENT_KEY])
+                .status();
+            if !restored.is_ok_and(|status| status.success()) {
+                eprintln!("could not restore the factory management key: `ykman piv reset` does");
+            }
+            return;
+        }
+        ykman(
+            &[
+                "piv",
+                "access",
+                "change-management-key",
+                "--pin",
+                PIN,
+                "--algorithm",
+                "AES192",
+                "--new-management-key",
+                MANAGEMENT_KEY,
+            ],
+            Some(&self.0.serial),
+        );
+    }
+}
+
+/// A management key `ykman --protect` stored is released by the PIN, which
+/// the step asks for first and records as its own authentication.
+#[test]
+#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
+fn a_protected_management_key_is_released_by_the_pin() {
+    let Some((_turn, card)) = card() else { return };
+    ykman(
+        &[
+            "piv",
+            "access",
+            "change-management-key",
+            "--management-key",
+            MANAGEMENT_KEY,
+            "--pin",
+            PIN,
+            "--protect",
+        ],
+        Some(&card.serial),
+    );
+    let _restore = Unprotect(card);
+    let yaml = admin_ceremony(
+        card,
+        "source:\n      protected_by: ${credential.card_pin}",
+        &admin_then_generate("87", ""),
+    );
+    let run = run(&yaml, vec![pin()]);
+    run.completed();
+    let credentials: Vec<_> = run
+        .facts_of("backend_operation")
+        .into_iter()
+        .filter(|fact| fact["kind"] == "authenticate")
+        .map(|fact| fact["inputs"]["credential"].clone())
+        .collect();
+    assert_eq!(credentials, ["card_pin", "card_admin"]);
+    assert_eq!(admin_outputs(&run)["is_default"], false);
+    generated_in(card, &run, "87");
 }

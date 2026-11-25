@@ -42,10 +42,20 @@ roles:
 backends:
   yk:
     provider: yubikey
+credentials:
+  yk_admin:
+    backend: yk
+    grants: admin
+    source: factory_default
 sections:
   main:
     role: ${role.officer}
     steps:
+      admin:
+        action: authenticate
+        backend: yk
+        reads:
+          credential: ${credential.yk_admin}
       gen:
         action: generate_key
         backend: yk

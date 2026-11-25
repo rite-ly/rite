@@ -2403,10 +2403,15 @@ fn combine_shares_recovers_what_split_secret_made() {
     assert_eq!((set.threshold(), set.count()), (2, 3));
 
     // The fact says how, and nothing of what.
-    let inputs = operation_inputs(&harness, "split_secret");
-    assert_eq!(inputs.get("scheme").unwrap(), "rite-sss/v1");
-    assert!(!inputs.to_string().contains("wallet"));
-    assert!(!inputs.to_string().contains("32"), "no length: {inputs}");
+    assert_eq!(
+        operation_inputs(&harness, "split_secret"),
+        serde_json::json!({
+            "scheme": "rite-sss/v1",
+            "secret": "seed_entropy",
+            "shares": 3,
+            "threshold": 2,
+        })
+    );
 
     // Two of three, out of order, by property.
     let shares_id = ArtifactId::new("shares");
@@ -2529,10 +2534,15 @@ fn split_secret_splits_a_backend_key_that_its_recovery_imports_back() {
 
     // The record names the key that left by its check value, and still says
     // nothing of its length.
-    let inputs = operation_inputs(&harness, "split_secret");
     assert_eq!(
-        inputs.get("key_check_value").and_then(|v| v.as_str()),
-        Some(check_value.as_str())
+        operation_inputs(&harness, "split_secret"),
+        serde_json::json!({
+            "key": "kek",
+            "key_check_value": check_value,
+            "scheme": "rite-sss/v1",
+            "shares": 3,
+            "threshold": 2,
+        })
     );
     // The export is a fact of its own, written before the split.
     let exported = operation_inputs(&harness, "export_secret_key");
@@ -2540,7 +2550,6 @@ fn split_secret_splits_a_backend_key_that_its_recovery_imports_back() {
         exported.get("key_check_value").and_then(|v| v.as_str()),
         Some(check_value.as_str())
     );
-    assert!(!inputs.to_string().contains("32"), "no length: {inputs}");
 
     assert!(matches!(shares, ArtifactValue::Shares(_)), "{shares:?}");
     let shares_id = ArtifactId::new("shares");

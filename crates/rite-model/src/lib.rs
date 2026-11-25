@@ -41,12 +41,15 @@ pub mod transcript;
 mod types;
 pub mod validate;
 
-pub use rite_sdk::{BackendConfig, KeyAlgorithm, KeyFingerprint, KeyId, Provider};
+pub use rite_sdk::{
+    AccessAxis, AccessPolicy, AccessWhen, BackendConfig, KeyAlgorithm, KeyFingerprint, KeyId,
+    Provider,
+};
 
 pub use canonical::{CanonicalJsonError, canonical_json, check_numbers};
 pub use credential::{
-    CredentialGrant, CredentialSource, generates_in_admin_session, opens_admin_session,
-    supports_credential,
+    CredentialGrant, CredentialSource, enforces_access, generates_in_admin_session,
+    opens_admin_session, supports_credential,
 };
 pub use digest::{DigestFormatError, Sha256Digest};
 pub use event_time::{EventTime, EventTimeFormatError, EventTimeRangeError};

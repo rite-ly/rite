@@ -119,6 +119,26 @@ pub fn from_yubikey_touch_policy(policy: yubikey::TouchPolicy) -> PivTouchPolicy
     }
 }
 
+/// Convert a Rite `PivPinPolicy` to a `yubikey::PinPolicy`.
+pub fn to_yubikey_pin_policy(policy: PivPinPolicy) -> yubikey::PinPolicy {
+    match policy {
+        PivPinPolicy::Never => yubikey::PinPolicy::Never,
+        PivPinPolicy::Once => yubikey::PinPolicy::Once,
+        PivPinPolicy::Always => yubikey::PinPolicy::Always,
+        _ => yubikey::PinPolicy::Default,
+    }
+}
+
+/// Convert a Rite `PivTouchPolicy` to a `yubikey::TouchPolicy`.
+pub fn to_yubikey_touch_policy(policy: PivTouchPolicy) -> yubikey::TouchPolicy {
+    match policy {
+        PivTouchPolicy::Never => yubikey::TouchPolicy::Never,
+        PivTouchPolicy::Cached => yubikey::TouchPolicy::Cached,
+        PivTouchPolicy::Always => yubikey::TouchPolicy::Always,
+        _ => yubikey::TouchPolicy::Default,
+    }
+}
+
 /// Convert a `yubikey::MgmAlgorithmId` to a Rite `ManagementKeyAlgorithm`.
 pub fn from_yubikey_management_algorithm(
     algorithm: yubikey::MgmAlgorithmId,

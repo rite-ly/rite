@@ -22,10 +22,11 @@
 //! - CI smoke tests and reproducible development without a backend device.
 
 use rite_sdk::{
-    Attestation, AttestationBackend, AttestationKind, Backend, BackendError, CertRef,
-    CertStoreBackend, KeyAlgorithm, KeyId, ManagementKey, ManagementKeyAlgorithm,
-    ManagementSession, PivBackend, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo,
-    PivTouchPolicy, PublicKeyDer, YubikeyBackend, YubikeySlotMetadata,
+    AccessPolicy, AccessWhen, Attestation, AttestationBackend, AttestationKind, Backend,
+    BackendError, CertRef, CertStoreBackend, KeyAlgorithm, KeyId, ManagementKey,
+    ManagementKeyAlgorithm, ManagementSession, PinDefaults, PivBackend, PivDeviceInfo,
+    PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy, PublicKeyDer, YubikeyBackend,
+    YubikeySlotMetadata,
 };
 
 #[cfg(feature = "openssl")]
@@ -107,6 +108,10 @@ pub struct MockBackend {
     /// stand-in so signatures match the slot certificate the mock reports.
     #[cfg(feature = "openssl")]
     slot_key: KeyId,
+    /// The access policy of each key a step generated, as a card reports it
+    /// back: what the step asked for, the slot's default for the rest.
+    #[cfg(feature = "openssl")]
+    access: std::collections::HashMap<KeyId, AccessPolicy>,
 }
 
 impl std::fmt::Debug for MockBackend {
@@ -156,6 +161,8 @@ impl MockBackend {
             stand_in_keys: std::collections::BTreeMap::new(),
             #[cfg(feature = "openssl")]
             slot_key,
+            #[cfg(feature = "openssl")]
+            access: std::collections::HashMap::new(),
             name,
             seed,
         }
@@ -283,8 +290,44 @@ impl Backend for MockBackend {
 
 #[cfg(feature = "openssl")]
 impl KeyStoreBackend for MockBackend {
-    fn generate_key(&mut self, spec: KeySpec) -> Result<KeyMetadata, BackendError> {
-        self.crypto.generate_key(spec)
+    /// Accepts the access values a `YubiKey` does, on the keypairs it holds,
+    /// and reports them back as it would: the slot's default PIN policy and
+    /// no touch for an axis left out. The software key under it enforces
+    /// none of them.
+    fn generate_key(&mut self, mut spec: KeySpec) -> Result<KeyMetadata, BackendError> {
+        let declared = spec.policy.access;
+        let reported = if spec.algorithm.is_symmetric() {
+            if !declared.is_empty() {
+                return Err(BackendError::OperationNotPermitted(format!(
+                    "a PIV device holds no {} key to give an access policy",
+                    spec.algorithm
+                )));
+            }
+            None
+        } else {
+            declared.to_piv()?;
+            let slot = spec
+                .location_hint
+                .as_deref()
+                .and_then(PivSlot::from_hint)
+                .unwrap_or(PivSlot::GENERATE_DEFAULT);
+            Some(AccessPolicy {
+                authentication: declared
+                    .authentication
+                    .or_else(|| AccessWhen::from_pin_policy(slot.default_pin_policy())),
+                presence: declared.presence.or(Some(AccessWhen::Never)),
+            })
+        };
+        spec.policy.access = AccessPolicy::default();
+        let metadata = self.crypto.generate_key(spec)?;
+        if let Some(reported) = reported {
+            self.access.insert(metadata.key_id.clone(), reported);
+        }
+        Ok(metadata)
+    }
+
+    fn access_policy(&self, key_id: &KeyId) -> Result<Option<AccessPolicy>, BackendError> {
+        Ok(self.access.get(key_id).copied())
     }
 
     fn import_key(
@@ -525,6 +568,12 @@ impl YubikeyBackend for MockBackend {
             algorithm: ManagementKeyAlgorithm::Aes192,
             is_default: Some(matches!(key, ManagementKey::FactoryDefault)),
         })
+    }
+
+    /// Says nothing: the mock accepts any PIN, so whether it is the
+    /// factory one means nothing.
+    fn pin_defaults(&self) -> Result<PinDefaults, BackendError> {
+        Ok(PinDefaults::default())
     }
 
     fn change_management_key(&mut self, _current: &[u8], _new: &[u8]) -> Result<(), BackendError> {

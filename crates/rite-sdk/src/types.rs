@@ -628,6 +628,189 @@ pub struct KeyPolicy {
     pub wrap_with_trusted_only: bool,
     /// What operations this key is permitted to perform.
     pub usages: KeyUsages,
+    /// When the device asks for the key's user and for a person at the
+    /// device. Each axis left `None` takes the device's default.
+    pub access: AccessPolicy,
+}
+
+/// When a device asks again before it lets a key be used.
+///
+/// One value type for both axes of a key's access policy, authentication
+/// and presence. A backend refuses a value it cannot enforce, `never`
+/// included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum AccessWhen {
+    /// Never: possession of the device is the authorisation.
+    Never,
+    /// Once, until the device logs out or resets.
+    PerSession,
+    /// Once for a time window: 15 seconds for a `YubiKey` touch.
+    Cached,
+    /// Right before each operation.
+    PerUse,
+}
+
+impl AccessWhen {
+    /// The name a ceremony writes.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            AccessWhen::Never => "never",
+            AccessWhen::PerSession => "per_session",
+            AccessWhen::Cached => "cached",
+            AccessWhen::PerUse => "per_use",
+        }
+    }
+
+    /// The PIV PIN policy that enforces this authentication value, if one
+    /// does: a PIV card has no time window.
+    #[must_use]
+    pub const fn to_pin_policy(self) -> Option<PivPinPolicy> {
+        match self {
+            AccessWhen::Never => Some(PivPinPolicy::Never),
+            AccessWhen::PerSession => Some(PivPinPolicy::Once),
+            AccessWhen::PerUse => Some(PivPinPolicy::Always),
+            AccessWhen::Cached => None,
+        }
+    }
+
+    /// The `YubiKey` touch policy that enforces this presence value, if one
+    /// does: no touch lasts a session.
+    #[must_use]
+    pub const fn to_touch_policy(self) -> Option<PivTouchPolicy> {
+        match self {
+            AccessWhen::Never => Some(PivTouchPolicy::Never),
+            AccessWhen::Cached => Some(PivTouchPolicy::Cached),
+            AccessWhen::PerUse => Some(PivTouchPolicy::Always),
+            AccessWhen::PerSession => None,
+        }
+    }
+
+    /// The authentication value a PIV PIN policy enforces; `None` for the
+    /// slot's default, which is not a value.
+    #[must_use]
+    pub const fn from_pin_policy(policy: PivPinPolicy) -> Option<Self> {
+        match policy {
+            PivPinPolicy::Never => Some(AccessWhen::Never),
+            PivPinPolicy::Once => Some(AccessWhen::PerSession),
+            PivPinPolicy::Always => Some(AccessWhen::PerUse),
+            PivPinPolicy::Default => None,
+        }
+    }
+
+    /// The presence value a `YubiKey` touch policy enforces; `None` for the
+    /// slot's default, which is not a value.
+    #[must_use]
+    pub const fn from_touch_policy(policy: PivTouchPolicy) -> Option<Self> {
+        match policy {
+            PivTouchPolicy::Never => Some(AccessWhen::Never),
+            PivTouchPolicy::Cached => Some(AccessWhen::Cached),
+            PivTouchPolicy::Always => Some(AccessWhen::PerUse),
+            PivTouchPolicy::Default => None,
+        }
+    }
+}
+
+impl std::fmt::Display for AccessWhen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A key's access policy: when the device asks for its user
+/// (authentication) and for a person at the device (presence).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccessPolicy {
+    /// When the device asks for a PIN, a password or a fingerprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authentication: Option<AccessWhen>,
+    /// When the device asks for a touch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence: Option<AccessWhen>,
+}
+
+impl AccessPolicy {
+    /// Whether neither axis is given.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.authentication.is_none() && self.presence.is_none()
+    }
+
+    /// The value given for `axis`, if any.
+    #[must_use]
+    pub const fn get(&self, axis: AccessAxis) -> Option<AccessWhen> {
+        match axis {
+            AccessAxis::Authentication => self.authentication,
+            AccessAxis::Presence => self.presence,
+        }
+    }
+
+    /// The PIV PIN and touch policies that enforce this policy; an axis left
+    /// out is the slot's default.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::OperationNotPermitted`] for a value no PIV key
+    /// can have.
+    pub fn to_piv(self) -> Result<(PivPinPolicy, PivTouchPolicy), BackendError> {
+        for axis in AccessAxis::ALL {
+            if let Some(value) = self.get(axis).filter(|value| !axis.piv_enforces(*value)) {
+                return Err(BackendError::OperationNotPermitted(format!(
+                    "a PIV key cannot have '{axis}: {value}'"
+                )));
+            }
+        }
+        Ok((
+            self.authentication
+                .and_then(AccessWhen::to_pin_policy)
+                .unwrap_or(PivPinPolicy::Default),
+            self.presence
+                .and_then(AccessWhen::to_touch_policy)
+                .unwrap_or(PivTouchPolicy::Default),
+        ))
+    }
+}
+
+/// One axis of a key's access policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccessAxis {
+    /// When the device asks for the key's user.
+    Authentication,
+    /// When the device asks for a person at it.
+    Presence,
+}
+
+impl AccessAxis {
+    /// Both axes.
+    pub const ALL: [AccessAxis; 2] = [AccessAxis::Authentication, AccessAxis::Presence];
+
+    /// The field a ceremony writes under `policy`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            AccessAxis::Authentication => "authentication",
+            AccessAxis::Presence => "presence",
+        }
+    }
+
+    /// Whether a PIV key can have `value` on this axis: as a PIN policy,
+    /// which has no time window, or a `YubiKey` touch policy, which has no
+    /// session.
+    #[must_use]
+    pub const fn piv_enforces(self, value: AccessWhen) -> bool {
+        match self {
+            AccessAxis::Authentication => value.to_pin_policy().is_some(),
+            AccessAxis::Presence => value.to_touch_policy().is_some(),
+        }
+    }
+}
+
+impl std::fmt::Display for AccessAxis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 impl KeyPolicy {
@@ -696,6 +879,7 @@ impl Default for KeyPolicy {
             extractable: false,
             wrap_with_trusted_only: false,
             usages: KeyUsages::SIGN | KeyUsages::VERIFY,
+            access: AccessPolicy::default(),
         }
     }
 }
@@ -1970,6 +2154,16 @@ impl ManagementKeyAlgorithm {
             ManagementKeyAlgorithm::Aes256 => 32,
         }
     }
+}
+
+/// Whether a card's PIN and PUK are still the factory values, where the card
+/// reports it (`YubiKey` firmware 5.3 and later).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PinDefaults {
+    /// Whether the PIN is the factory value.
+    pub pin: Option<bool>,
+    /// Whether the PUK is the factory value.
+    pub puk: Option<bool>,
 }
 
 /// What a card reports about its management key once a step authenticated

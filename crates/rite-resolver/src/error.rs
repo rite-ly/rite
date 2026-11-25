@@ -286,6 +286,37 @@ pub enum ResolveError {
         value_source: &'static str,
     },
 
+    /// A key's access policy names a value its backend cannot enforce.
+    #[error(
+        "Step '{step}' asks for '{axis}: {value}', which backend '{backend}' (provider \
+         '{provider}') cannot enforce: leave '{axis}' out to take the device's default"
+    )]
+    UnenforceableAccess {
+        /// The step.
+        step: StepId,
+        /// The axis.
+        axis: rite_sdk::AccessAxis,
+        /// The value written.
+        value: rite_sdk::AccessWhen,
+        /// The step's backend.
+        backend: String,
+        /// The backend's provider.
+        provider: rite_sdk::Provider,
+    },
+
+    /// A key's access policy is given by an expression, which `rite check`
+    /// cannot hold to what the backend enforces.
+    #[error(
+        "Step '{step}' gives '{field}' as an expression: a key's access policy is fixed when \
+         the key is made, so write the value itself"
+    )]
+    AccessByExpression {
+        /// The step.
+        step: StepId,
+        /// `policy`, or the axis under it.
+        field: &'static str,
+    },
+
     /// A key is generated on a card where Rite opens no admin session.
     #[error(
         "Step '{step}' generates a key on backend '{backend}', which needs an admin session, \

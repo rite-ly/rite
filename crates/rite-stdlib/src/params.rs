@@ -8,13 +8,23 @@
 #[cfg(feature = "crypto")]
 #[must_use]
 pub fn policy_json(policy: &rite_sdk::KeyPolicy) -> serde_json::Value {
-    serde_json::json!({
-        "persistent": policy.persistent,
-        "sensitive": policy.sensitive,
-        "extractable": policy.extractable,
-        "wrap_with_trusted_only": policy.wrap_with_trusted_only,
-        "usages": policy.usages.names(),
-    })
+    let mut fields = serde_json::Map::new();
+    fields.insert("persistent".into(), policy.persistent.into());
+    fields.insert("sensitive".into(), policy.sensitive.into());
+    fields.insert("extractable".into(), policy.extractable.into());
+    fields.insert(
+        "wrap_with_trusted_only".into(),
+        policy.wrap_with_trusted_only.into(),
+    );
+    fields.insert("usages".into(), policy.usages.names().into());
+    // Only an axis the step declared: one left out is the device's default,
+    // which the record shows as the device reported it.
+    for axis in rite_sdk::AccessAxis::ALL {
+        if let Some(value) = policy.access.get(axis) {
+            fields.insert(axis.as_str().into(), value.as_str().into());
+        }
+    }
+    fields.into()
 }
 
 /// The policy a key installed from material the ceremony holds gets when the

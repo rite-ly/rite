@@ -1,6 +1,6 @@
 //! Params for the key and data actions.
 
-use rite_sdk::{KeyAlgorithm, KeyUsages, SignAlgorithm, WrapScheme};
+use rite_sdk::{AccessWhen, KeyAlgorithm, KeyUsages, SignAlgorithm, WrapScheme};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +15,7 @@ pub struct GenerateKeyParams {
     /// The key's permitted operations and whether it can be exported from the
     /// backend. A key used by a later `wrap_key` step must be extractable.
     #[serde(default)]
-    pub policy: Option<KeyPolicyParams>,
+    pub policy: Option<GenerateKeyPolicyParams>,
     /// A backend-specific location for the key, such as a PIV slot or PKCS#11
     /// slot. The software backend ignores this field.
     #[serde(default)]
@@ -30,8 +30,9 @@ pub struct GenerateKeyParams {
 /// The key usage in a certificate is a different thing, set by `profile` on
 /// `issue_certificate`.
 //
-// Mirrors `rite_sdk::KeyPolicy` field for field; the usages fall back to
-// `KeyPolicy::default_for`.
+// Mirrors `rite_sdk::KeyPolicy` field for field but `access`, which only
+// `GenerateKeyPolicyParams` takes; the usages fall back to
+// `KeyPolicy::default_for`. A field added here goes there too.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
@@ -75,6 +76,69 @@ impl KeyPolicyParams {
                 .wrap_with_trusted_only
                 .unwrap_or(defaults.wrap_with_trusted_only),
             usages,
+            access: defaults.access,
+        }
+    }
+}
+
+/// What a generated key may do, and its access policy, which is fixed when
+/// the device makes the key.
+///
+/// The fields of [`KeyPolicyParams`], with the same defaults, and the two
+/// axes of the access policy. A key imported or unwrapped has no access
+/// policy here: its fields are refused there.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct GenerateKeyPolicyParams {
+    /// Whether the key remains available after the session ends.
+    #[serde(default)]
+    pub persistent: Option<bool>,
+    /// Whether the backend marks the key as sensitive and prevents plaintext
+    /// access.
+    #[serde(default)]
+    pub sensitive: Option<bool>,
+    /// Whether the key may be exported from the backend.
+    #[serde(default)]
+    pub extractable: Option<bool>,
+    /// Whether the key may be wrapped only by a trusted key.
+    #[serde(default)]
+    pub wrap_with_trusted_only: Option<bool>,
+    /// The operations the key may perform, such as `sign` or `unwrap`.
+    #[serde(default)]
+    pub usages: Option<Vec<KeyUsage>>,
+    /// When the device asks for the key's user (a PIN): `never`,
+    /// `per_session`, `cached` or `per_use`, on a backend that can enforce
+    /// the value; left out, the device's default. Written as a value, not an
+    /// expression.
+    #[serde(default)]
+    pub authentication: Option<AccessWhen>,
+    /// When the device asks for a person to touch it: `never`, `cached` or
+    /// `per_use` on a `YubiKey`; left out, the device's default. Written as
+    /// a value, not an expression.
+    #[serde(default)]
+    pub presence: Option<AccessWhen>,
+}
+
+impl GenerateKeyPolicyParams {
+    /// Resolve the declared policy against a base, as
+    /// [`KeyPolicyParams::resolve_from`] does, with the declared access
+    /// policy.
+    #[must_use]
+    pub fn resolve_from(&self, defaults: &rite_sdk::KeyPolicy) -> rite_sdk::KeyPolicy {
+        let key = KeyPolicyParams {
+            persistent: self.persistent,
+            sensitive: self.sensitive,
+            extractable: self.extractable,
+            wrap_with_trusted_only: self.wrap_with_trusted_only,
+            usages: self.usages.clone(),
+        };
+        rite_sdk::KeyPolicy {
+            access: rite_sdk::AccessPolicy {
+                authentication: self.authentication.or(defaults.access.authentication),
+                presence: self.presence.or(defaults.access.presence),
+            },
+            ..key.resolve_from(defaults)
         }
     }
 }

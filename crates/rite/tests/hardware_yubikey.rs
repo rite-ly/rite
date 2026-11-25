@@ -861,3 +861,48 @@ fn a_protected_management_key_is_released_by_the_pin() {
     assert_eq!(admin_outputs(&run)["is_default"], false);
     generated_in(card, &run, "87");
 }
+
+/// A key generated with a declared access policy has it on the card: the
+/// record shows what the card reports, and `ykman` agrees. The PIN step
+/// before it records that the PIN is still the factory one.
+#[test]
+#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
+fn a_declared_access_policy_is_set_and_read_back() {
+    let Some((_turn, card)) = card() else { return };
+    let steps = [
+        unlock("unlock"),
+        admin_then_generate("88", "").replace(
+            "          slot: \"88\"\n",
+            "          slot: \"88\"\n          policy:\n            authentication: per_use\n            \
+             presence: never\n",
+        ),
+    ]
+    .concat();
+    let yaml = admin_ceremony(card, "source: factory_default", &steps);
+    let run = run(&yaml, vec![pin()]);
+    run.completed();
+    let generated = run
+        .facts_of("backend_operation")
+        .into_iter()
+        .find(|fact| fact["kind"] == "generate_key")
+        .expect("a generate_key record");
+    assert_eq!(generated["inputs"]["policy"]["authentication"], "per_use");
+    assert_eq!(
+        generated["outputs"]["access"],
+        serde_json::json!({"authentication": "per_use", "presence": "never"})
+    );
+    let info = ykman(&["piv", "keys", "info", "88"], Some(&card.serial));
+    let collapsed = info.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        collapsed.contains("PIN required for use: ALWAYS")
+            && collapsed.contains("Touch required for use: NEVER"),
+        "ykman reports other policies for slot 88:\n{info}"
+    );
+
+    let unlocked = run
+        .facts_of("backend_operation")
+        .into_iter()
+        .find(|fact| fact["kind"] == "authenticate" && fact["inputs"]["grants"] == "user")
+        .expect("a PIN authentication");
+    assert_eq!(unlocked["outputs"]["pin_is_default"], true);
+}

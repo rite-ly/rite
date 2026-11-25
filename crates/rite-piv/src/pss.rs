@@ -105,12 +105,12 @@ mod tests {
         key: &PKey<Private>,
         message: &[u8],
         signature: &[u8],
-        salt: RsaPssSaltlen,
+        salt_len: RsaPssSaltlen,
     ) -> bool {
         let mut verifier = Verifier::new(MessageDigest::sha256(), key).unwrap();
         verifier.set_rsa_padding(Padding::PKCS1_PSS).unwrap();
         verifier.set_rsa_mgf1_md(MessageDigest::sha256()).unwrap();
-        verifier.set_rsa_pss_saltlen(salt).unwrap();
+        verifier.set_rsa_pss_saltlen(salt_len).unwrap();
         verifier.update(message).unwrap();
         verifier.verify(signature).unwrap()
     }
@@ -132,8 +132,8 @@ mod tests {
             assert_eq!(em.len(), k);
             let signature = raw_sign(key, &em);
 
-            for salt in [RsaPssSaltlen::DIGEST_LENGTH, RsaPssSaltlen::custom(32)] {
-                assert!(openssl_verifies(key, message, &signature, salt), "{k}");
+            for salt_len in [RsaPssSaltlen::DIGEST_LENGTH, RsaPssSaltlen::custom(32)] {
+                assert!(openssl_verifies(key, message, &signature, salt_len), "{k}");
             }
             assert!(
                 !openssl_verifies(
@@ -155,7 +155,7 @@ mod tests {
         let message = b"release manifest";
         let em = encode_sha256(
             Sha256::digest(message).into(),
-            &[7; SALT_LEN],
+            &random_salt().unwrap(),
             RsaSize::Rsa2048,
         );
         let signature = raw_sign(&key, &em);

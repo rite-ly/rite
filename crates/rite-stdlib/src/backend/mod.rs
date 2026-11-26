@@ -5,13 +5,41 @@
 //! backends.
 
 mod mock;
+#[cfg(feature = "pki")]
+mod mock_attestation;
 
 pub use mock::MockBackend;
+#[cfg(feature = "pki")]
+pub use mock_attestation::MOCK_ATTESTATION_ROOT;
 
 use std::collections::BTreeMap;
 
 use rite_runtime::BackendFactory;
 use rite_sdk::{BackendConfig, BackendError, KeyAlgorithm, KeyId, Provider};
+
+/// Refuse a step that runs on `backend` with a key `key_owner` holds.
+///
+/// Shared by every action that hands a key to its backend, so an operator who
+/// points a step at the wrong backend gets the same message from each.
+#[cfg_attr(
+    not(any(feature = "crypto", feature = "attestation")),
+    allow(dead_code)
+)]
+pub(crate) fn require_key_owner(
+    backend: &dyn rite_sdk::Backend,
+    key_owner: &str,
+    key_name: &str,
+) -> Result<(), rite_runtime::ActionError> {
+    let backend_name = backend.name();
+    if key_owner == backend_name {
+        Ok(())
+    } else {
+        Err(rite_runtime::ActionError::Failed(format!(
+            "Key '{key_name}' is owned by backend '{key_owner}', but this step runs on \
+             '{backend_name}'"
+        )))
+    }
+}
 
 /// Whether this build carries `provider`.
 ///

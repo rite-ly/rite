@@ -166,7 +166,6 @@ impl OpenSslBackend {
             label,
             public_key: Some(public_key),
             check_value: None,
-            attestation: None,
         })
     }
 
@@ -198,7 +197,6 @@ impl OpenSslBackend {
             label,
             public_key: None,
             check_value: Some(check_value),
-            attestation: None,
         })
     }
 
@@ -866,7 +864,6 @@ impl KeyStoreBackend for OpenSslBackend {
                     label: stored.label.clone(),
                     public_key,
                     check_value,
-                    attestation: None,
                 })
             })
             .collect()
@@ -2762,7 +2759,6 @@ mod tests {
         assert_eq!(metadata.algorithm, KeyAlgorithm::Rsa2048);
         assert_eq!(metadata.label, "test-key-2048");
         assert!(metadata.public_key.is_some());
-        assert!(metadata.attestation.is_none());
     }
 
     #[test]
@@ -2774,7 +2770,6 @@ mod tests {
         assert_eq!(metadata.algorithm, KeyAlgorithm::Rsa4096);
         assert_eq!(metadata.label, "test-key-4096");
         assert!(metadata.public_key.is_some());
-        assert!(metadata.attestation.is_none());
     }
 
     #[test]
@@ -2786,7 +2781,6 @@ mod tests {
         assert_eq!(metadata.algorithm, KeyAlgorithm::EcdsaP256);
         assert_eq!(metadata.label, "test-key-p256");
         assert!(metadata.public_key.is_some());
-        assert!(metadata.attestation.is_none());
     }
 
     #[test]

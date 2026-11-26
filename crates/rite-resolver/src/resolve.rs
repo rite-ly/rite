@@ -14,8 +14,8 @@ use rite_model::expression::{
 };
 use rite_model::validate::{Anchor, Pointer, Values};
 use rite_model::{
-    Accepts, ActionType, ArtifactKind, BackendUsage, DutyType, FileKind, Format, ParameterType,
-    ReadsContract, RevealFormat, SharingScheme,
+    Accepts, ActionType, ArtifactKind, BackendUsage, DutyType, FileKind, Format, KeyUse,
+    ParameterType, ReadsContract, RevealFormat, SharingScheme,
 };
 use rite_model::{
     Act, ActId, ArtifactId, ArtifactRef, Ceremony, Credential, CredentialId, Material, MaterialId,
@@ -79,6 +79,7 @@ pub(crate) fn resolve_ceremony(
     ctx.check_pin_steps(&execution_plan, &ceremony.backends);
     ctx.check_admin_steps(&execution_plan, &ceremony.backends);
     ctx.check_access_policies(&execution_plan, &ceremony.backends);
+    ctx.check_attesting_backends(&execution_plan, &ceremony.backends);
     ctx.validate_output_kinds(&execution_plan);
     ctx.validate_input_kinds(&execution_plan);
 
@@ -1321,6 +1322,32 @@ impl ResolveContext {
         })
     }
 
+    /// Refuse an `attest_key` step on a backend whose provider does not
+    /// attest, until backends answer capability queries.
+    fn check_attesting_backends(
+        &mut self,
+        execution_plan: &[Step],
+        backends: &HashMap<String, rite_sdk::BackendConfig>,
+    ) {
+        for step in execution_plan {
+            if step.action != ActionType::AttestKey {
+                continue;
+            }
+            let Some(backend) = step.backend.as_deref() else {
+                continue;
+            };
+            if let Some(config) = backends.get(backend)
+                && !config.provider.attests()
+            {
+                self.errors.push(ResolveError::BackendCannotAttest {
+                    step: step.id.clone(),
+                    backend: backend.to_string(),
+                    provider: config.provider,
+                });
+            }
+        }
+    }
+
     /// Check the `authenticate` steps against the backends they run on and
     /// the keys they unlock.
     ///
@@ -1576,7 +1603,7 @@ impl ResolveContext {
                 let declared = literal_length(step).map(|n| (n, step.id.clone()));
                 shares.insert(created.clone(), declared);
             }
-            for reference in reads_privately(step) {
+            for (reference, _) in reads_held(step) {
                 let holder = match reference {
                     ArtifactRef::Material { id, .. } => match self.materials.get(id) {
                         Some(Material {
@@ -1775,13 +1802,22 @@ fn held_keys_used_privately<'a>(
         .collect()
 }
 
-/// The references `step` reads whose private half it may use: all but those
-/// it reads only the public half of.
-fn reads_privately(step: &Step) -> impl Iterator<Item = &ArtifactRef> {
+/// The references `step` reads as a key a backend holds, used or named: all
+/// but those it reads only the public half of.
+fn reads_held(step: &Step) -> impl Iterator<Item = (&ArtifactRef, Accepts)> {
     read_inputs(step, &step.action.spec().reads)
         .into_iter()
         .filter(|(_, reference, accepts)| !reads_only_public_half(reference, *accepts))
-        .map(|(_, reference, _)| reference)
+        .map(|(_, reference, accepts)| (reference, accepts))
+}
+
+/// The references `step` reads whose private half it may use, which a device
+/// may lock behind a PIN: those it reads as a held key, except those it names
+/// to its device without using.
+fn reads_privately(step: &Step) -> impl Iterator<Item = &ArtifactRef> {
+    reads_held(step)
+        .filter(|(_, accepts)| accepts.key_use == KeyUse::Private)
+        .map(|(reference, _)| reference)
 }
 
 /// What a reference is once its property is read, or `None` when no kind the

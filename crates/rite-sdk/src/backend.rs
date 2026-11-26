@@ -28,11 +28,12 @@ use std::sync::{Mutex, MutexGuard};
 
 use zeroize::Zeroizing;
 
+use crate::attestation::Attestation;
 use crate::key_material::PublicKeyDer;
 use crate::types::{
-    AccessPolicy, AgreedSecret, Attestation, CertRef, DataKey, KeyAlgorithm, KeyId, KeyMetadata,
-    KeyPolicy, KeyProtection, KeySecurityAttributes, KeySpec, ManagementKey, ManagementSession,
-    PcrValue, PinDefaults, PivDeviceInfo, PivSlot, PivSlotInfo, Pkcs11Mechanism, Pkcs11TokenInfo,
+    AccessPolicy, AgreedSecret, CertRef, DataKey, KeyAlgorithm, KeyId, KeyMetadata, KeyPolicy,
+    KeyProtection, KeySecurityAttributes, KeySpec, ManagementKey, ManagementSession, PcrValue,
+    PinDefaults, PivDeviceInfo, PivSlot, PivSlotInfo, Pkcs11Mechanism, Pkcs11TokenInfo,
     SecretKeyValue, SignAlgorithm, TpmInfo, WrapScheme, WrappedKey, YubikeySlotMetadata,
 };
 
@@ -301,14 +302,16 @@ pub trait VerifyBackend: Backend {
     ) -> Result<bool, BackendError>;
 }
 
-/// Hardware attestation operations.
+/// Key attestation.
 ///
-/// Backends that support attestation can cryptographically prove that a key
-/// was generated on a specific hardware device.
+/// A backend whose device signs statements about its own keys, with a key the
+/// vendor provisioned, implements this.
 pub trait AttestationBackend: Backend {
-    /// Return a cryptographic proof that `key_id` was generated on this
-    /// backend's hardware and has specific properties.
-    fn attest_key(&self, key_id: &KeyId) -> Result<Attestation, BackendError>;
+    /// The device's signed statement about `key_id`, leaf first.
+    ///
+    /// A device may refuse a key it did not generate: a YubiKey attests only
+    /// those, and says so with [`BackendError::OperationNotPermitted`].
+    fn attest_key(&mut self, key_id: &KeyId) -> Result<Attestation, BackendError>;
 }
 
 /// Certificate storage operations.
@@ -664,9 +667,6 @@ pub trait TpmBackend: Backend {
 
     /// Extend a PCR register with new data.
     fn extend_pcr(&mut self, pcr: u8, data: &[u8]) -> Result<(), BackendError>;
-
-    /// Generate a TPM quote (signed attestation over PCR values).
-    fn generate_quote(&mut self, pcrs: &[u8], nonce: &[u8]) -> Result<Attestation, BackendError>;
 }
 
 /// Personal Identity Verification (PIV) smart card operations.
@@ -725,18 +725,11 @@ pub trait PivBackend: Backend {
 ///
 /// # Vendor references
 /// - Yubico PIV documentation: <https://developers.yubico.com/PIV/>
-/// - `YubiKey` attestation: key reference F9 (Yubico-proprietary)
+/// - `YubiKey` attestation: key reference F9 (Yubico-proprietary), through
+///   [`AttestationBackend`]
 /// - Touch/PIN policy configuration: Yubico-proprietary extensions
 ///   to the GENERATE ASYMMETRIC KEY PAIR command
 pub trait YubikeyBackend: PivBackend {
-    /// Generate an attestation certificate for a key in `slot`.
-    ///
-    /// Proves the key was generated on-device (not imported).
-    /// Uses `YubiKey`'s attestation key (slot F9) to sign a certificate
-    /// over the public key in the target slot.
-    /// This is a Yubico extension, not available on generic PIV cards.
-    fn attest_slot(&self, slot: PivSlot) -> Result<Vec<u8>, BackendError>;
-
     /// Authenticate with the management key (3DES or AES), and report what
     /// the card says of it.
     ///

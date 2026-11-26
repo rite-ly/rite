@@ -9,11 +9,11 @@ use std::sync::{Mutex, MutexGuard};
 
 use rite_piv::{convert, ops};
 use rite_sdk::{
-    AccessPolicy, AgreedSecret, Attestation, AttestationBackend, AttestationKind, Backend,
-    BackendConfig, BackendError, CertRef, CertStoreBackend, KeyAgreementBackend, KeyDecryptBackend,
-    KeyId, KeyMetadata, KeyProtection, KeySpec, KeyStoreBackend, ManagementKey, ManagementSession,
-    PinDefaults, PivBackend, PivDeviceInfo, PivSlot, PivSlotInfo, PublicKeyDer, SignAlgorithm,
-    SignBackend, YubikeyBackend, YubikeySlotMetadata,
+    AccessPolicy, AgreedSecret, Attestation, AttestationBackend, AttestationFormat, Backend,
+    BackendConfig, BackendError, CertRef, CertStoreBackend, CertificateDer, KeyAgreementBackend,
+    KeyDecryptBackend, KeyId, KeyMetadata, KeyProtection, KeySpec, KeyStoreBackend, ManagementKey,
+    ManagementSession, PinDefaults, PivBackend, PivDeviceInfo, PivSlot, PivSlotInfo, PublicKeyDer,
+    SignAlgorithm, SignBackend, YubikeyBackend, YubikeySlotMetadata,
 };
 use zeroize::Zeroizing;
 
@@ -171,15 +171,48 @@ impl KeyDecryptBackend for YubikeyDevice {
 }
 
 impl AttestationBackend for YubikeyDevice {
-    fn attest_key(&self, key_id: &KeyId) -> Result<Attestation, BackendError> {
+    /// The slot's attestation certificate, signed by the key in F9, followed
+    /// by F9's own certificate.
+    ///
+    /// The slot's metadata (firmware 5.3 and later) is read first, so an
+    /// imported key or an empty slot is named as such: the card refuses both
+    /// with the same status word.
+    fn attest_key(&mut self, key_id: &KeyId) -> Result<Attestation, BackendError> {
         let slot = ops::slot_from_key_id(key_id)?;
-        let cert_der = self.attest_slot(slot)?;
-        Ok(Attestation {
-            kind: AttestationKind::HardwareCertChain,
-            certificates: vec![cert_der],
-            signature: None,
-            metadata: serde_json::json!({ "slot": key_id.as_str() }),
-        })
+        let yubikey_slot = convert::to_yubikey_slot(slot)?;
+        let mut yk = self.device()?;
+        // Whether the card reported the key's origin. Without that, a
+        // refusal is put down to its usual causes, said as such.
+        let origin_known = match yubikey::piv::metadata(&mut yk, yubikey_slot) {
+            Ok(metadata) if metadata.origin == Some(yubikey::piv::Origin::Imported) => {
+                return Err(BackendError::OperationNotPermitted(format!(
+                    "slot {key_id} holds an imported key, and a YubiKey attests only keys \
+                     it generated"
+                )));
+            }
+            Ok(metadata) => metadata.origin.is_some(),
+            Err(yubikey::Error::NotFound) => {
+                return Err(BackendError::SlotEmpty(key_id.to_string()));
+            }
+            Err(_) => false,
+        };
+        let leaf = yubikey::piv::attest(&mut yk, yubikey_slot).map_err(|error| match error {
+            yubikey::Error::GenericError if !origin_known => {
+                BackendError::OperationNotPermitted(format!(
+                    "the YubiKey refused to attest slot {key_id}; it does not report a key's \
+                     origin, and the usual causes are an empty slot or an imported key"
+                ))
+            }
+            other => ops::map_error(other),
+        })?;
+        let device = ops::read_certificate_at(&mut yk, yubikey::piv::SlotId::Attestation)?;
+        Attestation::new(
+            AttestationFormat::YubicoPiv,
+            vec![
+                CertificateDer::new(leaf.to_vec())?,
+                CertificateDer::new(device)?,
+            ],
+        )
     }
 }
 
@@ -251,13 +284,6 @@ impl PivBackend for YubikeyDevice {
 }
 
 impl YubikeyBackend for YubikeyDevice {
-    fn attest_slot(&self, slot: PivSlot) -> Result<Vec<u8>, BackendError> {
-        let yubikey_slot = convert::to_yubikey_slot(slot)?;
-        let mut yk = self.device()?;
-        let cert = yubikey::piv::attest(&mut yk, yubikey_slot).map_err(ops::map_error)?;
-        Ok(cert.to_vec())
-    }
-
     fn authenticate_management(
         &mut self,
         key: ManagementKey<'_>,

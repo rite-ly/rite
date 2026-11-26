@@ -2,7 +2,8 @@
 //! touches the PIV code. CI has no device, so every test is `#[ignore]`.
 //!
 //! The suite resets the YubiKey's PIV application and provisions its own
-//! keys, so it runs only on a YubiKey kept for testing, named by serial:
+//! keys, generating four and importing one into 9E, so it runs only on a
+//! YubiKey kept for testing, named by serial:
 //!
 //! ```sh
 //! RITE_HW_YUBIKEY_SERIAL=12345678 cargo test -p rite --features piv,yubikey \
@@ -111,6 +112,25 @@ fn provision() -> Option<Card> {
             Some(&serial),
         );
     }
+    // An imported key, which the card refuses to attest.
+    let imported = keys.join("9e-private.pem");
+    let key = openssl::ec::EcKey::generate(
+        &openssl::ec::EcGroup::from_curve_name(openssl::nid::Nid::X9_62_PRIME256V1).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(&imported, key.private_key_to_pem().unwrap()).unwrap();
+    ykman(
+        &[
+            "piv",
+            "keys",
+            "import",
+            "--management-key",
+            MANAGEMENT_KEY,
+            "9e",
+            imported.to_str().unwrap(),
+        ],
+        Some(&serial),
+    );
     Some(Card { serial, keys })
 }
 
@@ -192,6 +212,11 @@ materials:
     backend: token
     id: "piv:84"
     algorithm: RSA-2048
+  imported_key:
+    type: backend_key
+    backend: token
+    id: "piv:9e"
+    algorithm: ECDSA-P256
   manifest:
     type: bytes
     path: "manifest.txt"
@@ -262,6 +287,19 @@ fn verify_as(id: &str, key: &str, signature: &str, algorithm: &str) -> String {
           key: ${{artifact.{key}}}
           data: ${{artifact.manifest}}
           signature: ${{artifact.{signature}}}
+"
+    )
+}
+
+/// An `attest_key` step on the card, named `id`, attesting `key`.
+fn attest(id: &str, key: &str) -> String {
+    format!(
+        r"      {id}:
+        action: attest_key
+        backend: token
+        reads:
+          key: ${{artifact.{key}}}
+        creates: {id}_attestation
 "
     )
 }
@@ -905,4 +943,85 @@ fn a_declared_access_policy_is_set_and_read_back() {
         .find(|fact| fact["kind"] == "authenticate" && fact["inputs"]["grants"] == "user")
         .expect("a PIN authentication");
     assert_eq!(unlocked["outputs"]["pin_is_default"], true);
+}
+
+/// The card attests a key it generated, with no PIN: the leaf names the key
+/// `ykman` exported, OpenSSL accepts it as issued by the bundle's F9
+/// certificate, and that certificate is the one `ykman` reads.
+#[test]
+#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
+fn the_card_attests_a_key_it_generated() {
+    let Some((_turn, card)) = card() else { return };
+    let run = run(
+        &ceremony(card, "", &attest("attest", "signing_key")),
+        vec![],
+    );
+    run.completed();
+
+    let Some(ArtifactValue::Attestation(attestation)) =
+        run.runner.artifact(&ArtifactId::new("attest_attestation"))
+    else {
+        panic!("attest_key made no attestation");
+    };
+    assert_eq!(attestation.format().as_str(), "yubico-piv/v1");
+    let exported = std::fs::read(card.keys.join("9c.pem")).unwrap();
+    let exported = PKey::public_key_from_pem(&exported).unwrap();
+    let leaf = openssl::x509::X509::from_der(attestation.leaf().as_bytes()).unwrap();
+    assert!(
+        leaf.public_key().unwrap().public_eq(&exported),
+        "the attestation names another key than 9C's"
+    );
+    let device = openssl::x509::X509::from_der(attestation.issuers()[0].as_bytes()).unwrap();
+    // The F9 certificate is the card's bytes, not a re-encoding that would
+    // break Yubico's signature over it.
+    let f9 = ykman(
+        &["piv", "certificates", "export", "f9", "-"],
+        Some(&card.serial),
+    );
+    assert_eq!(
+        openssl::x509::X509::from_pem(f9.as_bytes())
+            .unwrap()
+            .to_der()
+            .unwrap(),
+        attestation.issuers()[0].as_bytes(),
+        "the stored F9 certificate differs from the card's"
+    );
+    assert!(
+        leaf.verify(&device.public_key().unwrap()).unwrap(),
+        "the leaf is not signed by the F9 key"
+    );
+    assert_eq!(run.facts_of("backend_operation").len(), 1);
+}
+
+/// Attesting between a PIN step and a 9C signature leaves the PIN verified:
+/// the resolver counts `attest_key` as spending no PIN, and rests on this.
+#[test]
+#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
+fn attesting_between_the_pin_and_a_9c_signature_keeps_the_pin() {
+    let Some((_turn, card)) = card() else { return };
+    let steps = [
+        unlock("unlock"),
+        attest("attest", "signing_key"),
+        sign("sign", "signing_key", "ECDSA-SHA256", "signature"),
+    ]
+    .concat();
+    let run = run(&ceremony(card, "", &steps), vec![pin()]);
+    run.completed();
+    verify_off_card(card, "9c", MessageDigest::sha256(), run.bytes("signature"));
+}
+
+/// The card refuses to attest an imported key, and the step says why.
+#[test]
+#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
+fn the_card_refuses_to_attest_an_imported_key() {
+    let Some((_turn, card)) = card() else { return };
+    let run = run(
+        &ceremony(card, "", &attest("attest", "imported_key")),
+        vec![],
+    );
+    let Some((step, error)) = &run.stopped else {
+        panic!("an imported key was attested");
+    };
+    assert_eq!(step, "attest");
+    assert!(error.to_string().contains("imported key"), "{error}");
 }

@@ -21,9 +21,8 @@ use rite_runtime::{
 };
 use rite_sdk::{Backend, CertificateDer, PublicKeyDer};
 use serde_json::json;
-use signature::Keypair;
 use x509_cert::der::{
-    self, Decode, DecodePem, Document, Encode,
+    self, Decode, DecodePem, Encode,
     asn1::{BitString, ObjectIdentifier, OctetString},
     oid::AssociatedOid,
 };
@@ -37,10 +36,7 @@ use x509_cert::{
     name::Name,
     request::{CertReq, ExtensionReq},
     serial_number::SerialNumber,
-    spki::{
-        AlgorithmIdentifierOwned, DynSignatureAlgorithmIdentifier, EncodePublicKey,
-        SubjectPublicKeyInfoOwned, SubjectPublicKeyInfoRef,
-    },
+    spki::SubjectPublicKeyInfoRef,
     time::Validity,
 };
 
@@ -48,6 +44,7 @@ use rite_model::params::IssueCertificateParams;
 
 use x509_cert::der::oid::db::rfc5912::RSA_ENCRYPTION;
 
+use super::issuing_key::BackendIssuingKey;
 use super::oids::{
     sig_profile_for_algorithm, verifiable_algorithm_names, verifiable_sign_algorithm,
 };
@@ -57,41 +54,6 @@ const ID_KP_SERVER_AUTH: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.
 
 /// id-kp-codeSigning OID (1.3.6.1.5.5.7.3.3)
 const ID_KP_CODE_SIGNING: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.3");
-
-/// Public half of the backend-held issuing key.
-#[derive(Clone)]
-struct IssuingPublicKey(SubjectPublicKeyInfoOwned);
-
-impl EncodePublicKey for IssuingPublicKey {
-    fn to_public_key_der(&self) -> x509_cert::spki::Result<Document> {
-        Document::try_from(&self.0)
-    }
-}
-
-/// Presents the ceremony backend's issuing key to the `x509_cert` builder.
-///
-/// The builder needs the issuing key's public half and its signature
-/// algorithm identifier; the signature itself is produced by the backend
-/// between `Builder::finalize` and `Builder::assemble`, so this type holds
-/// no private key material.
-struct BackendIssuingKey {
-    public_key: IssuingPublicKey,
-    signature_algorithm: AlgorithmIdentifierOwned,
-}
-
-impl Keypair for BackendIssuingKey {
-    type VerifyingKey = IssuingPublicKey;
-
-    fn verifying_key(&self) -> IssuingPublicKey {
-        self.public_key.clone()
-    }
-}
-
-impl DynSignatureAlgorithmIdentifier for BackendIssuingKey {
-    fn signature_algorithm_identifier(&self) -> x509_cert::spki::Result<AlgorithmIdentifierOwned> {
-        Ok(self.signature_algorithm.clone())
-    }
-}
 
 /// Adapts a [`CertProfile`] to the `x509_cert` builder's profile interface,
 /// carrying the run-specific values the extensions are derived from.
@@ -249,12 +211,10 @@ impl Action for IssueCertificateAction {
             .map(|ic| ic.tbs_certificate().subject_public_key_info().clone());
         let has_issuer_cert = issuer_spki.is_some();
 
-        let issuing_key = BackendIssuingKey {
-            public_key: IssuingPublicKey(
-                issuer_spki.unwrap_or_else(|| csr.info.public_key.clone()),
-            ),
-            signature_algorithm: sig_alg,
-        };
+        let issuing_key = BackendIssuingKey::new(
+            issuer_spki.unwrap_or_else(|| csr.info.public_key.clone()),
+            sig_alg,
+        );
 
         let profile_name = profile.to_string();
         let adapter = ProfileAdapter {

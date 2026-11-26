@@ -1638,6 +1638,70 @@ sections:
             assert_eq!(pin_warnings(&in_9d), Vec::<String>::new());
         }
 
+        /// An `attest_key` step reading `signing_key` on `backend`.
+        fn attest_step(name: &str, backend: &str) -> String {
+            format!(
+                "      {name}:\n        action: attest_key\n        backend: {backend}\n        \
+                 reads:\n          key: \"${{artifact.signing_key}}\"\n        creates: \
+                 {name}_attestation\n"
+            )
+        }
+
+        /// Attesting names the key without using it: no PIN before it, and
+        /// none spent by it before a slot 9C signature.
+        #[test]
+        fn attesting_a_card_key_needs_no_pin_and_spends_none() {
+            let signed = pin_before(&on_card(DECLARED, "token"), "sign", "token");
+            let yaml = replaced(
+                &signed,
+                "      unlock_sign:\n",
+                &format!("{}      unlock_sign:\n", attest_step("attest", "token")),
+            );
+            let yaml = replaced(
+                &yaml,
+                "      sign:\n",
+                &format!("{}      sign:\n", attest_step("attest_again", "token")),
+            );
+            assert_eq!(pin_warnings(&yaml), Vec::<String>::new());
+        }
+
+        /// The device holding the key attests it, and only a device that
+        /// attests.
+        #[test]
+        fn refuses_attesting_on_another_backend_or_one_that_cannot() {
+            let elsewhere =
+                ceremony(DECLARED, "        backend: token") + &attest_step("attest", "software");
+            let found = messages(&elsewhere);
+            assert!(
+                found.iter().any(|m| m.starts_with(
+                    "Step 'attest' reads 'signing_key', which belongs to backend 'token'"
+                )),
+                "{found:?}"
+            );
+            assert!(
+                found.iter().any(|m| m
+                    == "Step 'attest' asks backend 'software' to attest a key, and provider \
+                        'openssl' does not attest keys"),
+                "{found:?}"
+            );
+
+            let piv = replaced(
+                &(ceremony(DECLARED, "        backend: token") + &attest_step("attest", "token")),
+                "    provider: mock",
+                "    provider: piv",
+            );
+            assert!(
+                messages(&piv)
+                    .iter()
+                    .any(|m| m.contains("provider 'piv' does not attest")),
+                "{:?}",
+                messages(&piv)
+            );
+            let mock =
+                ceremony(DECLARED, "        backend: token") + &attest_step("attest", "token");
+            assert_eq!(messages(&mock), Vec::<String>::new());
+        }
+
         /// A key a step makes on the card, then signs with.
         const MADE_ON_CARD: &str = r#"
 version: "0.3"

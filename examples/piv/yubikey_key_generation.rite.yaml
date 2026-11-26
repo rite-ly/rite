@@ -1,9 +1,8 @@
 version: "0.3"
 name: "Signing Key Generation on a YubiKey"
 description: |
-  Generate a signing key in PIV slot 9C of a prepared YubiKey, request a
-  YubiKey attestation certificate showing it was generated on the card, and
-  export its public key.
+  Generate a signing key in PIV slot 9C of a prepared YubiKey, have the
+  YubiKey attest that it generated the key, and export its public key.
 
 backends:
   token:
@@ -28,9 +27,9 @@ output:
   signing_key:
     type: public_key
     description: "Public half of the signing key generated in slot 9C"
-  attestation_cert:
-    type: certificate
-    description: "YubiKey attestation certificate for slot 9C"
+  signing_key_attestation:
+    type: attestation
+    description: "YubiKey attestation of the slot 9C key"
 
 roles:
   officer:
@@ -75,12 +74,12 @@ sections:
         creates: signing_key
         description: "Generate the signing key in slot 9C, replacing any key there."
       attest_signing_key:
-        action: yubikey_attest_slot
+        action: attest_key
         backend: token
-        with:
-          slot: "9c"
-        creates: attestation_cert
-        description: "Request the attestation certificate showing the key was generated on the card."
+        reads:
+          key: "${artifact.signing_key}"
+        creates: signing_key_attestation
+        description: "Have the card attest that it generated the key."
 
   attestation:
     name: "Witness Attestation"

@@ -59,7 +59,7 @@ pub use safe_path::{PathSafetyError, confine, is_safe_component, safe_join, vali
 
 pub use types::{
     Accepts, ActionSpec, ActionType, ArtifactKind, BackendUsage, CertProfile, DutyType, FileKind,
-    ListInput, Metadata, ParameterType, ReadInput, ReadsContract, SharingScheme,
+    KeyUse, ListInput, Metadata, ParameterType, ReadInput, ReadsContract, SharingScheme,
     UnknownCertProfile, UnknownSharingScheme, View, derive_role_name, derive_step_name, role_type,
     share_index,
 };

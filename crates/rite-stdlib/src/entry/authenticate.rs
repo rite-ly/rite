@@ -379,9 +379,6 @@ mod tests {
     }
 
     impl YubikeyBackend for Card {
-        fn attest_slot(&self, _slot: rite_sdk::PivSlot) -> Result<Vec<u8>, BackendError> {
-            Ok(Vec::new())
-        }
         fn authenticate_management(
             &mut self,
             key: ManagementKey<'_>,

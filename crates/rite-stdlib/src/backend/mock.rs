@@ -22,11 +22,10 @@
 //! - CI smoke tests and reproducible development without a backend device.
 
 use rite_sdk::{
-    AccessPolicy, AccessWhen, Attestation, AttestationBackend, AttestationKind, Backend,
-    BackendError, CertRef, CertStoreBackend, KeyAlgorithm, KeyId, ManagementKey,
-    ManagementKeyAlgorithm, ManagementSession, PinDefaults, PivBackend, PivDeviceInfo,
-    PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy, PublicKeyDer, YubikeyBackend,
-    YubikeySlotMetadata,
+    AccessPolicy, AccessWhen, Attestation, AttestationBackend, Backend, BackendError, CertRef,
+    CertStoreBackend, KeyAlgorithm, KeyId, ManagementKey, ManagementKeyAlgorithm,
+    ManagementSession, PinDefaults, PivBackend, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot,
+    PivSlotInfo, PivTouchPolicy, PublicKeyDer, YubikeyBackend, YubikeySlotMetadata,
 };
 
 #[cfg(feature = "openssl")]
@@ -64,14 +63,6 @@ const MOCK_SLOT_PUBLIC_KEY: &[u8] = include_bytes!("fixtures/mock-slot-key.spki.
 
 /// The certificate for [`MOCK_SLOT_PUBLIC_KEY`], self-signed and long-dated.
 const MOCK_SLOT_CERTIFICATE: &[u8] = include_bytes!("fixtures/mock-slot-cert.der");
-
-/// The certificate `yubikey_attest_slot` reports, standing in for the one a
-/// device signs with its Yubico-rooted attestation key.
-///
-/// A different keypair from the slot's, because an attestation certificate is
-/// issued by the device about the slot, not by the slot. Clearly synthetic: a
-/// rehearsal cannot produce a chain to the real Yubico root.
-const MOCK_ATTESTATION_CERTIFICATE: &[u8] = include_bytes!("fixtures/mock-attestation-cert.der");
 
 /// The policy of a key standing in for one a device holds: every usage.
 ///
@@ -112,6 +103,15 @@ pub struct MockBackend {
     /// back: what the step asked for, the slot's default for the rest.
     #[cfg(feature = "openssl")]
     access: std::collections::HashMap<KeyId, AccessPolicy>,
+    /// The stand-in for a YubiKey's F9 key, which signs the mock's
+    /// attestations, imported at the first one.
+    #[cfg(feature = "pki")]
+    attestation_key: Option<KeyId>,
+    /// Keys a step imported, which the mock refuses to attest, as a YubiKey
+    /// does. A held key's origin is not known to a rehearsal: the mock
+    /// attests it, and the card refuses it if it was imported.
+    #[cfg(feature = "pki")]
+    imported: std::collections::HashSet<KeyId>,
 }
 
 impl std::fmt::Debug for MockBackend {
@@ -153,7 +153,6 @@ impl MockBackend {
             )
             .expect("the committed slot key fixture is a P-256 PKCS#8 key")
             .key_id;
-
         Self {
             #[cfg(feature = "openssl")]
             crypto,
@@ -163,6 +162,10 @@ impl MockBackend {
             slot_key,
             #[cfg(feature = "openssl")]
             access: std::collections::HashMap::new(),
+            #[cfg(feature = "pki")]
+            attestation_key: None,
+            #[cfg(feature = "pki")]
+            imported: std::collections::HashSet::new(),
             name,
             seed,
         }
@@ -336,7 +339,10 @@ impl KeyStoreBackend for MockBackend {
         key_bytes: &[u8],
         passphrase: Option<&[u8]>,
     ) -> Result<KeyMetadata, BackendError> {
-        self.crypto.import_key(spec, key_bytes, passphrase)
+        let metadata = self.crypto.import_key(spec, key_bytes, passphrase)?;
+        #[cfg(feature = "pki")]
+        self.imported.insert(metadata.key_id.clone());
+        Ok(metadata)
     }
 
     fn export_public_key(&self, key_id: &KeyId) -> Result<PublicKeyDer, BackendError> {
@@ -348,7 +354,11 @@ impl KeyStoreBackend for MockBackend {
     }
 
     fn delete_key(&mut self, key_id: &KeyId) -> Result<(), BackendError> {
-        self.crypto.delete_key(key_id)
+        self.crypto.delete_key(key_id)?;
+        self.access.remove(key_id);
+        #[cfg(feature = "pki")]
+        self.imported.remove(key_id);
+        Ok(())
     }
 }
 
@@ -478,21 +488,47 @@ impl RandomBackend for MockBackend {
 // Device-semantic surface: deterministic, clearly-synthetic stubs.
 // ---------------------------------------------------------------------------
 
+/// A YubiKey PIV attestation in form, under the rehearsal root: see
+/// [`super::mock_attestation`].
 impl AttestationBackend for MockBackend {
-    fn attest_key(&self, key_id: &KeyId) -> Result<Attestation, BackendError> {
-        Ok(Attestation {
-            kind: AttestationKind::HardwareCertChain,
-            certificates: vec![
-                b"MOCK_ATTESTATION_CERT_1".to_vec(),
-                b"MOCK_ATTESTATION_CERT_2".to_vec(),
-            ],
-            signature: Some(b"MOCK_ATTESTATION_SIGNATURE".to_vec()),
-            metadata: serde_json::json!({
-                "mock": true,
-                "backend": self.name,
-                "key_id": key_id.as_str(),
-            }),
+    #[cfg(feature = "pki")]
+    fn attest_key(&mut self, key_id: &KeyId) -> Result<Attestation, BackendError> {
+        if self.imported.contains(key_id) {
+            return Err(BackendError::OperationNotPermitted(format!(
+                "key {key_id} was imported, and a YubiKey attests only keys it generated"
+            )));
+        }
+        let public_key = self.export_public_key(key_id)?;
+        let signer = if let Some(signer) = &self.attestation_key {
+            signer.clone()
+        } else {
+            let signer = self
+                .crypto
+                .import_key(
+                    KeySpec {
+                        algorithm: super::mock_attestation::F9_ALGORITHM,
+                        label: "mock-attestation-f9".to_string(),
+                        policy: KeyPolicy::default(),
+                        location_hint: None,
+                    },
+                    super::mock_attestation::MOCK_ATTESTATION_F9_KEY,
+                    None,
+                )?
+                .key_id;
+            self.attestation_key = Some(signer.clone());
+            signer
+        };
+        let access = self.access.get(key_id).copied().unwrap_or_default();
+        super::mock_attestation::attest(key_id.as_str(), &public_key, access, |tbs, algorithm| {
+            self.crypto.sign(&signer, tbs, algorithm)
         })
+    }
+
+    #[cfg(not(feature = "pki"))]
+    fn attest_key(&mut self, _key_id: &KeyId) -> Result<Attestation, BackendError> {
+        Err(BackendError::UnsupportedOperation(
+            "the mock attests only in a build with the 'pki' feature".to_string(),
+        ))
     }
 }
 
@@ -552,10 +588,6 @@ impl PivBackend for MockBackend {
 }
 
 impl YubikeyBackend for MockBackend {
-    fn attest_slot(&self, _slot: PivSlot) -> Result<Vec<u8>, BackendError> {
-        Ok(MOCK_ATTESTATION_CERTIFICATE.to_vec())
-    }
-
     /// Accepts any key, as a card of firmware 5.7 with an AES-192 key would
     /// the right one, and reports it as the default only when the step
     /// presents the default.
@@ -671,15 +703,107 @@ mod tests {
         );
     }
 
+    /// The attestation names the key the mock holds, which for a generated
+    /// key is a fresh one, and chains to the rehearsal root as OpenSSL builds
+    /// a chain.
+    #[cfg(feature = "pki")]
     #[test]
-    fn attestation_is_synthetic_but_well_formed() {
-        let backend = MockBackend::new("test".to_string(), "seed".to_string());
-        let attestation = backend.attest_key(&KeyId::new("k-1")).unwrap();
-        assert!(!attestation.certificates.is_empty());
-        assert!(attestation.signature.is_some());
+    fn an_attestation_names_the_key_and_chains_to_the_rehearsal_root() {
+        use super::super::mock_attestation::MOCK_ATTESTATION_ROOT;
+        use openssl::stack::Stack;
+        use openssl::x509::store::X509StoreBuilder;
+        use openssl::x509::{X509, X509StoreContext, X509StoreContextRef};
+
+        let mut backend = MockBackend::new("token".to_string(), "seed".to_string());
+        let key = backend
+            .generate_key(KeySpec {
+                algorithm: KeyAlgorithm::EcdsaP384,
+                label: "generated".to_string(),
+                policy: KeyPolicy::default(),
+                location_hint: None,
+            })
+            .unwrap();
+        let attestation = backend.attest_key(&key.key_id).unwrap();
+
         assert_eq!(
-            attestation.metadata.get("mock"),
-            Some(&serde_json::json!(true))
+            attestation.leaf().public_key().unwrap(),
+            backend.export_public_key(&key.key_id).unwrap()
+        );
+
+        let x509 = |der: &[u8]| X509::from_der(der).unwrap();
+        let mut store = X509StoreBuilder::new().unwrap();
+        store.add_cert(x509(MOCK_ATTESTATION_ROOT)).unwrap();
+        let store = store.build();
+        let mut untrusted = Stack::new().unwrap();
+        untrusted
+            .push(x509(attestation.issuers().first().unwrap().as_bytes()))
+            .unwrap();
+        let leaf = x509(attestation.leaf().as_bytes());
+        let mut context = X509StoreContext::new().unwrap();
+        let verified = context
+            .init(&store, &leaf, &untrusted, X509StoreContextRef::verify_cert)
+            .unwrap();
+        assert!(verified, "{}", context.error());
+    }
+
+    /// The attestation states the access policy the step that generated the
+    /// key set, as a card's does, so a rehearsal's claims match the run's.
+    #[cfg(feature = "pki")]
+    #[test]
+    fn an_attestation_states_the_policy_the_key_was_generated_with() {
+        use x509_cert::der::Decode;
+
+        let mut backend = MockBackend::new("token".to_string(), "seed".to_string());
+        let policy = KeyPolicy {
+            access: AccessPolicy {
+                authentication: Some(AccessWhen::PerUse),
+                presence: Some(AccessWhen::Cached),
+            },
+            ..KeyPolicy::default()
+        };
+        let key = backend
+            .generate_key(KeySpec {
+                algorithm: KeyAlgorithm::EcdsaP256,
+                label: "signing".to_string(),
+                policy,
+                location_hint: Some("9a".to_string()),
+            })
+            .unwrap();
+        let attestation = backend.attest_key(&key.key_id).unwrap();
+
+        let leaf = x509_cert::Certificate::from_der(attestation.leaf().as_bytes()).unwrap();
+        let stated = leaf
+            .tbs_certificate()
+            .extensions()
+            .into_iter()
+            .flatten()
+            .find(|extension| extension.extn_id == rite_sdk::yubico_oid::POLICY)
+            .expect("a Yubico policy extension");
+        // PIN always (3), touch cached (3): not 9A's defaults, once and never.
+        assert_eq!(stated.extn_value.as_bytes(), [3, 3]);
+    }
+
+    /// A rehearsal stops where the card would: at attesting an imported key.
+    #[cfg(feature = "pki")]
+    #[test]
+    fn an_imported_key_is_not_attested() {
+        let mut backend = MockBackend::new("token".to_string(), "seed".to_string());
+        let imported = backend
+            .import_key(
+                KeySpec {
+                    algorithm: KeyAlgorithm::EcdsaP256,
+                    label: "imported".to_string(),
+                    policy: KeyPolicy::default(),
+                    location_hint: None,
+                },
+                MOCK_SLOT_PRIVATE_KEY,
+                None,
+            )
+            .unwrap();
+        let error = backend.attest_key(&imported.key_id).unwrap_err();
+        assert!(
+            matches!(error, BackendError::OperationNotPermitted(_)),
+            "{error}"
         );
     }
 

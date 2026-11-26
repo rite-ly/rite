@@ -391,6 +391,7 @@ impl SpanMap {
             | ResolveError::AdminSessionUnavailable { step, .. }
             | ResolveError::UnenforceableAccess { step, .. }
             | ResolveError::AccessByExpression { step, .. }
+            | ResolveError::BackendCannotAttest { step, .. }
             | ResolveError::ArtifactNamesMaterial { step, .. }
             | ResolveError::InputKindMismatch { step, .. }
             | ResolveError::SymmetricKeyRead { step, .. }

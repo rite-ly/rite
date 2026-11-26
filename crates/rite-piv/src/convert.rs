@@ -21,14 +21,7 @@ pub fn to_yubikey_slot(slot: PivSlot) -> Result<yubikey::piv::SlotId, BackendErr
         PivSlot::KeyManagement => SlotId::KeyManagement,
         PivSlot::CardAuthentication => SlotId::CardAuthentication,
         PivSlot::Retired(index) => {
-            let key_ref = PivSlot::RETIRED_KEY_REF_MIN
-                .checked_add(index)
-                .ok_or_else(|| {
-                    BackendError::Configuration(format!(
-                        "retired PIV slot index {index} out of range (valid: 0..=19)"
-                    ))
-                })?;
-            let retired = RetiredSlotId::try_from(key_ref).map_err(|_| {
+            let retired = RetiredSlotId::try_from(slot.key_reference()).map_err(|_| {
                 BackendError::Configuration(format!(
                     "retired PIV slot index {index} out of range (valid: 0..=19)"
                 ))

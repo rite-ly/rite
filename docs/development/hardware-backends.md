@@ -43,15 +43,29 @@ build split.
 
 ## Actions
 
-| Action                 | Feature   | Backend capability used                  | Produces      |
-|------------------------|-----------|------------------------------------------|---------------|
-| `piv_read_certificate` | `piv`     | `CertStoreBackend::read_cert`            | `Certificate` |
-| `authenticate`         | (none)    | `PivBackend::verify_pin`                 | nothing       |
-| `yubikey_attest_slot`  | `yubikey` | `YubikeyBackend::attest_slot`            | `Certificate` |
+| Action                 | Feature       | Backend capability used                  | Produces      |
+|------------------------|---------------|------------------------------------------|---------------|
+| `piv_read_certificate` | `piv`         | `CertStoreBackend::read_cert`            | `Certificate` |
+| `authenticate`         | (none)        | `PivBackend::verify_pin`                 | nothing       |
+| `attest_key`           | `attestation` | `AttestationBackend::attest_key`         | `Attestation` |
 
-Both certificate-producing actions return a parsed `CertificateDer`, so a
-malformed certificate is refused at the step that read it rather than deep
-inside a later parser, and both write out as PEM by default.
+`piv_read_certificate` returns a parsed `CertificateDer`, so a malformed
+certificate is refused at the step that read it rather than deep inside a later
+parser. `attest_key` returns the slot's attestation certificate and the F9
+certificate that issued it, in an `Attestation` tagged `yubico-piv/v1`. It reads
+the slot's metadata first (firmware 5.3 and later), so an imported key or an
+empty slot is named in the error: the card refuses both the same way. Both
+write out as PEM by default, the attestation as a bundle, leaf first.
+
+`rite check` refuses `attest_key` on a provider that does not attest (only
+`yubikey` and `mock` do), and does not count it as a use of the key for the PIN
+checks: the card signs with its attestation key, so attesting needs no PIN.
+
+The mock attests too, so a rehearsal walks the step. It issues the leaf at
+attest time over the key it holds, stating the access policy the key was
+generated with, signed by a committed stand-in for F9 that chains to a
+rehearsal root (`MOCK_ATTESTATION_ROOT`). Its private keys are in the
+repository: a chain to that root proves nothing.
 
 Neither PIV backend implements `VerifyBackend`. A card signs; a signature check
 needs only the public key, so it runs in software or on a backend named for the
@@ -385,8 +399,9 @@ CI cannot touch a physical device, so:
      (`ykman piv keys generate`, `ykman piv certificates generate`).
   2. Run `examples/piv/yubikey_signing.rite.yaml` with the device inserted.
   3. Confirm `authenticate` prompts for the PIN, `sign_data` produces a
-     signature that `check_signature` accepts, and `yubikey_attest_slot` emits
-     an attestation certificate that chains to the Yubico attestation root.
+     signature that `check_signature` accepts, and `attest_key` writes an
+     attestation that `openssl verify -CAfile <Yubico root> -untrusted` accepts,
+     with the bundle's F9 certificate as the untrusted one.
   4. Cover the full algorithm matrix, not just the example's default: repeat
      `sign_data` for each supported algorithm (`ECDSA-SHA256`, `ECDSA-SHA384`,
      `RSA-PKCS1-SHA256`, `RSA-PSS-SHA256`, each against a slot provisioned with the matching key

@@ -377,6 +377,20 @@ pub enum ResolveError {
         artifact: ArtifactId,
     },
 
+    /// An `attest_key` step names a backend whose device does not attest.
+    #[error(
+        "Step '{step}' asks backend '{backend}' to attest a key, and provider '{provider}' \
+         does not attest keys"
+    )]
+    BackendCannotAttest {
+        /// The step.
+        step: StepId,
+        /// The backend it names.
+        backend: String,
+        /// The backend's provider.
+        provider: rite_sdk::Provider,
+    },
+
     /// Step references a backend not declared in the ceremony.
     #[error("Step '{step}' references undeclared backend '{backend}'")]
     UndeclaredBackend {

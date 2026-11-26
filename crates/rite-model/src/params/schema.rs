@@ -16,7 +16,7 @@ use schemars::{Schema, SchemaGenerator, json_schema};
 use serde_json::Value;
 
 use super::{
-    AttestParams, AttestSlotParams, AuthenticateParams, CheckValueParams, ClockCheckParams,
+    AttestKeyParams, AttestParams, AuthenticateParams, CheckValueParams, ClockCheckParams,
     ConfirmParams, EncryptDataParams, EnterShareParams, EntryParams, GatherEntropyParams,
     GenerateCsrParams, GenerateKeyParams, ImportKeyParams, IssueCertificateParams,
     MachineInfoParams, OralReadbackParams, PivReadCertificateParams, RevealParams, SignDataParams,
@@ -104,23 +104,21 @@ impl ActionType {
             ActionType::EnterShare => generator.subschema_for::<EnterShareParams>(),
             ActionType::SignData => generator.subschema_for::<SignDataParams>(),
             ActionType::VerifySignature => generator.subschema_for::<VerifySignatureParams>(),
+            ActionType::AttestKey => generator.subschema_for::<AttestKeyParams>(),
             ActionType::Attest => generator.subschema_for::<AttestParams>(),
             ActionType::GatherEntropy => generator.subschema_for::<GatherEntropyParams>(),
             ActionType::PivReadCertificate => generator.subschema_for::<PivReadCertificateParams>(),
             ActionType::Authenticate => generator.subschema_for::<AuthenticateParams>(),
-            ActionType::YubikeyAttestSlot => generator.subschema_for::<AttestSlotParams>(),
             ActionType::IssueCertificate => generator.subschema_for::<IssueCertificateParams>(),
             ActionType::GenerateCsr => generator.subschema_for::<GenerateCsrParams>(),
-            // These take their inputs through `reads:` alone, and
-            // `tpm_attest` has no handler in any build yet.
-            ActionType::ExportPublic
-            | ActionType::DecryptData
-            | ActionType::CombineShares
-            | ActionType::TpmAttest => json_schema!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false,
-            }),
+            // These take their inputs through `reads:` alone.
+            ActionType::ExportPublic | ActionType::DecryptData | ActionType::CombineShares => {
+                json_schema!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                })
+            }
         }
     }
 }

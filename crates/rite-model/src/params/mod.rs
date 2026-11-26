@@ -24,7 +24,7 @@ mod schema;
 mod sharing;
 mod verification;
 
-pub use attestation::AttestParams;
+pub use attestation::{AttestKeyParams, AttestParams};
 pub use crypto::{
     EncryptDataParams, GenerateKeyParams, GenerateKeyPolicyParams, ImportKeyParams,
     KeyPolicyParams, KeyUsage, SignDataParams, UnwrapKeyParams, VerifySignatureParams,
@@ -32,7 +32,7 @@ pub use crypto::{
 };
 pub use entropy::GatherEntropyParams;
 pub use entry::EntryParams;
-pub use piv::{AttestSlotParams, AuthenticateParams, PIV_SLOT, PivReadCertificateParams};
+pub use piv::{AuthenticateParams, PIV_SLOT, PivReadCertificateParams};
 pub use pki::{GenerateCsrParams, IssueCertificateParams};
 pub(crate) use schema::names;
 pub use schema::{KEYWORDS, generator, with_schema};
@@ -92,12 +92,11 @@ pub fn cross_field(action: ActionType, with: &serde_json::Value) -> Vec<ParamErr
         | ActionType::ExportPublic
         | ActionType::SignData
         | ActionType::VerifySignature
+        | ActionType::AttestKey
         | ActionType::Attest
         | ActionType::GatherEntropy
-        | ActionType::TpmAttest
         | ActionType::PivReadCertificate
         | ActionType::Authenticate
-        | ActionType::YubikeyAttestSlot
         | ActionType::IssueCertificate
         | ActionType::GenerateCsr => Vec::new(),
     }

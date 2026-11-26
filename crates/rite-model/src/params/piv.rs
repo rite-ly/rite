@@ -37,19 +37,6 @@ pub struct AuthenticateParams {
     pub message: Option<String>,
 }
 
-/// The `with` block of `yubikey_attest_slot`.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct AttestSlotParams {
-    /// The PIV slot containing the key to attest.
-    #[schemars(regex(pattern = PIV_SLOT), extend("x-message" = PIV_SLOT_MESSAGE))]
-    pub slot: String,
-    /// Shown to the operator when the step starts.
-    #[serde(default)]
-    pub message: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

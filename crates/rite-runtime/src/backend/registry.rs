@@ -316,7 +316,6 @@ mod tests {
                 label: spec.label,
                 public_key: None,
                 check_value: None,
-                attestation: None,
             })
         }
         fn import_key(
@@ -331,7 +330,6 @@ mod tests {
                 label: spec.label,
                 public_key: None,
                 check_value: None,
-                attestation: None,
             })
         }
         fn export_public_key(

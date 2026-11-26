@@ -19,12 +19,12 @@
 //! # Features
 //!
 //! - `verification`: verification actions (requires `subtle`, `sysinfo`)
-//! - `attestation`: attestation recording
+//! - `attestation`: the `attest` statement and `attest_key`
 //! - `crypto`: crypto actions (`generate_key`, `export_public`, `wrap_key`, `unwrap_key`,
 //!   `sign_data`, `verify_signature`)
 //! - `pki`: PKI actions (`generate_csr`, `issue_certificate`; requires `x509-cert`, `signature`)
 //! - `piv`: PIV smart-card actions (`piv_read_certificate`; requires PC/SC)
-//! - `yubikey`: `YubiKey` actions (`yubikey_attest_slot`; implies `piv`; requires PC/SC)
+//! - `yubikey`: the `YubiKey` backend, which `attest_key` reaches (implies `piv`; requires PC/SC)
 //! - `default`: all features enabled except the hardware backends (`piv`, `yubikey`)
 //!
 //! # Usage
@@ -68,7 +68,7 @@ use rite_runtime::{ActionRegistry, BackendFactory};
 pub use backend::{MockBackend, create_backend, default_backend_factory, is_built};
 
 #[cfg(feature = "attestation")]
-pub use attestation::AttestAction;
+pub use attestation::{AttestAction, AttestKeyAction};
 #[cfg(feature = "crypto")]
 pub use crypto::{
     DecryptDataAction, EncryptDataAction, ExportPublicAction, GenerateKeyAction, ImportKeyAction,
@@ -78,8 +78,6 @@ pub use entropy::GatherEntropyAction;
 pub use entry::{AuthenticateAction, EnterSecretAction, EnterValueAction};
 #[cfg(feature = "piv")]
 pub use piv::PivReadCertificateAction;
-#[cfg(feature = "yubikey")]
-pub use piv::YubikeyAttestSlotAction;
 #[cfg(feature = "pki")]
 pub use pki::{GenerateCsrAction, IssueCertificateAction};
 pub use sharing::{CombineSharesAction, EnterShareAction, RevealAction, SplitSecretAction};
@@ -113,6 +111,7 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
     #[cfg(feature = "attestation")]
     {
         registry.register(Arc::new(AttestAction));
+        registry.register(Arc::new(AttestKeyAction));
     }
 
     // Human-entropy gathering and typed entry have no optional dependencies,
@@ -153,11 +152,6 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
     #[cfg(feature = "piv")]
     {
         registry.register(Arc::new(PivReadCertificateAction));
-    }
-
-    #[cfg(feature = "yubikey")]
-    {
-        registry.register(Arc::new(YubikeyAttestSlotAction));
     }
 }
 

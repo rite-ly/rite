@@ -76,8 +76,6 @@ pub struct KeyMetadata {
     /// transcript and in the room. `None` for an asymmetric key, which is
     /// named by its public half.
     pub check_value: Option<KeyCheckValue>,
-    /// Attestation evidence (if backend supports attestation).
-    pub attestation: Option<Attestation>,
 }
 
 /// What a symmetric key answers to, in place of a public key.
@@ -560,7 +558,7 @@ names!(KeyAlgorithm {
 /// Shared across all algorithm enums in this crate.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("unknown value: {0:?}")]
-pub struct ParseError(String);
+pub struct ParseError(pub(crate) String);
 
 bitflags::bitflags! {
     /// Key usage flags. Maps to PKCS#11 `CKA_SIGN`, `CKA_VERIFY`, etc.
@@ -1905,39 +1903,6 @@ impl fmt::Debug for AgreedSecret {
     }
 }
 
-/// The kind of attestation evidence a backend can produce.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum AttestationKind {
-    /// Vendor cert chain proving on-device generation. Independently verifiable
-    /// against a public manufacturer root CA.
-    /// Examples: `YubiKey` F9 attestation, Thales Luna PKC (Public Key Confirmation).
-    HardwareCertChain,
-    /// TPM signed quote over PCR values with nonce. Proves platform state.
-    TpmQuote,
-    /// PKCS#11 attribute flags: `CKA_ALWAYS_SENSITIVE=true` + `CKA_NEVER_EXTRACTABLE=true`.
-    /// Trustworthy within the HSM's trust boundary but not independently
-    /// cryptographically verifiable.
-    Pkcs11Attributes,
-}
-
-/// Structured attestation evidence with a discriminant kind.
-///
-/// The `kind` field tells consumers what they're looking at and how to verify it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Attestation {
-    /// What kind of attestation this is.
-    pub kind: AttestationKind,
-    /// DER-encoded certificate chain. Leaf first, then intermediates, then root (if known).
-    /// Empty for `Pkcs11Attributes` kind.
-    pub certificates: Vec<Vec<u8>>,
-    /// Raw signature bytes (if applicable). None for attribute-based attestation.
-    pub signature: Option<Vec<u8>>,
-    /// Additional metadata (key attributes, slot info, etc.) for transcript recording.
-    pub metadata: serde_json::Value,
-}
-
 /// Device information for platform attestation.
 ///
 /// Collected from the system running the ceremony. Machine IDs are hashed
@@ -2044,6 +2009,20 @@ impl PivSlot {
             PivSlot::Authentication | PivSlot::KeyManagement | PivSlot::Retired(_) => {
                 PivPinPolicy::Once
             }
+        }
+    }
+
+    /// The slot's PIV key reference, the byte a hint names in hex: `0x9c`
+    /// for 9C, `0x82` for the first retired slot.
+    #[must_use]
+    pub const fn key_reference(self) -> u8 {
+        match self {
+            PivSlot::Authentication => 0x9a,
+            PivSlot::Signature => 0x9c,
+            PivSlot::KeyManagement => 0x9d,
+            PivSlot::CardAuthentication => 0x9e,
+            // `retired` keeps the index at 19 or below.
+            PivSlot::Retired(index) => Self::RETIRED_KEY_REF_MIN.saturating_add(index),
         }
     }
 
@@ -2365,6 +2344,15 @@ impl Provider {
     #[must_use]
     pub const fn takes_pin(self) -> bool {
         matches!(self, Provider::Piv | Provider::Yubikey)
+    }
+
+    /// Whether the device behind it signs statements about its own keys.
+    ///
+    /// A standard PIV card has no attestation; a YubiKey does. The mock
+    /// attests under a rehearsal root so a rehearsal walks the step.
+    #[must_use]
+    pub const fn attests(self) -> bool {
+        matches!(self, Provider::Yubikey | Provider::Mock)
     }
 }
 

@@ -119,12 +119,8 @@ pub(super) fn require_sign_backend<'a>(
     key_owner: &str,
     key_name: &str,
 ) -> Result<&'a mut dyn SignBackend, ActionError> {
+    crate::backend::require_key_owner(backend, key_owner, key_name)?;
     let backend_name = backend.name().to_string();
-    if key_owner != backend_name {
-        return Err(ActionError::Failed(format!(
-            "Key '{key_name}' is owned by backend '{key_owner}', but this step runs on '{backend_name}'"
-        )));
-    }
     backend.as_sign_mut().ok_or_else(|| {
         ActionError::Failed(format!("Backend '{backend_name}' does not support signing"))
     })

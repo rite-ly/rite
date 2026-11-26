@@ -820,9 +820,11 @@ fn record_now(
 /// confidential and never bundled.
 fn artifact_level(kind: FileKind) -> Level {
     match kind {
-        FileKind::Certificate | FileKind::PublicKey | FileKind::Csr | FileKind::Signature => {
-            Level::PUBLIC
-        }
+        FileKind::Certificate
+        | FileKind::PublicKey
+        | FileKind::Csr
+        | FileKind::Attestation
+        | FileKind::Signature => Level::PUBLIC,
         FileKind::Bytes | FileKind::Text | FileKind::WrappedKey | FileKind::EncryptedData => {
             Level::RESTRICTED
         }
@@ -839,7 +841,9 @@ fn artifact_level(kind: FileKind) -> Level {
 /// has no digest at all.
 fn material_digest_level(kind: FileKind) -> Level {
     match kind {
-        FileKind::Certificate | FileKind::PublicKey | FileKind::Csr => artifact_level(kind),
+        FileKind::Certificate | FileKind::PublicKey | FileKind::Csr | FileKind::Attestation => {
+            artifact_level(kind)
+        }
         FileKind::Bytes
         | FileKind::Text
         | FileKind::Signature

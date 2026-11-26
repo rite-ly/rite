@@ -1,17 +1,12 @@
 //! PIV smart-card and `YubiKey` ceremony actions.
 //!
 //! These actions are backend-agnostic: they drive any backend that implements
-//! the relevant `rite-sdk` capability traits (`CertStoreBackend`,
-//! `YubikeyBackend`). Slot-hint parsing is shared from `rite-piv`.
+//! the relevant `rite-sdk` capability traits (`CertStoreBackend`). Slot-hint
+//! parsing is shared from `rite-piv`.
 
 mod read_certificate;
 
 pub use read_certificate::PivReadCertificateAction;
-
-#[cfg(feature = "yubikey")]
-mod attest;
-#[cfg(feature = "yubikey")]
-pub use attest::YubikeyAttestSlotAction;
 
 #[cfg(test)]
 mod tests {

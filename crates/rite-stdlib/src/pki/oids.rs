@@ -71,7 +71,7 @@ const SIGNATURE_IDENTIFIERS: [(SignAlgorithm, ObjectIdentifier, bool, &str); 7] 
 ///
 /// Which signature algorithm suits a key is the SDK's decision, shared with the
 /// signing actions; this adds only the X.509 encoding of that choice.
-pub(super) fn sig_profile_for_algorithm(
+pub(crate) fn sig_profile_for_algorithm(
     key_algorithm: KeyAlgorithm,
 ) -> Result<(SignAlgorithm, AlgorithmIdentifier<Any>, &'static str), String> {
     let sign_algorithm = key_algorithm.default_sign_algorithm().ok_or_else(|| {

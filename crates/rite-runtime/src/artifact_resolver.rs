@@ -135,6 +135,10 @@ pub fn resolve_artifact_bytes<'a, S: BuildHasher>(
         // X.509 certificate: the whole certificate, not the key inside it.
         // `issue_certificate` reads an issuer certificate through here.
         (ArtifactValue::Certificate(certificate), None) => Ok(certificate.as_bytes()),
+        // Key attestation: the statement about the key, its leaf certificate,
+        // as a certificate reads. The device's certificate is evidence about
+        // the device, read by the step that verifies the chain.
+        (ArtifactValue::Attestation(attestation), None) => Ok(attestation.leaf().as_bytes()),
 
         // Invalid combinations
         _ => Err(ExecutionError::InvalidParams(format!(
@@ -282,6 +286,20 @@ mod tests {
         let result =
             resolve_artifact_bytes(&artifacts, &ArtifactId::new("usb_drive"), None).unwrap();
         assert_eq!(result, b"USB Drive");
+    }
+
+    #[test]
+    fn an_attestation_reads_as_its_leaf_certificate() {
+        let bundle = include_bytes!("../../rite-sdk/tests/vectors/yubico-piv-attestation.pem");
+        let attestation = rite_sdk::Attestation::from_key_material(bundle).unwrap();
+        let leaf = attestation.leaf().as_bytes().to_vec();
+        let artifacts = HashMap::from([(
+            ArtifactId::new("evidence"),
+            ArtifactValue::Attestation(attestation),
+        )]);
+        let result =
+            resolve_artifact_bytes(&artifacts, &ArtifactId::new("evidence"), None).unwrap();
+        assert_eq!(result, leaf);
     }
 
     fn two_shares() -> HashMap<ArtifactId, ArtifactValue> {

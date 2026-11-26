@@ -14,12 +14,13 @@
 //!   same slots
 //! - [`CertStoreBackend`](rite_sdk::CertStoreBackend): slot certificate storage
 //! - [`PivBackend`](rite_sdk::PivBackend): slot management, PIN lifecycle
-//! - [`YubikeyBackend`](rite_sdk::YubikeyBackend): attestation, touch policy, management key
-//! - [`AttestationBackend`](rite_sdk::AttestationBackend): via `attest_slot`
+//! - [`YubikeyBackend`](rite_sdk::YubikeyBackend): slot metadata, touch policy,
+//!   management key
+//! - [`AttestationBackend`](rite_sdk::AttestationBackend): the slot's attestation
+//!   certificate, signed by the key in F9, and F9's own certificate
 //!
 //! This crate is a pure backend: it depends only on `rite-sdk` and `rite-piv`.
-//! The `yubikey_attest_slot` ceremony action that drives it lives in
-//! `rite-stdlib`.
+//! The `attest_key` ceremony action that drives it lives in `rite-stdlib`.
 //!
 //! # Stability
 //!

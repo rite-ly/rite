@@ -297,6 +297,11 @@
           "const": "verify_signature"
         },
         {
+          "description": "Ask the device holding a key for its signed statement about the key.\n\nThe device signs with a key its vendor provisioned, so the statement holds for anyone who trusts the vendor. A YubiKey states that it generated the key, and the key's PIN and touch policies; it attests only keys it generated. The step creates an `attestation`: the device's certificate chain for the key, leaf first.",
+          "type": "string",
+          "const": "attest_key"
+        },
+        {
           "description": "Record a formal statement in the transcript.",
           "type": "string",
           "const": "attest"
@@ -305,11 +310,6 @@
           "description": "Add a participant-supplied random value to the ceremony's entropy.\n\nLater values drawn from the entropy source depend on this contribution.",
           "type": "string",
           "const": "gather_entropy"
-        },
-        {
-          "description": "Record a TPM-signed quote of the device's measurements.\n\nNo build of Rite currently supports this action.",
-          "type": "string",
-          "const": "tpm_attest"
         },
         {
           "description": "Read a certificate from a PIV card.\n\nReading a certificate from a PIV slot does not require a PIN.",
@@ -322,11 +322,6 @@
           "const": "authenticate"
         },
         {
-          "description": "Produce a YubiKey attestation for a PIV key.\n\nThe YubiKey attestation key in slot F9 signs a certificate for the key in the named slot.",
-          "type": "string",
-          "const": "yubikey_attest_slot"
-        },
-        {
           "description": "Issue an X.509 certificate for a certificate signing request.\n\nReads the request and a signing key.",
           "type": "string",
           "const": "issue_certificate"
@@ -335,6 +330,31 @@
           "description": "Create a PKCS#10 certificate signing request.\n\nThe request is built from `subject` and `san`, then signed with a key held by a backend.",
           "type": "string",
           "const": "generate_csr"
+        }
+      ]
+    },
+    "AttestKeyParams": {
+      "description": "The `with` block of `attest_key`. The key comes through `reads:`.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Shown to the operator when the step starts.",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
         }
       ]
     },
@@ -357,49 +377,6 @@
             }
           },
           "additionalProperties": false
-        },
-        {
-          "$ref": "#/$defs/Expression"
-        }
-      ]
-    },
-    "AttestSlotParams": {
-      "description": "The `with` block of `yubikey_attest_slot`.",
-      "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "message": {
-              "description": "Shown to the operator when the step starts.",
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "$ref": "#/$defs/Expression"
-                }
-              ]
-            },
-            "slot": {
-              "description": "The PIV slot containing the key to attest.",
-              "anyOf": [
-                {
-                  "type": "string",
-                  "errorMessage": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95",
-                  "pattern": "^(piv:)?(9[acde]|8[2-9a-fA-F]|9[0-5])$",
-                  "patternErrorMessage": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95",
-                  "x-message": "'slot' must be a PIV slot: 9a, 9c, 9d, 9e, or a retired slot from 82 to 95"
-                },
-                {
-                  "$ref": "#/$defs/Expression"
-                }
-              ]
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "slot"
-          ]
         },
         {
           "$ref": "#/$defs/Expression"
@@ -1580,6 +1557,7 @@
             "private_key",
             "certificate",
             "csr",
+            "attestation",
             "signature",
             "wrapped_key",
             "encrypted_data",
@@ -1589,8 +1567,8 @@
             "physical",
             "backend_key"
           ],
-          "errorMessage": "a material's 'type' is 'physical', 'backend_key', or the kind of file it is (public_key, private_key, certificate, csr, signature, wrapped_key, encrypted_data, secret, bytes, text, physical, backend_key); a file once declared 'digital' is 'bytes', or the kind it holds",
-          "x-message": "a material's 'type' is 'physical', 'backend_key', or the kind of file it is (public_key, private_key, certificate, csr, signature, wrapped_key, encrypted_data, secret, bytes, text, physical, backend_key); a file once declared 'digital' is 'bytes', or the kind it holds"
+          "errorMessage": "a material's 'type' is 'physical', 'backend_key', or the kind of file it is (public_key, private_key, certificate, csr, attestation, signature, wrapped_key, encrypted_data, secret, bytes, text, physical, backend_key); a file once declared 'digital' is 'bytes', or the kind it holds",
+          "x-message": "a material's 'type' is 'physical', 'backend_key', or the kind of file it is (public_key, private_key, certificate, csr, attestation, signature, wrapped_key, encrypted_data, secret, bytes, text, physical, backend_key); a file once declared 'digital' is 'bytes', or the kind it holds"
         }
       },
       "allOf": [
@@ -1603,6 +1581,7 @@
                   "private_key",
                   "certificate",
                   "csr",
+                  "attestation",
                   "signature",
                   "wrapped_key",
                   "encrypted_data",
@@ -1862,6 +1841,7 @@
             "private_key",
             "certificate",
             "csr",
+            "attestation",
             "signature",
             "wrapped_key",
             "encrypted_data",
@@ -1869,8 +1849,8 @@
             "bytes",
             "text"
           ],
-          "errorMessage": "an output's 'type' is the kind of file it is (public_key, private_key, certificate, csr, signature, wrapped_key, encrypted_data, secret, bytes, text); an output once declared 'document' is 'signature', 'bytes' or 'text'",
-          "x-message": "an output's 'type' is the kind of file it is (public_key, private_key, certificate, csr, signature, wrapped_key, encrypted_data, secret, bytes, text); an output once declared 'document' is 'signature', 'bytes' or 'text'"
+          "errorMessage": "an output's 'type' is the kind of file it is (public_key, private_key, certificate, csr, attestation, signature, wrapped_key, encrypted_data, secret, bytes, text); an output once declared 'document' is 'signature', 'bytes' or 'text'",
+          "x-message": "an output's 'type' is the kind of file it is (public_key, private_key, certificate, csr, attestation, signature, wrapped_key, encrypted_data, secret, bytes, text); an output once declared 'document' is 'signature', 'bytes' or 'text'"
         }
       },
       "additionalProperties": false,
@@ -3437,6 +3417,56 @@
           "if": {
             "properties": {
               "action": {
+                "const": "attest_key"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "errorMessage": "action 'attest_key' requires a backend; add a 'backend:' field",
+                "required": [
+                  "backend"
+                ],
+                "x-message": "action 'attest_key' requires a backend; add a 'backend:' field"
+              },
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "key": {
+                        "description": "Takes backend_key.",
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "key"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/AttestKeyParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
                 "const": "attest"
               }
             },
@@ -3473,45 +3503,6 @@
                 "properties": {
                   "with": {
                     "$ref": "#/$defs/GatherEntropyParams"
-                  }
-                }
-              }
-            ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "action": {
-                "const": "tpm_attest"
-              }
-            },
-            "required": [
-              "action"
-            ]
-          },
-          "then": {
-            "allOf": [
-              {
-                "errorMessage": "action 'tpm_attest' requires a backend; add a 'backend:' field",
-                "required": [
-                  "backend"
-                ],
-                "x-message": "action 'tpm_attest' requires a backend; add a 'backend:' field"
-              },
-              {
-                "properties": {
-                  "with": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": false
-                      },
-                      {
-                        "$ref": "#/$defs/Expression"
-                      }
-                    ]
                   }
                 }
               }
@@ -3596,36 +3587,6 @@
                 "properties": {
                   "with": {
                     "$ref": "#/$defs/AuthenticateParams"
-                  }
-                }
-              }
-            ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "action": {
-                "const": "yubikey_attest_slot"
-              }
-            },
-            "required": [
-              "action"
-            ]
-          },
-          "then": {
-            "allOf": [
-              {
-                "errorMessage": "action 'yubikey_attest_slot' requires a backend; add a 'backend:' field",
-                "required": [
-                  "backend"
-                ],
-                "x-message": "action 'yubikey_attest_slot' requires a backend; add a 'backend:' field"
-              },
-              {
-                "properties": {
-                  "with": {
-                    "$ref": "#/$defs/AttestSlotParams"
                   }
                 }
               }

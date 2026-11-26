@@ -256,6 +256,11 @@
           "const": "csr"
         },
         {
+          "description": "A device's signed statement about one of its keys: certificates, leaf first.",
+          "type": "string",
+          "const": "attestation"
+        },
+        {
           "description": "A signature over data.",
           "type": "string",
           "const": "signature"

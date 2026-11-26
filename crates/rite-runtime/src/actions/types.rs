@@ -4,8 +4,8 @@ use base64ct::{Base64, Encoding};
 use rite_model::{ArtifactKind, FileKind, SharingScheme};
 
 use rite_sdk::{
-    CertificateDer, EncryptedData, KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer, WrapScheme,
-    WrappedKey,
+    Attestation, CertificateDer, EncryptedData, KeyAlgorithm, KeyCheckValue, KeyId, PublicKeyDer,
+    WrapScheme, WrappedKey,
 };
 use secrecy::{ExposeSecret, SecretBox};
 
@@ -96,6 +96,14 @@ pub enum ArtifactValue {
     /// A PKCS#10 certificate signing request, as DER. Written as PEM by
     /// default, like a certificate.
     Csr(Vec<u8>),
+
+    /// A device's signed statement about one of its keys, as the device gave
+    /// it. Written as a PEM bundle, leaf first, which `openssl verify` reads.
+    ///
+    /// The same shape as a list of certificates and a different claim: it
+    /// is evidence about a key, made to be checked against the vendor's
+    /// roots and then distributed.
+    Attestation(Attestation),
 
     /// A signature over data, in the encoding its algorithm produces.
     ///
@@ -299,6 +307,9 @@ impl std::fmt::Display for ArtifactValue {
                 write!(f, "{pem}")
             }
             ArtifactValue::Csr(der) => write!(f, "{}", encode_pem("CERTIFICATE REQUEST", der)),
+            ArtifactValue::Attestation(attestation) => {
+                write!(f, "{}", attestation_bundle(attestation))
+            }
             ArtifactValue::Signature(bytes) => write!(f, "Signature({} bytes)", bytes.len()),
         }
     }
@@ -362,6 +373,17 @@ fn serialize_container(
     }
 }
 
+/// An attestation's certificates as PEM blocks, leaf first, one per line
+/// break: the bundle `openssl verify -untrusted` and `ykman` read.
+fn attestation_bundle(attestation: &Attestation) -> String {
+    let mut bundle = String::new();
+    for certificate in attestation.certificates() {
+        bundle.push_str(&encode_pem("CERTIFICATE", certificate.as_bytes()));
+        bundle.push('\n');
+    }
+    bundle
+}
+
 /// Encode DER bytes as PEM with given label.
 pub(crate) fn encode_pem(label: &str, der_bytes: &[u8]) -> String {
     let b64 = base64_encode(der_bytes);
@@ -411,6 +433,7 @@ impl ArtifactValue {
             ArtifactValue::Text(_) => ArtifactKind::File(FileKind::Text),
             ArtifactValue::Certificate(_) => ArtifactKind::File(FileKind::Certificate),
             ArtifactValue::Csr(_) => ArtifactKind::File(FileKind::Csr),
+            ArtifactValue::Attestation(_) => ArtifactKind::File(FileKind::Attestation),
             ArtifactValue::Signature(_) => ArtifactKind::File(FileKind::Signature),
         }
     }
@@ -426,6 +449,7 @@ impl ArtifactValue {
     /// - `WrappedKey`, `EncryptedData`: "der" (default), "pem" where the
     ///   container has a PEM form
     /// - `PublicKey`, `Certificate`, `Csr`: "pem" (default), "der", "base64"
+    /// - `Attestation`: "pem" only, a bundle leaf first
     /// - `Bytes`, `Secret`, `PrivateKey`, `Signature`, `Text`: the bytes as
     ///   they are
     ///   (format ignored)
@@ -490,6 +514,18 @@ impl ArtifactValue {
                 serialize_der(certificate.as_bytes(), &CERTIFICATE, format)
             }
             ArtifactValue::Csr(der) => serialize_der(der, &CSR, format),
+            // A chain has no single DER form; PEM is how tools take a bundle.
+            ArtifactValue::Attestation(attestation) => match format.unwrap_or("pem") {
+                "pem" => Ok(SerializedArtifact {
+                    bytes: attestation_bundle(attestation).into_bytes(),
+                    mime_type: Some("application/x-pem-file".to_string()),
+                    extension: "pem",
+                }),
+                other => Err(format!(
+                    "Invalid format '{other}' for an attestation (valid: pem); a chain of \
+                     certificates has no single DER form"
+                )),
+            },
             ArtifactValue::Signature(bytes) => Ok(SerializedArtifact {
                 bytes: bytes.clone(),
                 mime_type: Some("application/octet-stream".to_string()),

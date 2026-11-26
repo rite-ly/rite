@@ -45,7 +45,7 @@ flowchart TD
 | `rite-stdlib`   | All built-in actions: generic ones (verification, attestation, crypto, PKI) plus backend-specific ones behind features (`piv`/`yubikey`).            |
 | `rite-openssl`  | OpenSSL-backed `Backend` implementation.                                                                                                             |
 | `rite-piv`      | PIV smart-card `Backend` implementation (`yubikey` crate over PC/SC). Opt-in via the `piv` feature; the `piv_*` actions live in `rite-stdlib`.       |
-| `rite-yubikey`  | `YubiKey` backend: PIV plus Yubico on-device attestation. Opt-in via the `yubikey` feature; the `yubikey_attest_slot` action lives in `rite-stdlib`. |
+| `rite-yubikey`  | `YubiKey` backend: PIV plus Yubico on-device attestation. Opt-in via the `yubikey` feature; the `attest_key` action lives in `rite-stdlib`.          |
 | `rite-tui`      | TEA-based interactive frontend (ratatui + crossterm).                                                                                                |
 | `rite`          | `rite` binary; hosts the console and headless drivers and wires every crate above together.                                                          |
 | `rite-render`   | Document generation: ceremony scripts and post-ceremony reports (HTML/PDF).                                                                          |
@@ -63,7 +63,7 @@ flowchart TD
   actions: a backend crate carries no `Action` implementations.
 - Actions live in `rite-stdlib`, never in a backend crate. Generic actions
   dispatch through the `rite-sdk` capability traits and work with any backend;
-  backend-specific actions (`piv_read_certificate`, `yubikey_attest_slot`) are feature-gated
+  backend-specific actions (`piv_read_certificate`) are feature-gated
   there too. `rite-stdlib` is the integration layer and may depend on backend
   crates (optionally, per feature) to register their actions and build them in
   the factory. Plugin backends are a goal; pluggable actions are not.

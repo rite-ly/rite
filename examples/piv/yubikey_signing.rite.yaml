@@ -2,7 +2,7 @@ version: "0.3"
 name: "Release Signing with YubiKey PIV"
 description: |
   Sign a release manifest with the PIV key in slot 9C. Read its certificate,
-  request a YubiKey attestation certificate, enter the PIN, produce a detached
+  ask the YubiKey to attest the key, enter the PIN, produce a detached
   signature, and check it off the card.
 
 backends:
@@ -43,9 +43,11 @@ output:
   signing_cert:
     type: certificate
     description: "Signing key certificate read from PIV slot 9C"
-  attestation_cert:
-    type: certificate
-    description: "YubiKey attestation certificate for slot 9C"
+  # The card's statement about the key, leaf first, then the card's own F9
+  # certificate: `openssl verify -CAfile <Yubico root> -untrusted` reads it.
+  signing_key_attestation:
+    type: attestation
+    description: "YubiKey attestation of the slot 9C key"
   manifest_signature:
     type: signature
     description: "Detached ECDSA signature over the release manifest"
@@ -99,13 +101,15 @@ sections:
           message: "Read the signing certificate from slot 9C"
         creates: signing_cert
         description: "Read the X.509 certificate stored alongside the signing key."
+      # Attesting needs no PIN: the card signs with its attestation key, not
+      # with the key it attests. It attests only keys it generated.
       attest_signing_key:
-        action: yubikey_attest_slot
+        action: attest_key
         backend: token
-        with:
-          slot: "9c"
-        creates: attestation_cert
-        description: "Request the attestation certificate showing the slot 9C key was generated on the device."
+        reads:
+          key: "${artifact.signing_key}"
+        creates: signing_key_attestation
+        description: "Ask the card for its signed statement that it generated the slot 9C key."
 
   sign:
     act: signing
@@ -164,6 +168,6 @@ after:
     items:
       - "Ceremony transcript"
       - "Signing certificate (signing_cert.pem)"
-      - "Attestation certificate (attestation_cert.pem)"
+      - "Key attestation (signing_key_attestation.pem)"
       - "Manifest signature (manifest_signature.bin)"
     location: "Secure document archive"

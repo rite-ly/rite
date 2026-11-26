@@ -1,4 +1,4 @@
-//! Params for the `attest` action.
+//! Params for the `attest` and `attest_key` actions.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -11,4 +11,14 @@ pub struct AttestParams {
     /// The statement recorded in the transcript.
     #[serde(default)]
     pub statement: Option<String>,
+}
+
+/// The `with` block of `attest_key`. The key comes through `reads:`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct AttestKeyParams {
+    /// Shown to the operator when the step starts.
+    #[serde(default)]
+    pub message: Option<String>,
 }

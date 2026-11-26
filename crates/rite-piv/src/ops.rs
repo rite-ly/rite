@@ -341,8 +341,20 @@ pub fn list_slots(yk: &mut YubiKey) -> Result<Vec<PivSlotInfo>, BackendError> {
 ///
 /// Returns a `BackendError` if the slot is invalid or the read fails.
 pub fn read_certificate(yk: &mut YubiKey, slot: PivSlot) -> Result<Vec<u8>, BackendError> {
-    let slot_id = convert::to_yubikey_slot(slot)?;
-    let cert = Certificate::read(yk, slot_id).map_err(map_error)?;
+    read_certificate_at(yk, convert::to_yubikey_slot(slot)?)
+}
+
+/// Read the DER-encoded X.509 certificate at a card slot, including slots a
+/// ceremony names no key in, such as a `YubiKey`'s attestation slot F9.
+///
+/// # Errors
+///
+/// Returns a `BackendError` if the read fails.
+pub fn read_certificate_at(
+    yk: &mut YubiKey,
+    slot: yubikey::piv::SlotId,
+) -> Result<Vec<u8>, BackendError> {
+    let cert = Certificate::read(yk, slot).map_err(map_error)?;
     cert.cert
         .to_der()
         .map_err(|e| BackendError::Other(e.to_string()))
@@ -408,7 +420,6 @@ pub fn generate_key(
         label: label.to_string(),
         public_key: Some(encode_public_key(&spki)?),
         check_value: None,
-        attestation: None,
     })
 }
 
@@ -485,7 +496,6 @@ pub fn list_keys(yk: &mut YubiKey) -> Result<Vec<KeyMetadata>, BackendError> {
                 label: String::new(),
                 public_key,
                 check_value: None,
-                attestation: None,
             });
         }
     }

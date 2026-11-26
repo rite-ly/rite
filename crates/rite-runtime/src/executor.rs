@@ -8,7 +8,8 @@ use rite_model::{
     Sha256Digest, Step, StepId,
 };
 use rite_sdk::{
-    BackendError, CertificateDer, EncryptedData, PublicKeyDer, WrappedKey, csr_from_file,
+    Attestation, BackendError, CertificateDer, EncryptedData, PublicKeyDer, WrappedKey,
+    csr_from_file,
 };
 use secrecy::{ExposeSecret, SecretBox};
 use std::fs;
@@ -226,6 +227,11 @@ pub fn file_material(kind: FileKind, bytes: Vec<u8>) -> Result<ArtifactValue, St
             CertificateDer::from_key_material(&bytes).map_err(|e| e.to_string())?;
             ArtifactValue::Bytes(bytes)
         }
+        // Unlike a certificate, kept as what it is: the step that verifies it
+        // reads the chain, not bytes.
+        FileKind::Attestation => ArtifactValue::Attestation(
+            Attestation::from_key_material(&bytes).map_err(|e| e.to_string())?,
+        ),
         FileKind::Csr => {
             csr_from_file(&bytes).map_err(|e| e.to_string())?;
             ArtifactValue::Bytes(bytes)

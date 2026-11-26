@@ -463,6 +463,43 @@ impl CertificateDer {
         Self::new(bytes.to_vec())
     }
 
+    /// Read every certificate in a file: a single DER certificate, or one or
+    /// more PEM blocks, as `openssl verify -CAfile` reads a bundle.
+    ///
+    /// Text around the blocks is ignored, as OpenSSL ignores it. The PEM
+    /// decoder reads one block at a time, so each is cut out before it is
+    /// decoded.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::InvalidKeyFormat`] when a block is not a
+    /// certificate or is cut short, or when bytes with no PEM block are not
+    /// one DER certificate.
+    pub fn list_from_key_material(bytes: &[u8]) -> Result<Vec<Self>, BackendError> {
+        const BEGIN: &str = "-----BEGIN ";
+        const END: &str = "-----END ";
+        const DASHES: &str = "-----";
+
+        let Some(text) = std::str::from_utf8(bytes)
+            .ok()
+            .filter(|text| text.contains(BEGIN))
+        else {
+            return Ok(vec![Self::new(bytes.to_vec())?]);
+        };
+        let unterminated =
+            || BackendError::InvalidKeyFormat("a PEM block has no END line".to_string());
+        let mut certificates = Vec::new();
+        let mut rest = text;
+        while let Some((_, opened)) = rest.split_once(BEGIN) {
+            let (body, closing) = opened.split_once(END).ok_or_else(unterminated)?;
+            let (label, after) = closing.split_once(DASHES).ok_or_else(unterminated)?;
+            let block = format!("{BEGIN}{body}{END}{label}{DASHES}");
+            certificates.push(Self::from_key_material(block.as_bytes())?);
+            rest = after;
+        }
+        Ok(certificates)
+    }
+
     /// The certificate DER bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
@@ -657,6 +694,31 @@ mod tests {
     /// The identifier OpenSSL wrote into the vector certificate's subject key
     /// identifier extension, read back with `openssl x509 -ext
     /// subjectKeyIdentifier`, is the one derived from the key it certifies.
+    #[test]
+    fn reads_every_certificate_of_a_pem_bundle() {
+        let bundle = include_bytes!("../tests/vectors/yubico-piv-attestation.pem");
+        let mut annotated = b"subject=leaf\n".to_vec();
+        annotated.extend_from_slice(bundle);
+        let certificates =
+            CertificateDer::list_from_key_material(&annotated).expect("the bundle reads");
+        assert_eq!(certificates.len(), 2);
+        assert_ne!(certificates.first(), certificates.get(1));
+    }
+
+    #[test]
+    fn reads_a_der_certificate_as_a_list_of_one() {
+        let certificates = CertificateDer::list_from_key_material(vectors::CERTIFICATE)
+            .expect("a DER certificate reads");
+        assert_eq!(certificates.len(), 1);
+    }
+
+    #[test]
+    fn refuses_a_pem_block_cut_short() {
+        let bundle = include_bytes!("../tests/vectors/yubico-piv-attestation.pem");
+        let cut = bundle.get(..bundle.len().saturating_sub(20)).unwrap();
+        assert!(CertificateDer::list_from_key_material(cut).is_err());
+    }
+
     #[test]
     fn derives_the_key_identifier_openssl_writes() {
         let certificate = CertificateDer::new(vectors::CERTIFICATE.to_vec()).unwrap();

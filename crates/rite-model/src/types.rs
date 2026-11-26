@@ -193,17 +193,21 @@ pub enum ActionType {
     ///
     /// A backend is optional. Without one, the action verifies in software.
     VerifySignature,
+    /// Ask the device holding a key for its signed statement about the key.
+    ///
+    /// The device signs with a key its vendor provisioned, so the statement
+    /// holds for anyone who trusts the vendor. A YubiKey states that it
+    /// generated the key, and the key's PIN and touch policies; it attests
+    /// only keys it generated. The step creates an `attestation`: the
+    /// device's certificate chain for the key, leaf first.
+    // The backend must implement `AttestationBackend`.
+    AttestKey,
     /// Record a formal statement in the transcript.
     Attest,
     /// Add a participant-supplied random value to the ceremony's entropy.
     ///
     /// Later values drawn from the entropy source depend on this contribution.
     GatherEntropy,
-    /// Record a TPM-signed quote of the device's measurements.
-    ///
-    /// No build of Rite currently supports this action.
-    // Requires the `rite-tpm` backend, which does not exist yet.
-    TpmAttest,
 
     /// Read a certificate from a PIV card.
     ///
@@ -219,12 +223,6 @@ pub enum ActionType {
     /// value is never recorded.
     // Reaches the device through `PivBackend`.
     Authenticate,
-    /// Produce a YubiKey attestation for a PIV key.
-    ///
-    /// The YubiKey attestation key in slot F9 signs a certificate for the key
-    /// in the named slot.
-    // Requires the `rite-yubikey` backend.
-    YubikeyAttestSlot,
 
     /// Issue an X.509 certificate for a certificate signing request.
     ///
@@ -639,13 +637,38 @@ pub struct Accepts {
     pub kinds: &'static [ArtifactKind],
     /// What the input reads any other artifact as, if it reads any.
     pub view: Option<View>,
+    /// What the step does with a backend key it takes.
+    pub key_use: KeyUse,
+}
+
+/// What a step does with a backend key it reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyUse {
+    /// Uses its private half, which a device may lock behind a PIN.
+    Private,
+    /// Names it to the device that holds it, which acts with keys of its own:
+    /// `attest_key` signs with the device's attestation key.
+    Named,
 }
 
 impl Accepts {
     /// Artifacts of these kinds, and no other.
     #[must_use]
     pub const fn kinds(kinds: &'static [ArtifactKind]) -> Self {
-        Self { kinds, view: None }
+        Self {
+            kinds,
+            view: None,
+            key_use: KeyUse::Private,
+        }
+    }
+
+    /// The same input, naming a backend key it takes rather than using it.
+    #[must_use]
+    pub const fn naming_keys(self) -> Self {
+        Self {
+            key_use: KeyUse::Named,
+            ..self
+        }
     }
 
     /// Any artifact that can be read as `view`.
@@ -654,6 +677,7 @@ impl Accepts {
         Self {
             kinds: &[],
             view: Some(view),
+            key_use: KeyUse::Private,
         }
     }
 
@@ -744,6 +768,8 @@ const CREDENTIAL_VALUE: Accepts = Accepts::kinds(&[
 
 /// A key held by a backend, and nothing else.
 const BACKEND_KEY: Accepts = Accepts::kinds(&[ArtifactKind::BackendKey]);
+/// A backend key named to its device, which acts with keys of its own.
+const NAMED_BACKEND_KEY: Accepts = BACKEND_KEY.naming_keys();
 /// A credential a backend has, and nothing else.
 const BACKEND_CREDENTIAL: Accepts = Accepts::kinds(&[ArtifactKind::Credential]);
 /// Any artifact that is bytes once written.
@@ -760,6 +786,7 @@ const SHARE_LAYOUT: Accepts = Accepts::kinds(&[
 const SHARE_OR_BYTES: Accepts = Accepts {
     kinds: &[ArtifactKind::Share],
     view: Some(View::Bytes),
+    key_use: KeyUse::Private,
 };
 
 impl ReadsContract {
@@ -853,12 +880,11 @@ impl ActionType {
         ActionType::ExportPublic,
         ActionType::SignData,
         ActionType::VerifySignature,
+        ActionType::AttestKey,
         ActionType::Attest,
         ActionType::GatherEntropy,
-        ActionType::TpmAttest,
         ActionType::PivReadCertificate,
         ActionType::Authenticate,
-        ActionType::YubikeyAttestSlot,
         ActionType::IssueCertificate,
         ActionType::GenerateCsr,
     ];
@@ -951,6 +977,7 @@ impl ActionType {
                         accepts: Accepts {
                             kinds: &[ArtifactKind::File(FileKind::WrappedKey)],
                             view: None,
+                            key_use: KeyUse::Private,
                         },
                     },
                 ]),
@@ -969,6 +996,7 @@ impl ActionType {
                                 ArtifactKind::File(FileKind::Bytes),
                             ],
                             view: None,
+                            key_use: KeyUse::Private,
                         },
                     }],
                     exactly_one_of: &[],
@@ -980,6 +1008,7 @@ impl ActionType {
                         accepts: Accepts {
                             kinds: &[ArtifactKind::File(FileKind::Secret)],
                             view: None,
+                            key_use: KeyUse::Private,
                         },
                     }],
                     with_field_requires: &[],
@@ -1027,6 +1056,7 @@ impl ActionType {
                                 ArtifactKind::File(FileKind::Bytes),
                             ],
                             view: None,
+                            key_use: KeyUse::Private,
                         },
                     },
                     ReadInput {
@@ -1120,14 +1150,10 @@ impl ActionType {
                                 ArtifactKind::File(FileKind::Bytes),
                             ],
                             view: None,
+                            key_use: KeyUse::Private,
                         },
                     },
                 ]),
-                creates: &[],
-            },
-            ActionType::TpmAttest => ActionSpec {
-                backend: BackendUsage::Required,
-                reads: ReadsContract::NONE,
                 creates: &[],
             },
             // A credential opens a session and makes nothing. A held
@@ -1147,7 +1173,17 @@ impl ActionType {
                 },
                 creates: &[],
             },
-            ActionType::PivReadCertificate | ActionType::YubikeyAttestSlot => ActionSpec {
+
+            // The key is named, not used: attesting needs no PIN.
+            ActionType::AttestKey => ActionSpec {
+                backend: BackendUsage::Required,
+                reads: ReadsContract::required(&[ReadInput {
+                    name: "key",
+                    accepts: NAMED_BACKEND_KEY,
+                }]),
+                creates: &[ArtifactKind::File(FileKind::Attestation)],
+            },
+            ActionType::PivReadCertificate => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract::NONE,
                 creates: &[ArtifactKind::File(FileKind::Certificate)],
@@ -1168,6 +1204,7 @@ impl ActionType {
                                     ArtifactKind::File(FileKind::Bytes),
                                 ],
                                 view: None,
+                                key_use: KeyUse::Private,
                             },
                         },
                     ],
@@ -1180,6 +1217,7 @@ impl ActionType {
                         accepts: Accepts {
                             kinds: &[],
                             view: Some(View::Certificate),
+                            key_use: KeyUse::Private,
                         },
                     }],
                     with_field_requires: &[],
@@ -1257,12 +1295,11 @@ impl std::fmt::Display for ActionType {
             ActionType::ExportPublic => write!(f, "export_public"),
             ActionType::SignData => write!(f, "sign_data"),
             ActionType::VerifySignature => write!(f, "verify_signature"),
+            ActionType::AttestKey => write!(f, "attest_key"),
             ActionType::Attest => write!(f, "attest"),
             ActionType::GatherEntropy => write!(f, "gather_entropy"),
-            ActionType::TpmAttest => write!(f, "tpm_attest"),
             ActionType::PivReadCertificate => write!(f, "piv_read_certificate"),
             ActionType::Authenticate => write!(f, "authenticate"),
-            ActionType::YubikeyAttestSlot => write!(f, "yubikey_attest_slot"),
             ActionType::IssueCertificate => write!(f, "issue_certificate"),
             ActionType::GenerateCsr => write!(f, "generate_csr"),
         }
@@ -1293,6 +1330,8 @@ pub enum FileKind {
     Certificate,
     /// A PKCS#10 certificate signing request.
     Csr,
+    /// A device's signed statement about one of its keys: certificates, leaf first.
+    Attestation,
     /// A signature over data.
     Signature,
     /// A key wrapped for transport, in the container its scheme names.
@@ -1312,6 +1351,7 @@ crate::types::vocabulary!(FileKind {
     PrivateKey => "private_key",
     Certificate => "certificate",
     Csr => "csr",
+    Attestation => "attestation",
     Signature => "signature",
     WrappedKey => "wrapped_key",
     EncryptedData => "encrypted_data",
@@ -1331,6 +1371,7 @@ impl FileKind {
             FileKind::PublicKey
             | FileKind::Certificate
             | FileKind::Csr
+            | FileKind::Attestation
             | FileKind::Signature
             | FileKind::WrappedKey
             | FileKind::EncryptedData
@@ -1573,10 +1614,9 @@ mod tests {
             (ActionType::EnterShare, "\"enter_share\""),
             (ActionType::ExportPublic, "\"export_public\""),
             (ActionType::Attest, "\"attest\""),
-            (ActionType::TpmAttest, "\"tpm_attest\""),
+            (ActionType::AttestKey, "\"attest_key\""),
             (ActionType::PivReadCertificate, "\"piv_read_certificate\""),
             (ActionType::Authenticate, "\"authenticate\""),
-            (ActionType::YubikeyAttestSlot, "\"yubikey_attest_slot\""),
             (ActionType::IssueCertificate, "\"issue_certificate\""),
             (ActionType::GenerateCsr, "\"generate_csr\""),
         ];
@@ -1604,11 +1644,10 @@ mod tests {
             ActionType::UnwrapKey,
             ActionType::ImportKey,
             ActionType::ExportPublic,
+            ActionType::AttestKey,
             ActionType::Attest,
-            ActionType::TpmAttest,
             ActionType::PivReadCertificate,
             ActionType::Authenticate,
-            ActionType::YubikeyAttestSlot,
             ActionType::IssueCertificate,
             ActionType::GenerateCsr,
         ];
@@ -1803,12 +1842,11 @@ mod tests {
                 | ActionType::ExportPublic
                 | ActionType::SignData
                 | ActionType::VerifySignature
+                | ActionType::AttestKey
                 | ActionType::Attest
                 | ActionType::GatherEntropy
-                | ActionType::TpmAttest
                 | ActionType::PivReadCertificate
                 | ActionType::Authenticate
-                | ActionType::YubikeyAttestSlot
                 | ActionType::IssueCertificate
                 | ActionType::GenerateCsr => {}
             }

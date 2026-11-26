@@ -218,6 +218,7 @@ fn kind_of(artifact: &ArtifactValue) -> &'static str {
         ArtifactValue::Text(_) => "text",
         ArtifactValue::Certificate(_) => "a certificate",
         ArtifactValue::Csr(_) => "a certificate signing request",
+        ArtifactValue::Attestation(_) => "an attestation",
         ArtifactValue::Signature(_) => "a signature",
         ArtifactValue::Shares(_) => "a set of shares",
         ArtifactValue::Share { .. } => "a share",

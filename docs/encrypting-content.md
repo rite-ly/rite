@@ -129,9 +129,20 @@ Each is a standard structure, which is what makes the archive readable in a
 decade with no Rite binary present.
 
 The recipient identifier names the key, so the blob says which key opens it
-without anyone holding a key. A symmetric key is named by its check value, a
-public key by the SHA-256 of its SPKI, which is its `sha256:` fingerprint. For
-a symmetric key, write the check value on the envelope:
+without anyone holding a key. A symmetric key is named by its check value. A
+public key given in a certificate is named by the certificate's subject key
+identifier, so the holder's tools find it: `openssl cms -decrypt -recip <cert>`
+and mail clients compare the identifier with the certificate they hold. A
+public key given alone, read as `${artifact.cert.public}`, or in a certificate
+with no identifier, is named as OpenSSL names a key in a certificate it makes:
+the SHA-1 of the key's bits (RFC 5280 method 1), which most issuers use too.
+`-recip` then finds it with such a certificate, and not with one whose issuer
+chose another method; `-inkey` without `-recip` opens either. The recipient
+fact records the name beside the fingerprint, under `named_by`, with where it
+came from: `certificate`, with that certificate's SHA-256, or `rfc5280`.
+`rite verify` matches the container against it.
+
+For a symmetric key, write the check value on the envelope:
 
 ```yaml
 read_back_the_archive_key:
@@ -186,13 +197,19 @@ the ceremony. An RSA key on a card is RSA-2048, or RSA-4096 on a YubiKey
 with firmware 5.7 or later. A card holds no symmetric
 key, so it cannot open `KEKRecipientInfo`.
 
-A public-key recipient is named by subject key identifier: either the SHA-256
-of the key's SPKI, which is how Rite names a key, or the SHA-1 of RFC 5280
-method 1, which is what a certificate's subject key identifier usually holds.
+A public-key recipient is named by subject key identifier, which Rite matches
+against the names the key goes by: the SHA-256 of its SPKI, its fingerprint,
+which older Rite containers carry, the SHA-1 of RFC 5280 method 1, which most
+certificates and Rite hold, or
+the truncated SHA-256 of RFC 7093 method 1, which some issuers write, Let's
+Encrypt among them. An identifier derived from none of these, which an issuer
+may choose, names no key Rite can check, and the container is refused.
 
-The `openssl` command line writes the second form for an RSA certificate when
-told to use OAEP and to name the recipient by key identifier, and the third for
-an EC certificate when told which hash the KDF takes:
+The `openssl` command line writes a `KeyTransRecipientInfo` that Rite opens for
+an RSA certificate when told to use OAEP and to name the recipient by key
+identifier, and a `KeyAgreeRecipientInfo` for an EC certificate when told which
+hash the KDF takes. Either names the recipient by the certificate's subject key
+identifier:
 
 ```sh
 openssl cms -encrypt -binary -aes-256-gcm -keyid -outform DER \
@@ -263,7 +280,8 @@ the container names.
 
 For `recipient`, the fingerprint is in a `wrap_recipient_recorded` fact of its
 own, as for `wrap_key`, recorded before anything is encrypted and saying
-whether the ceremony declared it. The fact is restricted, so a disclosure can
+whether the ceremony declared it, with the name the container gives the key
+under `named_by`. The fact is restricted, so a disclosure can
 publish how the content was encrypted and withhold to whom.
 
 Deliberately no digest of the content, in either direction. Content is
@@ -283,8 +301,8 @@ Containers:
 
 - the recorded algorithms against the ones in the DER;
 - the key the blob is addressed to against a key this ceremony generated or
-  imported, or, for `recipient`, against the recorded recipient, reported as
-  declared where the definition named it.
+  imported, or, for `recipient`, against the name the recipient fact records,
+  reported as declared where the definition named it.
 
 An artifact that is not in the run directory is reported as unchecked, not as
 verified. That the content is what the ceremony meant to encrypt is outside the

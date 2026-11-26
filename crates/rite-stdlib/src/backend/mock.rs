@@ -432,11 +432,10 @@ impl KeyTransportBackend for MockBackend {
     fn wrap_to_public(
         &mut self,
         key_id: &KeyId,
-        recipient_pub_key: &PublicKeyDer,
+        recipient: &rite_sdk::cms::Recipient,
         scheme: WrapScheme,
     ) -> Result<WrappedKey, BackendError> {
-        self.crypto
-            .wrap_to_public(key_id, recipient_pub_key, scheme)
+        self.crypto.wrap_to_public(key_id, recipient, scheme)
     }
 
     fn export_secret_key(&mut self, key_id: &KeyId) -> Result<SecretKeyValue, BackendError> {

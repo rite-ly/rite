@@ -253,51 +253,81 @@ impl KeyFingerprint {
     }
 
     /// The digest bytes, which is also the subject key identifier a container
-    /// Rite writes names the key by.
+    /// Rite writes names a keypair the backend holds by.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8; Self::LEN] {
         &self.0
     }
 }
 
-impl fmt::Display for KeyFingerprint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}:{}",
-            Self::METHOD,
-            base16ct::lower::encode_string(&self.0)
-        )
-    }
+/// The `sha256:<hex>` text form of a SHA-256 newtype: rendering, a `Debug`
+/// that shows it, so a failed comparison shows the value a reader would look
+/// up in a transcript, parsing, and the string conversions serde goes through.
+macro_rules! sha256_text {
+    ($name:ident) => {
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(
+                    f,
+                    "{}:{}",
+                    KeyFingerprint::METHOD,
+                    base16ct::lower::encode_string(&self.0)
+                )
+            }
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}({self})", stringify!($name))
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = ParseError;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                parse_prefixed(s, KeyFingerprint::METHOD).map(Self)
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(value: $name) -> String {
+                value.to_string()
+            }
+        }
+
+        impl TryFrom<String> for $name {
+            type Error = ParseError;
+
+            fn try_from(s: String) -> Result<Self, Self::Error> {
+                s.parse()
+            }
+        }
+    };
 }
 
-/// The text form, so a failed comparison shows the value a reader would look
-/// up in a transcript.
-impl fmt::Debug for KeyFingerprint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "KeyFingerprint({self})")
+sha256_text!(KeyFingerprint);
+sha256_text!(CertificateFingerprint);
+
+/// The SHA-256 of a certificate's DER: which certificate a step was given.
+///
+/// Not a [`KeyFingerprint`], which hashes a public key: two certificates for
+/// the same key have one key fingerprint and two of these.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+pub struct CertificateFingerprint([u8; KeyFingerprint::LEN]);
+
+impl CertificateFingerprint {
+    /// The fingerprint of certificate DER bytes.
+    #[must_use]
+    pub fn of_der(der: &[u8]) -> Self {
+        Self(sha2::Sha256::digest(der).into())
     }
-}
 
-impl std::str::FromStr for KeyFingerprint {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_prefixed(s, Self::METHOD).map(Self)
-    }
-}
-
-impl From<KeyFingerprint> for String {
-    fn from(fingerprint: KeyFingerprint) -> String {
-        fingerprint.to_string()
-    }
-}
-
-impl TryFrom<String> for KeyFingerprint {
-    type Error = ParseError;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        s.parse()
+    /// The digest bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; KeyFingerprint::LEN] {
+        &self.0
     }
 }
 
@@ -305,9 +335,10 @@ impl TryFrom<String> for KeyFingerprint {
 /// `subjectPublicKey` bits, RFC 5280 §4.2.1.2 method 1.
 ///
 /// What a certificate's subject key identifier usually holds, and so what
-/// `openssl cms -encrypt -keyid` names a recipient by. Rite reads this name and
-/// never writes it. It hashes the key without its algorithm identifier, with
-/// SHA-1, so it is not a [`KeyFingerprint`] and the transcript records none.
+/// `openssl cms -encrypt -keyid` names a recipient by. Rite names a public key
+/// given alone this way, so the holder's certificate finds it. It hashes the
+/// key without its algorithm identifier, with SHA-1, so it is not a
+/// [`KeyFingerprint`].
 ///
 /// Method 1 is a convention, not a rule. RFC 5280 also describes a truncated
 /// method 2, and a CA may put any value in a subject key identifier, so a
@@ -335,6 +366,36 @@ impl Rfc5280KeyId {
 }
 
 impl fmt::Display for Rfc5280KeyId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&base16ct::lower::encode_string(&self.0))
+    }
+}
+
+/// The leftmost 160 bits of the SHA-256 of a key's bits: RFC 7093 method 1.
+///
+/// The subject key identifier some issuers write in place of RFC 5280's SHA-1,
+/// Let's Encrypt among them, and so another name a container sealed to a
+/// certificate may give a key. Rendered as bare hex, as [`Rfc5280KeyId`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rfc7093KeyId([u8; Self::LEN]);
+
+impl Rfc7093KeyId {
+    /// Bytes kept of the SHA-256 digest.
+    pub const LEN: usize = 20;
+
+    /// Keep an identifier [`PublicKeyDer`] has derived.
+    pub(crate) fn new(bytes: [u8; Self::LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// The identifier bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; Self::LEN] {
+        &self.0
+    }
+}
+
+impl fmt::Display for Rfc7093KeyId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&base16ct::lower::encode_string(&self.0))
     }

@@ -185,6 +185,7 @@ mod tests {
         let (_, line) = fact_summary(&StepFact::WrapRecipientRecorded {
             step: StepId::new("wrap"),
             source: "escrow_pubkey".to_string(),
+            named_by: None,
             fingerprint: format!("sha256:{}", "ab".repeat(32)).parse().unwrap(),
             declared: false,
         })

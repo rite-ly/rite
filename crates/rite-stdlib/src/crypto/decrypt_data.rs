@@ -319,17 +319,11 @@ impl<'a> KeyName<'a> {
                 "This artifact is addressed to the key identified by {identifier}, and \
                  '{display_name}' has check value {check_value}"
             ),
-            Self::PublicKey(public_key) => {
-                let rfc5280 = public_key.rfc5280_key_identifier().map_or_else(
-                    |_| String::new(),
-                    |id| format!(", or by {id}, its RFC 5280 identifier"),
-                );
-                format!(
-                    "This artifact is addressed to the key identified by {identifier}, and \
-                     '{display_name}' is identified by {}, its fingerprint{rfc5280}",
-                    cms::RecipientIdentifier::from(public_key.fingerprint())
-                )
-            }
+            Self::PublicKey(public_key) => format!(
+                "This artifact is addressed to the key identified by {identifier}, and \
+                 '{display_name}' is identified by {}",
+                cms::describe_key_names(public_key)
+            ),
         }
     }
 

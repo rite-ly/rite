@@ -813,6 +813,73 @@
         "hard_blocked"
       ]
     },
+    "RecipientName": {
+      "description": "The name a container gives its recipient, and where it came from.",
+      "oneOf": [
+        {
+          "description": "The subject key identifier of the certificate the key came in.",
+          "type": "object",
+          "properties": {
+            "certificate": {
+              "description": "The SHA-256 of the certificate's DER.",
+              "type": "string"
+            },
+            "key_identifier": {
+              "description": "The identifier, in lowercase hex.",
+              "type": "string"
+            },
+            "method": {
+              "type": "string",
+              "const": "certificate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "key_identifier",
+            "certificate"
+          ]
+        },
+        {
+          "description": "The SHA-1 of the key's bits, RFC 5280 method 1.",
+          "type": "object",
+          "properties": {
+            "key_identifier": {
+              "description": "The digest, in lowercase hex.",
+              "type": "string"
+            },
+            "method": {
+              "type": "string",
+              "const": "rfc5280"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "key_identifier"
+          ]
+        },
+        {
+          "description": "The SHA-256 of the key's SPKI, for a keypair the backend holds.",
+          "type": "object",
+          "properties": {
+            "key_identifier": {
+              "description": "The digest, in lowercase hex.",
+              "type": "string"
+            },
+            "method": {
+              "type": "string",
+              "const": "fingerprint"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "key_identifier"
+          ]
+        }
+      ]
+    },
     "ResponseRecord": {
       "description": "The answer to a prompt, as recorded. A secret answer is never recorded, not even as a digest.",
       "oneOf": [
@@ -1353,6 +1420,17 @@
             "fingerprint": {
               "description": "The digest of the recipient's public key, as DER-encoded SubjectPublicKeyInfo.",
               "$ref": "#/$defs/Sha256Digest"
+            },
+            "named_by": {
+              "description": "The name the container gives the recipient: its subject key identifier as lowercase hex, and where it came from. `certificate` is the identifier of the certificate the key came in, with that certificate's SHA-256; `rfc5280` the SHA-1 of the key's bits (RFC 5280 method 1); `fingerprint` the key's fingerprint, for a keypair the backend holds, which records no recipient fact today. Absent when the output names no recipient.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RecipientName"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "source": {
               "description": "The artifact or material the recipient's key came from, by its name in the ceremony.",

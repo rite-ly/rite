@@ -31,7 +31,7 @@ use x509_cert::ext::pkix::SubjectKeyIdentifier;
 use x509_cert::spki::{AlgorithmIdentifierRef, SubjectPublicKeyInfoRef};
 
 use crate::backend::BackendError;
-use crate::types::{KeyAlgorithm, KeyFingerprint, Rfc5280KeyId};
+use crate::types::{KeyAlgorithm, KeyFingerprint, Rfc5280KeyId, Rfc7093KeyId};
 
 /// A public key in `SubjectPublicKeyInfo` (SPKI) DER form.
 ///
@@ -193,6 +193,23 @@ impl PublicKeyDer {
             BackendError::InvalidKeyFormat("key identifier is not a SHA-1 digest".to_string())
         })?;
         Ok(Rfc5280KeyId::new(bytes))
+    }
+
+    /// The truncated SHA-256 identifier of RFC 7093 method 1, which some
+    /// issuers write where RFC 5280's SHA-1 would be.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::InvalidKeyFormat`] if the SPKI cannot be read,
+    /// which every constructor already rules out.
+    pub fn rfc7093_key_identifier(&self) -> Result<Rfc7093KeyId, BackendError> {
+        use sha2::Digest as _;
+        let spki = SubjectPublicKeyInfoRef::from_der(&self.0)
+            .map_err(|e| BackendError::InvalidKeyFormat(format!("SPKI is unreadable: {e}")))?;
+        let digest: [u8; 32] = sha2::Sha256::digest(spki.subject_public_key.raw_bytes()).into();
+        let mut bytes = [0u8; Rfc7093KeyId::LEN];
+        bytes.copy_from_slice(&digest[..Rfc7093KeyId::LEN]);
+        Ok(Rfc7093KeyId::new(bytes))
     }
 
     /// The key algorithm, read from the key's own structure.
@@ -465,6 +482,32 @@ impl CertificateDer {
     /// subject public key cannot be re-encoded.
     pub fn public_key(&self) -> Result<PublicKeyDer, BackendError> {
         certificate_public_key(&self.0)
+    }
+
+    /// The subject key identifier, if the certificate carries one: the name
+    /// the holder's tools look for when a container is addressed to it.
+    ///
+    /// Whatever bytes the issuer chose. RFC 5280 suggests the SHA-1 of the
+    /// key's bits and allows other methods, so these need not be derivable
+    /// from the key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::InvalidKeyFormat`] when the extension is there
+    /// and does not decode.
+    pub fn subject_key_identifier(&self) -> Result<Option<Vec<u8>>, BackendError> {
+        let certificate = Certificate::from_der(&self.0).map_err(|e| {
+            BackendError::InvalidKeyFormat(format!("not an X.509 certificate: {e}"))
+        })?;
+        certificate
+            .tbs_certificate()
+            .get_extension::<SubjectKeyIdentifier>()
+            .map(|found| found.map(|(_, identifier)| identifier.0.as_bytes().to_vec()))
+            .map_err(|e| {
+                BackendError::InvalidKeyFormat(format!(
+                    "the subject key identifier does not decode, or appears twice: {e}"
+                ))
+            })
     }
 }
 

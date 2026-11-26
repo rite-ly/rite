@@ -48,7 +48,11 @@ fn wrap_to(
         .unwrap();
     let payload_pub = backend.export_public_key(&payload.key_id).unwrap();
     let wrapped = backend
-        .wrap_to_public(&payload.key_id, &recipient_pub_der, scheme)
+        .wrap_to_public(
+            &payload.key_id,
+            &rite_sdk::cms::Recipient::key(recipient_pub_der).unwrap(),
+            scheme,
+        )
         .unwrap();
 
     (payload_pub, wrapped)

@@ -23,6 +23,7 @@ pub use wrap_key::WrapKeyAction;
 
 use rite_model::{ArtifactRef, StepFact};
 use rite_runtime::{ActionError, HandlerContext, Reporter, StepInfo};
+use rite_sdk::cms::Recipient;
 use rite_sdk::{
     Backend, KeyAgreementBackend, KeyDecryptBackend, KeyFingerprint, KeyTransportBackend,
     PublicKeyDer,
@@ -137,11 +138,20 @@ pub(crate) struct ExternalRecipient<'a> {
     /// What addressing the wrong key would do, completing the sentence "...,
     /// but the ceremony declares X." in the refusal.
     pub consequence: &'a str,
+    /// Whether the output names its recipient, as a CMS container does and a
+    /// raw scheme does not. Only then does the record hold the name.
+    pub named: bool,
 }
 
 impl ExternalRecipient<'_> {
     /// Resolve the key, check it against the declared fingerprint, and record
     /// it.
+    ///
+    /// A certificate names the recipient as it names itself, by its subject
+    /// key identifier, so the holder's tools find it. A key given alone, or as
+    /// `${cert.public}`, is named as OpenSSL would name it in a certificate,
+    /// by its RFC 5280 identifier. The record holds the name, and where it
+    /// came from, beside the fingerprint.
     ///
     /// `admits` is the step's own check that it can address this key at all,
     /// run before the fact. A recipient the step was going to refuse is never
@@ -158,20 +168,31 @@ impl ExternalRecipient<'_> {
         ctx: &HandlerContext,
         reporter: &mut Reporter<'_>,
         admits: impl FnOnce(&PublicKeyDer) -> Result<(), ActionError>,
-    ) -> Result<PublicKeyDer, ActionError> {
+    ) -> Result<Recipient, ActionError> {
         let name = self.key_ref.display_name();
-        let recipient = crate::signatures::resolve_public_key(
-            ctx.artifacts,
-            &self.key_ref.artifact_id(),
-            self.key_ref.property(),
-        )
-        .map_err(|e| {
+        let cannot = |e: rite_sdk::BackendError| {
             ActionError::Failed(format!(
                 "Cannot resolve recipient '{name}' as a public key: {e}"
             ))
-        })?;
+        };
+        // A certificate first, since it names the key as its holder's tools
+        // look for it; `resolve_certificate` refuses a property, so
+        // `${cert.public}` reads the key alone.
+        let id = self.key_ref.artifact_id();
+        let recipient = match crate::signatures::resolve_certificate(
+            ctx.artifacts,
+            &id,
+            self.key_ref.property(),
+        ) {
+            Ok(certificate) => Recipient::certified(&certificate),
+            Err(_) => {
+                crate::signatures::resolve_public_key(ctx.artifacts, &id, self.key_ref.property())
+                    .and_then(Recipient::key)
+            }
+        }
+        .map_err(cannot)?;
 
-        let fingerprint = recipient.fingerprint();
+        let fingerprint = recipient.public_key().fingerprint();
         if let Some(declared) = self.expected
             && declared != fingerprint
         {
@@ -180,13 +201,14 @@ impl ExternalRecipient<'_> {
                 self.consequence
             )));
         }
-        admits(&recipient)?;
+        admits(recipient.public_key())?;
 
         reporter.fact(StepFact::WrapRecipientRecorded {
             step: step.id.clone(),
             source: name,
             fingerprint,
             declared: self.expected.is_some(),
+            named_by: self.named.then(|| recipient.name().clone()),
         })?;
         Ok(recipient)
     }

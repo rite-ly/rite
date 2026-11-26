@@ -446,14 +446,18 @@ pub trait KeyTransportBackend: Backend {
 
     /// Wrap `key_id` to an external recipient's public key.
     ///
+    /// A container names the recipient as `recipient` says, so a key given in
+    /// a certificate is found by the certificate's holder. A raw scheme names
+    /// no one.
+    ///
     /// Default implementation returns `UnsupportedOperation`.
     fn wrap_to_public(
         &mut self,
         key_id: &KeyId,
-        recipient_pub_key: &PublicKeyDer,
+        recipient: &crate::cms::Recipient,
         scheme: WrapScheme,
     ) -> Result<WrappedKey, BackendError> {
-        let _ = (key_id, recipient_pub_key, scheme);
+        let _ = (key_id, recipient, scheme);
         Err(BackendError::UnsupportedOperation(
             "wrap_to_public not supported".to_string(),
         ))

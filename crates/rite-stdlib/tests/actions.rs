@@ -1630,7 +1630,7 @@ fn sealed_der(
     rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
         recipient: renamed(
             rite_openssl::recipient_info_for(
-                public_key,
+                &rite_sdk::cms::Recipient::key(public_key.clone()).unwrap(),
                 &cek,
                 &mut rite_openssl::OpenSslBackend::try_new("random").unwrap(),
             )
@@ -1800,7 +1800,7 @@ fn decrypt_data_refuses_a_content_key_of_the_wrong_length() {
     let public_key = public_half(&recipient.1);
     let der = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
         recipient: rite_openssl::recipient_info_for(
-            public_key,
+            &rite_sdk::cms::Recipient::key(public_key.clone()).unwrap(),
             &[0x5a; 16],
             &mut rite_openssl::OpenSslBackend::try_new("random").unwrap(),
         )
@@ -1937,9 +1937,10 @@ fn encrypt_data_seals_content_to_a_public_key_its_holder_opens() {
     let envelope =
         rite_sdk::cms::read_auth_enveloped(encrypted.data()).expect("the container reads back");
     assert_eq!(envelope.recipient.kind(), rite_sdk::RecipientInfoKind::Ktri);
+    // Named as OpenSSL would name the key in a certificate.
     assert_eq!(
         envelope.recipient.key_identifier().as_bytes(),
-        spki_digest(&public_key).as_slice()
+        public_key.rfc5280_key_identifier().unwrap().as_bytes()
     );
 
     let recorded = facts.iter().find_map(|fact| match fact {
@@ -2177,11 +2178,9 @@ fn encrypt_data_seals_content_to_an_ec_key_its_holder_opens() {
         };
         let envelope = rite_sdk::cms::read_auth_enveloped(encrypted.data()).unwrap();
         assert_eq!(envelope.recipient.kind(), rite_sdk::RecipientInfoKind::Kari);
-        assert!(
-            envelope
-                .recipient
-                .key_identifier()
-                .is_fingerprint(&fingerprint)
+        assert_eq!(
+            envelope.recipient.key_identifier().as_bytes(),
+            public_key.rfc5280_key_identifier().unwrap().as_bytes()
         );
         assert!(facts.iter().any(|fact| matches!(
             fact,

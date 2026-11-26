@@ -69,7 +69,11 @@ ceremonies should leave it alone.
 The choice is about where the blob is going, not about strength. What happens
 inside a scheme follows the recipient key, not the ceremony.
 [What the transcript records](#what-the-transcript-records) covers which
-encapsulation each recipient key takes.
+encapsulation each recipient key takes. A `CMS-AES-256-GCM` container names a
+public-key recipient as `encrypt_data` does: by the certificate's subject key
+identifier when the key comes in one, by its RFC 5280 identifier otherwise, and
+a keypair the backend holds by its fingerprint (see
+[Encrypting content](encrypting-content.md#the-container)).
 
 `RSA-OAEP-SHA256` carries at most `k - 2*hLen - 2` bytes: 190 under RSA-2048
 and 446 under RSA-4096. That fits a symmetric key or an EC private key and
@@ -269,7 +273,7 @@ Pointed at a run directory, `rite verify` reads each wrapped artifact and
 compares it against the transcript:
 
 - the recorded algorithms against the ones in the DER;
-- the recipient the blob names against the recipient the transcript recorded;
+- the recipient the blob names against the name the recipient fact records;
 - the key a wrap consumed against a key generated in the same ceremony.
 
 A wrap whose artifact is not in the directory is reported as unchecked, not as

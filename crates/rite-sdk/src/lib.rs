@@ -43,11 +43,12 @@ pub use backend::{
 
 pub use types::{
     AccessAxis, AccessPolicy, AccessWhen, AgreedSecret, Attestation, AttestationKind,
-    BackendConfig, CertRef, DataKey, DeviceInfo, EncryptedData, FromCmsError, IncoherentContainer,
-    KeyAlgorithm, KeyCheckValue, KeyFingerprint, KeyId, KeyMetadata, KeyPolicy, KeyProtection,
-    KeySecurityAttributes, KeySpec, KeyUsages, ManagementKey, ManagementKeyAlgorithm,
-    ManagementSession, Oid, ParseError, PcrValue, PinDefaults, PivDeviceInfo, PivKeyOrigin,
-    PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy, Pkcs11Mechanism, Pkcs11TokenFlags,
-    Pkcs11TokenInfo, Provider, RecipientInfoKind, Rfc5280KeyId, SecretKeyValue, SignAlgorithm,
-    TpmInfo, WrapDescription, WrapScheme, WrappedKey, YubikeySlotMetadata, oid,
+    BackendConfig, CertRef, CertificateFingerprint, DataKey, DeviceInfo, EncryptedData,
+    FromCmsError, IncoherentContainer, KeyAlgorithm, KeyCheckValue, KeyFingerprint, KeyId,
+    KeyMetadata, KeyPolicy, KeyProtection, KeySecurityAttributes, KeySpec, KeyUsages,
+    ManagementKey, ManagementKeyAlgorithm, ManagementSession, Oid, ParseError, PcrValue,
+    PinDefaults, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy,
+    Pkcs11Mechanism, Pkcs11TokenFlags, Pkcs11TokenInfo, Provider, RecipientInfoKind, Rfc5280KeyId,
+    Rfc7093KeyId, SecretKeyValue, SignAlgorithm, TpmInfo, WrapDescription, WrapScheme, WrappedKey,
+    YubikeySlotMetadata, oid,
 };

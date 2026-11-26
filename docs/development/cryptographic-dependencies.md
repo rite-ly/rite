@@ -22,8 +22,11 @@ crypto provider can still tell a key from a certificate and read a key's
 algorithm. A new key algorithm also needs its OID in
 `rite-sdk/src/key_material.rs`. `PublicKeyDer::rfc5280_key_identifier` derives
 the SHA-1 name X.509 tooling gives a key through `x509-cert`, as
-`issue_certificate` does for the certificates it writes: it is a name read off
-public bits, not an operation under a key.
+`issue_certificate` does for the certificates it writes, and
+`rfc7093_key_identifier` the truncated SHA-256 some issuers write, through
+`sha2`. A CMS container names a recipient by one of them or by a
+certificate's own identifier. They are names read off public bits, not
+operations under a key.
 
 ## Why one provider for primitives
 

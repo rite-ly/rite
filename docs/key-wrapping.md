@@ -273,7 +273,7 @@ Pointed at a run directory, `rite verify` reads each wrapped artifact and
 compares it against the transcript:
 
 - the recorded algorithms against the ones in the DER;
-- the recipient the blob names against the recipient the transcript recorded;
+- the recipient the blob names against the name the recipient fact records;
 - the key a wrap consumed against a key generated in the same ceremony.
 
 A wrap whose artifact is not in the directory is reported as unchecked, not as

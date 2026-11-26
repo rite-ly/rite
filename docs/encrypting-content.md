@@ -280,7 +280,8 @@ the container names.
 
 For `recipient`, the fingerprint is in a `wrap_recipient_recorded` fact of its
 own, as for `wrap_key`, recorded before anything is encrypted and saying
-whether the ceremony declared it. The fact is restricted, so a disclosure can
+whether the ceremony declared it, with the name the container gives the key
+under `named_by`. The fact is restricted, so a disclosure can
 publish how the content was encrypted and withhold to whom.
 
 Deliberately no digest of the content, in either direction. Content is
@@ -300,8 +301,8 @@ Containers:
 
 - the recorded algorithms against the ones in the DER;
 - the key the blob is addressed to against a key this ceremony generated or
-  imported, or, for `recipient`, against the recorded recipient, reported as
-  declared where the definition named it.
+  imported, or, for `recipient`, against the name the recipient fact records,
+  reported as declared where the definition named it.
 
 An artifact that is not in the run directory is reported as unchecked, not as
 verified. That the content is what the ceremony meant to encrypt is outside the

@@ -100,6 +100,7 @@ impl Action for WrapKeyAction {
                     )?,
                     consequence: "Wrapping to an unintended recipient cannot be undone, so this \
                                   step will not run.",
+                    named: scheme.is_self_describing(),
                 }
                 .resolve(step, ctx, reporter, |_| Ok(()))?;
 

@@ -13,10 +13,12 @@
 
 use std::fmt;
 
+use crate::backend::BackendError;
 use crate::der;
-use crate::key_material::{EcCurve, PublicKeyDer};
+use crate::key_material::{CertificateDer, EcCurve, PublicKeyDer};
 use crate::types::{
-    KeyAlgorithm, KeyCheckValue, KeyFingerprint, Oid, RecipientInfoKind, WrapDescription, oid,
+    CertificateFingerprint, KeyAlgorithm, KeyCheckValue, KeyFingerprint, Oid, RecipientInfoKind,
+    WrapDescription, oid,
 };
 
 /// `id-envelopedData` (RFC 5652 §6).
@@ -47,9 +49,11 @@ pub struct CmsFacts {
 /// `KeyTransRecipientInfo`, the `rKeyId` subject key identifier in a
 /// `KeyAgreeRecipientInfo`.
 ///
-/// Opaque. A container Rite writes carries a [`KeyCheckValue`] or a
-/// [`KeyFingerprint`] here, and one written elsewhere carries whatever its
-/// writer chose, an [`Rfc5280KeyId`](crate::Rfc5280KeyId) more often than not.
+/// Opaque. A container Rite writes carries a [`KeyCheckValue`], a
+/// certificate's identifier, an [`Rfc5280KeyId`](crate::Rfc5280KeyId) or a
+/// [`KeyFingerprint`] here, as its [`Recipient`] says, and one written
+/// elsewhere carries whatever its writer chose, an
+/// [`Rfc5280KeyId`](crate::Rfc5280KeyId) more often than not.
 /// Nothing in the bytes says which, their length included: 32 bytes need not
 /// be a SHA-256, and a SHA-256 need not be over the SPKI. So the bytes are
 /// never read as a name. They are compared with a name a key has:
@@ -60,8 +64,25 @@ pub struct CmsFacts {
 ///
 /// Rendered as bare hex, since a `sha256:` or `cmac-aes:` prefix would claim
 /// to know what the bytes are.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(into = "String", try_from = "String")]
 pub struct RecipientIdentifier(Vec<u8>);
+
+impl From<RecipientIdentifier> for String {
+    fn from(identifier: RecipientIdentifier) -> Self {
+        identifier.to_string()
+    }
+}
+
+impl TryFrom<String> for RecipientIdentifier {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        base16ct::lower::decode_vec(&text)
+            .map(Self)
+            .map_err(|_| format!("'{text}' is not lowercase hex"))
+    }
+}
 
 impl RecipientIdentifier {
     /// Bytes a writer chose to name a recipient by.
@@ -79,18 +100,12 @@ impl RecipientIdentifier {
         &self.0
     }
 
-    /// Whether these bytes name `key`, by either name it goes by in a
-    /// container: its [`KeyFingerprint`], which Rite writes, or its
-    /// [`Rfc5280KeyId`](crate::Rfc5280KeyId), which a container sealed to a
-    /// certificate usually carries.
+    /// Whether these bytes name `key`, by one of the names [`key_names`]
+    /// derives from it. A certificate's identifier can also be bytes derived
+    /// from nothing, and those name no key here.
     #[must_use]
     pub fn names_key(&self, key: &PublicKeyDer) -> bool {
-        // The SPKI parsed when `key` was built, so the identifier derives; a
-        // key that somehow did not would not be named by it either.
-        self.is_fingerprint(&key.fingerprint())
-            || key
-                .rfc5280_key_identifier()
-                .is_ok_and(|id| self.0 == id.as_bytes())
+        key_names(key).iter().any(|(_, name)| name == self)
     }
 
     /// Whether these bytes are `fingerprint`.
@@ -116,6 +131,52 @@ impl From<KeyFingerprint> for RecipientIdentifier {
     }
 }
 
+impl From<crate::Rfc5280KeyId> for RecipientIdentifier {
+    fn from(identifier: crate::Rfc5280KeyId) -> Self {
+        Self(identifier.as_bytes().to_vec())
+    }
+}
+
+impl From<crate::Rfc7093KeyId> for RecipientIdentifier {
+    fn from(identifier: crate::Rfc7093KeyId) -> Self {
+        Self(identifier.as_bytes().to_vec())
+    }
+}
+
+/// The names a container may give `key` that derive from the key itself, each
+/// with what it is: its [`KeyFingerprint`], which Rite writes for a keypair
+/// the backend holds; its [`Rfc5280KeyId`](crate::Rfc5280KeyId), which Rite
+/// writes for a key given alone and most certificates hold; and its
+/// [`Rfc7093KeyId`](crate::Rfc7093KeyId), which some issuers write.
+///
+/// A name the SPKI does not yield is left out; every [`PublicKeyDer`]
+/// constructor rules that out.
+#[must_use]
+pub fn key_names(key: &PublicKeyDer) -> Vec<(&'static str, RecipientIdentifier)> {
+    let mut names = vec![("its fingerprint", key.fingerprint().into())];
+    if let Ok(id) = key.rfc5280_key_identifier() {
+        names.push(("its RFC 5280 identifier", id.into()));
+    }
+    if let Ok(id) = key.rfc7093_key_identifier() {
+        names.push(("its RFC 7093 identifier", id.into()));
+    }
+    names
+}
+
+/// The names [`key_names`] derives, as a refusal states them: "A, its
+/// fingerprint, B, its RFC 5280 identifier, or C, its RFC 7093 identifier".
+#[must_use]
+pub fn describe_key_names(key: &PublicKeyDer) -> String {
+    let names: Vec<String> = key_names(key)
+        .into_iter()
+        .map(|(what, name)| format!("{name}, {what}"))
+        .collect();
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{}, or {last}", rest.join(", ")),
+        _ => names.concat(),
+    }
+}
+
 impl From<&KeyCheckValue> for RecipientIdentifier {
     fn from(check_value: &KeyCheckValue) -> Self {
         Self(check_value.as_bytes().to_vec())
@@ -125,6 +186,168 @@ impl From<&KeyCheckValue> for RecipientIdentifier {
 impl fmt::Display for RecipientIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&base16ct::lower::encode_string(&self.0))
+    }
+}
+
+/// The name a container gives its recipient, and where the name came from.
+///
+/// Where it came from is what an auditor needs: a name derived from the key
+/// can be derived again from it, while a certificate's identifier is whatever
+/// its issuer chose, and only that certificate vouches for it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(description = "The name a container gives its recipient, and where it came from.")
+)]
+#[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RecipientName {
+    /// The subject key identifier of the certificate the key came in.
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(description = "The subject key identifier of the certificate the key came in.")
+    )]
+    Certificate {
+        /// The identifier, as the certificate holds it.
+        #[cfg_attr(
+            feature = "schemars",
+            schemars(with = "String", description = "The identifier, in lowercase hex.")
+        )]
+        key_identifier: RecipientIdentifier,
+        /// Which certificate it came from.
+        #[cfg_attr(
+            feature = "schemars",
+            schemars(with = "String", description = "The SHA-256 of the certificate's DER.")
+        )]
+        certificate: CertificateFingerprint,
+    },
+    /// The SHA-1 of the key's bits, RFC 5280 method 1: what OpenSSL and most
+    /// issuers put in a certificate, for a key given alone or in a
+    /// certificate with no identifier.
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(description = "The SHA-1 of the key's bits, RFC 5280 method 1.")
+    )]
+    Rfc5280 {
+        /// The SHA-1 digest.
+        #[cfg_attr(
+            feature = "schemars",
+            schemars(with = "String", description = "The digest, in lowercase hex.")
+        )]
+        key_identifier: RecipientIdentifier,
+    },
+    /// The key's fingerprint, the SHA-256 of its SPKI, for a keypair the
+    /// backend holds.
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(description = "The SHA-256 of the key's SPKI, for a keypair the backend holds.")
+    )]
+    Fingerprint {
+        /// The fingerprint's bytes.
+        #[cfg_attr(
+            feature = "schemars",
+            schemars(with = "String", description = "The digest, in lowercase hex.")
+        )]
+        key_identifier: RecipientIdentifier,
+    },
+}
+
+impl RecipientName {
+    /// The bytes the container carries.
+    #[must_use]
+    pub fn key_identifier(&self) -> &RecipientIdentifier {
+        match self {
+            Self::Certificate { key_identifier, .. }
+            | Self::Rfc5280 { key_identifier }
+            | Self::Fingerprint { key_identifier } => key_identifier,
+        }
+    }
+}
+
+/// A public key a container is addressed to, and the name it is addressed by.
+///
+/// The holder's tools find their recipient by that name: `openssl cms -decrypt
+/// -recip` and a mail client compare it with the certificate they hold. So a
+/// key given in a certificate is named as the certificate names it, by its
+/// subject key identifier, whatever method made that. A key given alone, or in
+/// a certificate with no identifier, is named as OpenSSL and most issuers
+/// would name it in a certificate: the SHA-1 of RFC 5280 method 1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recipient {
+    key: PublicKeyDer,
+    name: RecipientName,
+}
+
+impl Recipient {
+    /// A key given alone, named by its [`Rfc5280KeyId`](crate::Rfc5280KeyId).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::InvalidKeyFormat`] if the identifier cannot be
+    /// derived, which every [`PublicKeyDer`] constructor already rules out.
+    pub fn key(key: PublicKeyDer) -> Result<Self, BackendError> {
+        let key_identifier = key.rfc5280_key_identifier()?.into();
+        Ok(Self {
+            key,
+            name: RecipientName::Rfc5280 { key_identifier },
+        })
+    }
+
+    /// A key named by its [`KeyFingerprint`]: a keypair the backend holds,
+    /// which meets no certificate, and which a transcript names by its
+    /// fingerprint where it was generated or imported.
+    #[must_use]
+    pub fn by_fingerprint(key: PublicKeyDer) -> Self {
+        let key_identifier = key.fingerprint().into();
+        Self {
+            key,
+            name: RecipientName::Fingerprint { key_identifier },
+        }
+    }
+
+    /// The key a certificate carries, named by the certificate's subject key
+    /// identifier, or as [`Recipient::key`] names it when the certificate has
+    /// none, or one empty or unreadable, which no tool could match.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::InvalidKeyFormat`] when the certificate's key
+    /// cannot be read.
+    pub fn certified(certificate: &CertificateDer) -> Result<Self, BackendError> {
+        let key = certificate.public_key()?;
+        let identifier = certificate
+            .subject_key_identifier()
+            .ok()
+            .flatten()
+            .filter(|identifier| !identifier.is_empty());
+        match identifier {
+            Some(identifier) => Ok(Self {
+                key,
+                name: RecipientName::Certificate {
+                    key_identifier: RecipientIdentifier(identifier),
+                    certificate: CertificateFingerprint::of_der(certificate.as_bytes()),
+                },
+            }),
+            None => Self::key(key),
+        }
+    }
+
+    /// The public key.
+    #[must_use]
+    pub fn public_key(&self) -> &PublicKeyDer {
+        &self.key
+    }
+
+    /// The name the container gives the recipient, and where it came from.
+    #[must_use]
+    pub fn name(&self) -> &RecipientName {
+        &self.name
+    }
+
+    /// The bytes the container names the recipient by.
+    #[must_use]
+    pub fn identifier(&self) -> &RecipientIdentifier {
+        self.name.key_identifier()
     }
 }
 
@@ -860,7 +1083,7 @@ pub enum RecipientInfo {
         wrapped_key: Vec<u8>,
     },
     /// A version 2 `KeyTransRecipientInfo` under RSAES-OAEP over SHA-256, for
-    /// an RSA public key. Rite names the key by its [`KeyFingerprint`].
+    /// an RSA public key, named as its [`Recipient`] says.
     KeyTransport {
         /// The `subjectKeyIdentifier` rid.
         key_identifier: RecipientIdentifier,

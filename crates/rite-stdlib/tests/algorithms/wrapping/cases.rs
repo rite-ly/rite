@@ -300,7 +300,7 @@ pub const WRITES: &[WriteCase] = &[
 
 /// RSAES-OAEP with SHA-256 for the digest and MGF1, which `openssl cms` writes
 /// only when told.
-const OAEP_SHA256: &[&str] = &[
+pub(super) const OAEP_SHA256: &[&str] = &[
     "-keyopt",
     "rsa_padding_mode:oaep",
     "-keyopt",
@@ -308,7 +308,7 @@ const OAEP_SHA256: &[&str] = &[
     "-keyopt",
     "rsa_mgf1_md:sha256",
 ];
-const KDF_SHA256: &[&str] = &["-keyopt", "ecdh_kdf_md:sha256"];
+pub(super) const KDF_SHA256: &[&str] = &["-keyopt", "ecdh_kdf_md:sha256"];
 const KDF_SHA384: &[&str] = &["-keyopt", "ecdh_kdf_md:sha384"];
 const KDF_SHA512: &[&str] = &["-keyopt", "ecdh_kdf_md:sha512"];
 const NONE: &[&str] = &[];
@@ -727,7 +727,8 @@ pub const FIXTURES: &[Fixture] = &[
         unwrap_key: read_fails(Unsupported, Check, NO_SUCH_ALGORITHM),
         decrypt_data: read_fails(Unsupported, Check, NO_SUCH_ALGORITHM),
     },
-    // A KEM.
+    // A KEM. `unwrap_key` opens it through OpenSSL, since the command line
+    // names the key as Rite now does; `decrypt_data` has no opening for it.
     Fixture {
         name: "kemri-ml-kem-768",
         content: GCM,
@@ -736,7 +737,7 @@ pub const FIXTURES: &[Fixture] = &[
         opened_with: K::MlKem768,
         holds: &[id::ML_KEM_768, HKDF_SHA256, AES_256_WRAP],
         lacks: &[],
-        unwrap_key: read_fails(Unsupported, Step, "CMS decrypt"),
+        unwrap_key: OPENS,
         decrypt_data: read_fails(
             Unsupported,
             Step,
@@ -890,14 +891,10 @@ pub const FIXTURES: &[Fixture] = &[
 pub const NOT_OPENED_FROM_ELSEWHERE: &[(Form, &str)] = &[
     (
         KEMRI_512,
-        "decrypt_data has no KEM reader, and unwrap_key reads no material",
-    ),
-    (
-        KEMRI_768,
-        "decrypt_data has no KEM reader, and unwrap_key reads no material",
+        "no fixture from another implementation; unwrap_key opens the ML-KEM-768 one",
     ),
     (
         KEMRI_1024,
-        "decrypt_data has no KEM reader, and unwrap_key reads no material",
+        "no fixture from another implementation; unwrap_key opens the ML-KEM-768 one",
     ),
 ];

@@ -89,6 +89,7 @@ impl Action for EncryptDataAction {
                     )?,
                     consequence: "Content encrypted to it would be readable by that key's \
                                   holder and not by the one intended, so this step will not run.",
+                    named: true,
                 }
                 .resolve(step, ctx, reporter, admits_recipient)?;
                 recipient_data_key(&recipient, random)?
@@ -323,7 +324,7 @@ fn admits_recipient(recipient: &PublicKeyDer) -> Result<(), ActionError> {
 ///
 /// Protecting it needs only the public key and happens in software.
 fn recipient_data_key(
-    recipient: &PublicKeyDer,
+    recipient: &cms::Recipient,
     random: &mut dyn RandomBackend,
 ) -> Result<(ContentKey, Addressee), ActionError> {
     let cek = Zeroizing::new(random.generate_random(content::KEY_BYTES)?);

@@ -8,6 +8,7 @@
 
 mod cases;
 mod coverage;
+mod identifiers;
 mod model;
 mod regenerate;
 
@@ -28,9 +29,10 @@ use crate::harness::{
     build_lacks, check_fields, check_fingerprint, check_refused, check_source, check_value_of,
     cli_lacks, held_spki, is_committed, judge, operation, ran_via, reference_check_value, trial,
 };
-use crate::keys::read;
+use crate::keys::{TestKey, read};
 use crate::outcome::Policy;
 use crate::session::{Refused, Session, Source, Via};
+use crate::shape::{Shape, certificate_path};
 use cases::{FIXTURES, RECIPIENT_SHAPES, WRITES};
 use model::{Fixture, Form, Path, Payload, Read, ReadStep, Write, WriteCase, WriteStep};
 
@@ -54,6 +56,7 @@ fn trials() -> Vec<Trial> {
         }
     }
     trials.extend(coverage::trials());
+    trials.extend(identifiers::trials());
     trials
 }
 
@@ -209,16 +212,20 @@ fn check_written(case: &WriteCase, form: &Form, session: &Session) -> Result<(),
 }
 
 /// The container names its recipient the way a third party computes it: a
-/// public key by the SHA-256 of its SPKI file (RFC 7093, method 1), a
-/// symmetric key by its check value. The command line opening the container
-/// tries every recipient with the key it holds, so without this a wrong
-/// identifier would pass, and a holder of many keys could not find theirs.
+/// key given in a certificate by the certificate's subject key identifier, as
+/// OpenSSL reads it; another public key by the SHA-256 of its SPKI file (RFC
+/// 7093, method 4); a symmetric key by its check value. The command line
+/// opening the container tries every recipient with the key it holds, so
+/// without this a wrong identifier would pass, and a holder of many keys could
+/// not find theirs.
 fn check_recipient_identifier(
     case: &WriteCase,
     session: &Session,
     identifier: Option<&cms::RecipientIdentifier>,
 ) -> Result<(), String> {
-    let expected = if let Some(spki) = opener_public(case, session) {
+    let expected = if let Some((_, named)) = recipient_name(case) {
+        named
+    } else if let Some(spki) = opener_public(case, session) {
         base16ct::lower::encode_string(&openssl::sha::sha256(&spki))
     } else {
         base16ct::lower::encode_string(check_value_of(session, "key").as_bytes())
@@ -269,7 +276,9 @@ fn check_identities(case: &WriteCase, session: &Session) -> Result<(), String> {
     }
     check_fields("inputs", inputs, &expected)?;
 
-    let recipients: Vec<(String, String, bool)> = session
+    // The certificate's identifier is recorded when the container names the
+    // recipient by it.
+    let recipients: Vec<RecordedRecipient> = session
         .facts()
         .iter()
         .filter_map(|fact| match fact {
@@ -277,8 +286,21 @@ fn check_identities(case: &WriteCase, session: &Session) -> Result<(), String> {
                 source,
                 fingerprint,
                 declared,
+                named_by,
                 ..
-            } => Some((source.clone(), fingerprint.to_string(), *declared)),
+            } => Some((
+                source.clone(),
+                fingerprint.to_string(),
+                *declared,
+                named_by.as_ref().map(|name| {
+                    let method = match name {
+                        cms::RecipientName::Certificate { .. } => "certificate",
+                        cms::RecipientName::Rfc5280 { .. } => "rfc5280",
+                        cms::RecipientName::Fingerprint { .. } => "fingerprint",
+                    };
+                    (method, name.key_identifier().to_string())
+                }),
+            )),
             _ => None,
         })
         .collect();
@@ -286,17 +308,71 @@ fn check_identities(case: &WriteCase, session: &Session) -> Result<(), String> {
         Path::Held(_) => Vec::new(),
         Path::Recipient(_) => {
             let public = case.key.public().expect("a recipient has a public half");
-            vec![("key".to_string(), compute_fingerprint(&public), false)]
+            // A raw scheme names no one, so nothing is recorded beside the
+            // fingerprint.
+            let self_describing = case.scheme.is_none_or(|scheme| {
+                scheme
+                    .parse::<WrapScheme>()
+                    .is_ok_and(WrapScheme::is_self_describing)
+            });
+            let named = recipient_name(case).filter(|_| self_describing);
+            vec![(
+                "key".to_string(),
+                compute_fingerprint(&public),
+                false,
+                named,
+            )]
         }
     };
     if recipients == expected {
         Ok(())
     } else {
         Err(format!(
-            "the recipient facts (source, fingerprint, declared) should be {expected:?}, and the \
-             record holds {recipients:?}"
+            "the recipient facts (source, fingerprint, declared, name) should be \
+             {expected:?}, and the record holds {recipients:?}"
         ))
     }
+}
+
+/// A recipient fact as the checks compare it: source, fingerprint, whether it
+/// was declared, and the name's method and identifier.
+type RecordedRecipient = (String, String, bool, Option<(&'static str, String)>);
+
+/// The name a container gives an external recipient, with the method the
+/// record states and the identifier in lowercase hex: the certificate's subject
+/// key identifier when the key came in one, and otherwise the SHA-1 of the
+/// key's bits (RFC 5280 method 1), as OpenSSL would name it. `None` for a key
+/// the backend holds, which is named by its fingerprint.
+fn recipient_name(case: &WriteCase) -> Option<(&'static str, String)> {
+    match case.path {
+        Path::Recipient(Shape::CertificateDer | Shape::CertificatePem | Shape::Certificate) => {
+            Some(("certificate", certificate_ski(case.key)))
+        }
+        Path::Recipient(_) => Some((
+            "rfc5280",
+            base16ct::lower::encode_string(&openssl::sha::sha1(&identifiers::public_bits(
+                case.key,
+            ))),
+        )),
+        Path::Held(_) => None,
+    }
+}
+
+/// The subject key identifier of `key`'s committed certificate, as OpenSSL
+/// reads it, in lowercase hex.
+fn certificate_ski(key: TestKey) -> String {
+    let ski = ski_of(&read(&certificate_path(key)))
+        .expect("the committed certificates carry a subject key identifier");
+    base16ct::lower::encode_string(&ski)
+}
+
+/// A certificate's subject key identifier as OpenSSL reads it, not as Rite
+/// does.
+pub(super) fn ski_of(der: &[u8]) -> Option<Vec<u8>> {
+    let certificate = openssl::x509::X509::from_der(der).expect("the certificate parses");
+    certificate
+        .subject_key_id()
+        .map(|ski| ski.as_slice().to_vec())
 }
 
 /// The step's operation fact, which is what the transcript keeps: the scheme

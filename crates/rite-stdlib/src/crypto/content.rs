@@ -9,7 +9,7 @@
 //! Actions call [`seal`] and [`open`] rather than `rite_openssl`, so swapping
 //! the provider is a change to this file and nothing else.
 
-use rite_sdk::{AgreedSecret, BackendError, PublicKeyDer, RandomBackend, cms};
+use rite_sdk::{AgreedSecret, BackendError, RandomBackend, cms};
 use zeroize::Zeroizing;
 
 /// Content and the values a container carries beside it.
@@ -42,7 +42,7 @@ pub fn open(cek: &[u8], sealed: &SealedContent) -> Result<Zeroizing<Vec<u8>>, Ba
 }
 
 /// Protect a content-encryption key for the holder of `recipient`, in the
-/// recipient form its key takes.
+/// recipient form its key takes, named as `recipient` says.
 ///
 /// No backend key takes part: encrypting to a public key uses no stored
 /// secret. The step's backend contributes random bytes: the content key's,
@@ -54,7 +54,7 @@ pub fn open(cek: &[u8], sealed: &SealedContent) -> Result<Zeroizing<Vec<u8>>, Ba
 /// Returns [`BackendError`] if the recipient is not a key a container can
 /// address, or if `random` fails.
 pub fn protect_for(
-    recipient: &PublicKeyDer,
+    recipient: &cms::Recipient,
     cek: &[u8],
     random: &mut dyn RandomBackend,
 ) -> Result<cms::RecipientInfo, BackendError> {

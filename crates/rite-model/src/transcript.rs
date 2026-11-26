@@ -1397,6 +1397,23 @@ pub enum StepFact {
             )
         )]
         declared: bool,
+        /// The name the container gives the recipient and where it came
+        /// from: the certificate the key came in, or the key itself. Absent
+        /// when the output names no recipient, as a raw scheme does not.
+        #[cfg_attr(
+            test,
+            schemars(
+                description = "The name the container gives the recipient: its subject key \
+                identifier as lowercase hex, and where it came from. `certificate` is the \
+                identifier of the certificate the key came in, with that certificate's \
+                SHA-256; `rfc5280` the SHA-1 of the key's bits (RFC 5280 method 1); \
+                `fingerprint` the key's fingerprint, for a keypair the backend holds, \
+                which records no recipient fact today. Absent when the output names no \
+                recipient."
+            )
+        )]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        named_by: Option<rite_sdk::cms::RecipientName>,
     },
     /// A human attestation was recorded.
     #[cfg_attr(test, schemars(description = "A person made an attestation."))]
@@ -2476,6 +2493,7 @@ mod schema_snapshot_tests {
                 source: "escrow_pubkey".to_string(),
                 fingerprint,
                 declared: true,
+                named_by: None,
             },
             &json!({
                 "type": "wrap_recipient_recorded",

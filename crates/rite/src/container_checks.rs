@@ -241,7 +241,7 @@ struct Index<'a> {
     /// Keyed by step because both facts come from one step. Keying by the
     /// input name instead would let two steps reading the same input share an
     /// entry, and the first `declared` would then stand for both.
-    recipients: HashMap<&'a str, (KeyFingerprint, bool)>,
+    recipients: HashMap<&'a str, RecordedRecipient<'a>>,
     /// Artifact file names by the digest recorded for their contents.
     artifacts: HashMap<&'a str, &'a str>,
 }
@@ -277,12 +277,19 @@ impl<'a> Index<'a> {
                     step,
                     fingerprint,
                     declared,
+                    named_by,
                     ..
                 } => {
                     index
                         .recipients
                         .entry(step.as_str())
-                        .or_insert((*fingerprint, *declared));
+                        .or_insert(RecordedRecipient {
+                            fingerprint: *fingerprint,
+                            declared: *declared,
+                            key_identifier: named_by
+                                .as_ref()
+                                .map(rite_sdk::cms::RecipientName::key_identifier),
+                        });
                 }
                 StepFact::ArtifactWritten {
                     file,
@@ -394,26 +401,29 @@ fn check_one(
 
     // The recipient identifier in the blob is compared with the names the
     // recipient fact and a generate_key fact record, so the two compare
-    // without holding any key. A blob that names its recipient by an RFC 5280
-    // identifier matches no record, since no record holds that name.
+    // without holding any key: the fingerprint, or the certificate's
+    // identifier the recipient fact records beside it. A blob that names its
+    // recipient by an identifier no fact records matches nothing.
     let form = from_blob.description.recipient_info;
     let recipient = match from_blob.recipient_key_identifier.as_ref() {
         None => RecipientEvidence::None,
         Some(identifier) => match index.recipients.get(step) {
-            Some(&(recorded, declared))
-                if RecordedKey::Fingerprint(recorded).names(identifier, form) =>
-            {
-                if declared {
+            Some(recorded) if recorded.names(identifier, form) => {
+                if recorded.declared {
                     RecipientEvidence::Declared
                 } else {
                     RecipientEvidence::Recorded
                 }
             }
-            Some(&(recorded, _)) => {
+            Some(recorded) => {
                 return ContainerStatus::Mismatch {
                     detail: format!(
-                        "the transcript records recipient {recorded}, \
-                         the artifact names the key identified by {identifier}"
+                        "the transcript records recipient {}{}, \
+                         the artifact names the key identified by {identifier}",
+                        recorded.fingerprint,
+                        recorded
+                            .key_identifier
+                            .map_or_else(String::new, |named| format!(" named {named}")),
                     ),
                 };
             }
@@ -437,6 +447,24 @@ fn check_one(
         algorithms: AlgorithmEvidence::Derived,
         recipient,
         origin,
+    }
+}
+
+/// The recipient a wrap fact records: its fingerprint, whether the ceremony
+/// declared it, and the identifier the container names it by when that is a
+/// certificate's rather than the fingerprint.
+#[derive(Debug, Clone, Copy)]
+struct RecordedRecipient<'a> {
+    fingerprint: KeyFingerprint,
+    declared: bool,
+    key_identifier: Option<&'a RecipientIdentifier>,
+}
+
+impl RecordedRecipient<'_> {
+    /// Whether a blob's recipient identifier is one of the names recorded.
+    fn names(&self, identifier: &RecipientIdentifier, form: Option<RecipientInfoKind>) -> bool {
+        RecordedKey::Fingerprint(self.fingerprint).names(identifier, form)
+            || (is_public_key_form(form) && self.key_identifier == Some(identifier))
     }
 }
 
@@ -477,19 +505,24 @@ impl RecordedKey {
     /// kind is never compared, so bytes that happen to equal it are not taken
     /// as evidence the recipient form rules out.
     fn names(&self, identifier: &RecipientIdentifier, form: Option<RecipientInfoKind>) -> bool {
-        let public_key_form = matches!(
-            form,
-            Some(RecipientInfoKind::Ktri | RecipientInfoKind::Kari | RecipientInfoKind::Kemri)
-        );
         match self {
             Self::Fingerprint(fingerprint) => {
-                public_key_form && identifier.is_fingerprint(fingerprint)
+                is_public_key_form(form) && identifier.is_fingerprint(fingerprint)
             }
             Self::CheckValue(check_value) => {
                 form == Some(RecipientInfoKind::Kekri) && identifier.is_check_value(check_value)
             }
         }
     }
+}
+
+/// Whether a recipient form names a public key, as `KEKRecipientInfo` names a
+/// symmetric one.
+fn is_public_key_form(form: Option<RecipientInfoKind>) -> bool {
+    matches!(
+        form,
+        Some(RecipientInfoKind::Ktri | RecipientInfoKind::Kari | RecipientInfoKind::Kemri)
+    )
 }
 
 /// What the transcript alone says about the recipient of a wrap.
@@ -500,8 +533,8 @@ impl RecordedKey {
 /// and is absent here for that reason.
 fn declared_recipient(index: &Index<'_>, step: &str) -> RecipientEvidence {
     match index.recipients.get(step) {
-        Some(&(_, true)) => RecipientEvidence::Declared,
-        Some(&(_, false)) => RecipientEvidence::Recorded,
+        Some(recorded) if recorded.declared => RecipientEvidence::Declared,
+        Some(_) => RecipientEvidence::Recorded,
         None => RecipientEvidence::None,
     }
 }
@@ -622,6 +655,7 @@ mod tests {
                 source: "kek".to_string(),
                 fingerprint: wrap.recipient_fingerprint.parse().unwrap(),
                 declared: true,
+                named_by: None,
             },
             StepFact::BackendOperation {
                 step: StepId::new("wrap"),
@@ -753,20 +787,37 @@ mod tests {
         );
     }
 
-    /// Content sealed to a public key names it by the SHA-256 of its SPKI,
-    /// which is the fingerprint the recipient fact records, so the two compare
-    /// as a wrap's do: a match is the declared recipient, any other key is a
-    /// mismatch. The same for an RSA key under key transport and an EC key
-    /// under key agreement.
+    /// Content sealed to a public key names it by its RFC 5280 identifier,
+    /// which the recipient fact records beside the fingerprint, so the two
+    /// compare as a wrap's do: a match is the declared recipient, a record
+    /// without it is a mismatch. The same for an RSA key under key transport
+    /// and an EC key under key agreement.
     #[test]
     fn an_encrypt_to_a_public_key_is_checked_against_its_recipient_fact() {
         for algorithm in [KeyAlgorithm::Rsa2048, KeyAlgorithm::EcdsaP256] {
-            encrypt_to_a_public_key_is_checked(algorithm);
+            encrypt_to_a_public_key_is_checked(algorithm, None);
         }
     }
 
-    fn encrypt_to_a_public_key_is_checked(algorithm: KeyAlgorithm) {
-        let tmp = tempfile::tempdir().unwrap();
+    /// Content sealed to a key in a certificate names it by the certificate's
+    /// subject key identifier, which the recipient fact records beside the
+    /// fingerprint. A record without it is a mismatch, as the container names
+    /// a key no fact does.
+    #[test]
+    fn an_encrypt_to_a_certificate_is_checked_against_the_identifier_recorded() {
+        let named = rite_sdk::cms::RecipientIdentifier::new(vec![0x5a; 20]);
+        for algorithm in [KeyAlgorithm::Rsa2048, KeyAlgorithm::EcdsaP256] {
+            encrypt_to_a_public_key_is_checked(algorithm, Some(&named));
+        }
+    }
+
+    /// Content sealed to a fresh key of `algorithm`, named by `named` in
+    /// place of the name Rite gives it when given: the key's fingerprint, its
+    /// recipient, and the container.
+    fn sealed_to(
+        algorithm: KeyAlgorithm,
+        named: Option<&rite_sdk::cms::RecipientIdentifier>,
+    ) -> (rite_sdk::KeyFingerprint, rite_sdk::cms::Recipient, Vec<u8>) {
         let mut backend = rite_openssl::OpenSslBackend::try_new("test").unwrap();
         let recipient = backend
             .generate_key(KeySpec {
@@ -780,28 +831,54 @@ mod tests {
         let fingerprint = public.fingerprint();
         let cek = [0x5a; 32];
         let content = rite_openssl::seal_content(&cek, b"an archive").unwrap();
+        let recipient = rite_sdk::cms::Recipient::key(public.clone()).unwrap();
+        let mut info = rite_openssl::recipient_info_for(
+            &recipient,
+            &cek,
+            &mut rite_openssl::OpenSslBackend::try_new("random").unwrap(),
+        )
+        .unwrap();
+        if let Some(named) = named {
+            match &mut info {
+                rite_sdk::cms::RecipientInfo::KeyTransport { key_identifier, .. } => {
+                    *key_identifier = named.clone();
+                }
+                rite_sdk::cms::RecipientInfo::KeyAgreement(agreed) => {
+                    agreed.key_identifier = named.clone();
+                }
+                _ => unreachable!("a public key is named by key transport or agreement"),
+            }
+        }
         let blob = rite_sdk::cms::write_auth_enveloped(&rite_sdk::cms::Envelope {
-            recipient: rite_openssl::recipient_info_for(
-                &public,
-                &cek,
-                &mut rite_openssl::OpenSslBackend::try_new("random").unwrap(),
-            )
-            .unwrap(),
+            recipient: info,
             nonce: content.nonce,
             ciphertext: content.ciphertext,
             tag: content.tag,
         })
         .unwrap();
+        (fingerprint, recipient, blob)
+    }
+
+    /// `named` is the certificate's identifier the container carries in place
+    /// of the fingerprint, and the recipient fact records.
+    fn encrypt_to_a_public_key_is_checked(
+        algorithm: KeyAlgorithm,
+        named: Option<&rite_sdk::cms::RecipientIdentifier>,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let (fingerprint, recipient, blob) = sealed_to(algorithm, named);
         std::fs::create_dir_all(tmp.path().join("artifacts")).unwrap();
         std::fs::write(tmp.path().join("artifacts/sealed.p7c"), &blob).unwrap();
 
-        let facts = |fingerprint: rite_sdk::KeyFingerprint| {
+        let facts = |fingerprint: rite_sdk::KeyFingerprint,
+                     named_by: Option<rite_sdk::cms::RecipientName>| {
             vec![
                 StepFact::WrapRecipientRecorded {
                     step: StepId::new("encrypt"),
                     source: "custodian_public".to_string(),
                     fingerprint,
                     declared: true,
+                    named_by,
                 },
                 StepFact::BackendOperation {
                     step: StepId::new("encrypt"),
@@ -827,7 +904,16 @@ mod tests {
             ]
         };
 
-        let recorded = facts(fingerprint);
+        // What the step records beside the fingerprint: the certificate's
+        // identifier, or else the key's RFC 5280 one.
+        let name = named.map_or_else(
+            || recipient.name().clone(),
+            |named| rite_sdk::cms::RecipientName::Certificate {
+                key_identifier: named.clone(),
+                certificate: rite_sdk::CertificateFingerprint::of_der(b"a certificate"),
+            },
+        );
+        let recorded = facts(fingerprint, Some(name));
         let checks = check_containers(Some(tmp.path()), &borrow(&recorded));
         let [check] = checks.as_slice() else {
             panic!("expected one container check, got {checks:?}");
@@ -843,12 +929,33 @@ mod tests {
             check.describe()
         );
 
-        let another = facts(format!("sha256:{}", "ab".repeat(32)).parse().unwrap());
+        // The same key, without the identifier the container names it by.
+        let another = facts(fingerprint, None);
         let checks = check_containers(Some(tmp.path()), &borrow(&another));
         assert!(
             checks.iter().all(ContainerCheck::failed),
             "{algorithm}: a record naming another recipient is a mismatch: {checks:?}"
         );
+    }
+
+    /// A recorded name matches a container of any public-key form, an ML-KEM
+    /// one included, and never a symmetric key's.
+    #[test]
+    fn a_recorded_name_matches_every_public_key_form() {
+        let named = RecipientIdentifier::new(vec![0x5a; 20]);
+        let recorded = RecordedRecipient {
+            fingerprint: format!("sha256:{}", "ab".repeat(32)).parse().unwrap(),
+            declared: true,
+            key_identifier: Some(&named),
+        };
+        for form in [
+            RecipientInfoKind::Ktri,
+            RecipientInfoKind::Kari,
+            RecipientInfoKind::Kemri,
+        ] {
+            assert!(recorded.names(&named, Some(form)), "{form:?}");
+        }
+        assert!(!recorded.names(&named, Some(RecipientInfoKind::Kekri)));
     }
 
     #[test]

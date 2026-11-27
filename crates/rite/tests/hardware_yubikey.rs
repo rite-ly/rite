@@ -979,6 +979,39 @@ fn a_declared_access_policy_is_set_and_read_back() {
     assert_eq!(unlocked["outputs"]["pin_is_default"], true);
 }
 
+/// A key under `per_use` presence that nobody touches fails its signature
+/// as a missed touch, not as a missing PIN. The card waits 15 seconds for
+/// the touch: do not touch it while this test runs.
+#[test]
+#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
+fn an_untouched_key_fails_as_a_missed_touch() {
+    let Some((_turn, card)) = card() else { return };
+    let steps = [
+        unlock("unlock"),
+        admin_then_generate("89", "").replace(
+            "          slot: \"89\"\n",
+            "          slot: \"89\"\n          policy:\n            authentication: never\n            \
+             presence: per_use\n",
+        ),
+        sign("sign", "new_key", "ECDSA-SHA256", "signature"),
+    ]
+    .concat();
+    let yaml = admin_ceremony(card, "source: factory_default", &steps);
+    // The PIN, then "no" to retrying the signature.
+    let run = run(&yaml, vec![pin(), Response::Bool(false)]);
+    let Some((step, error)) = &run.stopped else {
+        panic!("an untouched per_use key signed: the slot's touch policy is not `always`");
+    };
+    assert_eq!(step, "sign");
+    assert!(
+        matches!(
+            error,
+            ExecutionError::BackendError(BackendError::PresenceNotConfirmed)
+        ),
+        "{error:?}"
+    );
+}
+
 /// The card attests a key it generated, with no PIN: the leaf names the key
 /// `ykman` exported, OpenSSL accepts it as issued by the bundle's F9
 /// certificate, and that certificate is the one `ykman` reads.

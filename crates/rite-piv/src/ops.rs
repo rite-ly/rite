@@ -6,6 +6,8 @@
 //! `Mutex<YubiKey>` to satisfy the `Backend: Sync` requirement while still
 //! implementing `&self` trait methods.
 
+use std::time::{Duration, Instant};
+
 use der::Encode;
 use sha2::{Digest, Sha256, Sha384};
 use yubikey::certificate::CertInfo;
@@ -41,6 +43,46 @@ pub fn map_error(e: yubikey::Error) -> BackendError {
             BackendError::UnsupportedAlgorithm("algorithm not supported by device".to_string())
         }
         other => BackendError::HardwareFailure(other.to_string()),
+    }
+}
+
+/// How long a refusal comes after the operation was sent once the card has
+/// waited for a touch. A `YubiKey` waits 15 seconds; a missing PIN is
+/// refused at once.
+const TOUCH_WAIT: Duration = Duration::from_secs(5);
+
+/// [`map_error`] for an operation with the key `key_id` names, refused
+/// `waited` after it was sent.
+///
+/// The card answers a touch that never came with the status of a missing
+/// PIN. It checks the PIN first and refuses at once, and gives up on a
+/// touch only after waiting for it, so a late refusal from a key whose
+/// policy asks for a touch is put down to the touch. A card that does not
+/// report the policy is taken not to ask.
+fn key_use_error(
+    yk: &mut YubiKey,
+    key_id: &KeyId,
+    waited: Duration,
+    error: yubikey::Error,
+) -> BackendError {
+    match error {
+        yubikey::Error::AuthenticationError => authentication_refusal(waited, || {
+            access_policy(yk, key_id)
+                .ok()
+                .flatten()
+                .is_some_and(|policy| policy.asks_for_presence())
+        }),
+        other => map_error(other),
+    }
+}
+
+/// A refusal for want of authentication, `waited` after the operation was
+/// sent. `asks_for_touch` is read only for a late refusal.
+fn authentication_refusal(waited: Duration, asks_for_touch: impl FnOnce() -> bool) -> BackendError {
+    if waited >= TOUCH_WAIT && asks_for_touch() {
+        BackendError::PresenceNotConfirmed
+    } else {
+        BackendError::PinRequired
     }
 }
 
@@ -135,8 +177,8 @@ pub fn pin_retries(yk: &mut YubiKey) -> Result<u32, BackendError> {
 }
 
 /// The access policy the card reports for the key `key_id` names, from its
-/// slot metadata (`YubiKey` firmware 5.3 and later). `None` from a card too
-/// old to report it.
+/// slot metadata (`YubiKey` firmware 5.3 and later). `None` from a card that
+/// does not report it: an older `YubiKey`, or a PIV card from another maker.
 ///
 /// # Errors
 ///
@@ -176,17 +218,33 @@ pub fn pin_defaults(yk: &mut YubiKey) -> Result<PinDefaults, BackendError> {
     })
 }
 
-/// A slot's metadata, or `None` on firmware before 5.3, which does not
-/// report it.
+/// A slot's metadata, or `None` from a card that does not report it.
+///
+/// GET METADATA is a Yubico extension. Firmware before 5.3 answers
+/// `NotSupported`, another PIV card may answer any status word
+/// (`GenericError`) or a reply the crate cannot parse, and an empty slot is
+/// `NotFound`: all leave the metadata unknown. Only a card that cannot be
+/// reached is an error.
 fn metadata_if_reported(
     yk: &mut YubiKey,
     slot: SlotId,
 ) -> Result<Option<piv::SlotMetadata>, BackendError> {
     match piv::metadata(yk, slot) {
         Ok(meta) => Ok(Some(meta)),
-        Err(yubikey::Error::NotSupported) => Ok(None),
-        Err(error) => Err(map_error(error)),
+        Err(error) if is_unreachable(&error) => Err(map_error(error)),
+        Err(_) => Ok(None),
     }
+}
+
+/// Whether `error` says the card could not be reached, as opposed to a card
+/// that answered.
+fn is_unreachable(error: &yubikey::Error) -> bool {
+    matches!(
+        error,
+        yubikey::Error::PcscError { .. }
+            | yubikey::Error::AppletError
+            | yubikey::Error::AppletNotFound { .. }
+    )
 }
 
 /// The factory management key of every PIV card Yubico ships, in 3DES before
@@ -628,7 +686,9 @@ fn rsa_size_held(held: SlotKey, key_id: &KeyId) -> Result<RsaSize, BackendError>
 /// - [`BackendError::SlotEmpty`] if the card reports the slot empty before an
 ///   RSA signature;
 /// - [`BackendError::Other`] if the operating system supplies no PSS salt;
-/// - the mapped card error if signing fails.
+/// - [`BackendError::PresenceNotConfirmed`] if the card waited for a touch
+///   that did not come;
+/// - the mapped card error if signing fails otherwise.
 pub fn sign(
     yk: &mut YubiKey,
     key_id: &KeyId,
@@ -664,8 +724,9 @@ pub fn sign(
             )));
         }
     };
-    let sig =
-        piv::sign_data(yk, &input, card_algorithm(key_algorithm)?, slot).map_err(map_error)?;
+    let sent = Instant::now();
+    let sig = piv::sign_data(yk, &input, card_algorithm(key_algorithm)?, slot)
+        .map_err(|error| key_use_error(yk, key_id, sent.elapsed(), error))?;
     Ok(sig.to_vec())
 }
 
@@ -704,6 +765,8 @@ pub fn sign(
 /// - [`BackendError::UnsupportedAlgorithm`] if the slot key is not EC;
 /// - [`BackendError::SlotEmpty`] if the slot is empty;
 /// - [`BackendError::PinRequired`] if the PIN has not been verified;
+/// - [`BackendError::PresenceNotConfirmed`] if the card waited for a touch
+///   that did not come;
 /// - [`BackendError::HardwareFailure`] if the card refuses and the reason
 ///   cannot be determined;
 /// - [`BackendError::Other`] if the returned secret has an unexpected length.
@@ -721,10 +784,11 @@ pub fn agree(
         BackendError::UnsupportedAlgorithm(format!("PIV defines no key agreement on {curve}"))
     })?;
 
+    let sent = Instant::now();
     match piv::decrypt_data(yk, point.sec1_uncompressed(), card_algorithm, slot) {
         Ok(z) => agreed_secret(z, curve),
         Err(yubikey::Error::GenericError) => Err(refusal(slot_key(yk, slot)?, key_id, curve)),
-        Err(other) => Err(map_error(other)),
+        Err(other) => Err(key_use_error(yk, key_id, sent.elapsed(), other)),
     }
 }
 
@@ -779,9 +843,7 @@ fn slot_key(yk: &mut YubiKey, slot: SlotId) -> Result<SlotKey, BackendError> {
 fn slot_key_unread(error: yubikey::Error) -> Result<SlotKey, BackendError> {
     match error {
         yubikey::Error::NotFound => Ok(SlotKey::Empty),
-        unreachable @ (yubikey::Error::PcscError { .. }
-        | yubikey::Error::AppletError
-        | yubikey::Error::AppletNotFound { .. }) => Err(map_error(unreachable)),
+        unreachable if is_unreachable(&unreachable) => Err(map_error(unreachable)),
         _ => Ok(SlotKey::Unknown),
     }
 }
@@ -896,7 +958,8 @@ fn agreed_secret(z: yubikey::Buffer, curve: EcCurve) -> Result<AgreedSecret, Bac
 ///   not an OAEP encoding. The latter two have the same message;
 /// - [`BackendError::Other`] if the card returns a block longer than the
 ///   modulus;
-/// - [`BackendError::SlotEmpty`], [`BackendError::PinRequired`] and
+/// - [`BackendError::SlotEmpty`], [`BackendError::PinRequired`],
+///   [`BackendError::PresenceNotConfirmed`] and
 ///   [`BackendError::HardwareFailure`] as for [`agree`].
 pub fn decrypt_key(
     yk: &mut YubiKey,
@@ -907,13 +970,14 @@ pub fn decrypt_key(
     let (slot, size) = decryption_slot(key_id, encrypted, protection)?;
     runs_on_firmware(size.key_algorithm(), yk.version())?;
 
+    let sent = Instant::now();
     let block = match piv::decrypt_data(yk, encrypted, card_algorithm(size.key_algorithm())?, slot)
     {
         Ok(block) => block,
         Err(yubikey::Error::GenericError) => {
             return Err(decryption_refusal(slot_key(yk, slot)?, key_id, size));
         }
-        Err(other) => return Err(map_error(other)),
+        Err(other) => return Err(key_use_error(yk, key_id, sent.elapsed(), other)),
     };
     let block = full_length_block(&block, size)?;
     oaep::decode(&block).map_err(|oaep::DecodingError| does_not_decrypt(key_id))
@@ -1570,6 +1634,32 @@ mod tests {
     fn map_error_authentication_error_is_pin_required() {
         assert!(matches!(
             map_error(yubikey::Error::AuthenticationError),
+            BackendError::PinRequired
+        ));
+    }
+
+    /// The card refuses a missing PIN at once: never a touch, and the
+    /// policy is not read.
+    #[test]
+    fn a_prompt_refusal_is_a_missing_pin() {
+        assert!(matches!(
+            authentication_refusal(Duration::from_millis(40), || unreachable!()),
+            BackendError::PinRequired
+        ));
+    }
+
+    #[test]
+    fn a_late_refusal_from_a_key_that_asks_for_a_touch_is_no_touch() {
+        assert!(matches!(
+            authentication_refusal(Duration::from_secs(15), || true),
+            BackendError::PresenceNotConfirmed
+        ));
+    }
+
+    #[test]
+    fn a_late_refusal_from_a_key_without_touch_is_a_missing_pin() {
+        assert!(matches!(
+            authentication_refusal(Duration::from_secs(15), || false),
             BackendError::PinRequired
         ));
     }

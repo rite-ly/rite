@@ -244,18 +244,12 @@ impl Action for IssueCertificateAction {
             )
         })?;
 
-        let backend_name = backend.name().to_string();
-
-        if backend_name != signing_key.backend_name {
-            return Err(ActionError::Failed(format!(
-                "Signing key is on backend '{}', but step backend is '{backend_name}'",
-                signing_key.backend_name
-            )));
-        }
-
-        let sign_backend = backend.as_sign_mut().ok_or_else(|| {
-            ActionError::Failed(format!("Backend '{backend_name}' does not support signing"))
-        })?;
+        let sign_backend = crate::backend::sign_backend(
+            backend,
+            &signing_key,
+            &signing_key_ref.display_name(),
+            reporter,
+        )?;
 
         let signature_bytes = sign_backend.sign(signing_key.key_id, &tbs_der, sign_algorithm)?;
 

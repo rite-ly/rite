@@ -797,6 +797,26 @@ impl AccessPolicy {
         self.authentication.is_none() && self.presence.is_none()
     }
 
+    /// Whether the device asks for a person at it, a touch, before it uses
+    /// the key, at least for some uses.
+    ///
+    /// ```
+    /// use rite_sdk::{AccessPolicy, AccessWhen};
+    ///
+    /// let cached = AccessPolicy { authentication: None, presence: Some(AccessWhen::Cached) };
+    /// assert!(cached.asks_for_presence());
+    /// let never = AccessPolicy { authentication: None, presence: Some(AccessWhen::Never) };
+    /// assert!(!never.asks_for_presence());
+    /// assert!(!AccessPolicy::default().asks_for_presence());
+    /// ```
+    #[must_use]
+    pub const fn asks_for_presence(&self) -> bool {
+        match self.presence {
+            None | Some(AccessWhen::Never) => false,
+            Some(AccessWhen::PerSession | AccessWhen::Cached | AccessWhen::PerUse) => true,
+        }
+    }
+
     /// The value given for `axis`, if any.
     #[must_use]
     pub const fn get(&self, axis: AccessAxis) -> Option<AccessWhen> {

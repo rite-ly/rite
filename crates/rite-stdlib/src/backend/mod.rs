@@ -15,7 +15,26 @@ pub use mock_attestation::MOCK_ATTESTATION_ROOT;
 use std::collections::BTreeMap;
 
 use rite_runtime::BackendFactory;
-use rite_sdk::{BackendConfig, BackendError, KeyAlgorithm, KeyId, Provider};
+use rite_sdk::{BackendConfig, BackendError, CertificateDer, KeyAlgorithm, KeyId, Provider};
+
+/// The roots the mock attests under. A dry run, which puts the mock in place
+/// of every backend, hands them to its steps as rehearsal anchors. Their
+/// private keys are in this repository, so anyone can chain to them.
+#[must_use]
+pub fn rehearsal_anchors() -> Vec<CertificateDer> {
+    #[cfg(feature = "pki")]
+    {
+        // A committed fixture; a test pins that it parses.
+        CertificateDer::new(MOCK_ATTESTATION_ROOT.to_vec())
+            .into_iter()
+            .collect()
+    }
+    // Without `pki` the mock attests nothing.
+    #[cfg(not(feature = "pki"))]
+    {
+        Vec::new()
+    }
+}
 
 /// Refuse a step that runs on `backend` with a key `key_owner` holds.
 ///
@@ -171,5 +190,18 @@ mod tests {
                 .is_some_and(|e| e.to_string() == missing);
             assert_eq!(refused, !is_built(provider), "{provider}");
         }
+    }
+
+    /// The committed root parses, so a dry run never loses its anchor.
+    #[cfg(feature = "pki")]
+    #[test]
+    fn the_mock_root_is_a_rehearsal_anchor() {
+        assert_eq!(
+            rehearsal_anchors()
+                .iter()
+                .map(CertificateDer::as_bytes)
+                .collect::<Vec<_>>(),
+            [MOCK_ATTESTATION_ROOT]
+        );
     }
 }

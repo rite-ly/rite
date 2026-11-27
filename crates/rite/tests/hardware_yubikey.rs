@@ -34,7 +34,7 @@ use openssl::hash::MessageDigest;
 use openssl::pkey::PKey;
 use openssl::rsa::Padding;
 use openssl::sign::{RsaPssSaltlen, Verifier};
-use rite_model::{ArtifactId, MaterialKind};
+use rite_model::{ArtifactId, MaterialKind, MaterialSource};
 use rite_runtime::test_support::StepRunner;
 use rite_runtime::{ArtifactValue, BackendRegistry, ExecutionError, Response};
 use rite_sdk::BackendError;
@@ -220,12 +220,19 @@ materials:
   manifest:
     type: bytes
     path: "manifest.txt"
+  yubico_roots:
+    type: certificates
+    path: "{yubico}/attestation-roots.pem"
+  yubico_intermediates:
+    type: certificates
+    path: "{yubico}/attestation-intermediates.pem"
 sections:
   main:
     role: ${{role.operator}}
     steps:
 {steps}"#,
         serial = card.serial,
+        yubico = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/piv/yubico"),
     )
 }
 
@@ -304,6 +311,24 @@ fn attest(id: &str, key: &str) -> String {
     )
 }
 
+/// A `verify_attestation` step, named `id`, checking what the `attest` step
+/// made for `key` against Yubico's roots, with `require` as its `require:`
+/// entries, already indented.
+fn check_attestation(id: &str, attest: &str, key: &str, require: &str) -> String {
+    format!(
+        r"      {id}:
+        action: verify_attestation
+        reads:
+          attestation: ${{artifact.{attest}_attestation}}
+          key: ${{artifact.{key}}}
+          roots: ${{artifact.yubico_roots}}
+          intermediates: ${{artifact.yubico_intermediates}}
+        with:
+          require:
+{require}"
+    )
+}
+
 /// What a run left: the runner, holding its facts and artifacts, and the
 /// step that ended the run early with its error.
 struct Run {
@@ -349,6 +374,15 @@ fn run(yaml: &str, responses: Vec<Response>) -> Run {
         let artifact = ArtifactId::new(id.as_str());
         match &material.kind {
             MaterialKind::BackendKey(key) => runner.add_held_key(artifact, key.clone()),
+            // A file the repository holds, such as Yubico's roots, loads as
+            // a run loads it; any other file is the manifest.
+            MaterialKind::File {
+                kind,
+                source: Some(MaterialSource::File { file }),
+            } if file.exists() => runner.add_material(
+                artifact,
+                rite_runtime::file_material(*kind, std::fs::read(file).unwrap()).unwrap(),
+            ),
             _ => runner.add_material(artifact, ArtifactValue::Bytes(MANIFEST.to_vec())),
         }
     }
@@ -1024,4 +1058,74 @@ fn the_card_refuses_to_attest_an_imported_key() {
     };
     assert_eq!(step, "attest");
     assert!(error.to_string().contains("imported key"), "{error}");
+}
+
+/// The card's attestation verifies against Yubico's roots: the chain reaches
+/// a root, the attested key is 9C's, and 9C's default PIN policy is stated.
+/// The record names the root that matched and never the card's serial.
+#[test]
+#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
+fn the_card_attestation_verifies_against_yubicos_roots() {
+    let Some((_turn, card)) = card() else { return };
+    let serial = &card.serial;
+    let steps = [
+        attest("attest", "signing_key"),
+        check_attestation(
+            "check",
+            "attest",
+            "signing_key",
+            &format!("            authentication: [per_use]\n            serial: {serial}\n"),
+        ),
+    ]
+    .concat();
+    let run = run(&ceremony(card, "", &steps), vec![]);
+    run.completed();
+    let [fact] = run.facts_of("key_attested").try_into().unwrap();
+    assert_eq!(fact["anchor"], "trusted");
+    let chain = fact["chain"].as_array().unwrap();
+    let roots = fact["roots"].as_array().unwrap();
+    assert!(
+        chain.len() >= 3 && roots.contains(chain.last().unwrap()),
+        "the chain does not end at one of Yubico's roots: {fact}"
+    );
+    assert_eq!(fact["claims"]["origin"], "generated");
+    assert_eq!(fact["claims"]["authentication"], "per_use");
+    assert!(
+        fact["requirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|requirement| requirement["met"] == true),
+        "{fact}"
+    );
+    assert!(
+        !fact.to_string().contains(serial.as_str()),
+        "the record holds the card's serial: {fact}"
+    );
+}
+
+/// A policy the card does not state fails the check, after the record: 9C's
+/// key needs no touch.
+#[test]
+#[ignore = "needs a YubiKey kept for testing; see the module documentation"]
+fn a_policy_the_card_does_not_state_fails_the_check() {
+    let Some((_turn, card)) = card() else { return };
+    let steps = [
+        attest("attest", "signing_key"),
+        check_attestation(
+            "check",
+            "attest",
+            "signing_key",
+            "            presence: [per_use, cached]\n",
+        ),
+    ]
+    .concat();
+    let run = run(&ceremony(card, "", &steps), vec![Response::Bool(false)]);
+    let Some((step, error)) = &run.stopped else {
+        panic!("a touch policy the card does not state passed");
+    };
+    assert_eq!(step, "check");
+    assert!(error.to_string().contains("presence is never"), "{error}");
+    let [fact] = run.facts_of("key_attested").try_into().unwrap();
+    assert_eq!(fact["requirements"][0]["met"], false);
 }

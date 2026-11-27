@@ -232,6 +232,9 @@ pub fn file_material(kind: FileKind, bytes: Vec<u8>) -> Result<ArtifactValue, St
         FileKind::Attestation => ArtifactValue::Attestation(
             Attestation::from_key_material(&bytes).map_err(|e| e.to_string())?,
         ),
+        FileKind::Certificates => ArtifactValue::Certificates(
+            CertificateDer::list_from_key_material(&bytes).map_err(|e| e.to_string())?,
+        ),
         FileKind::Csr => {
             csr_from_file(&bytes).map_err(|e| e.to_string())?;
             ArtifactValue::Bytes(bytes)

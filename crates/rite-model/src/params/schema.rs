@@ -20,7 +20,8 @@ use super::{
     ConfirmParams, EncryptDataParams, EnterShareParams, EntryParams, GatherEntropyParams,
     GenerateCsrParams, GenerateKeyParams, ImportKeyParams, IssueCertificateParams,
     MachineInfoParams, OralReadbackParams, PivReadCertificateParams, RevealParams, SignDataParams,
-    SplitSecretParams, UnwrapKeyParams, VerifySignatureParams, WrapKeyParams,
+    SplitSecretParams, UnwrapKeyParams, VerifyAttestationParams, VerifySignatureParams,
+    WrapKeyParams,
 };
 use crate::{ActionType, Format};
 
@@ -105,6 +106,7 @@ impl ActionType {
             ActionType::SignData => generator.subschema_for::<SignDataParams>(),
             ActionType::VerifySignature => generator.subschema_for::<VerifySignatureParams>(),
             ActionType::AttestKey => generator.subschema_for::<AttestKeyParams>(),
+            ActionType::VerifyAttestation => generator.subschema_for::<VerifyAttestationParams>(),
             ActionType::Attest => generator.subschema_for::<AttestParams>(),
             ActionType::GatherEntropy => generator.subschema_for::<GatherEntropyParams>(),
             ActionType::PivReadCertificate => generator.subschema_for::<PivReadCertificateParams>(),

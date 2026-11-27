@@ -80,6 +80,7 @@ pub(crate) fn resolve_ceremony(
     ctx.check_admin_steps(&execution_plan, &ceremony.backends);
     ctx.check_access_policies(&execution_plan, &ceremony.backends);
     ctx.check_attesting_backends(&execution_plan, &ceremony.backends);
+    ctx.check_attestations_verified(&execution_plan);
     ctx.validate_output_kinds(&execution_plan);
     ctx.validate_input_kinds(&execution_plan);
 
@@ -1343,6 +1344,33 @@ impl ResolveContext {
                     step: step.id.clone(),
                     backend: backend.to_string(),
                     provider: config.provider,
+                });
+            }
+        }
+    }
+
+    /// Warn about an attestation a step creates and no `verify_attestation`
+    /// step checks.
+    fn check_attestations_verified(&mut self, execution_plan: &[Step]) {
+        let verified: HashSet<&ArtifactId> = execution_plan
+            .iter()
+            .filter(|step| step.action == ActionType::VerifyAttestation)
+            .filter_map(|step| match step.reads_resolved.as_ref()? {
+                StepInputs::Named(inputs) => match inputs.get("attestation")? {
+                    NamedInput::One(ArtifactRef::Produced { id, .. }) => Some(id),
+                    _ => None,
+                },
+                StepInputs::Single(_) => None,
+            })
+            .collect();
+        for step in execution_plan {
+            if step.action == ActionType::AttestKey
+                && let Some(created) = &step.creates
+                && !verified.contains(created)
+            {
+                self.warnings.push(ResolveWarning::AttestationNotVerified {
+                    step: step.id.clone(),
+                    attestation: created.clone(),
                 });
             }
         }

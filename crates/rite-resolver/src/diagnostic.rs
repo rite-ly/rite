@@ -517,7 +517,8 @@ impl SpanMap {
             ResolveWarning::UnknownRoleInInputs { role } => self.roles.get(role).copied(),
             ResolveWarning::UnusedBackend { step }
             | ResolveWarning::HeldKeyWithoutPin { step, .. }
-            | ResolveWarning::PinSpentBySlot { step, .. } => self.steps.get(step).copied(),
+            | ResolveWarning::PinSpentBySlot { step, .. }
+            | ResolveWarning::AttestationNotVerified { step, .. } => self.steps.get(step).copied(),
         }
     }
 }

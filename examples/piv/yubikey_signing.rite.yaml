@@ -2,8 +2,9 @@ version: "0.3"
 name: "Release Signing with YubiKey PIV"
 description: |
   Sign a release manifest with the PIV key in slot 9C. Read its certificate,
-  ask the YubiKey to attest the key, enter the PIN, produce a detached
-  signature, and check it off the card.
+  ask the YubiKey to attest the key and check the attestation against
+  Yubico's roots, enter the PIN, produce a detached signature, and check it
+  off the card.
 
 backends:
   token:
@@ -38,6 +39,17 @@ materials:
     type: bytes
     path: "test_data/release_manifest.txt"
     description: "Release manifest to be signed."
+  # Yubico's published roots. See docs/yubikey.md for the firmware versions
+  # each root covers. A dry run also trusts its mock's rehearsal root.
+  yubico_roots:
+    type: certificates
+    path: "yubico/attestation-roots.pem"
+    description: "Yubico's attestation roots, the only trust anchors of the check."
+  # Untrusted certificates that may help build a chain to a named root.
+  yubico_intermediates:
+    type: certificates
+    path: "yubico/attestation-intermediates.pem"
+    description: "Yubico's attestation intermediates, as Yubico publishes them."
 
 output:
   signing_cert:
@@ -110,6 +122,18 @@ sections:
           key: "${artifact.signing_key}"
         creates: signing_key_attestation
         description: "Ask the card for its signed statement that it generated the slot 9C key."
+      # Check the chain and key, and require the PIN policy used by slot 9C.
+      check_attestation:
+        action: verify_attestation
+        reads:
+          attestation: "${artifact.signing_key_attestation}"
+          key: "${artifact.signing_key}"
+          roots: "${artifact.yubico_roots}"
+          intermediates: "${artifact.yubico_intermediates}"
+        with:
+          require:
+            authentication: [per_use]
+        description: "Check the attestation against Yubico's roots and the signing key."
 
   sign:
     act: signing

@@ -1702,6 +1702,57 @@ sections:
             assert_eq!(messages(&mock), Vec::<String>::new());
         }
 
+        /// The ceremony attesting `signing_key`, with `roots` declared as a
+        /// material of `roots_type`.
+        fn attested(roots_type: &str) -> String {
+            replaced(
+                &(ceremony(DECLARED, "        backend: token") + &attest_step("attest", "token")),
+                "materials:\n",
+                &format!("materials:\n  roots:\n    type: {roots_type}\n    path: \"roots.pem\"\n"),
+            )
+        }
+
+        /// A `verify_attestation` step checking what `attest` made.
+        const VERIFY: &str = "      check:\n        action: verify_attestation\n        reads:\n \
+                              \x20         attestation: \"${artifact.attest_attestation}\"\n \
+                              \x20         key: \"${artifact.signing_key}\"\n \
+                              \x20         roots: \"${artifact.roots}\"\n        with:\n \
+                              \x20         require:\n            authentication: [per_use]\n";
+
+        fn unverified_warnings(yaml: &str) -> Vec<String> {
+            resolve(yaml, None)
+                .warnings
+                .iter()
+                .map(ToString::to_string)
+                .filter(|warning| warning.contains("'verify_attestation'"))
+                .collect()
+        }
+
+        /// An attestation is a claim until a step checks it.
+        #[test]
+        fn an_attestation_no_step_verifies_is_warned() {
+            let unchecked = attested("certificates");
+            let [warning] = unverified_warnings(&unchecked).try_into().unwrap();
+            assert!(
+                warning.contains("'attest'") && warning.contains("'attest_attestation'"),
+                "{warning}"
+            );
+            let checked = unchecked + VERIFY;
+            assert_eq!(messages(&checked), Vec::<String>::new());
+            assert_eq!(unverified_warnings(&checked), Vec::<String>::new());
+        }
+
+        /// Roots are certificates, one or several, and nothing else.
+        #[test]
+        fn verify_attestation_takes_certificates_as_roots() {
+            assert_eq!(
+                messages(&(attested("certificate") + VERIFY)),
+                Vec::<String>::new()
+            );
+            let bytes = messages(&(attested("bytes") + VERIFY));
+            assert!(bytes.iter().any(|m| m.contains("'roots'")), "{bytes:?}");
+        }
+
         /// A key a step makes on the card, then signs with.
         const MADE_ON_CARD: &str = r#"
 version: "0.3"

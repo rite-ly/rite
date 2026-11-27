@@ -574,6 +574,139 @@ pub fn compile_pattern(pattern: &str) -> Result<regex_lite::Regex, String> {
         .map_err(|e| format!("invalid pattern '{pattern}': {e}"))
 }
 
+/// The trust anchor used by an attestation check, in
+/// [`StepFact::KeyAttested`].
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(
+    test,
+    schemars(description = "The trust anchor used by an attestation check.")
+)]
+pub enum AttestationAnchor {
+    /// A root named by the ceremony.
+    Trusted,
+    /// The mock root trusted during a dry run; its requirements decide nothing.
+    Rehearsal,
+}
+
+/// Claims read from an attestation, in [`StepFact::KeyAttested`]. A claim
+/// the attestation does not make is absent.
+#[non_exhaustive]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    test,
+    schemars(
+        description = "Claims read from an attestation. A claim the attestation does not make \
+        is absent."
+    )
+)]
+pub struct AttestedClaimsRecord {
+    /// Where the key was made.
+    #[cfg_attr(
+        test,
+        schemars(description = "Where the key was made, as stated by the attestation.")
+    )]
+    pub origin: rite_sdk::AttestedOrigin,
+    /// The authentication policy stated.
+    #[cfg_attr(
+        test,
+        schemars(description = "The authentication policy stated by the attestation, if present.")
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authentication: Option<String>,
+    /// The presence policy stated.
+    #[cfg_attr(
+        test,
+        schemars(description = "The presence policy stated by the attestation, if present.")
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence: Option<String>,
+    /// The firmware version stated.
+    #[cfg_attr(
+        test,
+        schemars(description = "The firmware version stated by the attestation, if present.")
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firmware: Option<String>,
+    /// The form factor stated.
+    #[cfg_attr(
+        test,
+        schemars(description = "The form factor stated by the attestation, if present.")
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form_factor: Option<String>,
+    /// Certifications stated.
+    #[cfg_attr(
+        test,
+        schemars(description = "Certifications stated by the attestation.")
+    )]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub certifications: Vec<String>,
+}
+
+/// A requirement and whether the attested claim met it, in
+/// [`StepFact::KeyAttested`].
+#[non_exhaustive]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    test,
+    schemars(description = "A requirement and whether the attested claim met it.")
+)]
+pub struct RequirementRecord {
+    /// The claim required.
+    #[cfg_attr(test, schemars(description = "The claim required."))]
+    pub claim: String,
+    /// Values accepted by the requirement.
+    #[cfg_attr(test, schemars(description = "Values accepted by the requirement."))]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted: Vec<String>,
+    /// The value stated, if recorded.
+    #[cfg_attr(
+        test,
+        schemars(description = "The value stated by the attestation, if recorded.")
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<String>,
+    /// Whether the requirement was met.
+    #[cfg_attr(test, schemars(description = "Whether the requirement was met."))]
+    pub met: bool,
+}
+
+impl AttestedClaimsRecord {
+    /// The record of `claims`, without the serial.
+    #[must_use]
+    pub fn of(claims: &rite_sdk::AttestedClaims) -> Self {
+        Self {
+            origin: claims.origin,
+            authentication: claims.authentication.map(|value| value.to_string()),
+            presence: claims.presence.map(|value| value.to_string()),
+            firmware: claims.firmware.map(|value| value.to_string()),
+            form_factor: claims.form_factor.map(|value| value.to_string()),
+            certifications: claims
+                .certifications
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        }
+    }
+}
+
+impl RequirementRecord {
+    /// A requirement on `claim`, accepting `accepted`, met or not.
+    #[must_use]
+    pub fn new(claim: &str, accepted: Vec<String>, observed: Option<String>, met: bool) -> Self {
+        Self {
+            claim: claim.to_string(),
+            accepted,
+            observed,
+            met,
+        }
+    }
+}
+
 /// Request for user input, recorded into the transcript as part of
 /// [`StepFact::PromptAnswered`].
 #[non_exhaustive]
@@ -1415,6 +1548,99 @@ pub enum StepFact {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         named_by: Option<rite_sdk::cms::RecipientName>,
     },
+    /// A key attestation was checked: its chain to a root the ceremony
+    /// names, the key it attests, and its claims against what the step
+    /// requires.
+    ///
+    /// Public: it names certificates and a key, and states the device's
+    /// claims about the key. The device's serial is not among them, since it
+    /// links every ceremony made with the card; only whether a required
+    /// serial matched.
+    #[cfg_attr(
+        test,
+        schemars(
+            description = "An attestation was checked against the roots named by the ceremony."
+        )
+    )]
+    KeyAttested {
+        /// The step that checked it.
+        #[cfg_attr(test, schemars(description = "The step that checked the attestation."))]
+        step: StepId,
+        /// The attestation, by its name in the ceremony.
+        #[cfg_attr(
+            test,
+            schemars(description = "The attestation's name in the ceremony.")
+        )]
+        attestation: String,
+        /// The attestation's format.
+        #[cfg_attr(test, schemars(description = "The attestation format."))]
+        format: String,
+        /// The SHA-256 of the attestation as a PEM bundle, leaf first: the file
+        /// a step writes it as.
+        #[cfg_attr(
+            test,
+            schemars(
+                description = "The SHA-256 digest of the attestation bundle as PEM.",
+                with = "Sha256Digest"
+            )
+        )]
+        digest: Sha256Digest,
+        /// The key the attestation was found to attest.
+        #[cfg_attr(
+            test,
+            schemars(
+                description = "The SHA-256 digest of the attested public key as DER-encoded \
+                SubjectPublicKeyInfo.",
+                with = "Sha256Digest"
+            )
+        )]
+        key: rite_sdk::KeyFingerprint,
+        /// The chain the check built, leaf first, the matching root last.
+        #[cfg_attr(
+            test,
+            schemars(
+                description = "SHA-256 digests of the built chain certificates, leaf first and \
+                matching root last.",
+                with = "Vec<Sha256Digest>"
+            )
+        )]
+        chain: Vec<rite_sdk::CertificateFingerprint>,
+        /// Every root the step offered as a trust anchor.
+        #[cfg_attr(
+            test,
+            schemars(
+                description = "SHA-256 digests of the roots offered as trust anchors.",
+                with = "Vec<Sha256Digest>"
+            )
+        )]
+        roots: Vec<rite_sdk::CertificateFingerprint>,
+        /// The instant the chain was checked at, so a later check can use it.
+        #[cfg_attr(
+            test,
+            schemars(description = "The instant the chain was checked, in UTC.")
+        )]
+        checked_at: String,
+        /// What checked the chain, and how.
+        #[cfg_attr(
+            test,
+            schemars(description = "The library and settings used to check the chain.")
+        )]
+        verifier: String,
+        /// What the matching root is: one the ceremony trusts, or the
+        /// rehearsal root a dry run adds. The requirements decide the step
+        /// only for the first.
+        #[cfg_attr(test, schemars(description = "The trust anchor used by the check."))]
+        anchor: AttestationAnchor,
+        /// The claims, as stated.
+        #[cfg_attr(test, schemars(description = "Claims read from the attestation."))]
+        claims: Box<AttestedClaimsRecord>,
+        /// Each requirement of the step, with what was observed.
+        #[cfg_attr(
+            test,
+            schemars(description = "The step's requirements and whether each was met.")
+        )]
+        requirements: Vec<RequirementRecord>,
+    },
     /// A human attestation was recorded.
     #[cfg_attr(test, schemars(description = "A person made an attestation."))]
     AttestationRecorded {
@@ -1695,6 +1921,7 @@ pub const FACT_TYPES: &[&str] = &[
     "prompt_answered",
     "backend_operation",
     "wrap_recipient_recorded",
+    "key_attested",
     "attestation_recorded",
     "artifact_written",
     "deviation_recorded",
@@ -1730,6 +1957,8 @@ impl StepFact {
             // A key id and a public-key fingerprint, as a backend operation
             // records for a generated key.
             | StepFact::KeyBound { .. }
+            // Certificates, a key and the device's claims, never its serial.
+            | StepFact::KeyAttested { .. }
             | StepFact::ArtifactWritten { .. }
             | StepFact::AttestationRecorded { .. }
             | StepFact::StepCompleted { .. }
@@ -1791,6 +2020,8 @@ impl StepFact {
             | StepFact::PromptAnswered { .. }
             // Records an input the step read, not work it performed.
             | StepFact::WrapRecipientRecorded { .. }
+            // A check over evidence already held; repeating it changes nothing.
+            | StepFact::KeyAttested { .. }
             | StepFact::DeviationRecorded { .. }
             | StepFact::StepAttemptFailed { .. }
             | StepFact::StepCompleted { .. }
@@ -2501,6 +2732,73 @@ mod schema_snapshot_tests {
                 "source": "escrow_pubkey",
                 "fingerprint": fingerprint.to_string(),
                 "declared": true,
+            }),
+        );
+    }
+
+    #[test]
+    fn key_attested() {
+        let key: rite_sdk::KeyFingerprint =
+            Sha256Digest::of(b"card spki").as_str().parse().unwrap();
+        let [leaf, device, root] =
+            [b"leaf".as_slice(), b"f9", b"root"].map(rite_sdk::CertificateFingerprint::of_der);
+        assert_json(
+            &StepFact::KeyAttested {
+                step: StepId::new("s1"),
+                attestation: "signing_key_attestation".to_string(),
+                format: "yubico-piv/v1".to_string(),
+                digest: Sha256Digest::of(b"bundle"),
+                key,
+                chain: vec![leaf, device, root],
+                roots: vec![root],
+                checked_at: "2026-11-26T10:00:00Z".to_string(),
+                verifier: "OpenSSL 3.6.0".to_string(),
+                anchor: AttestationAnchor::Trusted,
+                claims: Box::new(AttestedClaimsRecord {
+                    origin: rite_sdk::AttestedOrigin::Generated,
+                    authentication: Some("per_use".to_string()),
+                    presence: Some("cached".to_string()),
+                    firmware: Some("5.7.1".to_string()),
+                    form_factor: None,
+                    certifications: Vec::new(),
+                }),
+                requirements: vec![
+                    RequirementRecord::new(
+                        "authentication",
+                        vec!["per_use".to_string()],
+                        Some("per_use".to_string()),
+                        true,
+                    ),
+                    RequirementRecord::new("serial", Vec::new(), None, true),
+                ],
+            },
+            &json!({
+                "type": "key_attested",
+                "step": "s1",
+                "attestation": "signing_key_attestation",
+                "format": "yubico-piv/v1",
+                "digest": Sha256Digest::of(b"bundle").as_str(),
+                "key": key.to_string(),
+                "chain": [leaf.to_string(), device.to_string(), root.to_string()],
+                "roots": [root.to_string()],
+                "checked_at": "2026-11-26T10:00:00Z",
+                "verifier": "OpenSSL 3.6.0",
+                "anchor": "trusted",
+                "claims": {
+                    "origin": "generated",
+                    "authentication": "per_use",
+                    "presence": "cached",
+                    "firmware": "5.7.1",
+                },
+                "requirements": [
+                    {
+                        "claim": "authentication",
+                        "accepted": ["per_use"],
+                        "observed": "per_use",
+                        "met": true,
+                    },
+                    {"claim": "serial", "met": true},
+                ],
             }),
         );
     }

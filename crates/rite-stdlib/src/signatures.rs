@@ -138,6 +138,10 @@ pub fn resolve_public_key<S: BuildHasher>(
             "artifact '{artifact_id}' is an attestation, not a public key; name the key it \
              attests"
         ))),
+        ArtifactValue::Certificates(_) => Err(BackendError::InvalidKeyFormat(format!(
+            "artifact '{artifact_id}' is several certificates, not a public key; name one \
+             certificate"
+        ))),
         ArtifactValue::Signature(_) => Err(BackendError::InvalidKeyFormat(format!(
             "artifact '{artifact_id}' is a signature, not a public key"
         ))),
@@ -203,6 +207,9 @@ pub fn resolve_certificate<S: BuildHasher>(
         ArtifactValue::Attestation(_) => Err(BackendError::InvalidKeyFormat(format!(
             "artifact '{artifact_id}' is an attestation, a chain of certificates, not one \
              certificate"
+        ))),
+        ArtifactValue::Certificates(_) => Err(BackendError::InvalidKeyFormat(format!(
+            "artifact '{artifact_id}' is several certificates, not one"
         ))),
         ArtifactValue::Signature(_) => Err(BackendError::InvalidKeyFormat(format!(
             "artifact '{artifact_id}' is a signature, not a certificate"

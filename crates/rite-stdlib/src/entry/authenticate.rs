@@ -512,6 +512,7 @@ mod tests {
             roles: &roles,
             materials: &materials,
             credentials: &credentials,
+            rehearsal_anchors: &[],
         };
         let mut inputs = HashMap::from([(
             "credential".to_string(),

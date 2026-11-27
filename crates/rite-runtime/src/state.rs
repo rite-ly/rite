@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use rite_model::{
     ArtifactId, Credential, CredentialId, HeldKey, MaterialId, ParamId, RoleId, StepOutcome,
 };
+use rite_sdk::CertificateDer;
 
 use crate::actions::ArtifactValue;
 
@@ -46,6 +47,9 @@ pub struct ExecutionState {
     pub held_keys: HashMap<ArtifactId, HeldKey>,
     /// Credentials the backends have, as the ceremony declares them.
     pub credentials: HashMap<CredentialId, Credential>,
+    /// Roots the substituted backends of a dry run attest under; empty in a
+    /// real run. See [`HandlerContext::rehearsal_anchors`].
+    pub rehearsal_anchors: Vec<CertificateDer>,
 }
 
 fn resolve_role_in(roles: &HashMap<RoleId, String>, role_id: &RoleId) -> String {
@@ -72,6 +76,7 @@ impl ExecutionState {
             artifacts: HashMap::new(),
             held_keys: HashMap::new(),
             credentials: HashMap::new(),
+            rehearsal_anchors: Vec::new(),
         }
     }
 
@@ -84,6 +89,7 @@ impl ExecutionState {
             roles: &self.roles,
             materials: &self.materials,
             credentials: &self.credentials,
+            rehearsal_anchors: &self.rehearsal_anchors,
         }
     }
 
@@ -117,6 +123,11 @@ pub struct HandlerContext<'a> {
     pub materials: &'a HashMap<MaterialId, String>,
     /// Credentials the backends have, as the ceremony declares them.
     pub credentials: &'a HashMap<CredentialId, Credential>,
+    /// Roots the substituted backends of a dry run attest under, which a
+    /// step that checks attestations also trusts; empty in a real run. A step
+    /// learns what the substitutes need from it, never whether the run is a
+    /// rehearsal, so it cannot behave differently in one otherwise.
+    pub rehearsal_anchors: &'a [CertificateDer],
 }
 
 impl HandlerContext<'_> {
@@ -214,6 +225,7 @@ mod tests {
             artifacts,
             held_keys: HashMap::new(),
             credentials: HashMap::new(),
+            rehearsal_anchors: Vec::new(),
         };
 
         let ctx = state.handler_context();

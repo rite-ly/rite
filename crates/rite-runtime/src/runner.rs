@@ -348,6 +348,7 @@ pub struct Executor {
     startup: StartupSnapshot,
     host: RunHost,
     clock: Arc<dyn Clock>,
+    rehearsal_anchors: Vec<rite_sdk::CertificateDer>,
 }
 
 impl Executor {
@@ -377,6 +378,7 @@ impl Executor {
             startup,
             host,
             clock: Arc::new(SystemClock),
+            rehearsal_anchors: Vec::new(),
         }
     }
 
@@ -385,6 +387,15 @@ impl Executor {
     #[must_use]
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
+        self
+    }
+
+    /// The roots the substituted backends of a dry run attest under, for the
+    /// steps that check attestations. Ignored outside a dry run, so a real
+    /// run never trusts them.
+    #[must_use]
+    pub fn with_rehearsal_anchors(mut self, anchors: Vec<rite_sdk::CertificateDer>) -> Self {
+        self.rehearsal_anchors = anchors;
         self
     }
 
@@ -620,6 +631,9 @@ impl Executor {
         *opened = true;
 
         let mut state = ExecutionState::new(resolved_params, roles, materials_map, dry_run);
+        if dry_run {
+            state.rehearsal_anchors.clone_from(&self.rehearsal_anchors);
+        }
         state.credentials = self
             .ceremony
             .credentials
@@ -821,6 +835,7 @@ fn record_now(
 fn artifact_level(kind: FileKind) -> Level {
     match kind {
         FileKind::Certificate
+        | FileKind::Certificates
         | FileKind::PublicKey
         | FileKind::Csr
         | FileKind::Attestation
@@ -841,9 +856,11 @@ fn artifact_level(kind: FileKind) -> Level {
 /// has no digest at all.
 fn material_digest_level(kind: FileKind) -> Level {
     match kind {
-        FileKind::Certificate | FileKind::PublicKey | FileKind::Csr | FileKind::Attestation => {
-            artifact_level(kind)
-        }
+        FileKind::Certificate
+        | FileKind::Certificates
+        | FileKind::PublicKey
+        | FileKind::Csr
+        | FileKind::Attestation => artifact_level(kind),
         FileKind::Bytes
         | FileKind::Text
         | FileKind::Signature

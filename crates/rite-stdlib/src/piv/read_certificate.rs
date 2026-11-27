@@ -125,6 +125,7 @@ mod tests {
             roles: &roles,
             materials: &materials,
             credentials: &HashMap::new(),
+            rehearsal_anchors: &[],
         };
         let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
 
@@ -172,6 +173,7 @@ mod tests {
             roles: &roles,
             materials: &materials,
             credentials: &HashMap::new(),
+            rehearsal_anchors: &[],
         };
         let mut backend = MockBackend::new("mock".to_string(), "seed".to_string());
 

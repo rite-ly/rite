@@ -19,7 +19,8 @@
 //! # Features
 //!
 //! - `verification`: verification actions (requires `subtle`, `sysinfo`)
-//! - `attestation`: the `attest` statement and `attest_key`
+//! - `attestation`: the `attest` statement, `attest_key`, and with `openssl`
+//!   `verify_attestation`
 //! - `crypto`: crypto actions (`generate_key`, `export_public`, `wrap_key`, `unwrap_key`,
 //!   `sign_data`, `verify_signature`)
 //! - `pki`: PKI actions (`generate_csr`, `issue_certificate`; requires `x509-cert`, `signature`)
@@ -65,8 +66,12 @@ use std::sync::Arc;
 
 use rite_runtime::{ActionRegistry, BackendFactory};
 
-pub use backend::{MockBackend, create_backend, default_backend_factory, is_built};
+pub use backend::{
+    MockBackend, create_backend, default_backend_factory, is_built, rehearsal_anchors,
+};
 
+#[cfg(all(feature = "attestation", feature = "openssl"))]
+pub use attestation::VerifyAttestationAction;
 #[cfg(feature = "attestation")]
 pub use attestation::{AttestAction, AttestKeyAction};
 #[cfg(feature = "crypto")]
@@ -112,6 +117,8 @@ pub fn register_stdlib(registry: &mut ActionRegistry) {
     {
         registry.register(Arc::new(AttestAction));
         registry.register(Arc::new(AttestKeyAction));
+        #[cfg(feature = "openssl")]
+        registry.register(Arc::new(VerifyAttestationAction));
     }
 
     // Human-entropy gathering and typed entry have no optional dependencies,

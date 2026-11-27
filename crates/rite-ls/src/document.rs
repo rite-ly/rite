@@ -1,5 +1,6 @@
 //! Per-document state: text content and analysis results.
 
+use crate::convert::LineIndex;
 use rite_model::Ceremony;
 use rite_resolver::SpanMap;
 
@@ -12,4 +13,11 @@ pub struct DocumentAnalysis {
     /// Resolved ceremony from the last successful analysis, used for hover content.
     /// `None` if the ceremony has parse or resolution errors.
     pub resolved: Option<Ceremony>,
+}
+
+impl DocumentAnalysis {
+    /// The text's lines, to convert positions to and from the client's.
+    pub fn lines(&self) -> LineIndex<'_> {
+        LineIndex::new(&self.text)
+    }
 }

@@ -8,10 +8,11 @@
 //! Field names, and the values of a field that takes one from a list, such
 //! as `action:`, come from the schema: see [`crate::fields`].
 
+use crate::convert::LineIndex;
 use rite_model::{ActId, Ceremony, RoleId, SectionId};
 use rite_resolver::SpanMap;
 use tower_lsp_server::ls_types::{
-    CompletionItem, CompletionItemKind, CompletionTextEdit, Position, Range, TextEdit,
+    CompletionItem, CompletionItemKind, CompletionTextEdit, Range, TextEdit,
 };
 
 /// Context detected from the line at the cursor position.
@@ -93,6 +94,7 @@ pub fn detect_context(line: &str, col: usize, cursor_line: u32) -> Option<Comple
 /// Build completion items for the detected context.
 pub fn completions_for(
     ctx: CompletionContext,
+    lines: &LineIndex,
     span_map: &SpanMap,
     resolved: Option<&Ceremony>,
 ) -> Vec<CompletionItem> {
@@ -102,7 +104,7 @@ pub fn completions_for(
             dollar_col,
             cursor_col,
             cursor_line,
-        } => expression_completions(&typed, dollar_col, cursor_col, cursor_line, span_map),
+        } => expression_completions(&typed, lines, dollar_col, cursor_col, cursor_line, span_map),
         CompletionContext::SectionRef { typed } => {
             declaration_completions(span_map.sections.keys().map(SectionId::as_str), &typed)
         }
@@ -157,6 +159,7 @@ fn declaration_completions<'a>(
 
 fn expression_completions(
     typed: &str,
+    lines: &LineIndex,
     dollar_col: usize,
     cursor_col: usize,
     cursor_line: u32,
@@ -187,15 +190,10 @@ fn expression_completions(
     // filtering against item labels like "role.operator", while new_text
     // inserts the completion with a closing `}` (the `${` already in the doc
     // is left untouched).
+    let line = cursor_line as usize;
     let replace_range = Range {
-        start: Position {
-            line: cursor_line,
-            character: crate::convert::to_u32(dollar_col.saturating_add(2)),
-        },
-        end: Position {
-            line: cursor_line,
-            character: crate::convert::to_u32(cursor_col),
-        },
+        start: lines.position(line, dollar_col.saturating_add(2)),
+        end: lines.position(line, cursor_col),
     };
 
     candidates
@@ -360,6 +358,7 @@ mod tests {
             CompletionContext::RetryRef {
                 typed: String::new(),
             },
+            &LineIndex::new(""),
             &SpanMap::default(),
             None,
         );
@@ -370,6 +369,7 @@ mod tests {
     fn retry_filters_by_typed_prefix() {
         let items = completions_for(
             CompletionContext::RetryRef { typed: "ne".into() },
+            &LineIndex::new(""),
             &SpanMap::default(),
             None,
         );
@@ -394,7 +394,7 @@ mod tests {
             cursor_col: 10,
             cursor_line: 0,
         };
-        let items = completions_for(ctx, &map, None);
+        let items = completions_for(ctx, &LineIndex::new(""), &map, None);
         assert_eq!(
             sorted_labels(&items),
             [
@@ -417,7 +417,7 @@ mod tests {
             cursor_col: 15,
             cursor_line: 0,
         };
-        let items = completions_for(ctx, &map, None);
+        let items = completions_for(ctx, &LineIndex::new(""), &map, None);
         assert_eq!(sorted_labels(&items), ["role.operator", "role.witness"]);
     }
 
@@ -431,7 +431,7 @@ mod tests {
             cursor_col: 11,
             cursor_line: 0,
         };
-        let items = completions_for(ctx, &map, None);
+        let items = completions_for(ctx, &LineIndex::new(""), &map, None);
         assert_eq!(sorted_labels(&items), ["param.threshold"]);
     }
 
@@ -444,7 +444,7 @@ mod tests {
             cursor_col: 17,
             cursor_line: 0,
         };
-        let items = completions_for(ctx, &map, None);
+        let items = completions_for(ctx, &LineIndex::new(""), &map, None);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].label, "role.operator");
     }
@@ -458,7 +458,7 @@ mod tests {
             cursor_col: 11,
             cursor_line: 0,
         };
-        assert!(completions_for(ctx, &map, None).is_empty());
+        assert!(completions_for(ctx, &LineIndex::new(""), &map, None).is_empty());
     }
 
     #[test]
@@ -471,12 +471,23 @@ mod tests {
             cursor_col: 15,
             cursor_line: 3,
         };
-        let items = completions_for(ctx, &map, None);
+        let items = completions_for(ctx, &LineIndex::new(""), &map, None);
         assert_eq!(items.len(), 1);
         let edit = get_text_edit(&items[0]);
         assert_eq!(edit.range.start.line, 3);
         assert_eq!(edit.range.start.character, 10); // dollar_col + 2
         assert_eq!(edit.range.end.character, 15); // cursor_col
+    }
+
+    #[test]
+    fn the_replace_range_after_an_emoji_counts_utf16_units() {
+        // `🔑` is one character and two UTF-16 units.
+        let line = r#"  label: "🔑 ${role.op"#;
+        let map = span_map_roles(&["operator"]);
+        let ctx = detect_context(line, line.chars().count(), 0).expect("an expression");
+        let items = completions_for(ctx, &LineIndex::new(line), &map, None);
+        let range = get_text_edit(&items[0]).range;
+        assert_eq!((range.start.character, range.end.character), (15, 22));
     }
 
     #[test]
@@ -489,7 +500,7 @@ mod tests {
             cursor_col: 10,
             cursor_line: 0,
         };
-        let items = completions_for(ctx, &map, None);
+        let items = completions_for(ctx, &LineIndex::new(""), &map, None);
         assert_eq!(items.len(), 1);
         assert_eq!(get_text_edit(&items[0]).new_text, "role.operator}");
     }
@@ -503,7 +514,7 @@ mod tests {
             cursor_col: 2,
             cursor_line: 0,
         };
-        for item in completions_for(ctx, &map, None) {
+        for item in completions_for(ctx, &LineIndex::new(""), &map, None) {
             assert_eq!(item.kind, Some(CompletionItemKind::REFERENCE));
         }
     }

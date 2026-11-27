@@ -1,8 +1,8 @@
 //! LSP server implementation for the Rite ceremony DSL.
 
 use crate::{
-    complete, convert, document::DocumentAnalysis, fields, goto, hover, inlay_hints, references,
-    semantic_tokens, symbols,
+    complete, convert::LineIndex, document::DocumentAnalysis, fields, goto, hover, inlay_hints,
+    references, semantic_tokens, symbols,
 };
 use dashmap::DashMap;
 use tower_lsp_server::{
@@ -47,6 +47,8 @@ impl RiteLanguageServer {
         let path = path.into_owned();
 
         let (resolved, span_map, diags) = rite_resolver::analyze_str(Some(&path), &text);
+        let lines = LineIndex::new(&text);
+        let lsp_diags: Vec<_> = diags.iter().map(|d| lines.diagnostic(d)).collect();
 
         // Cache the analysis for hover/completion/goto. `text` can be moved: the borrow above
         // ends after `analyze_str` returns, and `path` borrows from `uri`, not from `text`.
@@ -60,7 +62,6 @@ impl RiteLanguageServer {
         );
 
         // Publish diagnostics (tower-lsp-server 0.23 takes separate args, not a params struct)
-        let lsp_diags: Vec<_> = diags.iter().map(convert::to_lsp_diagnostic).collect();
         self.client.publish_diagnostics(uri, lsp_diags, None).await;
     }
 }
@@ -143,14 +144,17 @@ impl LanguageServer for RiteLanguageServer {
             return Ok(None);
         };
 
-        let line = analysis.text.lines().nth(pos.line as usize).unwrap_or("");
-        let col = pos.character as usize;
+        let lines = analysis.lines();
+        let at = lines.in_characters(pos);
 
-        let items = match complete::detect_context(line, col, pos.line) {
-            Some(ctx) => {
-                complete::completions_for(ctx, &analysis.span_map, analysis.resolved.as_ref())
-            }
-            None => fields::completions(&analysis.text, pos),
+        let items = match complete::detect_context(lines.line(at.line), at.column, pos.line) {
+            Some(ctx) => complete::completions_for(
+                ctx,
+                &lines,
+                &analysis.span_map,
+                analysis.resolved.as_ref(),
+            ),
+            None => fields::completions(&analysis.text, at),
         };
 
         if items.is_empty() {
@@ -168,6 +172,7 @@ impl LanguageServer for RiteLanguageServer {
             return Ok(None);
         };
 
+        let pos = analysis.lines().in_characters(pos);
         Ok(hover::hover_at(
             &analysis.text,
             &analysis.span_map,
@@ -187,7 +192,14 @@ impl LanguageServer for RiteLanguageServer {
             return Ok(None);
         };
 
-        Ok(goto::goto_definition_at(&analysis.span_map, pos, uri))
+        let lines = analysis.lines();
+        let pos = lines.in_characters(pos);
+        Ok(goto::goto_definition_at(
+            &lines,
+            &analysis.span_map,
+            pos,
+            uri,
+        ))
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
@@ -199,9 +211,11 @@ impl LanguageServer for RiteLanguageServer {
             return Ok(None);
         };
 
+        let lines = analysis.lines();
+        let pos = lines.in_characters(pos);
         let locs = references::find_references_at(
+            &lines,
             &analysis.span_map,
-            &analysis.text,
             pos,
             uri,
             include_declaration,
@@ -220,7 +234,11 @@ impl LanguageServer for RiteLanguageServer {
             return Ok(None);
         };
 
-        let hints = inlay_hints::hints_for(&analysis.span_map, analysis.resolved.as_ref());
+        let hints = inlay_hints::hints_for(
+            &analysis.lines(),
+            &analysis.span_map,
+            analysis.resolved.as_ref(),
+        );
         if hints.is_empty() {
             Ok(None)
         } else {
@@ -238,7 +256,7 @@ impl LanguageServer for RiteLanguageServer {
             return Ok(None);
         };
 
-        let data = semantic_tokens::tokens_for(&analysis.span_map);
+        let data = semantic_tokens::tokens_for(&analysis.lines(), &analysis.span_map);
         if data.is_empty() {
             return Ok(None);
         }
@@ -263,7 +281,7 @@ impl LanguageServer for RiteLanguageServer {
             return Ok(None);
         };
 
-        let syms = symbols::document_symbols(&analysis.span_map, resolved);
+        let syms = symbols::document_symbols(&analysis.lines(), &analysis.span_map, resolved);
         if syms.is_empty() {
             Ok(None)
         } else {

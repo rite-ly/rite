@@ -11,7 +11,7 @@
 //! it reads as a trailing annotation. When the document fails to
 //! resolve no hints are emitted, since partial labels would mislead.
 
-use crate::convert::span_to_range;
+use crate::convert::LineIndex;
 use rite_model::{Ceremony, StepId};
 use rite_resolver::SpanMap;
 use std::collections::HashMap;
@@ -20,7 +20,11 @@ use tower_lsp_server::ls_types::{InlayHint, InlayHintLabel};
 /// Build the inlay hints for a document. Returns an empty vec when the
 /// document failed to resolve, since partial labels would mislead the
 /// reader.
-pub fn hints_for(span_map: &SpanMap, ceremony: Option<&Ceremony>) -> Vec<InlayHint> {
+pub fn hints_for(
+    lines: &LineIndex,
+    span_map: &SpanMap,
+    ceremony: Option<&Ceremony>,
+) -> Vec<InlayHint> {
     let Some(ceremony) = ceremony else {
         return Vec::new();
     };
@@ -38,7 +42,7 @@ pub fn hints_for(span_map: &SpanMap, ceremony: Option<&Ceremony>) -> Vec<InlayHi
             let label = labels.get(id)?;
             // Anchor past the colon that follows the step ID so the hint
             // reads as a trailing annotation rather than splitting the key.
-            let mut position = span_to_range(*span).end;
+            let mut position = lines.span_range(*span).end;
             position.character = position.character.saturating_add(1);
             Some(InlayHint {
                 position,
@@ -57,12 +61,13 @@ pub fn hints_for(span_map: &SpanMap, ceremony: Option<&Ceremony>) -> Vec<InlayHi
 #[cfg(test)]
 mod tests {
     use super::hints_for;
+    use crate::convert::LineIndex;
     use rite_resolver::analyze_str;
     use tower_lsp_server::ls_types::InlayHintLabel;
 
     fn labels_in_source_order(text: &str) -> Vec<String> {
         let (ceremony, span_map, _) = analyze_str(None, text);
-        let mut hints = hints_for(&span_map, ceremony.as_ref());
+        let mut hints = hints_for(&LineIndex::new(text), &span_map, ceremony.as_ref());
         hints.sort_by_key(|h| (h.position.line, h.position.character));
         hints
             .into_iter()
@@ -154,7 +159,7 @@ sections:
           message: "hi"
 "#;
         let (ceremony, span_map, _) = analyze_str(None, text);
-        let hints = hints_for(&span_map, ceremony.as_ref());
+        let hints = hints_for(&LineIndex::new(text), &span_map, ceremony.as_ref());
         let hint = hints.first().expect("expected one hint");
         assert_eq!(hint.position.character, 12);
     }
@@ -162,6 +167,6 @@ sections:
     #[test]
     fn unresolved_document_emits_no_hints() {
         let (_, span_map, _) = analyze_str(None, "not a ceremony");
-        assert!(hints_for(&span_map, None).is_empty());
+        assert!(hints_for(&LineIndex::new(""), &span_map, None).is_empty());
     }
 }

@@ -10,14 +10,18 @@
 //!
 //! Sections not assigned to any act appear as top-level Namespace symbols.
 
-use crate::convert;
+use crate::convert::LineIndex;
 use rite_model::{ActId, Ceremony};
 use rite_resolver::SpanMap;
 use std::collections::HashMap;
 use tower_lsp_server::ls_types::{DocumentSymbol, Range, SymbolKind};
 
 /// Build the document symbol tree for a ceremony.
-pub fn document_symbols(span_map: &SpanMap, resolved: &Ceremony) -> Vec<DocumentSymbol> {
+pub fn document_symbols(
+    lines: &LineIndex,
+    span_map: &SpanMap,
+    resolved: &Ceremony,
+) -> Vec<DocumentSymbol> {
     let mut symbols: Vec<DocumentSymbol> = Vec::new();
 
     // Single pass over sections: group by act or collect as orphans.
@@ -27,7 +31,7 @@ pub fn document_symbols(span_map: &SpanMap, resolved: &Ceremony) -> Vec<Document
         let sec_range = span_map
             .sections
             .get(sec_id)
-            .map(|s| convert::point_range(convert::span_to_position(*s)))
+            .map(|s| lines.span_point(*s))
             .unwrap_or_default();
         let sym = make_symbol(
             sec_id.as_str(),
@@ -47,7 +51,7 @@ pub fn document_symbols(span_map: &SpanMap, resolved: &Ceremony) -> Vec<Document
         let act_range = span_map
             .acts
             .get(act_id)
-            .map(|s| convert::point_range(convert::span_to_position(*s)))
+            .map(|s| lines.span_point(*s))
             .unwrap_or_default();
         let children = sections_by_act.remove(act_id);
         let detail = act.name.clone().or_else(|| act.description.clone());
@@ -68,7 +72,7 @@ pub fn document_symbols(span_map: &SpanMap, resolved: &Ceremony) -> Vec<Document
         let range = span_map
             .roles
             .get(role_id)
-            .map(|s| convert::point_range(convert::span_to_position(*s)))
+            .map(|s| lines.span_point(*s))
             .unwrap_or_default();
         let detail = if role.name == role_id.as_str() {
             None
@@ -89,7 +93,7 @@ pub fn document_symbols(span_map: &SpanMap, resolved: &Ceremony) -> Vec<Document
         let range = span_map
             .params
             .get(param_id)
-            .map(|s| convert::point_range(convert::span_to_position(*s)))
+            .map(|s| lines.span_point(*s))
             .unwrap_or_default();
         symbols.push(make_symbol(
             param_id.as_str(),
@@ -105,7 +109,7 @@ pub fn document_symbols(span_map: &SpanMap, resolved: &Ceremony) -> Vec<Document
         let range = span_map
             .materials
             .get(mat_id)
-            .map(|s| convert::point_range(convert::span_to_position(*s)))
+            .map(|s| lines.span_point(*s))
             .unwrap_or_default();
         symbols.push(make_symbol(
             mat_id.as_str(),

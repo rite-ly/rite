@@ -72,7 +72,8 @@ pub use ir::{
 
 pub use display::{Layout, RevealFormat, TypedRow, TypedValue, UnknownRevealFormat};
 pub use transcript::{
-    ErrorClass, ErrorRecord, FACT_TYPES, FACT_VOCABULARY, Format, Level, PLACEHOLDER_LIMIT, Prompt,
-    ResponseRecord, Shown, StepFact, StepOutcome, TRANSCRIPT_FORMAT, TRANSCRIPT_SCHEMA,
-    TranscriptHeader, ValidatorSpec, compile_pattern,
+    AttestationAnchor, AttestedClaimsRecord, ErrorClass, ErrorRecord, FACT_TYPES, FACT_VOCABULARY,
+    Format, Level, PLACEHOLDER_LIMIT, Prompt, RequirementRecord, ResponseRecord, Shown, StepFact,
+    StepOutcome, TRANSCRIPT_FORMAT, TRANSCRIPT_SCHEMA, TranscriptHeader, ValidatorSpec,
+    compile_pattern,
 };

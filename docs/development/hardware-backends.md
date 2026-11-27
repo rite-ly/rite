@@ -48,6 +48,7 @@ build split.
 | `piv_read_certificate` | `piv`         | `CertStoreBackend::read_cert`            | `Certificate` |
 | `authenticate`         | (none)        | `PivBackend::verify_pin`                 | nothing       |
 | `attest_key`           | `attestation` | `AttestationBackend::attest_key`         | `Attestation` |
+| `verify_attestation`   | `attestation`, `openssl` | none: the evidence and the roots | `key_attested` |
 
 `piv_read_certificate` returns a parsed `CertificateDer`, so a malformed
 certificate is refused at the step that read it rather than deep inside a later
@@ -66,6 +67,30 @@ attest time over the key it holds, stating the access policy the key was
 generated with, signed by a committed stand-in for F9 that chains to a
 rehearsal root (`MOCK_ATTESTATION_ROOT`). Its private keys are in the
 repository: a chain to that root proves nothing.
+
+`verify_attestation` checks an attestation with no device:
+
+- **Chain:** `rite_openssl::verify_certificate_chain` builds it from the leaf
+  through F9 and `intermediates` to one of `roots`. It checks at the step's
+  time, which the fact records, with partial chains off and no purpose check,
+  since Yubico leaves carry no extended key usage. Only `roots` are anchors,
+  and an F9 that is not a CA (YubiKey 4) is refused by name. The chain built
+  must run through the attestation's own leaf and F9, which the claims are
+  read from, and not through a look-alike F9 found among `intermediates`.
+- **Key:** the leaf's public key, re-encoded, must equal the key the step
+  reads.
+- **Claims:** `Attestation::claims` reads the Yubico extensions (`x509-cert`,
+  no PC/SC): `.3`, `.7`, `.8` and `.9` from the leaf only, `.10` and `.11`
+  from F9 only. Duplicates and wrong lengths are refused, and a policy code
+  outside never, once and always (a biometric one, say) is reported as
+  unmodelled, which no requirement accepts. Each `require` entry lists the
+  values it accepts; the serial is compared and never recorded.
+- **Rehearsal:** in a dry run (`HandlerContext::dry_run`) the step trusts the
+  rehearsal root besides `roots`. A chain to that root is recorded with
+  `anchor: rehearsal`, and its requirements do not fail the step; in a real
+  run it fails the step, even when `roots` holds it.
+
+`rite check` warns about an attestation no step verifies.
 
 Neither PIV backend implements `VerifyBackend`. A card signs; a signature check
 needs only the public key, so it runs in software or on a backend named for the
@@ -399,9 +424,10 @@ CI cannot touch a physical device, so:
      (`ykman piv keys generate`, `ykman piv certificates generate`).
   2. Run `examples/piv/yubikey_signing.rite.yaml` with the device inserted.
   3. Confirm `authenticate` prompts for the PIN, `sign_data` produces a
-     signature that `check_signature` accepts, and `attest_key` writes an
-     attestation that `openssl verify -CAfile <Yubico root> -untrusted` accepts,
-     with the bundle's F9 certificate as the untrusted one.
+     signature that `check_signature` accepts, and `check_attestation`
+     records `key_attested` with `anchor: trusted`, the chain ending at one of
+     Yubico's roots. `openssl verify -CAfile examples/piv/yubico/attestation-roots.pem
+     -untrusted <bundle>` should accept the written bundle too.
   4. Cover the full algorithm matrix, not just the example's default: repeat
      `sign_data` for each supported algorithm (`ECDSA-SHA256`, `ECDSA-SHA384`,
      `RSA-PKCS1-SHA256`, `RSA-PSS-SHA256`, each against a slot provisioned with the matching key

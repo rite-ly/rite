@@ -1,8 +1,10 @@
 version: "0.3"
 name: "Signing Key Generation on a YubiKey"
 description: |
-  Generate a signing key in PIV slot 9C of a prepared YubiKey, have the
-  YubiKey attest that it generated the key, and export its public key.
+  Generate a signing key in PIV slot 9C of a prepared YubiKey, with the PIN
+  before each use and a touch, have the YubiKey attest that it generated the
+  key, check the attestation against Yubico's roots and the policy asked for,
+  and export the public key.
 
 backends:
   token:
@@ -22,6 +24,18 @@ credentials:
     source:
       protected_by: "${credential.card_pin}"
     description: "PIV management key, stored on the card behind the PIN."
+
+materials:
+  # As Yubico publishes them; see yubikey_signing.rite.yaml. A dry run also
+  # trusts a rehearsal root, which its mock attests under.
+  yubico_roots:
+    type: certificates
+    path: "yubico/attestation-roots.pem"
+    description: "Yubico's attestation roots, the only trust anchors of the check."
+  yubico_intermediates:
+    type: certificates
+    path: "yubico/attestation-intermediates.pem"
+    description: "Yubico's attestation intermediates, as Yubico publishes them."
 
 output:
   signing_key:
@@ -80,6 +94,22 @@ sections:
           key: "${artifact.signing_key}"
         creates: signing_key_attestation
         description: "Have the card attest that it generated the key."
+      # What the card states, checked against what the ceremony asked for:
+      # Yubico, not the operator, vouches that this key was generated on the
+      # card with these policies. A relying party can repeat the check with
+      # the attestation and Yubico's roots alone.
+      check_attestation:
+        action: verify_attestation
+        reads:
+          attestation: "${artifact.signing_key_attestation}"
+          key: "${artifact.signing_key}"
+          roots: "${artifact.yubico_roots}"
+          intermediates: "${artifact.yubico_intermediates}"
+        with:
+          require:
+            authentication: [per_use]
+            presence: [cached]
+        description: "Check the attestation against Yubico's roots and the policy generated."
 
   attestation:
     name: "Witness Attestation"

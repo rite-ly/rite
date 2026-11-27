@@ -202,6 +202,13 @@ pub enum ActionType {
     /// device's certificate chain for the key, leaf first.
     // The backend must implement `AttestationBackend`.
     AttestKey,
+    /// Check a key attestation against the roots the ceremony trusts.
+    ///
+    /// The chain must lead from the attestation to one of `roots`, the
+    /// attested key must be `key`, and each claim under `require` must be
+    /// one of the values listed. Needs no device: the evidence and the roots
+    /// suffice. The step records what was checked and against which root.
+    VerifyAttestation,
     /// Record a formal statement in the transcript.
     Attest,
     /// Add a participant-supplied random value to the ceremony's entropy.
@@ -720,6 +727,7 @@ impl fmt::Display for Accepts {
 pub enum View {
     /// Its bytes: every kind that exists as a file. A backend key is not one,
     /// though it is written as its public half: that is read as `.public`.
+    /// Nor are certificates, which are several, each with bytes of its own.
     Bytes,
     /// A public key: a backend key's public half, a public key, the key a
     /// certificate holds, or bytes, text or a secret that parse as one.
@@ -734,7 +742,9 @@ impl View {
     pub fn may_read(self, kind: ArtifactKind) -> bool {
         use FileKind as K;
         match self {
-            View::Bytes => matches!(kind, ArtifactKind::File(_)),
+            View::Bytes => {
+                matches!(kind, ArtifactKind::File(file) if file != K::Certificates)
+            }
             View::PublicKey => matches!(
                 kind,
                 ArtifactKind::BackendKey
@@ -776,6 +786,13 @@ const BACKEND_CREDENTIAL: Accepts = Accepts::kinds(&[ArtifactKind::Credential]);
 const BYTES: Accepts = Accepts::view(View::Bytes);
 /// Anything a public key is read from.
 const PUBLIC_KEY: Accepts = Accepts::view(View::PublicKey);
+/// A device's attestation of a key.
+const ATTESTATION: Accepts = Accepts::kinds(&[ArtifactKind::File(FileKind::Attestation)]);
+/// Certificates a check is given: one, or a list in one file.
+const CERTIFICATES: Accepts = Accepts::kinds(&[
+    ArtifactKind::File(FileKind::Certificates),
+    ArtifactKind::File(FileKind::Certificate),
+]);
 /// A share, or a secret or bytes that hold one in its layout.
 const SHARE_LAYOUT: Accepts = Accepts::kinds(&[
     ArtifactKind::Share,
@@ -881,6 +898,7 @@ impl ActionType {
         ActionType::SignData,
         ActionType::VerifySignature,
         ActionType::AttestKey,
+        ActionType::VerifyAttestation,
         ActionType::Attest,
         ActionType::GatherEntropy,
         ActionType::PivReadCertificate,
@@ -1183,6 +1201,36 @@ impl ActionType {
                 }]),
                 creates: &[ArtifactKind::File(FileKind::Attestation)],
             },
+            // Only the public half of `key` is compared, so no device is
+            // asked for anything.
+            ActionType::VerifyAttestation => ActionSpec {
+                backend: BackendUsage::Unused,
+                reads: ReadsContract {
+                    required: &[
+                        ReadInput {
+                            name: "attestation",
+                            accepts: ATTESTATION,
+                        },
+                        ReadInput {
+                            name: "key",
+                            accepts: PUBLIC_KEY,
+                        },
+                        ReadInput {
+                            name: "roots",
+                            accepts: CERTIFICATES,
+                        },
+                    ],
+                    exactly_one_of: &[],
+                    optional: &[ReadInput {
+                        name: "intermediates",
+                        accepts: CERTIFICATES,
+                    }],
+                    with_field_requires: &[],
+                    lists: &[],
+                    single: None,
+                },
+                creates: &[],
+            },
             ActionType::PivReadCertificate => ActionSpec {
                 backend: BackendUsage::Required,
                 reads: ReadsContract::NONE,
@@ -1296,6 +1344,7 @@ impl std::fmt::Display for ActionType {
             ActionType::SignData => write!(f, "sign_data"),
             ActionType::VerifySignature => write!(f, "verify_signature"),
             ActionType::AttestKey => write!(f, "attest_key"),
+            ActionType::VerifyAttestation => write!(f, "verify_attestation"),
             ActionType::Attest => write!(f, "attest"),
             ActionType::GatherEntropy => write!(f, "gather_entropy"),
             ActionType::PivReadCertificate => write!(f, "piv_read_certificate"),
@@ -1328,6 +1377,8 @@ pub enum FileKind {
     PrivateKey,
     /// An X.509 certificate.
     Certificate,
+    /// X.509 certificates, one or more, such as the roots a check trusts.
+    Certificates,
     /// A PKCS#10 certificate signing request.
     Csr,
     /// A device's signed statement about one of its keys: certificates, leaf first.
@@ -1350,6 +1401,7 @@ crate::types::vocabulary!(FileKind {
     PublicKey => "public_key",
     PrivateKey => "private_key",
     Certificate => "certificate",
+    Certificates => "certificates",
     Csr => "csr",
     Attestation => "attestation",
     Signature => "signature",
@@ -1370,6 +1422,7 @@ impl FileKind {
             FileKind::PrivateKey | FileKind::Secret => true,
             FileKind::PublicKey
             | FileKind::Certificate
+            | FileKind::Certificates
             | FileKind::Csr
             | FileKind::Attestation
             | FileKind::Signature
@@ -1615,6 +1668,7 @@ mod tests {
             (ActionType::ExportPublic, "\"export_public\""),
             (ActionType::Attest, "\"attest\""),
             (ActionType::AttestKey, "\"attest_key\""),
+            (ActionType::VerifyAttestation, "\"verify_attestation\""),
             (ActionType::PivReadCertificate, "\"piv_read_certificate\""),
             (ActionType::Authenticate, "\"authenticate\""),
             (ActionType::IssueCertificate, "\"issue_certificate\""),
@@ -1645,6 +1699,7 @@ mod tests {
             ActionType::ImportKey,
             ActionType::ExportPublic,
             ActionType::AttestKey,
+            ActionType::VerifyAttestation,
             ActionType::Attest,
             ActionType::PivReadCertificate,
             ActionType::Authenticate,
@@ -1843,6 +1898,7 @@ mod tests {
                 | ActionType::SignData
                 | ActionType::VerifySignature
                 | ActionType::AttestKey
+                | ActionType::VerifyAttestation
                 | ActionType::Attest
                 | ActionType::GatherEntropy
                 | ActionType::PivReadCertificate

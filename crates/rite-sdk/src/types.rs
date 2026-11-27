@@ -2090,6 +2090,58 @@ pub enum PivTouchPolicy {
     Cached,
 }
 
+impl PivPinPolicy {
+    /// The byte a `YubiKey` attestation states this policy as: Yubico codes
+    /// the slot's default 0, which a device resolves before stating it.
+    #[must_use]
+    pub const fn attestation_code(self) -> u8 {
+        match self {
+            Self::Never => 1,
+            Self::Once => 2,
+            Self::Always => 3,
+            Self::Default => 0,
+        }
+    }
+
+    /// The policy a `YubiKey` attestation states as `code`, if Rite models it.
+    #[must_use]
+    pub const fn from_attestation_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(Self::Never),
+            2 => Some(Self::Once),
+            3 => Some(Self::Always),
+            0 => Some(Self::Default),
+            _ => None,
+        }
+    }
+}
+
+impl PivTouchPolicy {
+    /// The byte a `YubiKey` attestation states this policy as: Yubico codes
+    /// the slot's default 0, which a device resolves before stating it.
+    #[must_use]
+    pub const fn attestation_code(self) -> u8 {
+        match self {
+            Self::Never => 1,
+            Self::Always => 2,
+            Self::Cached => 3,
+            Self::Default => 0,
+        }
+    }
+
+    /// The policy a `YubiKey` attestation states as `code`, if Rite models it.
+    #[must_use]
+    pub const fn from_attestation_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(Self::Never),
+            2 => Some(Self::Always),
+            3 => Some(Self::Cached),
+            0 => Some(Self::Default),
+            _ => None,
+        }
+    }
+}
+
 /// Metadata about a populated PIV slot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PivSlotInfo {

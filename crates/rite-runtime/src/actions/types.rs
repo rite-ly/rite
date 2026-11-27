@@ -105,6 +105,11 @@ pub enum ArtifactValue {
     /// roots and then distributed.
     Attestation(Attestation),
 
+    /// X.509 certificates in no order of their own, at least one: trust
+    /// anchors a check names, or untrusted certificates it may build a chain
+    /// through. Written as a PEM bundle.
+    Certificates(Vec<CertificateDer>),
+
     /// A signature over data, in the encoding its algorithm produces.
     ///
     /// The same shape as [`Bytes`](ArtifactValue::Bytes) and a different
@@ -308,7 +313,10 @@ impl std::fmt::Display for ArtifactValue {
             }
             ArtifactValue::Csr(der) => write!(f, "{}", encode_pem("CERTIFICATE REQUEST", der)),
             ArtifactValue::Attestation(attestation) => {
-                write!(f, "{}", attestation_bundle(attestation))
+                write!(f, "{}", pem_bundle(attestation.certificates()))
+            }
+            ArtifactValue::Certificates(certificates) => {
+                write!(f, "{}", pem_bundle(certificates.iter()))
             }
             ArtifactValue::Signature(bytes) => write!(f, "Signature({} bytes)", bytes.len()),
         }
@@ -373,11 +381,11 @@ fn serialize_container(
     }
 }
 
-/// An attestation's certificates as PEM blocks, leaf first, one per line
-/// break: the bundle `openssl verify -untrusted` and `ykman` read.
-fn attestation_bundle(attestation: &Attestation) -> String {
+/// Certificates as PEM blocks, in the order given, one per line break: the
+/// bundle `openssl verify -untrusted` and `ykman` read.
+fn pem_bundle<'a>(certificates: impl Iterator<Item = &'a CertificateDer>) -> String {
     let mut bundle = String::new();
-    for certificate in attestation.certificates() {
+    for certificate in certificates {
         bundle.push_str(&encode_pem("CERTIFICATE", certificate.as_bytes()));
         bundle.push('\n');
     }
@@ -434,6 +442,7 @@ impl ArtifactValue {
             ArtifactValue::Certificate(_) => ArtifactKind::File(FileKind::Certificate),
             ArtifactValue::Csr(_) => ArtifactKind::File(FileKind::Csr),
             ArtifactValue::Attestation(_) => ArtifactKind::File(FileKind::Attestation),
+            ArtifactValue::Certificates(_) => ArtifactKind::File(FileKind::Certificates),
             ArtifactValue::Signature(_) => ArtifactKind::File(FileKind::Signature),
         }
     }
@@ -515,17 +524,12 @@ impl ArtifactValue {
             }
             ArtifactValue::Csr(der) => serialize_der(der, &CSR, format),
             // A chain has no single DER form; PEM is how tools take a bundle.
-            ArtifactValue::Attestation(attestation) => match format.unwrap_or("pem") {
-                "pem" => Ok(SerializedArtifact {
-                    bytes: attestation_bundle(attestation).into_bytes(),
-                    mime_type: Some("application/x-pem-file".to_string()),
-                    extension: "pem",
-                }),
-                other => Err(format!(
-                    "Invalid format '{other}' for an attestation (valid: pem); a chain of \
-                     certificates has no single DER form"
-                )),
-            },
+            ArtifactValue::Attestation(attestation) => {
+                serialize_bundle(attestation.certificates(), "an attestation", format)
+            }
+            ArtifactValue::Certificates(certificates) => {
+                serialize_bundle(certificates.iter(), "certificates", format)
+            }
             ArtifactValue::Signature(bytes) => Ok(SerializedArtifact {
                 bytes: bytes.clone(),
                 mime_type: Some("application/octet-stream".to_string()),
@@ -565,6 +569,26 @@ const CSR: DerArtifact = DerArtifact {
     der_mime: "application/pkcs10",
     name: "a certificate signing request",
 };
+
+/// Render certificates as a PEM bundle, the one format several certificates
+/// have: there is no single DER form for them.
+fn serialize_bundle<'a>(
+    certificates: impl Iterator<Item = &'a CertificateDer>,
+    name: &str,
+    format: Option<&str>,
+) -> Result<SerializedArtifact, String> {
+    match format.unwrap_or("pem") {
+        "pem" => Ok(SerializedArtifact {
+            bytes: pem_bundle(certificates).into_bytes(),
+            mime_type: Some("application/x-pem-file".to_string()),
+            extension: "pem",
+        }),
+        other => Err(format!(
+            "Invalid format '{other}' for {name} (valid: pem); several certificates have no \
+             single DER form"
+        )),
+    }
+}
 
 /// Render DER material in the format a ceremony asked for, PEM by default.
 fn serialize_der(

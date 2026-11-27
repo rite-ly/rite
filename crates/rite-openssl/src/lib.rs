@@ -33,9 +33,11 @@
 #![warn(missing_docs)]
 
 mod backend;
+mod chain;
 mod content;
 
 pub use backend::{OpenSslBackend, open_key_agreement, recipient_info_for, verify_signature};
+pub use chain::{ChainOutcome, VerifiedChain, chain_verifier, verify_certificate_chain};
 pub use content::{SealedContent, open_content, seal_content};
 
 /// Whether this build can generate ML-KEM keys and wrap to them.

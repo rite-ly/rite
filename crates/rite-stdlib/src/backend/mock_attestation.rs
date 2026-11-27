@@ -10,7 +10,7 @@
 
 use rite_sdk::{
     AccessPolicy, AccessWhen, Attestation, AttestationFormat, BackendError, CertificateDer,
-    KeyAlgorithm, PivPinPolicy, PivSlot, PivTouchPolicy, PublicKeyDer, SignAlgorithm,
+    KeyAlgorithm, PivSlot, PivTouchPolicy, PublicKeyDer, SignAlgorithm,
 };
 use x509_cert::Certificate;
 use x509_cert::builder::{Builder, CertificateBuilder, profile::BuilderProfile};
@@ -114,22 +114,17 @@ fn extensions(
     slot: PivSlot,
     access: AccessPolicy,
 ) -> Result<Vec<Extension>, x509_cert::der::Error> {
-    let pin = match access
+    let pin = access
         .authentication
         .and_then(AccessWhen::to_pin_policy)
         .unwrap_or(slot.default_pin_policy())
-    {
-        PivPinPolicy::Never => 1,
-        PivPinPolicy::Always => 3,
-        // `default_pin_policy` resolves a slot's default; once is the rest.
-        _ => 2,
-    };
-    let touch = match access.presence.and_then(AccessWhen::to_touch_policy) {
-        Some(PivTouchPolicy::Always) => 2,
-        Some(PivTouchPolicy::Cached) => 3,
-        // Touch is never by default on every slot.
-        _ => 1,
-    };
+        .attestation_code();
+    // Touch is never by default on every slot.
+    let touch = access
+        .presence
+        .and_then(AccessWhen::to_touch_policy)
+        .unwrap_or(PivTouchPolicy::Never)
+        .attestation_code();
     let serial = 0u32.to_der()?;
     [
         (FIRMWARE, vec![0, 0, 0]),

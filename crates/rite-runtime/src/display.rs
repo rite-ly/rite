@@ -128,12 +128,53 @@ pub fn fact_summary(fact: &StepFact) -> Option<(Icon, String)> {
                 format!("Recipient {source} is {fingerprint}, undeclared")
             },
         )),
+        StepFact::KeyAttested { .. } => key_attested(fact),
         // `StepFact` is `#[non_exhaustive]`, so this arm is unavoidable in a
         // crate downstream of the one defining it. A variant reaching it is a
         // variant added without a line of its own, which an operator sees
         // mid-ceremony; give every new variant an arm above.
         _ => Some((Icon::Info, UNSUMMARISED.to_string())),
     }
+}
+
+/// A checked attestation: what it attests and how many requirements held, a
+/// warning when one did not, since the step then fails, or a warning that a
+/// rehearsal root proves nothing.
+fn key_attested(fact: &StepFact) -> Option<(Icon, String)> {
+    let StepFact::KeyAttested {
+        attestation,
+        key,
+        anchor,
+        requirements,
+        ..
+    } = fact
+    else {
+        return None;
+    };
+    let met = requirements.iter().filter(|r| r.met).count();
+    let total = requirements.len();
+    Some(match anchor {
+        rite_model::AttestationAnchor::Trusted if met == total => (
+            Icon::Checkmark,
+            format!(
+                "Attestation {attestation} verified for {key}, {met} of {total} requirements met"
+            ),
+        ),
+        rite_model::AttestationAnchor::Trusted => (
+            Icon::Warning,
+            format!(
+                "Attestation {attestation} for {key} chains to a trusted root, but only {met} of \
+                 {total} requirements met"
+            ),
+        ),
+        rite_model::AttestationAnchor::Rehearsal => (
+            Icon::Warning,
+            format!(
+                "Attestation {attestation} chains to the rehearsal root, which proves nothing; \
+                 requirements not exercised"
+            ),
+        ),
+    })
 }
 
 /// One-line summary of a [`UiSignal`] for live-frontend display.
@@ -175,7 +216,7 @@ pub fn truncate_for_display(s: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{UNSUMMARISED, fact_summary, truncate_for_display};
+    use super::{Icon, UNSUMMARISED, fact_summary, truncate_for_display};
     use rite_model::{StepFact, StepId};
 
     /// A fact with no arm of its own reaches the operator as a placeholder in
@@ -193,6 +234,36 @@ mod tests {
         assert_ne!(line, UNSUMMARISED);
         assert!(line.contains("escrow_pubkey"), "{line}");
         assert!(line.contains("sha256:abab"), "{line}");
+    }
+
+    /// A trusted chain with an unmet requirement fails the step next, so
+    /// the line before it must not read as a pass.
+    #[test]
+    fn an_unmet_attestation_requirement_is_a_warning() {
+        let fact = |met: bool| -> StepFact {
+            let fingerprint = format!("sha256:{}", "ab".repeat(32));
+            serde_json::from_value(serde_json::json!({
+                "type": "key_attested",
+                "step": "check",
+                "attestation": "evidence",
+                "format": "yubico-piv/v1",
+                "digest": fingerprint,
+                "key": fingerprint,
+                "chain": [],
+                "roots": [],
+                "checked_at": "2026-11-27T10:00:00Z",
+                "verifier": "OpenSSL",
+                "anchor": "trusted",
+                "claims": {"origin": "generated"},
+                "requirements": [{"claim": "presence", "met": met}],
+            }))
+            .unwrap()
+        };
+        let (icon, line) = fact_summary(&fact(true)).unwrap();
+        assert_eq!(icon, Icon::Checkmark, "{line}");
+        let (icon, line) = fact_summary(&fact(false)).unwrap();
+        assert_eq!(icon, Icon::Warning, "{line}");
+        assert!(line.contains("0 of 1"), "{line}");
     }
 
     #[test]

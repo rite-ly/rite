@@ -24,7 +24,9 @@ mod schema;
 mod sharing;
 mod verification;
 
-pub use attestation::{AttestKeyParams, AttestParams};
+pub use attestation::{
+    AttestKeyParams, AttestParams, AttestationRequirements, VerifyAttestationParams,
+};
 pub use crypto::{
     EncryptDataParams, GenerateKeyParams, GenerateKeyPolicyParams, ImportKeyParams,
     KeyPolicyParams, KeyUsage, SignDataParams, UnwrapKeyParams, VerifySignatureParams,
@@ -93,6 +95,7 @@ pub fn cross_field(action: ActionType, with: &serde_json::Value) -> Vec<ParamErr
         | ActionType::SignData
         | ActionType::VerifySignature
         | ActionType::AttestKey
+        | ActionType::VerifyAttestation
         | ActionType::Attest
         | ActionType::GatherEntropy
         | ActionType::PivReadCertificate

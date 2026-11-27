@@ -302,6 +302,11 @@
           "const": "attest_key"
         },
         {
+          "description": "Check a key attestation against the roots the ceremony trusts.\n\nThe chain must lead from the attestation to one of `roots`, the attested key must be `key`, and each claim under `require` must be one of the values listed. Needs no device: the evidence and the roots suffice. The step records what was checked and against which root.",
+          "type": "string",
+          "const": "verify_attestation"
+        },
+        {
           "description": "Record a formal statement in the transcript.",
           "type": "string",
           "const": "attest"
@@ -369,6 +374,63 @@
               "anyOf": [
                 {
                   "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "AttestationRequirements": {
+      "description": "The claims an attestation must make. Each policy lists the values accepted, since `per_session` and `cached` do not compare. A claim named here that the attestation does not make fails the step.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "authentication": {
+              "description": "When the device asks for the PIN before using the key: the values accepted, such as `[per_use]`.",
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/AccessWhen"
+                  },
+                  "minItems": 1
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "presence": {
+              "description": "When the device asks for a touch before using the key: the values accepted, such as `[per_use, cached]`.",
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/AccessWhen"
+                  },
+                  "minItems": 1
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "serial": {
+              "description": "The serial number of the device that must hold the key.",
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 4294967295,
+                  "minimum": 0
                 },
                 {
                   "$ref": "#/$defs/Expression"
@@ -1556,6 +1618,7 @@
             "public_key",
             "private_key",
             "certificate",
+            "certificates",
             "csr",
             "attestation",
             "signature",
@@ -1567,8 +1630,8 @@
             "physical",
             "backend_key"
           ],
-          "errorMessage": "a material's 'type' is 'physical', 'backend_key', or the kind of file it is (public_key, private_key, certificate, csr, attestation, signature, wrapped_key, encrypted_data, secret, bytes, text, physical, backend_key); a file once declared 'digital' is 'bytes', or the kind it holds",
-          "x-message": "a material's 'type' is 'physical', 'backend_key', or the kind of file it is (public_key, private_key, certificate, csr, attestation, signature, wrapped_key, encrypted_data, secret, bytes, text, physical, backend_key); a file once declared 'digital' is 'bytes', or the kind it holds"
+          "errorMessage": "a material's 'type' is 'physical', 'backend_key', or the kind of file it is (public_key, private_key, certificate, certificates, csr, attestation, signature, wrapped_key, encrypted_data, secret, bytes, text, physical, backend_key); a file once declared 'digital' is 'bytes', or the kind it holds",
+          "x-message": "a material's 'type' is 'physical', 'backend_key', or the kind of file it is (public_key, private_key, certificate, certificates, csr, attestation, signature, wrapped_key, encrypted_data, secret, bytes, text, physical, backend_key); a file once declared 'digital' is 'bytes', or the kind it holds"
         }
       },
       "allOf": [
@@ -1580,6 +1643,7 @@
                   "public_key",
                   "private_key",
                   "certificate",
+                  "certificates",
                   "csr",
                   "attestation",
                   "signature",
@@ -1840,6 +1904,7 @@
             "public_key",
             "private_key",
             "certificate",
+            "certificates",
             "csr",
             "attestation",
             "signature",
@@ -1849,8 +1914,8 @@
             "bytes",
             "text"
           ],
-          "errorMessage": "an output's 'type' is the kind of file it is (public_key, private_key, certificate, csr, attestation, signature, wrapped_key, encrypted_data, secret, bytes, text); an output once declared 'document' is 'signature', 'bytes' or 'text'",
-          "x-message": "an output's 'type' is the kind of file it is (public_key, private_key, certificate, csr, attestation, signature, wrapped_key, encrypted_data, secret, bytes, text); an output once declared 'document' is 'signature', 'bytes' or 'text'"
+          "errorMessage": "an output's 'type' is the kind of file it is (public_key, private_key, certificate, certificates, csr, attestation, signature, wrapped_key, encrypted_data, secret, bytes, text); an output once declared 'document' is 'signature', 'bytes' or 'text'",
+          "x-message": "an output's 'type' is the kind of file it is (public_key, private_key, certificate, certificates, csr, attestation, signature, wrapped_key, encrypted_data, secret, bytes, text); an output once declared 'document' is 'signature', 'bytes' or 'text'"
         }
       },
       "additionalProperties": false,
@@ -3467,6 +3532,63 @@
           "if": {
             "properties": {
               "action": {
+                "const": "verify_attestation"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "properties": {
+                  "reads": {
+                    "type": "object",
+                    "properties": {
+                      "attestation": {
+                        "description": "Takes attestation.",
+                        "type": "string"
+                      },
+                      "intermediates": {
+                        "description": "Takes certificates or certificate.",
+                        "type": "string"
+                      },
+                      "key": {
+                        "description": "Takes anything a public key is read from.",
+                        "type": "string"
+                      },
+                      "roots": {
+                        "description": "Takes certificates or certificate.",
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "attestation",
+                      "key",
+                      "roots"
+                    ]
+                  }
+                },
+                "required": [
+                  "reads"
+                ]
+              },
+              {
+                "properties": {
+                  "with": {
+                    "$ref": "#/$defs/VerifyAttestationParams"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
                 "const": "attest"
               }
             },
@@ -3747,6 +3869,35 @@
             "policy": {
               "description": "The operations the recovered key may perform and whether it may be exported from the backend. Without this field, the key may sign, verify, and be wrapped again. To use it as a wrapping key, set `usages: [wrap, unwrap]`.",
               "$ref": "#/$defs/KeyPolicyParams"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/Expression"
+        }
+      ]
+    },
+    "VerifyAttestationParams": {
+      "description": "The `with` block of `verify_attestation`. The attestation, the key and the roots come through `reads:`.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "message": {
+              "description": "Shown to the operator when the step starts.",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Expression"
+                }
+              ]
+            },
+            "require": {
+              "description": "What the attestation must state; left out, only the chain and the key are checked.",
+              "$ref": "#/$defs/AttestationRequirements"
             }
           },
           "additionalProperties": false

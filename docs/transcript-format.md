@@ -101,17 +101,18 @@ fact type has a default level:
 
 | Level | Facts |
 |---|---|
-| public | `ceremony_started`, `role_declared`, `act_started`, `step_started`, `key_bound`, `backend_operation`, `attestation_recorded`, `step_completed`, `ceremony_completed`, `ceremony_failed`, and the entropy facts, which `rite verify` needs to re-derive the entropy |
+| public | `ceremony_started`, `role_declared`, `act_started`, `step_started`, `key_bound`, `key_attested`, `backend_operation`, `attestation_recorded`, `step_completed`, `ceremony_completed`, `ceremony_failed`, and the entropy facts, which `rite verify` needs to re-derive the entropy |
 | restricted | `parameter_bound`, `material_loaded`, `backend_bound`, `prompt_answered`, `wrap_recipient_recorded`, `step_attempt_failed`, `deviation_recorded`, `platform_recorded`, `network_state_recorded` |
 | confidential | `role_assigned`, `material_digest`, `machine_info_recorded` |
 
-`artifact_written` takes its level from the artifact's kind: certificates, public keys, CSRs
-and signatures are public; wrapped keys, ciphertext and other content are restricted; a
-secret, as opened content or a private key, is confidential and recorded without a digest.
+`artifact_written` takes its level from the artifact's kind: certificates, attestations,
+public keys, CSRs and signatures are public; wrapped keys, ciphertext and other content are
+restricted; a secret, as opened content or a private key, is confidential and recorded
+without a digest.
 
-`material_digest` is confidential, except for a certificate, a public key or a CSR: the file
-is parsed as what it declares when it loads, so its digest is public. A material of a secret
-kind, a secret or a private key, has no digest.
+`material_digest` is confidential, except for certificates, an attestation, a public key or a
+CSR: the file is parsed as what it declares when it loads, so its digest is public. A
+material of a secret kind, a secret or a private key, has no digest.
 
 A secret value (a private key, a PIN, a passphrase, opened plaintext, a share, a value shown for
 writing down) is never recorded, at any level.
@@ -143,6 +144,13 @@ as a material's name and the digest of its content, they are separate facts. The
   whether the fingerprint was pinned. It names the key and never the device, so it is public;
   the device is on `backend_bound`. A key that is not the declared one fails the step's
   attempt, which the operator can retry with the right device.
+- `key_attested`: a key attestation a `verify_attestation` step checked: its digest and
+  format, the attested key's fingerprint, the chain the check built and every root offered,
+  the instant it was checked at and the verifier, the anchor, the device's claims as stated,
+  and each requirement with the value stated and whether it was met. The anchor is `trusted`
+  for a root the ceremony names and `rehearsal` for the root a dry run trusts besides them,
+  whose requirements are not exercised. The device's serial is never recorded, only whether a
+  required one matched, so the fact is public.
 - `act_started`, `step_started`, `step_attempt_failed`, `step_completed`
 - `prompt_answered`: the prompt, and the answer unless it is a secret
 - `backend_operation`: the kind of operation, the backend the step ran with, and what went in and

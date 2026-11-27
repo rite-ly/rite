@@ -84,6 +84,7 @@ impl ExecutionState {
             roles: &self.roles,
             materials: &self.materials,
             credentials: &self.credentials,
+            dry_run: self.dry_run,
         }
     }
 
@@ -117,6 +118,10 @@ pub struct HandlerContext<'a> {
     pub materials: &'a HashMap<MaterialId, String>,
     /// Credentials the backends have, as the ceremony declares them.
     pub credentials: &'a HashMap<CredentialId, Credential>,
+    /// Whether the run is a rehearsal, set by whoever started it. A step
+    /// that would accept a stand-in only in a rehearsal asks this, never the
+    /// evidence it is given.
+    pub dry_run: bool,
 }
 
 impl HandlerContext<'_> {

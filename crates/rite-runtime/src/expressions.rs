@@ -509,6 +509,7 @@ mod tests {
             roles: &EMPTY_ROLES,
             materials: &EMPTY_MATERIALS,
             credentials: &EMPTY_CREDENTIALS,
+            dry_run: false,
         }
     }
 
@@ -533,6 +534,7 @@ mod tests {
             roles: &EMPTY_ROLES,
             materials: &EMPTY_MATERIALS,
             credentials: &EMPTY_CREDENTIALS,
+            dry_run: false,
         }
     }
 
@@ -555,6 +557,7 @@ mod tests {
         )])));
         let ctx = HandlerContext {
             credentials,
+            dry_run: false,
             ..empty_context()
         };
         let read = |name: &str, property: Option<&str>| {

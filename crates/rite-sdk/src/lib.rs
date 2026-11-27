@@ -33,7 +33,10 @@ mod names;
 pub mod signature;
 mod types;
 
-pub use attestation::{Attestation, AttestationFormat, yubico_oid};
+pub use attestation::{
+    Attestation, AttestationFormat, AttestedClaims, AttestedOrigin, FirmwareVersion, FormFactor,
+    StatedAccess, yubico_oid,
+};
 pub use key_material::{CertificateDer, EcCurve, EcPoint, PublicKeyDer, csr_from_file};
 
 pub use backend::{

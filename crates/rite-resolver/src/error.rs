@@ -743,6 +743,15 @@ pub enum ResolveWarning {
         /// The backend holding it.
         backend: String,
     },
+    /// An `attest_key` step creates an attestation no `verify_attestation`
+    /// step checks. Until checked, it is a claim anyone holding the device's
+    /// certificates could have made.
+    AttestationNotVerified {
+        /// The step that creates it.
+        step: StepId,
+        /// The attestation.
+        attestation: ArtifactId,
+    },
 }
 
 impl std::fmt::Display for ResolveWarning {
@@ -783,6 +792,12 @@ impl std::fmt::Display for ResolveWarning {
                  no 'authenticate' since its last use; slot 9C clears the PIN after each use \
                  unless it was provisioned with another PIN policy, so add an 'authenticate' \
                  step right before this one"
+            ),
+            ResolveWarning::AttestationNotVerified { step, attestation } => write!(
+                f,
+                "step '{step}' creates attestation '{attestation}', and no 'verify_attestation' \
+                 step checks it; until it is checked against the vendor's roots, the ceremony \
+                 records a claim, not evidence"
             ),
         }
     }

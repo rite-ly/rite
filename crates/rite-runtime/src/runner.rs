@@ -821,6 +821,7 @@ fn record_now(
 fn artifact_level(kind: FileKind) -> Level {
     match kind {
         FileKind::Certificate
+        | FileKind::Certificates
         | FileKind::PublicKey
         | FileKind::Csr
         | FileKind::Attestation
@@ -841,9 +842,11 @@ fn artifact_level(kind: FileKind) -> Level {
 /// has no digest at all.
 fn material_digest_level(kind: FileKind) -> Level {
     match kind {
-        FileKind::Certificate | FileKind::PublicKey | FileKind::Csr | FileKind::Attestation => {
-            artifact_level(kind)
-        }
+        FileKind::Certificate
+        | FileKind::Certificates
+        | FileKind::PublicKey
+        | FileKind::Csr
+        | FileKind::Attestation => artifact_level(kind),
         FileKind::Bytes
         | FileKind::Text
         | FileKind::Signature

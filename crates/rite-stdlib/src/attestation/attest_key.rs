@@ -165,6 +165,7 @@ mod tests {
             roles: &roles,
             materials: &materials,
             credentials: &HashMap::new(),
+            dry_run: false,
         };
         let result = {
             let mut reporter = harness.reporter(StepId::new("attest"));

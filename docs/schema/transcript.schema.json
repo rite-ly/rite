@@ -25,6 +25,79 @@
       "format": "date-time",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$"
     },
+    "AttestationAnchor": {
+      "description": "What the matching root is.",
+      "oneOf": [
+        {
+          "description": "One of the roots the ceremony names.",
+          "type": "string",
+          "const": "trusted"
+        },
+        {
+          "description": "The rehearsal root a dry run adds, to which anyone can chain.",
+          "type": "string",
+          "const": "rehearsal"
+        }
+      ]
+    },
+    "AttestedClaimsRecord": {
+      "description": "An attestation's claims, as stated.",
+      "type": "object",
+      "properties": {
+        "authentication": {
+          "description": "When the device asks for the PIN before using the key: never, per_session, cached or per_use, or a code Rite does not model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "certifications": {
+          "description": "Certifications the device's certificate states, such as FIPS.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "firmware": {
+          "description": "The device's firmware version.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "form_factor": {
+          "description": "The device's form factor.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin": {
+          "description": "Where the key was made: generated.",
+          "$ref": "#/$defs/AttestedOrigin"
+        },
+        "presence": {
+          "description": "When the device asks for a touch before using the key: never, cached or per_use, or a code Rite does not model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "origin"
+      ]
+    },
+    "AttestedOrigin": {
+      "description": "Where an attested key was made.",
+      "oneOf": [
+        {
+          "description": "On the device, which never let the private key out.",
+          "type": "string",
+          "const": "generated"
+        }
+      ]
+    },
     "CompleteLine": {
       "description": "A fact line with its content: the fact, the salt that hides it, and the values that commit to both.",
       "type": "object",
@@ -249,6 +322,11 @@
           "description": "An X.509 certificate.",
           "type": "string",
           "const": "certificate"
+        },
+        {
+          "description": "X.509 certificates, one or more, such as the roots a check trusts.",
+          "type": "string",
+          "const": "certificates"
         },
         {
           "description": "A PKCS#10 certificate signing request.",
@@ -885,6 +963,38 @@
         }
       ]
     },
+    "RequirementRecord": {
+      "description": "A requirement, and whether it was met.",
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "description": "The values accepted. Empty for serial, which identifies the device and is not recorded.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "claim": {
+          "description": "The claim required: authentication, presence or serial.",
+          "type": "string"
+        },
+        "met": {
+          "description": "Whether the stated value is one accepted.",
+          "type": "boolean"
+        },
+        "observed": {
+          "description": "The value stated. Absent when the attestation states none, and for serial.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "claim",
+        "met"
+      ]
+    },
     "ResponseRecord": {
       "description": "The answer to a prompt, as recorded. A secret answer is never recorded, not even as a digest.",
       "oneOf": [
@@ -1456,6 +1566,88 @@
             "source",
             "fingerprint",
             "declared"
+          ]
+        },
+        {
+          "description": "A key attestation was checked against the roots the ceremony names: the chain built, the key attested, and the claims against what the step requires. A rehearsal is checked against a rehearsal root and proves nothing.",
+          "type": "object",
+          "properties": {
+            "anchor": {
+              "description": "trusted when the root is one the ceremony names, and the requirements decided the step; rehearsal when it is the root a dry run adds, which proves nothing and whose requirements decided nothing.",
+              "$ref": "#/$defs/AttestationAnchor"
+            },
+            "attestation": {
+              "description": "The attestation, by its name in the ceremony.",
+              "type": "string"
+            },
+            "chain": {
+              "description": "The SHA-256 of each certificate of the chain the check built, leaf first and the matching root last.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Sha256Digest"
+              }
+            },
+            "checked_at": {
+              "description": "The instant the chain was checked at, RFC 3339 in UTC. A later check uses the same instant.",
+              "type": "string"
+            },
+            "claims": {
+              "description": "The attestation's claims, as stated.",
+              "$ref": "#/$defs/AttestedClaimsRecord"
+            },
+            "digest": {
+              "description": "The digest of the attestation as a PEM bundle, leaf first: the file it is written as.",
+              "$ref": "#/$defs/Sha256Digest"
+            },
+            "format": {
+              "description": "The attestation's format, such as yubico-piv/v1.",
+              "type": "string"
+            },
+            "key": {
+              "description": "The digest of the attested public key, as DER-encoded SubjectPublicKeyInfo: the key the step was given.",
+              "$ref": "#/$defs/Sha256Digest"
+            },
+            "requirements": {
+              "description": "Each requirement of the step, and whether it was met.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RequirementRecord"
+              }
+            },
+            "roots": {
+              "description": "The SHA-256 of each root the step offered as a trust anchor.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Sha256Digest"
+              }
+            },
+            "step": {
+              "description": "The step that checked the attestation.",
+              "$ref": "#/$defs/StepId"
+            },
+            "type": {
+              "type": "string",
+              "const": "key_attested"
+            },
+            "verifier": {
+              "description": "The library that checked the chain, and its settings.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "step",
+            "attestation",
+            "format",
+            "digest",
+            "key",
+            "chain",
+            "roots",
+            "checked_at",
+            "verifier",
+            "anchor",
+            "claims",
+            "requirements"
           ]
         },
         {

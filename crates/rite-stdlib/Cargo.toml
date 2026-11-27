@@ -78,7 +78,7 @@ name              = "pki_ecdsa"
 required-features = ["crypto", "pki"]
 
 [[test]]
-name              = "pki_key_usage"
+name              = "pki_profiles"
 required-features = ["crypto", "pki"]
 
 [[test]]

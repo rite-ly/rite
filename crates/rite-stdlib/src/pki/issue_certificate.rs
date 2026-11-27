@@ -25,6 +25,7 @@ use x509_cert::der::{
     self, Decode, DecodePem, Encode,
     asn1::{BitString, ObjectIdentifier, OctetString},
     oid::AssociatedOid,
+    referenced::OwnedToRef,
 };
 use x509_cert::{
     Certificate, TbsCertificate,
@@ -63,9 +64,10 @@ struct ProfileAdapter {
     path_len: Option<u8>,
     subject: Name,
     issuer: Name,
-    /// Whether an issuer certificate was supplied; gates the
-    /// `AuthorityKeyIdentifier` extension (self-signed roots carry none).
-    has_issuer_cert: bool,
+    /// The issuer certificate's key identifier, which the issued certificate's
+    /// `AuthorityKeyIdentifier` repeats. `None` without an issuer certificate:
+    /// a self-signed root carries no `AuthorityKeyIdentifier`.
+    issuer_key_id: Option<SubjectKeyIdentifier>,
     /// `SubjectAltName` carried over from the CSR's extensionRequest
     /// attribute, for profiles that honor it.
     san: Option<x509_cert::ext::Extension>,
@@ -83,17 +85,14 @@ impl BuilderProfile for ProfileAdapter {
     fn build_extensions(
         &self,
         spk: SubjectPublicKeyInfoRef<'_>,
-        issuer_spk: SubjectPublicKeyInfoRef<'_>,
+        _issuer_spk: SubjectPublicKeyInfoRef<'_>,
         _tbs: &TbsCertificate,
     ) -> x509_cert::builder::Result<Vec<x509_cert::ext::Extension>> {
-        // `issuer_spk` is derived by the builder from the issuing key
-        // adapter, so the AKI matches the signer by construction.
-        let issuer_spk = self.has_issuer_cert.then_some(issuer_spk);
         build_extensions(
             self.profile,
             self.path_len,
             spk,
-            issuer_spk,
+            self.issuer_key_id.as_ref(),
             self.san.as_ref(),
         )
         .map_err(x509_cert::builder::Error::from)
@@ -209,7 +208,11 @@ impl Action for IssueCertificateAction {
         let issuer_spki = issuer_cert_opt
             .as_ref()
             .map(|ic| ic.tbs_certificate().subject_public_key_info().clone());
-        let has_issuer_cert = issuer_spki.is_some();
+        let issuer_key_id = issuer_cert_opt
+            .as_ref()
+            .map(issuer_key_identifier)
+            .transpose()
+            .map_err(ActionError::Failed)?;
 
         let issuing_key = BackendIssuingKey::new(
             issuer_spki.unwrap_or_else(|| csr.info.public_key.clone()),
@@ -222,7 +225,7 @@ impl Action for IssueCertificateAction {
             path_len: typed.path_len,
             subject: csr.info.subject.clone(),
             issuer: issuer_name,
-            has_issuer_cert,
+            issuer_key_id,
             san: extract_san_from_csr(&csr),
         };
 
@@ -311,7 +314,7 @@ fn build_extensions(
     profile: CertProfile,
     path_len: Option<u8>,
     subject_spki: SubjectPublicKeyInfoRef<'_>,
-    issuer_spki: Option<SubjectPublicKeyInfoRef<'_>>,
+    issuer_key_id: Option<&SubjectKeyIdentifier>,
     san_ext: Option<&x509_cert::ext::Extension>,
 ) -> Result<x509_cert::ext::Extensions, der::Error> {
     let mut exts: x509_cert::ext::Extensions = Vec::new();
@@ -330,8 +333,8 @@ fn build_extensions(
                 KeyUsages::KeyCertSign | KeyUsages::CRLSign | KeyUsages::DigitalSignature,
             )?);
             exts.push(build_ski(subject_spki)?);
-            if let Some(spki) = issuer_spki {
-                exts.push(build_aki(spki)?);
+            if let Some(key_id) = issuer_key_id {
+                exts.push(build_aki(key_id)?);
             }
         }
         CertProfile::TlsServer => {
@@ -341,8 +344,8 @@ fn build_extensions(
             ))?);
             exts.push(build_eku(&[ID_KP_SERVER_AUTH])?);
             exts.push(build_ski(subject_spki)?);
-            if let Some(spki) = issuer_spki {
-                exts.push(build_aki(spki)?);
+            if let Some(key_id) = issuer_key_id {
+                exts.push(build_aki(key_id)?);
             }
             if let Some(ext) = san_ext {
                 exts.push(ext.clone());
@@ -352,8 +355,8 @@ fn build_extensions(
             exts.push(build_basic_constraints(false, None)?);
             exts.push(build_key_usage(KeyUsages::DigitalSignature.into())?);
             exts.push(build_eku(&[ID_KP_CODE_SIGNING])?);
-            if let Some(spki) = issuer_spki {
-                exts.push(build_aki(spki)?);
+            if let Some(key_id) = issuer_key_id {
+                exts.push(build_aki(key_id)?);
             }
         }
         // `CertProfile` is `#[non_exhaustive]`, so a crate downstream of the
@@ -362,8 +365,8 @@ fn build_extensions(
         // a guess: no CA rights, no extended key usage.
         CertProfile::EndEntity | _ => {
             exts.push(build_basic_constraints(false, None)?);
-            if let Some(spki) = issuer_spki {
-                exts.push(build_aki(spki)?);
+            if let Some(key_id) = issuer_key_id {
+                exts.push(build_aki(key_id)?);
             }
         }
     }
@@ -431,12 +434,34 @@ fn build_ski(spki: SubjectPublicKeyInfoRef<'_>) -> Result<x509_cert::ext::Extens
     })
 }
 
+/// The identifier a certificate issued by `issuer` names it by: the issuer's
+/// own `SubjectKeyIdentifier`, whatever method made it, since RFC 5280 section
+/// 4.2.1.2 requires the two to match. An issuer certificate without one gets
+/// the method-1 identifier of its key, which most issuers write.
+fn issuer_key_identifier(issuer: &Certificate) -> Result<SubjectKeyIdentifier, String> {
+    let tbs = issuer.tbs_certificate();
+    match tbs.get_extension::<SubjectKeyIdentifier>() {
+        Ok(Some((_critical, key_id))) => Ok(key_id),
+        Ok(None) => SubjectKeyIdentifier::try_from(tbs.subject_public_key_info().owned_to_ref())
+            .map_err(|e| {
+                format!(
+                    "issuer_cert has no subjectKeyIdentifier, and none derives from its key: {e}"
+                )
+            }),
+        Err(e) => Err(format!(
+            "issuer_cert's subjectKeyIdentifier is malformed or repeated: {e}"
+        )),
+    }
+}
+
 fn build_aki(
-    issuer_spki: SubjectPublicKeyInfoRef<'_>,
+    issuer_key_id: &SubjectKeyIdentifier,
 ) -> Result<x509_cert::ext::Extension, der::Error> {
-    // Key-identifier-only AKI, derived like the issuer's SKI (RFC 5280
-    // Section 4.2.1.1), provided by `x509_cert`.
-    let authority_key_id = AuthorityKeyIdentifier::try_from(issuer_spki)?;
+    // Key-identifier-only AKI (RFC 5280 Section 4.2.1.1).
+    let authority_key_id = AuthorityKeyIdentifier {
+        key_identifier: Some(issuer_key_id.0.clone()),
+        ..AuthorityKeyIdentifier::default()
+    };
     Ok(x509_cert::ext::Extension {
         extn_id: AuthorityKeyIdentifier::OID,
         critical: false,

@@ -15,18 +15,18 @@ backends:
 parameters:
   escrow_fingerprint:
     type: string
-    default: "sha256:0de3cef37d95cd5137ef49d1812e0d012699fd34ea71f3be80161201f68c888a"
+    default: "sha256:52039f14c6659f4c7e6d49abd5cf6247fba4a0de4d5255a24d28ffc3fae586c0"
     description: |
       SHA-256 of the escrow public key's SPKI DER, which a real ceremony would
-      obtain from the escrow holder out of band rather than read off the key
-      file it was handed.
+      obtain from the escrow holder out of band rather than read off the
+      certificate it was handed.
 
 materials:
-  escrow_pubkey:
-    type: public_key
-    path: "test_keys/escrow_public.pem"
-    title: "Escrow transport public key"
-    description: "Escrow holder's public transport key."
+  escrow_certificate:
+    type: certificate
+    path: "test_keys/escrow_certificate.pem"
+    title: "Escrow transport certificate"
+    description: "The escrow holder's certificate for their transport key."
 
 output:
   wrapped_demo_key:
@@ -126,14 +126,23 @@ sections:
         backend: openssl
         reads:
           key_to_wrap: ${artifact.demo_keypair}
-          recipient: ${artifact.escrow_pubkey}
-        # Pin the recipient to the fingerprint supplied out of band.
+          recipient: ${artifact.escrow_certificate}
+        # Pin the recipient to the fingerprint supplied out of band. The
+        # container names the recipient by the certificate's subject key
+        # identifier, so the escrow holder opens it without Rite. From this
+        # directory, with <run> the run's output directory:
+        #   openssl cms -decrypt -inform DER \
+        #     -in <run>/artifacts/escrowed_demo_key.p7c \
+        #     -recip test_keys/escrow_certificate.pem \
+        #     -passin pass:placeholder-secret -inkey test_keys/escrow_private.pem \
+        #     -out escrowed_demo_key.der
         with:
           expect_recipient: ${param.escrow_fingerprint}
         creates: escrowed_demo_key
         description: |
-          Wrap the key to the escrow public key. Confirm the recipient
-          fingerprint matches the value recorded for this ceremony.
+          Wrap the key to the public key in the escrow certificate. Confirm
+          the recipient fingerprint matches the value recorded for this
+          ceremony.
 
       wrap_under_kek:
         action: wrap_key

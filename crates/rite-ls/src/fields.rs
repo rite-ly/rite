@@ -400,10 +400,7 @@ pub fn completions(text: &str, pos: Position) -> Vec<CompletionItem> {
     let lines = outline(text);
     let row = pos.line as usize;
     let current = text.lines().nth(row).unwrap_or("");
-    let before = current
-        .char_indices()
-        .nth(pos.character as usize)
-        .map_or(current, |(end, _)| current.get(..end).unwrap_or(current));
+    let before = crate::convert::line_prefix(current, pos.character as usize);
     let typed = before.trim_start();
     let start = before.len().saturating_sub(typed.len());
     let (item, typed) = match typed.strip_prefix("- ") {

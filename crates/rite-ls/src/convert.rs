@@ -11,6 +11,18 @@ pub fn to_u32(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 
+/// The part of `line` before its `n`th character, or all of it when it is
+/// shorter.
+///
+/// The server counts columns in characters. The LSP default counts UTF-16
+/// units, which differ only after a character outside the Basic
+/// Multilingual Plane, such as an emoji.
+pub fn line_prefix(line: &str, n: usize) -> &str {
+    line.char_indices()
+        .nth(n)
+        .map_or(line, |(end, _)| line.get(..end).unwrap_or(line))
+}
+
 /// Convert a rite-resolver span (1-indexed) to an LSP position (0-indexed).
 pub fn span_to_position(span: Span) -> Position {
     Position {

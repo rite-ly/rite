@@ -203,21 +203,18 @@ impl Action for IssueCertificateAction {
                 ActionError::Failed(format!("Failed to build signature algorithm: {e}"))
             })?;
 
-        // The issuing key's public half: the issuer certificate's SPKI, or
-        // the CSR's own key when issuing self-signed (root) certificates.
-        let issuer_spki = issuer_cert_opt
-            .as_ref()
-            .map(|ic| ic.tbs_certificate().subject_public_key_info().clone());
-        let issuer_key_id = issuer_cert_opt
-            .as_ref()
-            .map(issuer_key_identifier)
-            .transpose()
-            .map_err(ActionError::Failed)?;
+        // The issuing key's public half and the identifier the certificate
+        // names it by: the issuer certificate's, or, issuing self-signed
+        // (root) certificates, the CSR's own key and no identifier.
+        let (issuer_spki, issuer_key_id) = match &issuer_cert_opt {
+            Some(ic) => (
+                ic.tbs_certificate().subject_public_key_info().clone(),
+                Some(issuer_key_identifier(ic).map_err(ActionError::Failed)?),
+            ),
+            None => (csr.info.public_key.clone(), None),
+        };
 
-        let issuing_key = BackendIssuingKey::new(
-            issuer_spki.unwrap_or_else(|| csr.info.public_key.clone()),
-            sig_alg,
-        );
+        let issuing_key = BackendIssuingKey::new(issuer_spki, sig_alg);
 
         let profile_name = profile.to_string();
         let adapter = ProfileAdapter {
@@ -331,9 +328,6 @@ fn build_extensions(
             exts.push(build_key_usage(
                 KeyUsages::KeyCertSign | KeyUsages::CRLSign | KeyUsages::DigitalSignature,
             )?);
-            if let Some(key_id) = issuer_key_id {
-                exts.push(build_aki(key_id)?);
-            }
         }
         CertProfile::TlsServer => {
             exts.push(build_basic_constraints(false, None)?);
@@ -341,9 +335,6 @@ fn build_extensions(
                 subject_spki.algorithm.oid,
             ))?);
             exts.push(build_eku(&[ID_KP_SERVER_AUTH])?);
-            if let Some(key_id) = issuer_key_id {
-                exts.push(build_aki(key_id)?);
-            }
             if let Some(ext) = san_ext {
                 exts.push(ext.clone());
             }
@@ -352,9 +343,6 @@ fn build_extensions(
             exts.push(build_basic_constraints(false, None)?);
             exts.push(build_key_usage(KeyUsages::DigitalSignature.into())?);
             exts.push(build_eku(&[ID_KP_CODE_SIGNING])?);
-            if let Some(key_id) = issuer_key_id {
-                exts.push(build_aki(key_id)?);
-            }
         }
         // `CertProfile` is `#[non_exhaustive]`, so a crate downstream of the
         // one defining it cannot match exhaustively. A profile with no
@@ -362,10 +350,13 @@ fn build_extensions(
         // a guess: no CA rights, no extended key usage.
         CertProfile::EndEntity | _ => {
             exts.push(build_basic_constraints(false, None)?);
-            if let Some(key_id) = issuer_key_id {
-                exts.push(build_aki(key_id)?);
-            }
         }
+    }
+
+    // A certificate issued under an issuer certificate names it; a
+    // self-signed one has no issuer to name.
+    if let Some(key_id) = issuer_key_id {
+        exts.push(build_aki(key_id)?);
     }
 
     // Every profile names its subject's key. RFC 5280 section 4.2.1.2

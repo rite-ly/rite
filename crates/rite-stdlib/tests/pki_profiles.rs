@@ -14,22 +14,19 @@ use openssl::ec::{EcGroup, EcKey};
 use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
 use openssl::pkey::PKey;
-use openssl::stack::Stack;
 use openssl::x509::extension::{BasicConstraints, KeyUsage};
-use openssl::x509::store::X509StoreBuilder;
-use openssl::x509::{
-    X509, X509Builder, X509ExtendedKeyUsage, X509Extension, X509KeyUsage, X509StoreContext,
-    X509StoreContextRef,
-};
+use openssl::x509::{X509, X509Builder, X509ExtendedKeyUsage, X509Extension, X509KeyUsage};
 use rite_model::{ArtifactId, ArtifactRef, NamedInput, StepId, StepInputs};
-use rite_openssl::OpenSslBackend;
+use rite_openssl::{ChainOutcome, OpenSslBackend, verify_certificate_chain};
 use rite_runtime::{
     Action, ArtifactValue, ExecutionState, StepInfo, test_support::ReporterHarness,
 };
 use rite_sdk::CertificateDer;
 use rite_stdlib::{GenerateCsrAction, GenerateKeyAction, IssueCertificateAction};
 use std::collections::HashMap;
-use x509_cert::der::Decode;
+use std::time::{SystemTime, UNIX_EPOCH};
+use x509_cert::der::{Decode, Encode, asn1::OctetString, oid::AssociatedOid};
+use x509_cert::ext::pkix::SubjectKeyIdentifier;
 use x509_cert::spki::SubjectPublicKeyInfoRef;
 
 const RSA_TLS_SERVER: X509KeyUsage =
@@ -94,9 +91,13 @@ impl Chain {
             ArtifactValue::Certificate(certificate) => Some(certificate.as_bytes().to_vec()),
             _ => None,
         };
+        self.store(id, value);
+        certificate
+    }
+
+    fn store(&mut self, id: ArtifactId, value: ArtifactValue) {
         let state = std::mem::replace(&mut self.state, empty_state());
         self.state = state.with_material(id, value);
-        certificate
     }
 
     /// Generate a key named `name` and a CSR for it, named `{name}_csr`.
@@ -130,10 +131,8 @@ impl Chain {
 
     /// Put a certificate made outside the chain in place as `name`.
     fn bring(&mut self, name: &str, certificate: &X509) {
-        let value =
-            ArtifactValue::Certificate(CertificateDer::new(certificate.to_der().unwrap()).unwrap());
-        let state = std::mem::replace(&mut self.state, empty_state());
-        self.state = state.with_material(ArtifactId::new(name), value);
+        let value = ArtifactValue::Certificate(der(certificate));
+        self.store(ArtifactId::new(name), value);
     }
 }
 
@@ -172,11 +171,11 @@ fn outside_ca(template: &X509, key_id: Option<&[u8]>) -> X509 {
         )
         .unwrap();
     if let Some(key_id) = key_id {
-        // The extension's value is the DER of an OCTET STRING holding the identifier.
-        let mut value = vec![0x04, u8::try_from(key_id.len()).unwrap()];
-        value.extend_from_slice(key_id);
+        let value = SubjectKeyIdentifier(OctetString::new(key_id).unwrap())
+            .to_der()
+            .unwrap();
         let extension = X509Extension::new_from_der(
-            &Asn1Object::from_str("2.5.29.14").unwrap(),
+            &Asn1Object::from_str(&SubjectKeyIdentifier::OID.to_string()).unwrap(),
             false,
             &Asn1OctetString::new_from_bytes(&value).unwrap(),
         )
@@ -187,17 +186,18 @@ fn outside_ca(template: &X509, key_id: Option<&[u8]>) -> X509 {
     builder.build()
 }
 
-/// Whether OpenSSL builds a chain from `leaf` to `ca`, which finds the issuer
-/// through the leaf's `authorityKeyIdentifier`.
-fn chains_to(leaf: &X509, ca: &X509) -> bool {
-    let mut store = X509StoreBuilder::new().unwrap();
-    store.add_cert(ca.clone()).unwrap();
-    let store = store.build();
-    let untrusted = Stack::new().unwrap();
-    let mut context = X509StoreContext::new().unwrap();
-    context
-        .init(&store, leaf, &untrusted, X509StoreContextRef::verify_cert)
+/// Whether `leaf` chains to `ca` by the check Rite runs, which finds the
+/// issuer through the leaf's `authorityKeyIdentifier`.
+fn chains_to(leaf: &X509, ca: &X509) -> ChainOutcome {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .unwrap()
+        .as_secs();
+    verify_certificate_chain(&der(leaf), &[], &[der(ca)], now.try_into().unwrap()).unwrap()
+}
+
+fn der(certificate: &X509) -> CertificateDer {
+    CertificateDer::new(certificate.to_der().unwrap()).unwrap()
 }
 
 fn empty_state() -> ExecutionState {
@@ -221,8 +221,11 @@ fn named_inputs(pairs: &[(&str, &str)]) -> StepInputs {
     )
 }
 
+/// Each profile carries the usages its subject's key allows and the method-1
+/// identifier of that key, so a tool that names a recipient or a signer by key
+/// identifier finds the certificate.
 #[test]
-fn every_profile_carries_the_usages_its_subject_key_allows() {
+fn every_profile_describes_its_subject_key() {
     let ca = X509KeyUsage::KEY_CERT_SIGN | X509KeyUsage::CRL_SIGN | X509KeyUsage::DIGITAL_SIGNATURE;
 
     for (algorithm, tls_server) in SIGNING_ALGORITHMS {
@@ -256,49 +259,18 @@ fn every_profile_carries_the_usages_its_subject_key_allows() {
                 extended_key_usage,
                 "{profile} on {algorithm}"
             );
+            assert_eq!(
+                cert.subject_key_id().map(Asn1OctetStringRef::as_slice),
+                Some(method_1(&cert).as_slice()),
+                "{profile} on {algorithm}"
+            );
         }
     }
 }
 
-/// Every profile carries the method-1 identifier of the subject's key, so a
-/// tool that names a recipient or a signer by key identifier finds the
-/// certificate.
-#[test]
-fn every_profile_carries_its_subject_key_identifier() {
-    let mut chain = Chain::new();
-    chain.key_and_csr("ca", "ECDSA-P256");
-    let ca = chain.issue(
-        "ca_cert",
-        &[("signing_key", "ca"), ("csr", "ca_csr")],
-        "root_ca",
-    );
-    assert_eq!(
-        ca.subject_key_id().map(Asn1OctetStringRef::as_slice),
-        Some(method_1(&ca).as_slice()),
-        "root_ca"
-    );
-
-    chain.key_and_csr("subject", "RSA-2048");
-    for profile in ["sub_ca", "tls_server", "code_signing", "end_entity"] {
-        let cert = chain.issue(
-            &format!("{profile}_cert"),
-            &[
-                ("signing_key", "ca"),
-                ("csr", "subject_csr"),
-                ("issuer_cert", "ca_cert"),
-            ],
-            profile,
-        );
-        assert_eq!(
-            cert.subject_key_id().map(Asn1OctetStringRef::as_slice),
-            Some(method_1(&cert).as_slice()),
-            "{profile}"
-        );
-    }
-}
-
-/// RFC 5280 section 4.2.1.2 method 1: the SHA-1 of the subjectPublicKey bits,
-/// computed here rather than by the `x509_cert` code under test.
+/// RFC 5280 section 4.2.1.2 method 1: the SHA-1 of the subjectPublicKey bits.
+/// OpenSSL hashes them, so the value does not come from the `x509_cert`
+/// derivation under test.
 fn method_1(certificate: &X509) -> Vec<u8> {
     let spki = certificate
         .public_key()
@@ -351,8 +323,9 @@ fn a_tls_server_certificate_takes_its_usages_from_the_subject_key_not_the_issuer
 }
 
 /// A certificate names its issuer by the identifier the issuer certificate
-/// carries, whatever method made it (RFC 5280 section 4.2.1.2), and OpenSSL
-/// finds the issuer through it.
+/// carries, whatever method made it (RFC 5280 section 4.2.1.2), and the chain
+/// check finds the issuer through it. A root issued under another CA's
+/// certificate, a cross-signed root, names its issuer too.
 #[test]
 fn a_certificate_names_its_issuer_by_the_issuer_certificates_own_key_identifier() {
     let mut chain = Chain::new();
@@ -362,26 +335,32 @@ fn a_certificate_names_its_issuer_by_the_issuer_certificates_own_key_identifier(
         &[("signing_key", "ca"), ("csr", "ca_csr")],
         "root_ca",
     );
-    let method_1 = method_1(&rite_ca);
+    let rite_key_id = method_1(&rite_ca);
     // Not derived from the key by any method, as an issuer drawing random
     // identifiers writes it.
     let foreign = [0x5a; 20];
 
     let issuers = [
-        ("rite_ca", rite_ca.clone(), method_1.clone()),
+        ("rite_ca", rite_ca.clone(), rite_key_id.clone()),
         (
             "foreign_ski_ca",
             outside_ca(&rite_ca, Some(&foreign)),
             foreign.to_vec(),
         ),
         // Without an identifier to repeat, the method-1 one of its key.
-        ("no_ski_ca", outside_ca(&rite_ca, None), method_1),
+        ("no_ski_ca", outside_ca(&rite_ca, None), rite_key_id),
     ];
 
     chain.key_and_csr("leaf", "ECDSA-P256");
     for (issuer, ca, expected) in issuers {
         chain.bring(issuer, &ca);
-        for profile in ["sub_ca", "tls_server", "code_signing", "end_entity"] {
+        for profile in [
+            "root_ca",
+            "sub_ca",
+            "tls_server",
+            "code_signing",
+            "end_entity",
+        ] {
             let cert = chain.issue(
                 &format!("{profile}_by_{issuer}"),
                 &[
@@ -396,7 +375,9 @@ fn a_certificate_names_its_issuer_by_the_issuer_certificates_own_key_identifier(
                 Some(expected.as_slice()),
                 "{profile} by {issuer}"
             );
-            assert!(chains_to(&cert, &ca), "{profile} by {issuer} chains");
+            if let ChainOutcome::Refused(why) = chains_to(&cert, &ca) {
+                panic!("{profile} by {issuer} does not chain: {why}");
+            }
         }
     }
 }

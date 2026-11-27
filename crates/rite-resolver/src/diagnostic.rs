@@ -11,15 +11,16 @@ use std::path::{Path, PathBuf};
 
 /// A source location within a YAML file (1-indexed line and column).
 ///
-/// `length` is the byte count of the token when known; `None` signals a point location
-/// that editors may extend to a word boundary.
+/// Columns and lengths count characters, as `marked_yaml` does. `length` is
+/// the token's length when known; `None` signals a point location that
+/// editors may extend to a word boundary.
 #[derive(Debug, Clone, Copy)]
 pub struct Span {
     /// Line number (1-indexed).
     pub line: usize,
-    /// Column number (1-indexed).
+    /// Column number (1-indexed), counted in characters.
     pub column: usize,
-    /// Byte length of the token, when known.
+    /// Length of the token in characters, when known.
     pub length: Option<usize>,
 }
 
@@ -116,7 +117,7 @@ pub enum ReferenceTarget {
 /// A single reference site collected during span walking.
 ///
 /// `span` is the 1-indexed position of the value scalar in the source file.
-/// `span.length` is always set for reference entries; it covers the token byte length
+/// `span.length` is always set for reference entries; it covers the token's characters,
 /// used for cursor containment and diagnostic range end: `[span.column, span.column + span.length)`.
 #[derive(Debug, Clone)]
 pub struct ReferenceEntry {

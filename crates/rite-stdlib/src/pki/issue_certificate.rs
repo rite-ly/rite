@@ -325,14 +325,12 @@ fn build_extensions(
             exts.push(build_key_usage(
                 KeyUsages::KeyCertSign | KeyUsages::CRLSign | KeyUsages::DigitalSignature,
             )?);
-            exts.push(build_ski(subject_spki)?);
         }
         CertProfile::SubCa => {
             exts.push(build_basic_constraints(true, Some(path_len.unwrap_or(0)))?);
             exts.push(build_key_usage(
                 KeyUsages::KeyCertSign | KeyUsages::CRLSign | KeyUsages::DigitalSignature,
             )?);
-            exts.push(build_ski(subject_spki)?);
             if let Some(key_id) = issuer_key_id {
                 exts.push(build_aki(key_id)?);
             }
@@ -343,7 +341,6 @@ fn build_extensions(
                 subject_spki.algorithm.oid,
             ))?);
             exts.push(build_eku(&[ID_KP_SERVER_AUTH])?);
-            exts.push(build_ski(subject_spki)?);
             if let Some(key_id) = issuer_key_id {
                 exts.push(build_aki(key_id)?);
             }
@@ -370,6 +367,16 @@ fn build_extensions(
             }
         }
     }
+
+    // Every profile names its subject's key. RFC 5280 section 4.2.1.2
+    // requires the identifier on a CA certificate and asks for it on every
+    // other, and tools that name a recipient or a signer by key identifier
+    // find the certificate through it. It grants nothing. The CA/Browser
+    // Forum profiles leave it off subscriber certificates (TLS Baseline
+    // Requirements section 7.1.2.7.6, Code Signing section 7.1.2.3). They
+    // apply to publicly trusted CAs, and a ceremony that issues leaf
+    // certificates rarely runs one.
+    exts.push(build_ski(subject_spki)?);
 
     Ok(exts)
 }

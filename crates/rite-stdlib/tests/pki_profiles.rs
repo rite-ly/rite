@@ -29,6 +29,8 @@ use rite_runtime::{
 use rite_sdk::CertificateDer;
 use rite_stdlib::{GenerateCsrAction, GenerateKeyAction, IssueCertificateAction};
 use std::collections::HashMap;
+use x509_cert::der::Decode;
+use x509_cert::spki::SubjectPublicKeyInfoRef;
 
 const RSA_TLS_SERVER: X509KeyUsage =
     X509KeyUsage::DIGITAL_SIGNATURE.union(X509KeyUsage::KEY_ENCIPHERMENT);
@@ -258,6 +260,55 @@ fn every_profile_carries_the_usages_its_subject_key_allows() {
     }
 }
 
+/// Every profile carries the method-1 identifier of the subject's key, so a
+/// tool that names a recipient or a signer by key identifier finds the
+/// certificate.
+#[test]
+fn every_profile_carries_its_subject_key_identifier() {
+    let mut chain = Chain::new();
+    chain.key_and_csr("ca", "ECDSA-P256");
+    let ca = chain.issue(
+        "ca_cert",
+        &[("signing_key", "ca"), ("csr", "ca_csr")],
+        "root_ca",
+    );
+    assert_eq!(
+        ca.subject_key_id().map(Asn1OctetStringRef::as_slice),
+        Some(method_1(&ca).as_slice()),
+        "root_ca"
+    );
+
+    chain.key_and_csr("subject", "RSA-2048");
+    for profile in ["sub_ca", "tls_server", "code_signing", "end_entity"] {
+        let cert = chain.issue(
+            &format!("{profile}_cert"),
+            &[
+                ("signing_key", "ca"),
+                ("csr", "subject_csr"),
+                ("issuer_cert", "ca_cert"),
+            ],
+            profile,
+        );
+        assert_eq!(
+            cert.subject_key_id().map(Asn1OctetStringRef::as_slice),
+            Some(method_1(&cert).as_slice()),
+            "{profile}"
+        );
+    }
+}
+
+/// RFC 5280 section 4.2.1.2 method 1: the SHA-1 of the subjectPublicKey bits,
+/// computed here rather than by the `x509_cert` code under test.
+fn method_1(certificate: &X509) -> Vec<u8> {
+    let spki = certificate
+        .public_key()
+        .unwrap()
+        .public_key_to_der()
+        .unwrap();
+    let spki = SubjectPublicKeyInfoRef::from_der(&spki).unwrap();
+    openssl::sha::sha1(spki.subject_public_key.raw_bytes()).to_vec()
+}
+
 /// The issuing key signs the certificate but says nothing about what the
 /// subject's key can do, so swapping the two must not change the usages.
 #[test]
@@ -311,7 +362,7 @@ fn a_certificate_names_its_issuer_by_the_issuer_certificates_own_key_identifier(
         &[("signing_key", "ca"), ("csr", "ca_csr")],
         "root_ca",
     );
-    let method_1 = rite_ca.subject_key_id().unwrap().as_slice().to_vec();
+    let method_1 = method_1(&rite_ca);
     // Not derived from the key by any method, as an issuer drawing random
     // identifiers writes it.
     let foreign = [0x5a; 20];

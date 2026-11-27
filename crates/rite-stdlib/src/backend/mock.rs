@@ -22,19 +22,20 @@
 //! - CI smoke tests and reproducible development without a backend device.
 
 use rite_sdk::{
-    AccessPolicy, AccessWhen, Attestation, AttestationBackend, Backend, BackendError, CertRef,
-    CertStoreBackend, KeyAlgorithm, KeyId, ManagementKey, ManagementKeyAlgorithm,
-    ManagementSession, PinDefaults, PivBackend, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot,
-    PivSlotInfo, PivTouchPolicy, PublicKeyDer, YubikeyBackend, YubikeySlotMetadata,
+    Attestation, AttestationBackend, Backend, BackendError, CertRef, CertStoreBackend,
+    KeyAlgorithm, KeyId, ManagementKey, ManagementKeyAlgorithm, ManagementSession, PinDefaults,
+    PivBackend, PivDeviceInfo, PivKeyOrigin, PivPinPolicy, PivSlot, PivSlotInfo, PivTouchPolicy,
+    PublicKeyDer, YubikeyBackend, YubikeySlotMetadata,
 };
 
 #[cfg(feature = "openssl")]
 use rite_openssl::OpenSslBackend;
 #[cfg(feature = "openssl")]
 use rite_sdk::{
-    DataKey, KeyAgreementBackend, KeyDecryptBackend, KeyMetadata, KeyPolicy, KeyProtection,
-    KeySpec, KeyStoreBackend, KeyTransportBackend, KeyUsages, RandomBackend, SecretKeyValue,
-    SignAlgorithm, SignBackend, VerifyBackend, WrapScheme, WrappedKey,
+    AccessPolicy, AccessWhen, DataKey, KeyAgreementBackend, KeyDecryptBackend, KeyMetadata,
+    KeyPolicy, KeyProtection, KeySpec, KeyStoreBackend, KeyTransportBackend, KeyUsages,
+    RandomBackend, SecretKeyValue, SignAlgorithm, SignBackend, VerifyBackend, WrapScheme,
+    WrappedKey,
 };
 #[cfg(feature = "openssl")]
 use zeroize::Zeroizing;
@@ -893,7 +894,10 @@ mod tests {
                     &wrapped,
                     &kek.key_id,
                     "unwrapped-key",
-                    crate::params::installed_key_default_policy(None),
+                    KeyPolicy {
+                        extractable: true,
+                        ..KeyPolicy::default()
+                    },
                     None,
                 )
                 .unwrap();

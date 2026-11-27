@@ -15,6 +15,7 @@ use secrecy::SecretBox;
 use serde_json::json;
 use zeroize::Zeroizing;
 
+use crate::backend::{agreement_backend, key_decrypt_backend, transport_backend};
 use crate::crypto::content::{self, SealedContent};
 
 /// Open a container `encrypt_data` produced, or one supplied as a material,
@@ -168,19 +169,15 @@ fn open_content_key(
     match (recipient, own) {
         // The KEK is a symmetric key the backend holds and unwraps under.
         (cms::RecipientInfo::Kek { wrapped_key, .. }, _) => {
-            let (transport, _) =
-                crate::crypto::transport_backend(backend, key_backend, "open a data key")?;
+            let (transport, _) = transport_backend(backend, key_backend, "open a data key")?;
             Ok(transport.open_data_key(key_id, wrapped_key, KeyProtection::AesKeyWrap)?)
         }
         // No KEK: the content key itself was encrypted to the public key, so
         // the backend decrypts it, and a device that can do nothing else with
         // the key opens this.
         (cms::RecipientInfo::KeyTransport { encrypted_key, .. }, _) => {
-            let decrypt = crate::crypto::key_decrypt_backend(
-                backend,
-                key_backend,
-                "decrypt a key to open a data key",
-            )?;
+            let decrypt =
+                key_decrypt_backend(backend, key_backend, "decrypt a key to open a data key")?;
             Ok(decrypt.decrypt_key(key_id, encrypted_key, KeyProtection::RsaOaepSha256)?)
         }
         // The backend agrees the secret, and the host derives the wrap key from
@@ -189,11 +186,8 @@ fn open_content_key(
             let ephemeral = agreed
                 .ephemeral_key(public_key)
                 .map_err(|e| ActionError::Failed(format!("Cannot read the container: {e}")))?;
-            let agreement = crate::crypto::agreement_backend(
-                backend,
-                key_backend,
-                "agree a key to open a data key",
-            )?;
+            let agreement =
+                agreement_backend(backend, key_backend, "agree a key to open a data key")?;
             let secret = agreement.agree(key_id, &ephemeral)?;
             Ok(content::open_key_agreement(agreed, &secret)?)
         }

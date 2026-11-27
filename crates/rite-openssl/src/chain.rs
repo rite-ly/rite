@@ -40,15 +40,12 @@ pub enum ChainOutcome {
 /// Check that `leaf` chains to one of `roots` at the instant `at`, a Unix
 /// time, through `untrusted` certificates.
 ///
-/// Only `roots` are trust anchors: a certificate in `untrusted` never is,
-/// even one that is self-signed, so a chain that stops short of a root is
-/// refused. No purpose is checked, since attestation leaves carry no
-/// extended key usage. The time is explicit so that a check made again later
-/// reaches the same answer, and because a device copies its attestation
-/// certificate's dates rather than reading a clock.
+/// Only `roots` are trust anchors. A certificate in `untrusted` never is,
+/// even if it is self-signed; a chain that stops short of a root is refused.
+/// No purpose is checked. The time is explicit so a repeated check can use
+/// the same instant.
 ///
-/// An issuer that is not marked as a CA is refused, as a YubiKey 4's
-/// attestation certificate is; the reason says so.
+/// An issuer that is not marked as a CA is refused.
 ///
 /// # Errors
 ///
@@ -135,8 +132,7 @@ fn refusal(error: X509VerifyResult, depth: u32) -> String {
     // An issuer without CA:TRUE.
     if error.as_raw() == openssl_sys::X509_V_ERR_INVALID_CA {
         return format!(
-            "the certificate at depth {depth} issues another without being a CA; a YubiKey 4 \
-             attestation certificate is made this way, and Rite does not accept it"
+            "the certificate at depth {depth} issues another without being marked as a CA"
         );
     }
     format!(
@@ -305,6 +301,6 @@ mod tests {
         let ChainOutcome::Refused(reason) = outcome else {
             panic!("a chain through a non-CA issuer was trusted");
         };
-        assert!(reason.contains("YubiKey 4"), "{reason}");
+        assert!(reason.contains("marked as a CA"), "{reason}");
     }
 }

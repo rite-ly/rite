@@ -13,7 +13,7 @@ lists what Rite does during a ceremony and what `ykman` does before it.
 | Generate a key in a slot, with its PIN and touch policies | `generate_key`, after the management key | `ykman piv keys generate` |
 | Sign, or open content sealed to a slot key | `sign_data`, `decrypt_data` | |
 | Read a slot's certificate | `piv_read_certificate` | |
-| Show whether a key was generated on the card, and with which policies | `attest_key`, then `verify_attestation` against Yubico's roots | |
+| Show whether a key was generated on the card, and its stated policies | `attest_key`, then `verify_attestation` against Yubico's roots | |
 | Write a certificate to a slot | | `ykman piv certificates import` |
 | Change the PIN, PUK or management key | | `ykman piv access` |
 | Set retries, unblock the PIN or reset the card | | `ykman piv access`, `ykman piv reset` |
@@ -52,10 +52,11 @@ ykman piv certificates import 9c 9c.crt
 ```
 
 The PIN and touch policies are fixed when the key is generated. The ceremony reads the
-key as a `backend_key` material and checks its origin and policies with `attest_key` and
-`verify_attestation`. It
-declares the PIN under `credentials:` with `grants: user` and `source: entered`, and an
-`authenticate` step asks the holder for it.
+key as a `backend_key` material. `attest_key` obtains the YubiKey's attestation;
+`verify_attestation` checks its chain against the roots named by the ceremony, confirms that
+it describes the key, and checks any required claims. Rite currently parses the
+`yubico-piv/v1` format. The ceremony declares the PIN under `credentials:` with
+`grants: user` and `source: entered`, and an `authenticate` step asks the holder for it.
 
 ## The management key in a ceremony
 
@@ -139,8 +140,10 @@ public-key information, not the private key. Three certificates matter here:
   factory; it chains to the Yubico PIV root CA.
 
 The attestation chain from the Yubico root through F9 to the slot key is evidence that the
-key was generated on the card. `verify_attestation` checks it against the roots the
-ceremony names, and against the PIN and touch policies the step requires.
-[`examples/piv/yubico/`](../examples/piv/yubico/) holds Yubico's roots and intermediates as
-Yubico publishes them: PIV Root CA Serial 263751 for firmware before 5.7.4, Attestation
-Root 1 and its intermediates after. Compare them with Yubico's before a real ceremony.
+key was generated on the card.
+
+For firmware before 5.7.4, YubiKey PIV attestations chain to PIV Root CA Serial 263751.
+Later firmware uses Attestation Root 1 and its intermediates. The example's
+[`yubico/` files](../examples/piv/yubico/) contain these certificates as Yubico publishes
+them. Check the roots against Yubico's publication before a real ceremony. A YubiKey 4
+attestation issuer is not marked as a CA, so Rite refuses its chain.

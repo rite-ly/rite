@@ -389,13 +389,13 @@
       ]
     },
     "AttestationRequirements": {
-      "description": "The claims an attestation must make. Each policy lists the values accepted, since `per_session` and `cached` do not compare. A claim named here that the attestation does not make fails the step.",
+      "description": "Claims an attestation must satisfy; a required claim the attestation does not make fails the step.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "authentication": {
-              "description": "When the device asks for the PIN before using the key: the values accepted, such as `[per_use]`.",
+              "description": "Accepted authentication policies.",
               "anyOf": [
                 {
                   "type": "array",
@@ -410,7 +410,7 @@
               ]
             },
             "presence": {
-              "description": "When the device asks for a touch before using the key: the values accepted, such as `[per_use, cached]`.",
+              "description": "Accepted presence policies.",
               "anyOf": [
                 {
                   "type": "array",
@@ -425,7 +425,7 @@
               ]
             },
             "serial": {
-              "description": "The serial number of the device that must hold the key.",
+              "description": "Device serial number that must match.",
               "anyOf": [
                 {
                   "type": "integer",
@@ -3879,13 +3879,13 @@
       ]
     },
     "VerifyAttestationParams": {
-      "description": "The `with` block of `verify_attestation`. The attestation, the key and the roots come through `reads:`.",
+      "description": "Parameters for `verify_attestation`. Inputs are supplied through `reads`.",
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "message": {
-              "description": "Shown to the operator when the step starts.",
+              "description": "Message shown when the step starts.",
               "anyOf": [
                 {
                   "type": "string"
@@ -3896,7 +3896,7 @@
               ]
             },
             "require": {
-              "description": "What the attestation must state; left out, only the chain and the key are checked.",
+              "description": "Claims the attestation must satisfy. If omitted, only the chain and key are checked.",
               "$ref": "#/$defs/AttestationRequirements"
             }
           },

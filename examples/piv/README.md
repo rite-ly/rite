@@ -19,15 +19,13 @@ Windows.
 
 Signs a release manifest with the key in PIV slot 9C. The ceremony declares
 the key as a `backend_key` material and the card's PIN under `credentials:`,
-and then:
+then:
 
 1. reads the key's certificate from the card;
-2. asks the card to attest the key (`attest_key`): a certificate over the key,
-   signed by the card's attestation key, followed by that key's certificate
-   from slot F9;
-3. checks the attestation (`verify_attestation`) against Yubico's roots: the
-   chain reaches a root, the attested key is the signing key, and the card
-   asks for the PIN before each use of it;
+2. obtains the key's attestation with `attest_key`;
+3. checks the attestation with `verify_attestation`: the chain against
+   Yubico's roots, the attested key against the signing key, and the required
+   PIN policy;
 4. asks for the PIN in an `authenticate` step and signs the manifest with
    `sign_data`;
 5. checks the signature in software against the certificate, and records
@@ -35,14 +33,13 @@ and then:
 
 Slot 9C must already contain the signing key and certificate, and the YubiKey
 needs firmware 5.3 or later, which reports a slot's public key. A YubiKey
-attests only keys it generated: a key imported into the slot stops the run at
-the attestation, and the error says why.
+attests only keys it generated; importing a key into the slot makes the
+attestation step fail.
 
-The transcript's `key_attested` fact records the chain that was built, the
-root it reached, the card's claims (origin, PIN and touch policies, firmware)
-and each requirement with what the card stated. It never records the card's
-serial, which links every ceremony made with the card. A relying party can
-repeat the check with the attestation file and Yubico's roots alone:
+The transcript records the chain, anchor, claims, and requirement results. It
+never records the card's serial. A relying party can repeat the chain check
+with the attestation bundle and the roots and intermediates named by the
+ceremony:
 
 ```sh
 openssl verify -CAfile examples/piv/yubico/attestation-roots.pem \
@@ -51,11 +48,10 @@ openssl verify -CAfile examples/piv/yubico/attestation-roots.pem \
   signing_key_attestation.pem
 ```
 
-`yubico/` holds Yubico's roots and intermediates as Yubico publishes them
-(`developers.yubico.com/PKI`): PIV Root CA Serial 263751, for firmware before
-5.7.4, and Attestation Root 1 with its intermediates for later firmware. The
-roots are the check's only trust anchors; compare them with Yubico's before a
-real ceremony.
+The [`yubico/` files](yubico/) contain Yubico's published roots and
+intermediates. See [the YubiKey guide](../../docs/yubikey.md) for which roots
+apply to each firmware generation. Check the roots against Yubico's
+publication before a real ceremony.
 
 Slot 9C clears the PIN after each signature, so a ceremony signing twice with
 it puts an `authenticate` step before each. To bind the ceremony to one card, add
@@ -87,11 +83,10 @@ cargo run -p rite --features piv,yubikey -- run examples/piv/yubikey_signing.rit
 ### Rehearse without a device
 
 `--dry-run` substitutes a mock backend, which supplies placeholder
-certificates and a synthetic slot key, and attests its keys under a rehearsal
-root whose private keys are in this repository. The run trusts that root
-beside Yubico's, and `key_attested` records the anchor as `rehearsal` with
-the requirements not exercised. The ceremony completes without a YubiKey, and
-nothing it produces is evidence of a real device:
+certificates and a synthetic slot key. It attests keys under a rehearsal root.
+The run trusts that root as well as the ceremony's roots; `key_attested`
+records the anchor as `rehearsal`, and the requirements do not affect the
+rehearsal result. Nothing the rehearsal produces is evidence of a real device:
 
 ```sh
 cargo run -p rite --features piv,yubikey -- run --dry-run --frontend headless \
@@ -100,11 +95,10 @@ cargo run -p rite --features piv,yubikey -- run --dry-run --frontend headless \
 
 ## `yubikey_key_generation.rite.yaml`: Key generation on the card
 
-Generates a P-256 signing key in slot 9C that needs the PIN before each use and
-a touch within 15 seconds of it, has the card attest the key, checks the
-attestation against Yubico's roots and the policy the ceremony asked for, and
-outputs the public key. The record then shows, on Yubico's word and not the
-operator's, that the card generated the key with those policies.
+Generates a P-256 signing key in slot 9C that requires the PIN before each use
+and a touch, cached for 15 seconds. The ceremony has the card attest the key,
+checks the attestation against Yubico's roots and the required policies, and
+outputs the public key.
 
 The card's management key is stored on it behind the PIN (`ykman piv access
 change-management-key --generate --protect`): the `authenticate` step asks for

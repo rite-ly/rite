@@ -574,105 +574,104 @@ pub fn compile_pattern(pattern: &str) -> Result<regex_lite::Regex, String> {
         .map_err(|e| format!("invalid pattern '{pattern}': {e}"))
 }
 
-/// What the root a key attestation chains to is, in
+/// The trust anchor used by an attestation check, in
 /// [`StepFact::KeyAttested`].
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[cfg_attr(test, schemars(description = "What the matching root is."))]
+#[cfg_attr(
+    test,
+    schemars(description = "The trust anchor used by an attestation check.")
+)]
 pub enum AttestationAnchor {
-    /// One of the roots the ceremony names.
+    /// A root named by the ceremony.
     Trusted,
-    /// The rehearsal root a dry run adds, to which anyone can chain.
+    /// The mock root trusted during a dry run; its requirements decide nothing.
     Rehearsal,
 }
 
-/// An attestation's claims as stated, in [`StepFact::KeyAttested`]. A claim
+/// Claims read from an attestation, in [`StepFact::KeyAttested`]. A claim
 /// the attestation does not make is absent.
 #[non_exhaustive]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, schemars(description = "An attestation's claims, as stated."))]
+#[cfg_attr(
+    test,
+    schemars(
+        description = "Claims read from an attestation. A claim the attestation does not make \
+        is absent."
+    )
+)]
 pub struct AttestedClaimsRecord {
     /// Where the key was made.
-    #[cfg_attr(test, schemars(description = "Where the key was made: generated."))]
-    pub origin: rite_sdk::AttestedOrigin,
-    /// When the device asks for the PIN before using the key.
     #[cfg_attr(
         test,
-        schemars(
-            description = "When the device asks for the PIN before using the key: never, \
-            per_session, cached or per_use, or a code Rite does not model."
-        )
+        schemars(description = "Where the key was made, as stated by the attestation.")
+    )]
+    pub origin: rite_sdk::AttestedOrigin,
+    /// The authentication policy stated.
+    #[cfg_attr(
+        test,
+        schemars(description = "The authentication policy stated by the attestation, if present.")
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authentication: Option<String>,
-    /// When the device asks for a touch before using the key.
+    /// The presence policy stated.
     #[cfg_attr(
         test,
-        schemars(
-            description = "When the device asks for a touch before using the key: never, \
-            cached or per_use, or a code Rite does not model."
-        )
+        schemars(description = "The presence policy stated by the attestation, if present.")
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presence: Option<String>,
-    /// The device's firmware version.
-    #[cfg_attr(test, schemars(description = "The device's firmware version."))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub firmware: Option<String>,
-    /// The device's form factor.
-    #[cfg_attr(test, schemars(description = "The device's form factor."))]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub form_factor: Option<String>,
-    /// Certifications the device's own certificate states.
+    /// The firmware version stated.
     #[cfg_attr(
         test,
-        schemars(description = "Certifications the device's certificate states, such as FIPS.")
+        schemars(description = "The firmware version stated by the attestation, if present.")
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firmware: Option<String>,
+    /// The form factor stated.
+    #[cfg_attr(
+        test,
+        schemars(description = "The form factor stated by the attestation, if present.")
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form_factor: Option<String>,
+    /// Certifications stated.
+    #[cfg_attr(
+        test,
+        schemars(description = "Certifications stated by the attestation.")
     )]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub certifications: Vec<String>,
 }
 
-/// One requirement of a `verify_attestation` step, in
+/// A requirement and whether the attested claim met it, in
 /// [`StepFact::KeyAttested`].
 #[non_exhaustive]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, schemars(description = "A requirement, and whether it was met."))]
+#[cfg_attr(
+    test,
+    schemars(description = "A requirement and whether the attested claim met it.")
+)]
 pub struct RequirementRecord {
-    /// The claim required: `authentication`, `presence` or `serial`.
-    #[cfg_attr(
-        test,
-        schemars(description = "The claim required: authentication, presence or serial.")
-    )]
+    /// The claim required.
+    #[cfg_attr(test, schemars(description = "The claim required."))]
     pub claim: String,
-    /// The values accepted. Empty for `serial`, which is not recorded.
-    #[cfg_attr(
-        test,
-        schemars(
-            description = "The values accepted. Empty for serial, which identifies the device \
-            and is not recorded."
-        )
-    )]
+    /// Values accepted by the requirement.
+    #[cfg_attr(test, schemars(description = "Values accepted by the requirement."))]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accepted: Vec<String>,
-    /// The value stated, if the attestation states one and it may be
-    /// recorded.
+    /// The value stated, if recorded.
     #[cfg_attr(
         test,
-        schemars(
-            description = "The value stated. Absent when the attestation states none, and \
-            for serial."
-        )
+        schemars(description = "The value stated by the attestation, if recorded.")
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed: Option<String>,
-    /// Whether the stated value is one accepted.
-    #[cfg_attr(
-        test,
-        schemars(description = "Whether the stated value is one accepted.")
-    )]
+    /// Whether the requirement was met.
+    #[cfg_attr(test, schemars(description = "Whether the requirement was met."))]
     pub met: bool,
 }
 
@@ -1560,9 +1559,7 @@ pub enum StepFact {
     #[cfg_attr(
         test,
         schemars(
-            description = "A key attestation was checked against the roots the ceremony \
-            names: the chain built, the key attested, and the claims against what the step \
-            requires. A rehearsal is checked against a rehearsal root and proves nothing."
+            description = "An attestation was checked against the roots named by the ceremony."
         )
     )]
     KeyAttested {
@@ -1572,22 +1569,18 @@ pub enum StepFact {
         /// The attestation, by its name in the ceremony.
         #[cfg_attr(
             test,
-            schemars(description = "The attestation, by its name in the ceremony.")
+            schemars(description = "The attestation's name in the ceremony.")
         )]
         attestation: String,
         /// The attestation's format.
-        #[cfg_attr(
-            test,
-            schemars(description = "The attestation's format, such as yubico-piv/v1.")
-        )]
+        #[cfg_attr(test, schemars(description = "The attestation format."))]
         format: String,
         /// The SHA-256 of the attestation as a PEM bundle, leaf first: the file
         /// a step writes it as.
         #[cfg_attr(
             test,
             schemars(
-                description = "The digest of the attestation as a PEM bundle, leaf first: the \
-                file it is written as.",
+                description = "The SHA-256 digest of the attestation bundle as PEM.",
                 with = "Sha256Digest"
             )
         )]
@@ -1596,8 +1589,8 @@ pub enum StepFact {
         #[cfg_attr(
             test,
             schemars(
-                description = "The digest of the attested public key, as DER-encoded \
-                SubjectPublicKeyInfo: the key the step was given.",
+                description = "The SHA-256 digest of the attested public key as DER-encoded \
+                SubjectPublicKeyInfo.",
                 with = "Sha256Digest"
             )
         )]
@@ -1606,8 +1599,8 @@ pub enum StepFact {
         #[cfg_attr(
             test,
             schemars(
-                description = "The SHA-256 of each certificate of the chain the check built, \
-                leaf first and the matching root last.",
+                description = "SHA-256 digests of the built chain certificates, leaf first and \
+                matching root last.",
                 with = "Vec<Sha256Digest>"
             )
         )]
@@ -1616,7 +1609,7 @@ pub enum StepFact {
         #[cfg_attr(
             test,
             schemars(
-                description = "The SHA-256 of each root the step offered as a trust anchor.",
+                description = "SHA-256 digests of the roots offered as trust anchors.",
                 with = "Vec<Sha256Digest>"
             )
         )]
@@ -1624,37 +1617,27 @@ pub enum StepFact {
         /// The instant the chain was checked at, so a later check can use it.
         #[cfg_attr(
             test,
-            schemars(
-                description = "The instant the chain was checked at, RFC 3339 in UTC. A \
-                later check uses the same instant."
-            )
+            schemars(description = "The instant the chain was checked, in UTC.")
         )]
         checked_at: String,
         /// What checked the chain, and how.
         #[cfg_attr(
             test,
-            schemars(description = "The library that checked the chain, and its settings.")
+            schemars(description = "The library and settings used to check the chain.")
         )]
         verifier: String,
         /// What the matching root is: one the ceremony trusts, or the
         /// rehearsal root a dry run adds. The requirements decide the step
         /// only for the first.
-        #[cfg_attr(
-            test,
-            schemars(
-                description = "trusted when the root is one the ceremony names, and the \
-                requirements decided the step; rehearsal when it is the root a dry run adds, \
-                which proves nothing and whose requirements decided nothing."
-            )
-        )]
+        #[cfg_attr(test, schemars(description = "The trust anchor used by the check."))]
         anchor: AttestationAnchor,
         /// The claims, as stated.
-        #[cfg_attr(test, schemars(description = "The attestation's claims, as stated."))]
+        #[cfg_attr(test, schemars(description = "Claims read from the attestation."))]
         claims: Box<AttestedClaimsRecord>,
         /// Each requirement of the step, with what was observed.
         #[cfg_attr(
             test,
-            schemars(description = "Each requirement of the step, and whether it was met.")
+            schemars(description = "The step's requirements and whether each was met.")
         )]
         requirements: Vec<RequirementRecord>,
     },

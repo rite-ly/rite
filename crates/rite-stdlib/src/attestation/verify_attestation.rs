@@ -19,23 +19,15 @@ use rite_sdk::{
     PublicKeyDer, StatedAccess,
 };
 
-/// Check a key attestation: its chain to one of the ceremony's roots, the key
-/// it attests, and its claims against what the step requires.
+/// Check an attestation against the roots named by the ceremony.
 ///
-/// Needs no device. The chain is checked at the step's time, which is
-/// recorded so a later check can use the same instant: a device copies its
-/// attestation certificate's dates and reads no clock. Only `roots` are
-/// trust anchors; the attestation's own device certificate and
-/// `intermediates` are untrusted, so the chain must reach a root, and it must
-/// run through the attestation's own certificates, which the claims are read
-/// from.
+/// The action checks the certificate chain, confirms that the attested key
+/// matches the supplied key, and evaluates any required claims. Only the
+/// named roots are trust anchors. Rite currently reads `yubico-piv/v1`.
 ///
-/// A dry run's devices are mocks attesting under the rehearsal root, so a dry
-/// run also trusts that root, beside the ceremony's. A chain to it is
-/// recorded as such. In a dry run its requirements are not exercised, since
-/// the stand-in device's claims say nothing about the real one; in a real run
-/// it fails the step, since that root's private keys are public and anyone
-/// can chain to it.
+/// In a dry run, the root the mock attests under is also trusted and recorded
+/// as `rehearsal`. A real run refuses that root because its private keys are
+/// public.
 pub struct VerifyAttestationAction;
 
 impl Action for VerifyAttestationAction {

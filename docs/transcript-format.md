@@ -144,13 +144,11 @@ as a material's name and the digest of its content, they are separate facts. The
   whether the fingerprint was pinned. It names the key and never the device, so it is public;
   the device is on `backend_bound`. A key that is not the declared one fails the step's
   attempt, which the operator can retry with the right device.
-- `key_attested`: a key attestation a `verify_attestation` step checked: its digest and
-  format, the attested key's fingerprint, the chain the check built and every root offered,
-  the instant it was checked at and the verifier, the anchor, the device's claims as stated,
-  and each requirement with the value stated and whether it was met. The anchor is `trusted`
-  for a root the ceremony names and `rehearsal` for the root a dry run trusts besides them,
-  whose requirements are not exercised. The device's serial is never recorded, only whether a
-  required one matched, so the fact is public.
+- `key_attested`: the attestation format and digest, the attested key fingerprint, the built
+  chain and offered roots, the check time and verifier, the trust anchor, the claims read from
+  the attestation, and the results of any requirements. `trusted` means the chain reached a
+  ceremony-named root; `rehearsal` means it reached the mock root used in a dry run. The
+  serial is not recorded.
 - `act_started`, `step_started`, `step_attempt_failed`, `step_completed`
 - `prompt_answered`: the prompt, and the answer unless it is a secret
 - `backend_operation`: the kind of operation, the backend the step ran with, and what went in and

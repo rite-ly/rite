@@ -68,29 +68,23 @@ generated with, signed by a committed stand-in for F9 that chains to a
 rehearsal root (`MOCK_ATTESTATION_ROOT`). Its private keys are in the
 repository: a chain to that root proves nothing.
 
-`verify_attestation` checks an attestation with no device:
+`verify_attestation` checks the attestation chain to a named root, confirms
+that the attested public key matches the step's key, and checks any required
+claims. The chain is checked at the step's time. Only `roots` are trust
+anchors; the attestation certificates and `intermediates` are untrusted. The
+chain must include the certificates belonging to the attestation, so claims are
+not accepted from a different certificate found in the intermediate list.
 
-- **Chain:** `rite_openssl::verify_certificate_chain` builds it from the leaf
-  through F9 and `intermediates` to one of `roots`. It checks at the step's
-  time, which the fact records, with partial chains off and no purpose check,
-  since Yubico leaves carry no extended key usage. Only `roots` are anchors,
-  and an F9 that is not a CA (YubiKey 4) is refused by name. The chain built
-  must run through the attestation's own leaf and F9, which the claims are
-  read from, and not through a look-alike F9 found among `intermediates`.
-- **Key:** the leaf's public key, re-encoded, must equal the key the step
-  reads.
-- **Claims:** `Attestation::claims` reads the Yubico extensions (`x509-cert`,
-  no PC/SC): `.3`, `.7`, `.8` and `.9` from the leaf only, `.10` and `.11`
-  from F9 only. Duplicates and wrong lengths are refused, and a policy code
-  outside never, once and always (a biometric one, say) is reported as
-  unmodelled, which no requirement accepts. Each `require` entry lists the
-  values it accepts; the serial is compared and never recorded.
-- **Rehearsal:** in a dry run (`HandlerContext::dry_run`) the step trusts the
-  rehearsal root besides `roots`. A chain to that root is recorded with
-  `anchor: rehearsal`, and its requirements do not fail the step; in a real
-  run it fails the step, even when `roots` holds it.
+Rite currently parses `yubico-piv/v1`. Its claims parser reads Yubico's X.509
+extensions. Claims it does not model cannot satisfy a requirement. A serial
+requirement is compared but the serial is not recorded.
 
-`rite check` warns about an attestation no step verifies.
+In a dry run, the root the mock attests under is also trusted. A chain to it is
+recorded as `rehearsal`; its requirements do not affect the rehearsal result. A
+real run refuses that root because its private keys are public. The mock's
+attestations are not evidence about a real device.
+
+`rite check` warns when an attestation has no step that verifies it.
 
 Neither PIV backend implements `VerifyBackend`. A card signs; a signature check
 needs only the public key, so it runs in software or on a backend named for the

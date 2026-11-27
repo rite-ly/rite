@@ -1,13 +1,11 @@
-//! Key attestation: a device's signed statement about one of its keys.
+//! A device's signed statement about a key.
 //!
-//! The statement is signed by a key the operator does not control, the
-//! device vendor's, so it is evidence a ceremony can carry to someone who
-//! trusts that vendor and not the operator. What it claims and how its claims
-//! are laid out depend on the vendor, which [`AttestationFormat`] names.
+//! The format determines how the evidence and its claims are represented.
+//! Rite currently reads `yubico-piv/v1`.
 //!
-//! This module holds the evidence only. Checking it, the chain to a vendor
-//! root and the claims against what a ceremony requires, is a separate step
-//! that needs no device.
+//! This module holds the evidence and reads its claims. Checking the chain
+//! against trusted roots and checking claims against ceremony requirements
+//! are separate operations.
 
 use std::cmp::Ordering;
 use std::fmt;

@@ -39,16 +39,13 @@ materials:
     type: bytes
     path: "test_data/release_manifest.txt"
     description: "Release manifest to be signed."
-  # The roots this ceremony trusts for attestations, as Yubico publishes
-  # them: PIV Root CA Serial 263751, which issued the attestation
-  # certificates of firmware before 5.7.4, and Attestation Root 1 after.
-  # A dry run also trusts a rehearsal root, which its mock attests under.
+  # Yubico's published roots. See docs/yubikey.md for the firmware versions
+  # each root covers. A dry run also trusts its mock's rehearsal root.
   yubico_roots:
     type: certificates
     path: "yubico/attestation-roots.pem"
     description: "Yubico's attestation roots, the only trust anchors of the check."
-  # Untrusted: the check may build a chain through them, as firmware 5.7.4
-  # and later needs, and never stops at one.
+  # Untrusted certificates that may help build a chain to a named root.
   yubico_intermediates:
     type: certificates
     path: "yubico/attestation-intermediates.pem"
@@ -125,10 +122,7 @@ sections:
           key: "${artifact.signing_key}"
         creates: signing_key_attestation
         description: "Ask the card for its signed statement that it generated the slot 9C key."
-      # Needs no card: the evidence and Yubico's roots suffice. The chain must
-      # reach one of the roots, the attested key must be the signing key, and
-      # the card must ask for the PIN before each signature, as 9C does by
-      # default. The record names the root that matched.
+      # Check the chain and key, and require the PIN policy used by slot 9C.
       check_attestation:
         action: verify_attestation
         reads:

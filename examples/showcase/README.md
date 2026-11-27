@@ -60,8 +60,9 @@ into this ceremony`, a weaker claim than a generated key earns. See
 
 Wraps one key twice and unwraps it back. `wrapping_key` names a key the backend
 holds, so the ceremony can undo the wrap; `recipient` names a public key held
-by someone else, so only they can open the result. The escrow wrap pins its
-recipient with `expect_recipient`, and the unwrap asserts the round trip with
+by someone else, so only they can open the result. The escrow wrap goes to the
+escrow holder's certificate, so `openssl cms -decrypt -recip` opens it, and pins
+its recipient with `expect_recipient`. The unwrap asserts the round trip with
 `expect_key`. The ceremony also wraps and recovers an AES-256 KEK, the way a
 KEK is carried to a second HSM, identified by its `cmac-aes:` check value.
 

@@ -22,7 +22,7 @@ parameters:
     description: "Number of sealed backup copies to produce and distribute."
   escrow_fingerprint:
     type: string
-    default: "sha256:0de3cef37d95cd5137ef49d1812e0d012699fd34ea71f3be80161201f68c888a"
+    default: "sha256:52039f14c6659f4c7e6d49abd5cf6247fba4a0de4d5255a24d28ffc3fae586c0"
     description: |
       SHA-256 of the escrow public key's SPKI DER, obtained from the escrow
       service out of band and printed on the worksheet. The wrap step checks
@@ -52,7 +52,7 @@ materials:
     path: "test_keys/escrow_public.pem"
     title: "Escrow transport public key"
     description: |
-      RSA-4096 public key of the escrow service. The freshly generated backup
+      RSA-2048 public key of the escrow service. The freshly generated backup
       private key is wrapped to this key so it can be archived without ever
       existing in plaintext outside the workstation.
 

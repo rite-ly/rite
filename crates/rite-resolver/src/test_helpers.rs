@@ -10,9 +10,15 @@ use crate::diagnostic::Span;
 #[allow(clippy::arithmetic_side_effects)]
 pub(crate) fn span_text(yaml: &str, span: Span) -> &str {
     let line = yaml.lines().nth(span.line.saturating_sub(1)).unwrap_or("");
+    // Columns and lengths count characters.
+    let byte = |chars: usize| {
+        line.char_indices()
+            .nth(chars)
+            .map_or(line.len(), |(at, _)| at)
+    };
     let start = span.column.saturating_sub(1);
     let end = start + span.length.unwrap_or(0);
-    line.get(start..end).unwrap_or("")
+    line.get(byte(start)..byte(end)).unwrap_or("")
 }
 
 pub(crate) fn annotate(yaml: &str, span: Span) -> String {

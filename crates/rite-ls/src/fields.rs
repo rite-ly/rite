@@ -8,9 +8,10 @@
 
 use std::sync::OnceLock;
 
+use crate::convert::CharPos;
 use serde_json::Value;
 use tower_lsp_server::ls_types::{
-    CompletionItem, CompletionItemKind, Documentation, MarkupContent, MarkupKind, Position,
+    CompletionItem, CompletionItemKind, Documentation, MarkupContent, MarkupKind,
 };
 
 /// The editor schema, generated on first use.
@@ -396,11 +397,11 @@ fn outline(text: &str) -> Vec<Option<Line<'_>>> {
 /// Completions from the schema at `pos`: the fields the map there takes and
 /// it does not hold yet, while a key is typed; the values a field takes,
 /// after its key.
-pub fn completions(text: &str, pos: Position) -> Vec<CompletionItem> {
+pub fn completions(text: &str, pos: CharPos) -> Vec<CompletionItem> {
     let lines = outline(text);
-    let row = pos.line as usize;
+    let row = pos.line;
     let current = text.lines().nth(row).unwrap_or("");
-    let before = crate::convert::line_prefix(current, pos.character as usize);
+    let before = crate::convert::line_prefix(current, pos.column);
     let typed = before.trim_start();
     let start = before.len().saturating_sub(typed.len());
     let (item, typed) = match typed.strip_prefix("- ") {
@@ -439,12 +440,12 @@ pub fn completions(text: &str, pos: Position) -> Vec<CompletionItem> {
 }
 
 /// What the schema says of the key or the value at `pos`, in Markdown.
-pub fn hover(text: &str, pos: Position) -> Option<String> {
+pub fn hover(text: &str, pos: CharPos) -> Option<String> {
     let lines = outline(text);
-    let row = pos.line as usize;
+    let row = pos.line;
     let line = lines.get(row).copied().flatten()?;
     let key = line.key?;
-    let column = pos.character as usize;
+    let column = pos.column;
     let place = place(&lines, row, line.start, line.item);
     let map = place.maps.last().cloned().unwrap_or_default();
     let node = field(&node_at(&place), key, &map);
@@ -489,9 +490,9 @@ acts:
     name: Opening
 ";
 
-    fn at(text: &str, line: u32, character: u32) -> Position {
+    fn at(text: &str, line: usize, column: usize) -> CharPos {
         let _ = text;
-        Position { line, character }
+        CharPos { line, column }
     }
 
     fn with_line(line: u32, text: &str) -> String {
@@ -504,7 +505,7 @@ acts:
         items.iter().map(|item| item.label.clone()).collect()
     }
 
-    fn hover_text(text: &str, pos: Position) -> String {
+    fn hover_text(text: &str, pos: CharPos) -> String {
         hover(text, pos).unwrap_or_default()
     }
 

@@ -596,6 +596,57 @@ sections:
     }
 
     #[test]
+    fn a_reference_after_non_ascii_text_spans_the_expression() {
+        // `é` is one column but two bytes.
+        let yaml = r#"
+version: "0.3"
+name: "Test"
+roles:
+  alice: {}
+sections:
+  main:
+    steps:
+      my_step:
+        action: confirm
+        role: "${role.alice}"
+        description: "Hélène signe pour ${role.alice}, é"
+"#;
+        let (_, span_map, _) = analyze_str(None, yaml);
+        let spans: Vec<_> = span_map
+            .references
+            .iter()
+            .filter(|e| e.value == "${role.alice}")
+            .map(|e| span_text(yaml, e.span))
+            .collect();
+        assert_eq!(spans, ["${role.alice}", "${role.alice}"]);
+    }
+
+    #[test]
+    fn a_quoted_value_after_a_non_ascii_comment_spans_its_text() {
+        // The comment's `é` puts every later byte one past its character.
+        let yaml = r#"
+# Cérémonie de test
+version: "0.3"
+name: "Test"
+roles:
+  alice: {}
+sections:
+  main:
+    steps:
+      my_step:
+        action: confirm
+        role: "${role.ghost}"
+"#;
+        let (_, _, diags) = analyze_str(None, yaml);
+        let span = diags
+            .iter()
+            .find(|d| d.message.contains("Unknown role"))
+            .and_then(|d| d.span)
+            .expect("an unknown role diagnostic with a span");
+        assert_eq!(span_text(yaml, span), "${role.ghost}");
+    }
+
+    #[test]
     fn unknown_role_diagnostic_spans_the_full_expression() {
         // When `role: "${role.ghost}"` references a role that does not exist,
         // the diagnostic must underline the entire "${role.ghost}" expression.

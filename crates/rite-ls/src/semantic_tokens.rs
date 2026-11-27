@@ -11,7 +11,7 @@
 //!     a declared identifier; the resolver records their spans in
 //!     `SpanMap.enum_values`.
 
-use crate::convert::{span_to_position, to_u32};
+use crate::convert::LineIndex;
 use rite_resolver::{Span, SpanMap};
 use tower_lsp_server::ls_types::{SemanticToken, SemanticTokenType};
 
@@ -37,7 +37,7 @@ pub const LEGEND: &[SemanticTokenType] = &[
 ];
 
 /// Build a delta-encoded semantic-token stream from the document's span map.
-pub fn tokens_for(span_map: &SpanMap) -> Vec<SemanticToken> {
+pub fn tokens_for(lines: &LineIndex, span_map: &SpanMap) -> Vec<SemanticToken> {
     let mut entries: Vec<TokenEntry> = Vec::new();
 
     for e in &span_map.references {
@@ -57,7 +57,7 @@ pub fn tokens_for(span_map: &SpanMap) -> Vec<SemanticToken> {
 
     entries.sort_by_key(|t| (t.span.line, t.span.column));
 
-    encode(&entries)
+    encode(lines, &entries)
 }
 
 #[derive(Clone, Copy)]
@@ -90,26 +90,27 @@ fn push_reference_tokens(out: &mut Vec<TokenEntry>, value: &str, span: Span) {
     }
 }
 
-/// Return the byte length of the contents inside `${...}`, or `None` if
+/// Return the length in characters of the contents inside `${...}`, or `None` if
 /// the value is not a `${...}` expression or is empty inside.
 fn expression_inside_len(value: &str) -> Option<usize> {
     let inside = value.strip_prefix("${")?.strip_suffix('}')?;
     if inside.is_empty() {
         None
     } else {
-        Some(inside.len())
+        Some(inside.chars().count())
     }
 }
 
 /// Convert sorted entries to LSP's delta-encoded representation.
-fn encode(entries: &[TokenEntry]) -> Vec<SemanticToken> {
+fn encode(lines: &LineIndex, entries: &[TokenEntry]) -> Vec<SemanticToken> {
     let mut tokens = Vec::with_capacity(entries.len());
     let mut prev_line: u32 = 0;
     let mut prev_col: u32 = 0;
 
     for e in entries {
-        let pos = span_to_position(e.span);
-        let length = to_u32(e.span.length.unwrap_or(0));
+        let range = lines.span_range(e.span);
+        let pos = range.start;
+        let length = range.end.character.saturating_sub(pos.character);
 
         let delta_line = pos.line.saturating_sub(prev_line);
         let delta_start = if delta_line == 0 {
@@ -137,12 +138,13 @@ fn encode(entries: &[TokenEntry]) -> Vec<SemanticToken> {
 #[allow(clippy::indexing_slicing)]
 mod tests {
     use super::{Kind, LEGEND, expression_inside_len, tokens_for};
+    use crate::convert::LineIndex;
     use rite_resolver::analyze_str;
     use tower_lsp_server::ls_types::SemanticTokenType;
 
     fn analyze(text: &str) -> Vec<super::SemanticToken> {
         let (_, span_map, _) = analyze_str(None, text);
-        tokens_for(&span_map)
+        tokens_for(&LineIndex::new(text), &span_map)
     }
 
     #[test]

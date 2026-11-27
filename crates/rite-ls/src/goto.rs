@@ -5,27 +5,26 @@
 //! to its declaration span via [`SpanMap::declaration_span`]. See
 //! [`rite_resolver::SpanMap`] for the reference-collection model.
 
-use crate::convert;
+use crate::convert::{CharPos, LineIndex};
 use rite_resolver::SpanMap;
-use tower_lsp_server::ls_types::{GotoDefinitionResponse, Location, Position, Uri};
+use tower_lsp_server::ls_types::{GotoDefinitionResponse, Location, Uri};
 
 /// Return a go-to-definition response for the cursor position, if applicable.
 pub fn goto_definition_at(
+    lines: &LineIndex,
     span_map: &SpanMap,
-    pos: Position,
+    pos: CharPos,
     uri: &Uri,
 ) -> Option<GotoDefinitionResponse> {
-    // LSP positions are 0-indexed; SpanMap uses 1-indexed (from marked-yaml).
-    let line = pos.line as usize + 1;
-    let col = pos.character as usize + 1;
+    // SpanMap is 1-indexed (from marked-yaml).
+    let (line, col) = pos.one_indexed();
 
     let target = span_map.find_target_at(line, col)?;
     let decl_span = span_map.declaration_span(target)?;
 
-    let target_pos = convert::span_to_position(decl_span);
     Some(GotoDefinitionResponse::Scalar(Location {
         uri: uri.clone(),
-        range: convert::point_range(target_pos),
+        range: lines.span_point(decl_span),
     }))
 }
 
@@ -63,11 +62,11 @@ mod tests {
             value: "${artifact.keypair}".to_string(),
         });
 
-        let pos = Position {
+        let pos = CharPos {
             line: 11, // 0-indexed → 12
-            character: 14,
+            column: 14,
         };
-        let resp = goto_definition_at(&span_map, pos, &make_uri())
+        let resp = goto_definition_at(&LineIndex::new(""), &span_map, pos, &make_uri())
             .expect("should resolve artifact reference");
         let GotoDefinitionResponse::Scalar(loc) = resp else {
             panic!("expected Scalar response");

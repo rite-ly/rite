@@ -13,19 +13,19 @@
 
 use std::fmt::Write as _;
 
+use crate::convert::CharPos;
 use rite_model::{ArtifactId, Ceremony, MaterialId};
 use rite_resolver::{ReferenceTarget, SpanMap};
-use tower_lsp_server::ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
+use tower_lsp_server::ls_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 /// Return hover content for the cursor position, if anything is known.
 pub fn hover_at(
     text: &str,
     span_map: &SpanMap,
     resolved: Option<&Ceremony>,
-    pos: Position,
+    pos: CharPos,
 ) -> Option<Hover> {
-    let line = pos.line as usize + 1; // 1-indexed
-    let col = pos.character as usize + 1;
+    let (line, col) = pos.one_indexed();
 
     span_map
         .find_target_at(line, col)
@@ -175,12 +175,12 @@ mod tests {
     #[test]
     fn extracts_word_at_middle() {
         let text = "    action: confirm\n";
-        let pos = Position {
+        let pos = CharPos {
             line: 0,
-            character: 14,
+            column: 14,
         };
         assert_eq!(
-            crate::convert::word_at_position(text, pos).as_deref(),
+            crate::convert::LineIndex::new(text).word_at(pos).as_deref(),
             Some("confirm")
         );
     }
@@ -190,9 +190,9 @@ mod tests {
     #[test]
     fn an_action_is_described_by_the_schema() {
         let span_map = SpanMap::default();
-        let pos = Position {
+        let pos = CharPos {
             line: 4,
-            character: 18,
+            column: 18,
         };
         let Some(Hover {
             contents: HoverContents::Markup(markup),
@@ -212,9 +212,9 @@ mod tests {
     fn returns_none_for_unknown_action() {
         let span_map = SpanMap::default();
         let text = STEP.replace("confirm", "unknown_action");
-        let pos = Position {
+        let pos = CharPos {
             line: 4,
-            character: 18,
+            column: 18,
         };
         assert!(hover_at(&text, &span_map, None, pos).is_none());
     }
@@ -241,9 +241,9 @@ mod tests {
             value: "${artifact.keypair}".to_string(),
         });
 
-        let pos = Position {
+        let pos = CharPos {
             line: 11,
-            character: 14,
+            column: 14,
         };
         let hover = hover_at("", &span_map, None, pos).expect("hover");
         if let HoverContents::Markup(MarkupContent { value, .. }) = hover.contents {
@@ -271,9 +271,9 @@ mod tests {
             value: "${artifact.ghost}".to_string(),
         });
 
-        let pos = Position {
+        let pos = CharPos {
             line: 11,
-            character: 14,
+            column: 14,
         };
         let hover = hover_at("", &span_map, None, pos).expect("hover");
         if let HoverContents::Markup(MarkupContent { value, .. }) = hover.contents {

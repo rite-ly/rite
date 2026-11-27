@@ -5,9 +5,9 @@
 //! that references that target. Lookups delegate to `SpanMap`. See
 //! [`rite_resolver::SpanMap`] for the reference-collection model.
 
-use crate::convert;
+use crate::convert::{CharPos, LineIndex};
 use rite_resolver::SpanMap;
-use tower_lsp_server::ls_types::{Location, Position, Uri};
+use tower_lsp_server::ls_types::{Location, Uri};
 
 /// Return all reference sites for the target at the cursor position.
 ///
@@ -23,20 +23,19 @@ use tower_lsp_server::ls_types::{Location, Position, Uri};
 ///
 /// Returns an empty vec if no known target is under the cursor.
 pub fn find_references_at(
+    lines: &LineIndex,
     span_map: &SpanMap,
-    text: &str,
-    pos: Position,
+    pos: CharPos,
     uri: &Uri,
     include_declaration: bool,
 ) -> Vec<Location> {
-    // LSP is 0-indexed; SpanMap is 1-indexed.
-    let line_1 = pos.line as usize + 1;
-    let col_1 = pos.character as usize + 1;
+    // SpanMap is 1-indexed.
+    let (line_1, col_1) = pos.one_indexed();
 
     let target = if let Some(t) = span_map.find_target_at(line_1, col_1) {
         t.clone()
     } else {
-        let word = crate::convert::word_at_position(text, pos).unwrap_or_default();
+        let word = lines.word_at(pos).unwrap_or_default();
         if word.is_empty() {
             return vec![];
         }
@@ -51,13 +50,13 @@ pub fn find_references_at(
     if include_declaration && let Some(decl_span) = span_map.declaration_span(&target) {
         locs.push(Location {
             uri: uri.clone(),
-            range: convert::point_range(convert::span_to_position(decl_span)),
+            range: lines.span_point(decl_span),
         });
     }
 
     locs.extend(span_map.references_for_target(&target).map(|e| Location {
         uri: uri.clone(),
-        range: convert::span_to_range(e.span),
+        range: lines.span_range(e.span),
     }));
 
     locs
@@ -69,6 +68,7 @@ mod tests {
     use super::*;
     use rite_model::{ArtifactId, SectionId, StepId};
     use rite_resolver::{ReferenceContext, ReferenceEntry, ReferenceTarget, Span};
+    use tower_lsp_server::ls_types::Position;
 
     fn make_uri() -> Uri {
         "file:///test.yaml".parse().unwrap()
@@ -115,11 +115,11 @@ mod tests {
         });
 
         // Cursor on the first reference value (line 10, col 15 → 0-indexed: 9, 14).
-        let pos = Position {
+        let pos = CharPos {
             line: 9,
-            character: 14,
+            column: 14,
         };
-        let locs = find_references_at(&span_map, "", pos, &make_uri(), false);
+        let locs = find_references_at(&LineIndex::new(""), &span_map, pos, &make_uri(), false);
         assert_eq!(locs.len(), 2, "should find both 'main' references");
         assert_eq!(locs[0].range.start.line, 9); // span line 10 → 0-indexed 9
         assert_eq!(locs[1].range.start.line, 19);
@@ -143,24 +143,65 @@ mod tests {
 
         // Cursor on the declaration itself (not a reference), word = "setup".
         let text = "    - id: setup\n";
-        let pos = Position {
+        let pos = CharPos {
             line: 0,
-            character: 11,
+            column: 11,
         };
-        let locs = find_references_at(&span_map, text, pos, &make_uri(), false);
+        let locs = find_references_at(&LineIndex::new(text), &span_map, pos, &make_uri(), false);
         assert_eq!(locs.len(), 1);
         assert_eq!(locs[0].range.start.line, 14); // span line 15 → 0-indexed 14
+    }
+
+    /// The client counts columns in UTF-16 units, and an emoji is two of
+    /// them: the cursor and the ranges are converted at the boundary.
+    #[test]
+    fn a_reference_after_an_emoji_is_found_and_ranged_in_utf16() {
+        let text = r#"
+version: "0.3"
+name: "Test"
+roles:
+  alice: {}
+sections:
+  main:
+    steps:
+      sign:
+        action: confirm
+        role: "${role.alice}"
+        description: "🔑 ${role.alice}"
+"#;
+        let (_, span_map, _) = rite_resolver::analyze_str(None, text);
+        let lines = LineIndex::new(text);
+        // `${` starts at character 24, UTF-16 unit 25.
+        let pos = lines.in_characters(Position {
+            line: 11,
+            character: 26,
+        });
+        let locs = find_references_at(&lines, &span_map, pos, &make_uri(), false);
+        let ranges: Vec<_> = locs
+            .iter()
+            .map(|l| {
+                (
+                    l.range.start.line,
+                    l.range.start.character,
+                    l.range.end.character,
+                )
+            })
+            .collect();
+        assert_eq!(ranges, [(10, 15, 28), (11, 25, 38)]);
     }
 
     #[test]
     fn returns_empty_when_no_target() {
         let span_map = SpanMap::default();
         let text = "  action: confirm\n";
-        let pos = Position {
+        let pos = CharPos {
             line: 0,
-            character: 12,
+            column: 12,
         };
-        assert!(find_references_at(&span_map, text, pos, &make_uri(), false).is_empty());
+        assert!(
+            find_references_at(&LineIndex::new(text), &span_map, pos, &make_uri(), false)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -177,11 +218,11 @@ mod tests {
             value: "main".to_string(),
         });
 
-        let pos = Position {
+        let pos = CharPos {
             line: 9,
-            character: 14,
+            column: 14,
         };
-        let locs = find_references_at(&span_map, "", pos, &make_uri(), true);
+        let locs = find_references_at(&LineIndex::new(""), &span_map, pos, &make_uri(), true);
         assert_eq!(locs.len(), 2);
         // Declaration site (span line 5 → 0-indexed 4) comes first.
         assert_eq!(locs[0].range.start.line, 4);
@@ -221,11 +262,11 @@ mod tests {
             value: "${artifact.keypair}".to_string(),
         });
 
-        let pos = Position {
+        let pos = CharPos {
             line: 11,
-            character: 14,
+            column: 14,
         };
-        let locs = find_references_at(&span_map, "", pos, &make_uri(), true);
+        let locs = find_references_at(&LineIndex::new(""), &span_map, pos, &make_uri(), true);
         // 1 declaration + 2 reference entries (creates: and reads:).
         assert_eq!(locs.len(), 3);
         assert_eq!(locs[0].range.start.line, 4); // declaration at line 5

@@ -72,11 +72,12 @@ pub(crate) fn lower_ceremony(
     }
 
     // Step B: walk spans; always runs, even if Step C fails.
-    let span_map = Lowerer::new(yaml).walk(&node);
+    let source = Source::new(yaml);
+    let span_map = Lowerer::new(&source).walk(&node);
 
     // The whole definition against its schema, which reports every key the
     // reader would drop and every field missing, each where it is.
-    let (schema_diags, refused_at) = check_document(path, yaml, &node);
+    let (schema_diags, refused_at) = check_document(path, &source, &node);
     let refused = !schema_diags.is_empty();
     diags.extend(schema_diags);
 
@@ -123,17 +124,17 @@ pub(crate) fn lower_ceremony(
 /// Walks the YAML node tree once and accumulates the [`SpanMap`] used by the LSP
 /// to enrich diagnostics with source locations and to power go-to-definition.
 ///
-/// Owning `yaml` and `span_map` together avoids the parameter sprawl that
+/// Owning `source` and `span_map` together avoids the parameter sprawl that
 /// grows every time we add a new walked field.
 struct Lowerer<'src> {
-    yaml: &'src str,
+    source: &'src Source<'src>,
     span_map: SpanMap,
 }
 
 impl<'src> Lowerer<'src> {
-    fn new(yaml: &'src str) -> Self {
+    fn new(source: &'src Source<'src>) -> Self {
         Self {
-            yaml,
+            source,
             span_map: SpanMap::default(),
         }
     }
@@ -385,10 +386,11 @@ impl<'src> Lowerer<'src> {
             let Some(value) = text.get(abs_start..end) else {
                 break;
             };
+            // Spans count characters; `abs_start` and `end` are bytes.
             let span = Span {
                 line: base.line,
-                column: base.column + abs_start,
-                length: Some(end - abs_start),
+                column: base.column + text.get(..abs_start).map_or(0, |t| t.chars().count()),
+                length: Some(value.chars().count()),
             };
 
             // The parse already worked out the namespace, the name, and whether
@@ -458,20 +460,41 @@ impl<'src> Lowerer<'src> {
 
     /// For quoted scalars `marked_yaml` places the START marker at the opening quote,
     /// but `scalar.as_str()` returns the content without the quotes, so we shift the
-    /// column by 1 when the source byte is `"` or `'`. This keeps byte offsets within
-    /// `as_str()` aligned with source characters for both quoted and unquoted scalars.
+    /// column by 1 when the source character is `"` or `'`. This keeps character
+    /// offsets within `as_str()` aligned with the source for both quoted and
+    /// unquoted scalars.
     fn scalar_to_span(&self, scalar: &MarkedScalarNode) -> Option<Span> {
-        scalar_span(self.yaml, scalar)
+        scalar_span(self.source, scalar)
     }
 }
 
-/// The span of `scalar`'s text in `yaml`, from its first content character.
-fn scalar_span(yaml: &str, scalar: &MarkedScalarNode) -> Option<Span> {
+/// The YAML text, by line, to read the character at a marker.
+struct Source<'a> {
+    lines: Vec<&'a str>,
+}
+
+impl<'a> Source<'a> {
+    fn new(yaml: &'a str) -> Self {
+        Self {
+            lines: yaml.lines().collect(),
+        }
+    }
+
+    /// The character at a 1-indexed line and column, as a marker counts them.
+    fn char_at(&self, line: usize, column: usize) -> Option<char> {
+        self.lines
+            .get(line.checked_sub(1)?)?
+            .chars()
+            .nth(column.checked_sub(1)?)
+    }
+}
+
+/// The span of `scalar`'s text in the source, from its first content character.
+fn scalar_span(source: &Source, scalar: &MarkedScalarNode) -> Option<Span> {
     let m = scalar.span().start()?;
-    let is_quoted = yaml
-        .as_bytes()
-        .get(m.character())
-        .is_some_and(|&b| b == b'"' || b == b'\'');
+    let is_quoted = source
+        .char_at(m.line(), m.column())
+        .is_some_and(|c| c == '"' || c == '\'');
     let column = if is_quoted {
         m.column().saturating_add(1)
     } else {
@@ -480,7 +503,7 @@ fn scalar_span(yaml: &str, scalar: &MarkedScalarNode) -> Option<Span> {
     Some(Span {
         line: m.line(),
         column,
-        length: Some(scalar.as_str().len()),
+        length: Some(scalar.as_str().chars().count()),
     })
 }
 
@@ -500,7 +523,7 @@ struct Refused {
 /// Every way the definition in `node` fails the ceremony schema, each
 /// pointing at the key or value it is about, in the order they are written,
 /// and what the schema refused there.
-fn check_document(path: Option<&Path>, yaml: &str, node: &Node) -> (Vec<Diagnostic>, Refused) {
+fn check_document(path: Option<&Path>, source: &Source, node: &Node) -> (Vec<Diagnostic>, Refused) {
     let diagnostic = |span, message| Diagnostic {
         path: path.map(Path::to_owned),
         span,
@@ -538,7 +561,7 @@ fn check_document(path: Option<&Path>, yaml: &str, node: &Node) -> (Vec<Diagnost
             }
             let message = check.message_in(&document, &violation, &place, &within);
             let (at, anchor) = violation.anchor();
-            let span = span_at(yaml, node, &at, anchor);
+            let span = span_at(source, node, &at, anchor);
             // Two keywords can say the same thing about one entry.
             let key = (message.clone(), span.map(|span| (span.line, span.column)));
             reported.insert(key).then(|| diagnostic(span, message))
@@ -612,11 +635,11 @@ fn remove(node: &mut Node, parents: &[String], last: &str) {
 ///
 /// Where `at` names nothing written, as an empty `reads:` the check reads in
 /// for one left out, it is the key of the nearest entry that is written.
-fn span_at(yaml: &str, node: &Node, at: &Pointer, anchor: Anchor) -> Option<Span> {
+fn span_at(source: &Source, node: &Node, at: &Pointer, anchor: Anchor) -> Option<Span> {
     let mut segments = at.segments();
     let mut anchor = anchor;
     loop {
-        if let Some(span) = locate(yaml, node, segments, anchor) {
+        if let Some(span) = locate(source, node, segments, anchor) {
             return Some(span);
         }
         segments = segments.split_last()?.1;
@@ -629,7 +652,7 @@ fn span_at(yaml: &str, node: &Node, at: &Pointer, anchor: Anchor) -> Option<Span
 /// it starts on the next line, and so is a key with nothing after it; an
 /// entry of a list has no key, so its first key is used, and so is the
 /// document's.
-fn locate(yaml: &str, node: &Node, segments: &[String], anchor: Anchor) -> Option<Span> {
+fn locate(source: &Source, node: &Node, segments: &[String], anchor: Anchor) -> Option<Span> {
     let mut current = node;
     let mut key = None;
     for segment in segments {
@@ -642,15 +665,15 @@ fn locate(yaml: &str, node: &Node, segments: &[String], anchor: Anchor) -> Optio
             key = None;
         }
     }
-    let key_span = key.and_then(|key| scalar_span(yaml, key));
+    let key_span = key.and_then(|key| scalar_span(source, key));
     let first_key = || {
         current
             .as_mapping()
             .and_then(|map| map.iter().next())
-            .and_then(|(key, _)| scalar_span(yaml, key))
+            .and_then(|(key, _)| scalar_span(source, key))
     };
     let value = || match current.as_scalar() {
-        Some(scalar) if !scalar.as_str().is_empty() => scalar_span(yaml, scalar),
+        Some(scalar) if !scalar.as_str().is_empty() => scalar_span(source, scalar),
         Some(_) | None => key_span
             .or_else(first_key)
             .or_else(|| node_to_span(current)),

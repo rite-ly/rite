@@ -66,7 +66,9 @@ use std::sync::Arc;
 
 use rite_runtime::{ActionRegistry, BackendFactory};
 
-pub use backend::{MockBackend, create_backend, default_backend_factory, is_built};
+pub use backend::{
+    MockBackend, create_backend, default_backend_factory, is_built, rehearsal_anchors,
+};
 
 #[cfg(all(feature = "attestation", feature = "openssl"))]
 pub use attestation::VerifyAttestationAction;

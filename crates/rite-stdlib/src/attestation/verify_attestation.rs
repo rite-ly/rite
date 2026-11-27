@@ -80,7 +80,15 @@ impl Action for VerifyAttestationAction {
         }
 
         let claims = attestation.claims()?;
-        let anchor = if chain.root().is_some_and(is_rehearsal_root) {
+        // A root the run offered as a rehearsal anchor proves nothing, and nor
+        // does the mock's, offered or not: its private keys are public.
+        let offered = chain
+            .root()
+            .is_some_and(|root| ctx.rehearsal_anchors.contains(root));
+        let public = chain
+            .root()
+            .is_some_and(|root| crate::rehearsal_anchors().contains(root));
+        let anchor = if offered || public {
             AttestationAnchor::Rehearsal
         } else {
             AttestationAnchor::Trusted
@@ -109,13 +117,13 @@ impl Action for VerifyAttestationAction {
             requirements,
         })?;
 
-        // Its private keys are public: outside a rehearsal, a chain to it is
-        // a chain anyone could have made, with any claims.
-        if anchor == AttestationAnchor::Rehearsal && !ctx.dry_run {
+        // Unless the run offered it, a chain to the mock's root is a chain
+        // anyone could have made, with any claims.
+        if public && !offered {
             return Err(ActionError::Failed(format!(
-                "attestation '{attestation_name}' chains to the rehearsal root, whose private \
-                 keys are public, and this run is not a rehearsal; '{roots_name}' must hold \
-                 only the vendor's roots"
+                "attestation '{attestation_name}' chains to the mock's rehearsal root, whose \
+                 private keys are public, outside a rehearsal; '{roots_name}' must hold only \
+                 the vendor's roots"
             )));
         }
         // A rehearsal's requirements are not exercised: its stand-in device's
@@ -203,9 +211,7 @@ impl<'a> Inputs<'a> {
             None => Vec::new(),
         };
         let mut roots = certificates(ctx.artifacts, roots_ref, "roots")?;
-        if ctx.dry_run {
-            roots.extend(rehearsal_root()?);
-        }
+        roots.extend_from_slice(ctx.rehearsal_anchors);
         Ok(Self {
             attestation,
             attestation_value,
@@ -298,34 +304,6 @@ fn check(
         records.push(RequirementRecord::new("serial", Vec::new(), None, met));
     }
     (records, unmet)
-}
-
-/// The root a dry run's mock attests under, to which anyone can make a chain.
-fn rehearsal_root() -> Result<Option<CertificateDer>, ActionError> {
-    #[cfg(feature = "pki")]
-    {
-        CertificateDer::new(crate::backend::MOCK_ATTESTATION_ROOT.to_vec())
-            .map(Some)
-            .map_err(|e| ActionError::Failed(format!("the rehearsal root does not parse: {e}")))
-    }
-    // Without `pki` the mock attests nothing, so there is no root to trust.
-    #[cfg(not(feature = "pki"))]
-    {
-        Ok(None)
-    }
-}
-
-/// Whether `root` is the rehearsal root.
-fn is_rehearsal_root(root: &CertificateDer) -> bool {
-    #[cfg(feature = "pki")]
-    {
-        root.as_bytes() == crate::backend::MOCK_ATTESTATION_ROOT
-    }
-    #[cfg(not(feature = "pki"))]
-    {
-        let _ = root;
-        false
-    }
 }
 
 #[cfg(all(test, feature = "pki"))]
@@ -470,10 +448,11 @@ mod tests {
         (device.attested_key(), attestation, der(&device.root))
     }
 
-    /// The step in a rehearsal when `dry_run`, otherwise in a real run, with
-    /// `intermediates` when there are any.
+    /// The step in a rehearsal, which offers the mock's root as an anchor,
+    /// when `rehearsal`, otherwise in a real run; with `intermediates` when
+    /// there are any.
     fn run(
-        dry_run: bool,
+        rehearsal: bool,
         attestation: Attestation,
         key: PublicKeyDer,
         roots: Vec<CertificateDer>,
@@ -513,13 +492,18 @@ mod tests {
         }
         step.typed_inputs = Some(StepInputs::Named(inputs));
         let (params, roles, materials) = (HashMap::new(), HashMap::new(), HashMap::new());
+        let anchors = if rehearsal {
+            crate::rehearsal_anchors()
+        } else {
+            Vec::new()
+        };
         let ctx = HandlerContext {
             params: &params,
             artifacts: &artifacts,
             roles: &roles,
             materials: &materials,
             credentials: &HashMap::new(),
-            dry_run,
+            rehearsal_anchors: &anchors,
         };
         let result = {
             let mut reporter = harness.reporter(StepId::new("check"));
@@ -682,7 +666,7 @@ mod tests {
         let none = serde_json::json!({});
         let (result, harness) = run(false, attestation, key, vec![root], Vec::new(), &none);
         let error = result.expect_err("a real run does not take the rehearsal root");
-        assert!(error.to_string().contains("not a rehearsal"), "{error}");
+        assert!(error.to_string().contains("outside a rehearsal"), "{error}");
         assert_eq!(recorded(&harness).0, AttestationAnchor::Rehearsal);
     }
 }

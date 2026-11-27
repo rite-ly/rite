@@ -149,7 +149,8 @@ pub fn run(args: Args) {
         args.dry_run,
         startup,
         crate::system_info::run_host(),
-    );
+    )
+    .with_rehearsal_anchors(rite_stdlib::rehearsal_anchors());
     let exec_handle = std::thread::spawn(move || executor.run(&cmd_rx, &event_tx, sink));
 
     let frontend_result = run_frontend(frontend, &cmd_tx, event_rx, args.dry_run);

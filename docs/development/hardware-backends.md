@@ -320,13 +320,33 @@ or a whole `policy` given by an expression, which it cannot check. Only `generat
 `unwrap_key` refuse them as unknown. The backends refuse the same at run time.
 
 After generation, `KeyStoreBackend::access_policy` reads the policy back from
-the device; on a YubiKey, from the slot metadata (firmware 5.3 and later). The
+the device; on a PIV card, from the slot metadata, a Yubico extension (firmware
+5.3 and later), through either provider. The
 `generate_key` record holds the declared axes under `inputs.policy` and the
 device's report under `outputs.access`, where an axis the step left out shows
 as the slot's default. A declared axis the device reports with another value
-fails the step, after the record is written. A device that cannot report the
-policy leaves `outputs.access` out with a warning. The mock accepts what a
-YubiKey does, on keypairs only, and reports it back the same way.
+fails the step, after the record is written. A device that does not report the
+policy leaves `outputs.access` out, and a read that fails also warns. The mock
+accepts what a YubiKey does, on keypairs only, and reports it back the same way.
+
+## Touch
+
+Before a step signs, agrees or decrypts with a key, it reads the key's access
+policy, and if `presence` is anything but `never` it tells the operator to
+touch the device if it blinks; the stdlib accessors that hand an action the
+operation (`sign_backend`, `agreement_backend` and `key_decrypt_backend` in
+`backend/mod.rs`) do this, so an action does not. A cached touch
+may still be valid, so the device may not blink. A policy the device does not
+report, or fails to read, gives no notice.
+
+A YubiKey answers a touch that never came with SW `6982`, the status of a
+missing PIN, and the `yubikey` crate maps both to `AuthenticationError`. The
+card checks the PIN at once and gives up on a touch after 15 seconds, so
+`rite-piv` reports a refusal that came 5 seconds or more after the operation
+was sent, from a key whose policy asks for presence, as
+`BackendError::PresenceNotConfirmed` ("No touch"), and any other as
+`PinRequired`. Both are retriable; only `PinRequired` sends the operator to
+the `authenticate` step.
 
 ## Authenticating with the management key
 

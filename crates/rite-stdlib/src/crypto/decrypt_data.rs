@@ -96,6 +96,7 @@ impl Action for DecryptDataAction {
             backend,
             &key_backend,
             &backend_key_id,
+            reporter,
         )?;
         if data_key.len() != content::KEY_BYTES {
             return Err(ActionError::Failed(format!(
@@ -165,6 +166,7 @@ fn open_content_key(
     backend: Option<&mut dyn Backend>,
     key_backend: &str,
     key_id: &rite_sdk::KeyId,
+    reporter: &mut Reporter<'_>,
 ) -> Result<Zeroizing<Vec<u8>>, ActionError> {
     match (recipient, own) {
         // The KEK is a symmetric key the backend holds and unwraps under.
@@ -176,8 +178,13 @@ fn open_content_key(
         // the backend decrypts it, and a device that can do nothing else with
         // the key opens this.
         (cms::RecipientInfo::KeyTransport { encrypted_key, .. }, _) => {
-            let decrypt =
-                key_decrypt_backend(backend, key_backend, "decrypt a key to open a data key")?;
+            let decrypt = key_decrypt_backend(
+                backend,
+                key_backend,
+                key_id,
+                "decrypt a key to open a data key",
+                reporter,
+            )?;
             Ok(decrypt.decrypt_key(key_id, encrypted_key, KeyProtection::RsaOaepSha256)?)
         }
         // The backend agrees the secret, and the host derives the wrap key from
@@ -186,8 +193,13 @@ fn open_content_key(
             let ephemeral = agreed
                 .ephemeral_key(public_key)
                 .map_err(|e| ActionError::Failed(format!("Cannot read the container: {e}")))?;
-            let agreement =
-                agreement_backend(backend, key_backend, "agree a key to open a data key")?;
+            let agreement = agreement_backend(
+                backend,
+                key_backend,
+                key_id,
+                "agree a key to open a data key",
+                reporter,
+            )?;
             let secret = agreement.agree(key_id, &ephemeral)?;
             Ok(content::open_key_agreement(agreed, &secret)?)
         }

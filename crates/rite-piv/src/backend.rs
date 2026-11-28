@@ -110,6 +110,14 @@ impl KeyStoreBackend for PivCardBackend {
         )
     }
 
+    /// Read from the slot metadata, a Yubico extension: a card that does
+    /// not report it gives `None`. A key it reports a touch policy for is
+    /// then announced, whichever provider drives the card.
+    fn access_policy(&self, key_id: &KeyId) -> Result<Option<AccessPolicy>, BackendError> {
+        let mut yk = self.device()?;
+        ops::access_policy(&mut yk, key_id)
+    }
+
     fn import_key(
         &mut self,
         _spec: KeySpec,

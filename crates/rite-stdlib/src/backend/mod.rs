@@ -46,7 +46,7 @@ pub fn rehearsal_anchors() -> Vec<CertificateDer> {
 /// Shared by every action that hands a key to its backend, so an operator who
 /// points a step at the wrong backend gets the same message from each.
 #[cfg_attr(
-    not(any(feature = "crypto", feature = "attestation")),
+    not(any(feature = "crypto", feature = "attestation", feature = "pki")),
     allow(dead_code)
 )]
 pub(crate) fn require_key_owner(
@@ -97,17 +97,22 @@ pub(crate) fn transport_backend<'a>(
 /// # Errors
 ///
 /// As [`transport_backend`], and the same "Backend '<name>' cannot <operation>"
-/// when the backend does not agree keys.
+/// when the backend does not agree keys. Announces a key that asks for a
+/// touch, as [`announce_presence`] says.
 #[cfg(feature = "crypto")]
 pub(crate) fn agreement_backend<'a>(
     backend: Option<&'a mut dyn Backend>,
     key_backend: &str,
+    key_id: &KeyId,
     operation: &str,
+    reporter: &mut rite_runtime::Reporter<'_>,
 ) -> Result<&'a mut dyn KeyAgreementBackend, ActionError> {
     let (backend, name) = holding_backend(backend, key_backend, operation)?;
-    backend
+    let agreement = backend
         .as_agreement_mut()
-        .ok_or_else(|| ActionError::Failed(format!("Backend '{name}' cannot {operation}")))
+        .ok_or_else(|| ActionError::Failed(format!("Backend '{name}' cannot {operation}")))?;
+    announce_presence(agreement, key_id, reporter)?;
+    Ok(agreement)
 }
 
 /// [`transport_backend`] for a step that needs the backend to decrypt a key
@@ -116,17 +121,22 @@ pub(crate) fn agreement_backend<'a>(
 /// # Errors
 ///
 /// As [`transport_backend`], and the same "Backend '<name>' cannot <operation>"
-/// when the backend does not decrypt keys.
+/// when the backend does not decrypt keys. Announces a key that asks for a
+/// touch, as [`announce_presence`] says.
 #[cfg(feature = "crypto")]
 pub(crate) fn key_decrypt_backend<'a>(
     backend: Option<&'a mut dyn Backend>,
     key_backend: &str,
+    key_id: &KeyId,
     operation: &str,
+    reporter: &mut rite_runtime::Reporter<'_>,
 ) -> Result<&'a mut dyn KeyDecryptBackend, ActionError> {
     let (backend, name) = holding_backend(backend, key_backend, operation)?;
-    backend
+    let decrypt = backend
         .as_key_decrypt_mut()
-        .ok_or_else(|| ActionError::Failed(format!("Backend '{name}' cannot {operation}")))
+        .ok_or_else(|| ActionError::Failed(format!("Backend '{name}' cannot {operation}")))?;
+    announce_presence(decrypt, key_id, reporter)?;
+    Ok(decrypt)
 }
 
 /// The two questions every key operation asks first, and the backend's name.
@@ -144,6 +154,64 @@ fn holding_backend<'a>(
         )));
     }
     Ok((backend, name))
+}
+
+/// Tell the operator to touch the device if the key `key_id` names asks
+/// for a person at it.
+///
+/// Called right before the operation: once the device waits for a touch,
+/// the step blocks until one comes or the device gives up, and nothing else
+/// tells the operator why. A backend that reports no policy, or fails to
+/// read it, gets no notice; the operation reports what the device does.
+///
+/// Called by the accessors that hand an action a private-key operation
+/// ([`sign_backend`], `agreement_backend`, `key_decrypt_backend`), once the
+/// backend is known to offer it, so an action cannot forget it. Not by
+/// [`transport_backend`]: a symmetric key on a device has no touch policy.
+#[cfg_attr(not(any(feature = "crypto", feature = "pki")), allow(dead_code))]
+pub(crate) fn announce_presence(
+    backend: &mut dyn rite_sdk::Backend,
+    key_id: &KeyId,
+    reporter: &mut rite_runtime::Reporter<'_>,
+) -> Result<(), rite_runtime::ActionError> {
+    let presence = backend
+        .as_keystore_mut()
+        .and_then(|keystore| keystore.access_policy(key_id).ok().flatten())
+        .filter(rite_sdk::AccessPolicy::asks_for_presence)
+        .and_then(|policy| policy.presence);
+    if let Some(when) = presence {
+        reporter.log(
+            rite_runtime::Icon::Warning,
+            format!(
+                "Touch the device of backend '{}' if it blinks (presence: {when})",
+                backend.name()
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+/// The signing capability of `backend` for `key`, which `key_name` names
+/// in messages, once the backend is shown to own it. Announces a key that
+/// asks for a touch, as [`announce_presence`] says.
+///
+/// Shared by every signing action, so each gives the same messages.
+#[cfg_attr(not(any(feature = "crypto", feature = "pki")), allow(dead_code))]
+pub(crate) fn sign_backend<'a>(
+    backend: &'a mut dyn rite_sdk::Backend,
+    key: &rite_runtime::BackendKeyMeta<'_>,
+    key_name: &str,
+    reporter: &mut rite_runtime::Reporter<'_>,
+) -> Result<&'a mut dyn rite_sdk::SignBackend, rite_runtime::ActionError> {
+    require_key_owner(backend, key.backend_name, key_name)?;
+    let backend_name = backend.name().to_string();
+    let signer = backend.as_sign_mut().ok_or_else(|| {
+        rite_runtime::ActionError::Failed(format!(
+            "Backend '{backend_name}' does not support signing"
+        ))
+    })?;
+    announce_presence(signer, key.key_id, reporter)?;
+    Ok(signer)
 }
 
 /// Whether this build carries `provider`.
@@ -276,6 +344,48 @@ mod tests {
                 .is_some_and(|e| e.to_string() == missing);
             assert_eq!(refused, !is_built(provider), "{provider}");
         }
+    }
+
+    /// What [`announce_presence`] logs for a mock key generated with
+    /// `presence`.
+    fn presence_notice(presence: Option<rite_sdk::AccessWhen>) -> Vec<String> {
+        let mut mock = MockBackend::new("token".to_string(), "seed".to_string());
+        let spec = rite_sdk::KeySpec {
+            algorithm: KeyAlgorithm::EcdsaP256,
+            label: "signer".to_string(),
+            policy: rite_sdk::KeyPolicy {
+                access: rite_sdk::AccessPolicy {
+                    authentication: None,
+                    presence,
+                },
+                ..rite_sdk::KeyPolicy::default_for(KeyAlgorithm::EcdsaP256)
+            },
+            location_hint: Some("9c".to_string()),
+        };
+        let keystore = rite_sdk::Backend::as_keystore_mut(&mut mock).unwrap();
+        let key_id = keystore.generate_key(spec).unwrap().key_id;
+        let mut harness = rite_runtime::test_support::ReporterHarness::new();
+        let mut reporter = harness.reporter(rite_model::StepId::new("sign"));
+        announce_presence(&mut mock, &key_id, &mut reporter).unwrap();
+        drop(reporter);
+        harness.logged()
+    }
+
+    /// A key that asks for a touch tells the operator before the device
+    /// waits; one that does not says nothing.
+    #[test]
+    fn a_key_that_asks_for_a_touch_is_announced() {
+        let notice = presence_notice(Some(rite_sdk::AccessWhen::Cached));
+        assert_eq!(
+            notice,
+            ["Touch the device of backend 'token' if it blinks (presence: cached)"]
+        );
+        assert_eq!(
+            presence_notice(Some(rite_sdk::AccessWhen::PerUse)),
+            ["Touch the device of backend 'token' if it blinks (presence: per_use)"]
+        );
+        assert!(presence_notice(Some(rite_sdk::AccessWhen::Never)).is_empty());
+        assert!(presence_notice(None).is_empty());
     }
 
     /// The committed root parses, so a dry run never loses its anchor.

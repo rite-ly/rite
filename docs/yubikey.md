@@ -113,6 +113,10 @@ once the key exists:
 | `cached` | refused | `CACHED`, 15 seconds |
 | `per_use` | `ALWAYS` | `ALWAYS` |
 
+A step that uses a key under `cached` or `per_use` presence tells the operator to touch
+the card if it blinks. A touch that does not come within 15 seconds fails the step with
+"No touch", and the step can be retried.
+
 A field left out takes the slot's default. Write each as a value, not an expression:
 `rite check` refuses a value the backend cannot enforce. The `generate_key` record holds
 both what the step asked for and what the card reports it set, and the step fails if

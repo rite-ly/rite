@@ -5,7 +5,7 @@ use rite_runtime::{
     Action, ActionError, ArtifactValue, HandlerContext, Icon, Reporter, StepInfo, StepResult,
     compute_fingerprint, parse_params, resolve_artifact_bytes, resolve_backend_key,
 };
-use rite_sdk::{Backend, KeyAlgorithm, SignAlgorithm, SignBackend};
+use rite_sdk::{Backend, KeyAlgorithm, SignAlgorithm};
 use serde_json::json;
 
 use rite_model::params::SignDataParams;
@@ -71,7 +71,7 @@ impl Action for SignDataAction {
             .ok_or_else(|| ActionError::Failed("Backend required for sign_data".to_string()))?;
 
         let sign_backend =
-            require_sign_backend(backend, key.backend_name, &key_ref.display_name())?;
+            crate::backend::sign_backend(backend, &key, &key_ref.display_name(), reporter)?;
         let signature = sign_backend.sign(key.key_id, data, algorithm)?;
 
         let signature_fingerprint = compute_fingerprint(&signature);
@@ -107,23 +107,6 @@ impl Action for SignDataAction {
             Ok(StepResult::completed(summary))
         }
     }
-}
-
-/// Check that `backend` owns the key, and expose its signing capability.
-///
-/// Shared by both signing actions so an operator who points a step at the wrong
-/// backend gets the same message either way. Read `name()` and `fingerprint()`
-/// before calling: the returned capability borrows the backend mutably.
-pub(super) fn require_sign_backend<'a>(
-    backend: &'a mut dyn Backend,
-    key_owner: &str,
-    key_name: &str,
-) -> Result<&'a mut dyn SignBackend, ActionError> {
-    crate::backend::require_key_owner(backend, key_owner, key_name)?;
-    let backend_name = backend.name().to_string();
-    backend.as_sign_mut().ok_or_else(|| {
-        ActionError::Failed(format!("Backend '{backend_name}' does not support signing"))
-    })
 }
 
 /// Decide which signature algorithm to use for a key.

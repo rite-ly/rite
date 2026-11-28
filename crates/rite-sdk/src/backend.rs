@@ -818,6 +818,11 @@ pub enum BackendError {
     #[error("PIN blocked")]
     PinBlocked,
 
+    /// The device waited for a person to confirm their presence, a touch,
+    /// and none came before it gave up.
+    #[error("No touch: the device waited for one and gave up")]
+    PresenceNotConfirmed,
+
     /// User PIN not initialized (PKCS#11: `C_InitPIN` not yet called).
     #[error("User PIN not initialized")]
     UserPinNotInitialized,
@@ -907,6 +912,7 @@ impl BackendError {
             BackendError::AuthRequired
             | BackendError::PinRequired
             | BackendError::PinFailed(_)
+            | BackendError::PresenceNotConfirmed
             | BackendError::ManagementKeyRequired
             | BackendError::UserPinNotInitialized
             | BackendError::KeyNotFound(_)
@@ -971,6 +977,7 @@ mod tests {
             BackendError::AuthRequired,
             BackendError::PinRequired,
             BackendError::PinFailed(2),
+            BackendError::PresenceNotConfirmed,
             BackendError::ManagementKeyRequired,
             BackendError::UserPinNotInitialized,
             BackendError::KeyNotFound("k".into()),

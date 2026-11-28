@@ -13,6 +13,7 @@ use rite_sdk::{
 use serde_json::json;
 use zeroize::Zeroizing;
 
+use crate::backend::transport_backend;
 use crate::crypto::content;
 use crate::sharing::{ShareOrBytes, share_bytes};
 use rite_model::params::EncryptDataParams;
@@ -228,8 +229,7 @@ fn backend_data_key(
         ))
     })?;
     let check_value = recipient_check_value(&key, &key_ref.display_name())?;
-    let (transport, _) =
-        crate::crypto::transport_backend(backend, key.backend_name, "protect a data key")?;
+    let (transport, _) = transport_backend(backend, key.backend_name, "protect a data key")?;
     let data_key = transport.generate_data_key(key.key_id, KeyAlgorithm::Aes256)?;
     let recipient = kek_recipient(&data_key, &check_value)?;
     Ok((

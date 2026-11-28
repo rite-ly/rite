@@ -10,6 +10,7 @@ use serde_json::json;
 use zeroize::Zeroizing;
 
 use super::gf256;
+use crate::backend::transport_backend;
 use rite_model::params::SplitSecretParams;
 
 /// Split a secret into shares of which a threshold reconstruct it.
@@ -258,7 +259,7 @@ fn read_key<'a>(
             reference.display_name()
         ))
     })?;
-    let (transport, _) = crate::crypto::transport_backend(
+    let (transport, _) = transport_backend(
         Some(backend),
         named.backend_name,
         "hand over a key's value to split it",

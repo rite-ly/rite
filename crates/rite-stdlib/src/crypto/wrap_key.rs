@@ -8,6 +8,7 @@ use rite_runtime::{
 use rite_sdk::{Backend, WrapScheme};
 use serde_json::json;
 
+use crate::backend::transport_backend;
 use rite_model::params::WrapKeyParams;
 
 /// Wrap a key for transport, producing a wrapped-key artifact.
@@ -85,8 +86,7 @@ impl Action for WrapKeyAction {
                         "Key wrapping requires both keys on same backend (key: '{key_backend}', wrapper: '{wrap_key_backend}')"
                     )));
                 }
-                let (transport, _) =
-                    crate::crypto::transport_backend(backend, key_backend, "wrap a key")?;
+                let (transport, _) = transport_backend(backend, key_backend, "wrap a key")?;
                 reporter.log(Icon::Spinner, "Wrapping key using backend...")?;
                 transport.wrap(key_to_wrap.key_id, wrapping_key.key_id, scheme)?
             }
@@ -104,8 +104,7 @@ impl Action for WrapKeyAction {
                 }
                 .resolve(step, ctx, reporter, |_| Ok(()))?;
 
-                let (transport, _) =
-                    crate::crypto::transport_backend(backend, key_backend, "wrap a key")?;
+                let (transport, _) = transport_backend(backend, key_backend, "wrap a key")?;
                 reporter.log(
                     Icon::Spinner,
                     "Wrapping key to external recipient public key...",

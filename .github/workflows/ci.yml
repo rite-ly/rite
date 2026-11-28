@@ -37,6 +37,9 @@ jobs:
       # lint the piv/yubikey code paths and their tests explicitly.
       - name: Clippy (hardware backends)
         run: cargo clippy -p rite-stdlib --features piv,yubikey --all-targets -- -D warnings
+      # Lint the rite-stdlib code paths that only compile with features off.
+      - name: Clippy (rite-stdlib, no default features)
+        run: cargo clippy -p rite-stdlib --no-default-features --all-targets -- -D warnings
       - name: Clippy (pkcs11)
         run: cargo clippy -p rite-pkcs11 --all-targets -- -D warnings
       - name: Shellcheck (image tooling)

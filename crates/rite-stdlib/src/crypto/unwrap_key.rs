@@ -8,6 +8,7 @@ use rite_runtime::{
 use rite_sdk::Backend;
 use serde_json::json;
 
+use crate::backend::transport_backend;
 use crate::params::installed_key_default_policy;
 use rite_model::params::UnwrapKeyParams;
 
@@ -79,7 +80,7 @@ impl Action for UnwrapKeyAction {
         reporter.log(Icon::Spinner, format!("Unwrapping key using {scheme}..."))?;
 
         let (unwrap_backend, backend_name) =
-            crate::crypto::transport_backend(backend, unwrapping_key.backend_name, "unwrap a key")?;
+            transport_backend(backend, unwrapping_key.backend_name, "unwrap a key")?;
 
         let default_policy = installed_key_default_policy(expected);
         let policy = match &typed.policy {

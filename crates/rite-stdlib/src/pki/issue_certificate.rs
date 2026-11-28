@@ -65,8 +65,8 @@ struct ProfileAdapter {
     subject: Name,
     issuer: Name,
     /// The issuer certificate's key identifier, which the issued certificate's
-    /// `AuthorityKeyIdentifier` repeats. `None` without an issuer certificate:
-    /// a self-signed root carries no `AuthorityKeyIdentifier`.
+    /// `AuthorityKeyIdentifier` repeats. `None` without an issuer certificate,
+    /// and the certificate then carries no `AuthorityKeyIdentifier`.
     issuer_key_id: Option<SubjectKeyIdentifier>,
     /// `SubjectAltName` carried over from the CSR's extensionRequest
     /// attribute, for profiles that honor it.
@@ -184,6 +184,21 @@ impl Action for IssueCertificateAction {
             csr.info.subject.clone()
         };
 
+        // The issuing key's public half and the identifier the certificate
+        // names it by, both from the issuer certificate. Without one, the
+        // CSR's own key stands in and no identifier is written: a self-signed
+        // certificate has no issuer to name, and an `issuer_cn` gives no
+        // certificate to take an identifier from. Read before the serial is
+        // drawn, so a bad issuer certificate fails the step before it uses
+        // ceremony entropy.
+        let (issuer_spki, issuer_key_id) = match &issuer_cert_opt {
+            Some(ic) => (
+                ic.tbs_certificate().subject_public_key_info().clone(),
+                Some(issuer_key_identifier(ic).map_err(ActionError::Failed)?),
+            ),
+            None => (csr.info.public_key.clone(), None),
+        };
+
         // Draw the serial from the ceremony entropy source rather than an
         // unrecorded RNG, so it is auditable and re-derivable by `rite verify`.
         // `SerialNumber` wraps an unsigned ASN.1 INTEGER, so the raw bytes need
@@ -202,17 +217,6 @@ impl Action for IssueCertificateAction {
             sig_profile_for_algorithm(key_algorithm).map_err(|e| {
                 ActionError::Failed(format!("Failed to build signature algorithm: {e}"))
             })?;
-
-        // The issuing key's public half and the identifier the certificate
-        // names it by: the issuer certificate's, or, issuing self-signed
-        // (root) certificates, the CSR's own key and no identifier.
-        let (issuer_spki, issuer_key_id) = match &issuer_cert_opt {
-            Some(ic) => (
-                ic.tbs_certificate().subject_public_key_info().clone(),
-                Some(issuer_key_identifier(ic).map_err(ActionError::Failed)?),
-            ),
-            None => (csr.info.public_key.clone(), None),
-        };
 
         let issuing_key = BackendIssuingKey::new(issuer_spki, sig_alg);
 
@@ -353,8 +357,8 @@ fn build_extensions(
         }
     }
 
-    // A certificate issued under an issuer certificate names it; a
-    // self-signed one has no issuer to name.
+    // A certificate issued under an issuer certificate names it by the
+    // identifier that certificate carries.
     if let Some(key_id) = issuer_key_id {
         exts.push(build_aki(key_id)?);
     }

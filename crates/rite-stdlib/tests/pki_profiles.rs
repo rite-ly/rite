@@ -67,6 +67,18 @@ impl Chain {
         inputs: Option<StepInputs>,
         params: &serde_json::Value,
     ) -> Option<Vec<u8>> {
+        self.try_run(action, produces, inputs, params)
+            .unwrap_or_else(|e| panic!("making {produces} with {params}: {e}"))
+    }
+
+    /// [`Chain::run`], returning the step's error rather than panicking.
+    fn try_run(
+        &mut self,
+        action: &dyn Action,
+        produces: &str,
+        inputs: Option<StepInputs>,
+        params: &serde_json::Value,
+    ) -> Result<Option<Vec<u8>>, String> {
         let id = ArtifactId::new(produces);
         let step = StepInfo::new(
             StepId::new(format!("make_{produces}")),
@@ -80,7 +92,7 @@ impl Chain {
             let mut reporter = self.harness.reporter(step.id.clone());
             action
                 .execute(&step, &ctx, params, &mut reporter, Some(&mut self.backend))
-                .unwrap_or_else(|e| panic!("making {produces} with {params}: {e}"))
+                .map_err(|e| e.to_string())?
         };
         let value = result
             .artifacts
@@ -92,7 +104,7 @@ impl Chain {
             _ => None,
         };
         self.store(id, value);
-        certificate
+        Ok(certificate)
     }
 
     fn store(&mut self, id: ArtifactId, value: ArtifactValue) {
@@ -117,16 +129,26 @@ impl Chain {
     }
 
     fn issue(&mut self, produces: &str, inputs: &[(&str, &str)], profile: &str) -> X509 {
+        self.try_issue(produces, inputs, profile)
+            .unwrap_or_else(|e| panic!("issuing {produces}: {e}"))
+    }
+
+    fn try_issue(
+        &mut self,
+        produces: &str,
+        inputs: &[(&str, &str)],
+        profile: &str,
+    ) -> Result<X509, String> {
         let params = serde_json::json!({ "profile": profile, "validity_days": 365 });
         let der = self
-            .run(
+            .try_run(
                 &IssueCertificateAction,
                 produces,
                 Some(named_inputs(inputs)),
                 &params,
-            )
+            )?
             .expect("issue_certificate must produce a certificate");
-        X509::from_der(&der).expect("certificate must be valid DER")
+        Ok(X509::from_der(&der).expect("certificate must be valid DER"))
     }
 
     /// Put a certificate made outside the chain in place as `name`.
@@ -137,10 +159,11 @@ impl Chain {
 }
 
 /// A CA certificate for the key in `template`, as an issuer other than Rite
-/// would write it: its `subjectKeyIdentifier` is `key_id`, or absent. Only
-/// what `issue_certificate` reads from it matters here, so a throwaway key
-/// signs it.
-fn outside_ca(template: &X509, key_id: Option<&[u8]>) -> X509 {
+/// would write it: its `subjectKeyIdentifier` extension holds `ski`, the
+/// extension's encoded value, or is absent. It is a valid trust anchor for
+/// the chain check, which does not verify an anchor's own signature, so a
+/// throwaway key signs it.
+fn outside_ca(template: &X509, ski: Option<&[u8]>) -> X509 {
     let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
     let signer = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
 
@@ -170,20 +193,24 @@ fn outside_ca(template: &X509, key_id: Option<&[u8]>) -> X509 {
                 .unwrap(),
         )
         .unwrap();
-    if let Some(key_id) = key_id {
-        let value = SubjectKeyIdentifier(OctetString::new(key_id).unwrap())
-            .to_der()
-            .unwrap();
+    if let Some(value) = ski {
         let extension = X509Extension::new_from_der(
             &Asn1Object::from_str(&SubjectKeyIdentifier::OID.to_string()).unwrap(),
             false,
-            &Asn1OctetString::new_from_bytes(&value).unwrap(),
+            &Asn1OctetString::new_from_bytes(value).unwrap(),
         )
         .unwrap();
         builder.append_extension(extension).unwrap();
     }
     builder.sign(&signer, MessageDigest::sha256()).unwrap();
     builder.build()
+}
+
+/// The encoded value of a `subjectKeyIdentifier` extension holding `key_id`.
+fn ski(key_id: &[u8]) -> Vec<u8> {
+    SubjectKeyIdentifier(OctetString::new(key_id).unwrap())
+        .to_der()
+        .unwrap()
 }
 
 /// Whether `leaf` chains to `ca` by the check Rite runs, which finds the
@@ -264,6 +291,10 @@ fn every_profile_describes_its_subject_key() {
                 Some(method_1(&cert).as_slice()),
                 "{profile} on {algorithm}"
             );
+            assert!(
+                cert.authority_key_id().is_none(),
+                "{profile} on {algorithm}, issued without an issuer certificate"
+            );
         }
     }
 }
@@ -337,14 +368,14 @@ fn a_certificate_names_its_issuer_by_the_issuer_certificates_own_key_identifier(
     );
     let rite_key_id = method_1(&rite_ca);
     // Not derived from the key by any method, as an issuer drawing random
-    // identifiers writes it.
-    let foreign = [0x5a; 20];
+    // identifiers writes it, and of a length no SHA-1 gives.
+    let foreign = [0x5a; 8];
 
     let issuers = [
         ("rite_ca", rite_ca.clone(), rite_key_id.clone()),
         (
             "foreign_ski_ca",
-            outside_ca(&rite_ca, Some(&foreign)),
+            outside_ca(&rite_ca, Some(&ski(&foreign))),
             foreign.to_vec(),
         ),
         // Without an identifier to repeat, the method-1 one of its key.
@@ -375,9 +406,47 @@ fn a_certificate_names_its_issuer_by_the_issuer_certificates_own_key_identifier(
                 Some(expected.as_slice()),
                 "{profile} by {issuer}"
             );
+            assert_eq!(
+                cert.subject_key_id().map(Asn1OctetStringRef::as_slice),
+                Some(method_1(&cert).as_slice()),
+                "{profile} by {issuer} names its own key"
+            );
             if let ChainOutcome::Refused(why) = chains_to(&cert, &ca) {
                 panic!("{profile} by {issuer} does not chain: {why}");
             }
         }
     }
+}
+
+/// An issuer certificate whose `subjectKeyIdentifier` does not decode refuses
+/// the step, rather than falling back to an identifier the issuer does not
+/// carry.
+#[test]
+fn an_unreadable_issuer_key_identifier_refuses_the_step() {
+    let mut chain = Chain::new();
+    chain.key_and_csr("ca", "ECDSA-P256");
+    let rite_ca = chain.issue(
+        "rite_ca",
+        &[("signing_key", "ca"), ("csr", "ca_csr")],
+        "root_ca",
+    );
+    // The identifier's bytes without the OCTET STRING around them.
+    chain.bring("bad_ski_ca", &outside_ca(&rite_ca, Some(&[0x5a; 8])));
+    chain.key_and_csr("leaf", "ECDSA-P256");
+
+    let refusal = chain
+        .try_issue(
+            "leaf_cert",
+            &[
+                ("signing_key", "ca"),
+                ("csr", "leaf_csr"),
+                ("issuer_cert", "bad_ski_ca"),
+            ],
+            "end_entity",
+        )
+        .expect_err("an unreadable issuer key identifier must refuse the step");
+    assert!(
+        refusal.contains("subjectKeyIdentifier is malformed or repeated"),
+        "{refusal}"
+    );
 }
